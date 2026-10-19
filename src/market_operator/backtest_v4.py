@@ -188,7 +188,9 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     contracts: dict, params: Params, n_fill: int,
                     maker_fee: Optional[float] = None,
                     strategy: Optional[Strategy] = None,
-                    whitelist: Optional[frozenset] = None) -> BacktestResult:
+                    whitelist: Optional[frozenset] = None,
+                    execution_ledger=None,
+                    ledger_run_id: Optional[str] = None) -> BacktestResult:
     """v4 多品种合并 15m 时间序回放;主循环与缝见模块 docstring。"""
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -392,6 +394,20 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()})
     assert_fill_after_decision(res.ledger)
+    if execution_ledger is not None:
+        # Optional full-path ledger audit. Broker is still the simulator, and
+        # we import only actual execution rows, never signals or attempted orders.
+        if not ledger_run_id:
+            raise ValueError("ledger_run_id required when execution_ledger is set")
+        from decimal import Decimal
+        for fill_row in broker.ledger:
+            execution_ledger.record_backtest_fill(fill_row, run_id=ledger_run_id)
+        expected = {
+            sym: Decimal(str(pos.qty)) * pos.direction
+            for sym, pos in broker.positions.items() if pos.qty > 0
+        }
+        # Block promotion if journal and simulated real positions disagree.
+        execution_ledger.verify_exchange_positions(expected)
     return res
 
 
