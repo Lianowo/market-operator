@@ -32,6 +32,7 @@ class Opportunity:
     invalid: float
     observed_index: int
     source_event: MarketEvent
+    snapshot: StructureView  # immutable facts known when reaction was observed
     stage: str              # BREAK_OBSERVED / RETEST_REJECTED / REACTION_PENDING
     reject_close: Optional[float] = None
 
@@ -76,7 +77,8 @@ class OpportunityRouter(V5Router):
                 # Confirm continuation on a distinct later close; no fixed
                 # amplitude threshold and no lookahead.
                 ev = previous.source_event
-                hyp = build(ev, view, None, entry=float(close))
+                hyp = build(ev, view if view is not None else previous.snapshot,
+                            None, entry=float(close))
                 if hyp is not None and d * (close - hyp.invalid) > 0:
                     reason = (f"{ev.id}|{'long' if d>0 else 'short'} "
                               f"RETEST_CONFIRMED reject_known={previous.observed_index} "
@@ -109,7 +111,7 @@ class OpportunityRouter(V5Router):
                 continue
             self.opportunities[symbol] = Opportunity(
                 symbol, ev.direction, float(ref), float(invalid),
-                bar_index, ev, "BREAK_OBSERVED")
+                bar_index, ev, view, "BREAK_OBSERVED")
             self._bump("break_observed")
             self._notes.append(f"OBSERVE|{ev.id} structural change, no order")
 
@@ -137,7 +139,7 @@ class OpportunityRouter(V5Router):
             # and invalidation, never fabricate same-episode equality.
             self.opportunities[symbol] = Opportunity(
                 symbol, ev.direction, float(ref), float(invalid),
-                bar_index, ev,
+                bar_index, ev, view,
                 "RETEST_REJECTED" if ev.id == E7 else "REACTION_PENDING",
                 float(close))
             self._bump(f"reaction_observed_{ev.id}")
