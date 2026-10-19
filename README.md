@@ -4,6 +4,10 @@
 
 **当前状态：Research Only（研究结论 NO-GO，无实盘路径）。** 见 `docs/acceptance.md`。
 
+**最新 v4（2026-10-19，修复前冻结研究产物）：** test@1x 净收益 −25.13%、PF 0.29、32 笔；full@1x −56.00%、PF 0.39、140 笔（见 `reports/backtest_v4.md`）。test 已历经多轮复用，绝不代表新的独立 OOS。历史报告不得拿来宣称已验证正期望。
+
+**代码审计（仅审查分支）：** `docs/audits/2026-10-19-execution-reconciliation.md` 记录 v4 maker 减仓意图与真实成交状态脱节的问题、修复范围和残留阻断项。审计分支上的正确性修复尚未重新认证任何策略收益；`reports/` 下旧结果不会被覆盖，策略仍然 NO-GO。
+
 ## 设计原则
 
 - **时间即真相**：每个结构事实携带 `forming_index`（指向位置）与 `known_index`（可被知道的位置），任何决策只使用 `known_index <= t`。前缀不变性与"增量==批量"由测试锁定。
