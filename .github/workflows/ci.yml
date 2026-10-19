@@ -35,4 +35,4 @@ jobs:
                     "crlf_expanded:",digest(raw.replace(bytes([13,10]),bytes([10])).replace(bytes([10]),bytes([13,10]))))
           PY
       - name: Run tests
-        run: python -m pytest tests -q
+        run: python -m pytest -q

@@ -16,4 +16,4 @@ dev = ["pytest>=8.0"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "research/rounds"]

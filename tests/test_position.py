@@ -10,7 +10,7 @@ import pytest
 
 from market_operator.events import E4, E6, MarketEvent
 from market_operator.position import PositionManager
-from market_operator.strategy import OrderKind
+from market_operator.broker import OrderKind
 from market_operator.structure import Params, Pivot, PivotKind
 
 P = Params(k_bm=0.1, n_time=3)
