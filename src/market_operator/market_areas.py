@@ -147,6 +147,30 @@ class AreaBook:
             return None
         return matches[0]
 
+    def last_expansion_for_trend(
+            self, symbol: str, direction: int,
+            leg_extreme: float, asof: int) -> Optional[AreaEpisode]:
+        """Find the actual structural expansion to which a pullback belongs.
+
+        A "trend recovery" must recover a directional swing that previously
+        advanced beyond a defended structural level. We use strictly
+        *observed* E1/E6 breaks, not a minimum-bar-age/ATR score. The latest
+        causally established break owns the active leg. If no break has been
+        observed since startup, the trend exists as a market observation but
+        its trade thesis is not established in this study.
+        """
+        candidates = [
+            episode for episode in self.active.get(symbol, [])
+            if episode.area.direction == direction
+            and episode.area.break_known < asof
+            and direction * (leg_extreme - episode.area.ref) > 0
+        ]
+        if not candidates:
+            return None
+        newest = max(x.area.break_known for x in candidates)
+        owners = [x for x in candidates if x.area.break_known == newest]
+        return owners[0] if len(owners) == 1 else None
+
     def consume(self, symbol: str, episode: AreaEpisode, at: int) -> None:
         self.active[symbol] = [e for e in self.active.get(symbol, [])
                                if e is not episode]
