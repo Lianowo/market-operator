@@ -4,8 +4,6 @@ on:
     branches:
       - 'audit/fill-confirmed-reductions-20261019'
       - 'feat/standalone-trade-core-20261019'
-    paths:
-      - '.github/workflows/audit-v4.yml'
 jobs:
   forensic-replay:
     runs-on: ubuntu-latest
