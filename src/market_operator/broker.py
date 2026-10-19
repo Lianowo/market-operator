@@ -748,8 +748,10 @@ class Broker:
             "gap_at_open": reference != stop})
         # All actual trading/accounting uses the same _close_qty as normal
         # taker EXIT; no signal-intent state is mistaken for a fill.
-        return self._close_qty(pending, pos, pos.qty, int(ts), reference,
-                               full=True)
+        row = self._close_qty(pending, pos, pos.qty, int(ts), reference,
+                              full=True)
+        self.ledger.append(row)  # broker.on_bar_open usually owns this append
+        return row
 
     # -- mark-to-market(每 bar,权益/资金费/强平) ------------------------------
 
