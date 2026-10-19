@@ -1,4 +1,9 @@
-"""v6 战役引擎(docs/v6-protocol.md §1,冻结):多时间尺度并行战役 + 组合容量。
+"""v6 战役引擎(docs/v6-protocol.md §1):多时间尺度并行战役 + 组合容量。
+
+规范地位:多尺度战役引擎是规范语义链的执行/风险层(唯一,不重命名)。
+语义合并后 A/B 臂切换移除,持仓侧接线固化为原臂 B(turtle)口径:
+PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
+见 strategy_v6 docstring。A/B 判定历史与双臂归档见 research/rounds/v6/。
 
 基础设施(非策略变更):每 (symbol, TF ∈ {1h,2h,4h,12h,1d}) 为一个独立
 战役 —— 自有 EventDetector 认知缓存(SymbolCognition,TF 帧)、策略状态
@@ -65,7 +70,7 @@ from .backtest_v6 import (
 from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, _floor_step
 from .position import PositionManager
 from .research import split_boundary
-from .strategy_v6 import ARM_CLAMP2R, ARM_TURTLE, V6Params, V6Router
+from .strategy_v6 import V6Params, V6Router
 from .structure import Params
 
 
@@ -216,7 +221,7 @@ class _CampaignState:
     hi: int
 
 
-def run_campaigns(frames: dict, *, arm: str, segment: str, dev_frac: float,
+def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   equity0: float, risk_frac: float, leverage_cap: float,
                   taker_fee: float, slippage_per_side: float,
                   funding_per_8h: float, cost_multiplier: float,
@@ -225,16 +230,15 @@ def run_campaigns(frames: dict, *, arm: str, segment: str, dev_frac: float,
                   maker_fee: Optional[float] = None,
                   router_params: Optional[V6Params] = None,
                   ) -> BacktestResult:
-    """v6 全部 (symbol, TF) 战役合并回放;主循环与缝见模块 docstring。"""
+    """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
+    docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。"""
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
-    if arm not in (ARM_CLAMP2R, ARM_TURTLE):
-        raise ValueError(f"unknown v6 arm {arm!r}")
     if not (0.0 < portfolio_cap_frac <= 1.0):
         raise ValueError("portfolio_cap_frac must be in (0, 1]")
 
     keys = sorted(frames)
-    base_rp = router_params or V6Params(arm=arm)
+    base_rp = router_params or V6Params()
     seg_bounds: dict = {}
     states: dict[str, _CampaignState] = {}
     for key in keys:
@@ -246,17 +250,12 @@ def run_campaigns(frames: dict, *, arm: str, segment: str, dev_frac: float,
         seg_bounds[key] = {"lo": lo, "hi": hi, "n": n,
                            "ts_lo": f.cog.bars[lo][0] if lo < n else None,
                            "ts_hi": f.cog.bars[hi - 1][0] if hi > 0 else None}
-        rp = V6Params(arm=arm, k_dq=base_rp.k_dq, k_imp=base_rp.k_imp,
-                      k_is=base_rp.k_is, r_min=base_rp.r_min,
-                      target_r=base_rp.target_r,
-                      turtle_stop_atr=base_rp.turtle_stop_atr,
-                      k_bm=base_rp.k_bm, whitelist=base_rp.whitelist)
         states[key] = _CampaignState(
-            frame=f, router=V6Router(rp),
+            frame=f, router=V6Router(base_rp),
             pos_mgr=PositionManager(
                 params, allow_add=False,
-                breakeven_on_reduce=(arm == ARM_TURTLE),   # 臂 A:False 禁保本
-                time_stop=(arm == ARM_CLAMP2R)),            # 臂 B:关 §8.6
+                breakeven_on_reduce=True,    # turtle 固化(原臂 B 接线)
+                time_stop=False),            # §8.6 关闭(原臂 B 接线)
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -460,7 +459,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                 meta={"direction": d.hyp.direction,
                       "regime": d.hyp.regime.value,
                       "r_mult": d.hyp.r_mult,
-                      "route": d.route, "arm": st.router.params.arm,
+                      "route": d.route,
                       **d.meta})
         else:
             broker.submit_limit(RestingLimitOrder(
@@ -476,7 +475,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                 meta={"direction": int(d.hyp.direction),
                       "regime": d.hyp.regime.value,
                       "r_mult": d.hyp.r_mult,
-                      "route": d.route, "arm": st.router.params.arm,
+                      "route": d.route,
                       **d.meta}))
             counters["limits_armed"] += 1
 
@@ -505,7 +504,7 @@ def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
         fill_after_ts=fill_after,
         symbol=key, role="reduce", reason=intent.reason,
         reduce_qty=qty, qty_frac_snap=qty / pos_acct.open_qty,
-        meta={"direction": pos_acct.direction, "arm": st.router.params.arm}))
+        meta={"direction": pos_acct.direction}))
     return True
 
 
@@ -528,5 +527,5 @@ def _reconstruct_trades_v6(ledger: list, seg_bounds: dict) -> list:
 
 __all__ = [
     "CampaignFrame", "build_campaign_frame", "run_campaigns",
-    "campaign_key", "parse_key", "ARM_CLAMP2R", "ARM_TURTLE",
+    "campaign_key", "parse_key",
 ]

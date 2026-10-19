@@ -1,37 +1,37 @@
-"""v6 回测全管线(docs/v6-protocol.md §1-§4):多尺度战役 × 语义修复(S1/S2)
-× A/B 二臂判选 × 9 格(主臂 full/dev/test;对照臂 dev-only;成本 1x/1.5x/2x)。
+"""规范(canonical)v6 回测全管线:多尺度战役 × turtle 唯一语义 × 9 格
+(full/dev/test × 成本 1x/1.5x/2x)。
 
 用法:  python scripts/run_backtest_v6.py
-产物:  reports/backtest_v6.json / backtest_v6.md
-       reports/trades_v6_{arm}_{seg}[_cost1_5,_cost2_0].csv
-       reports/equity_v6_{arm}_{seg}[_cost1_5,_cost2_0].csv
+配置:  config/canonical.json(v6 turtle 语义固化的当前生产配置;父配置
+       config/v6.json 冻结不改)
+产物:  reports/backtest_v6_turtle.json / backtest_v6_turtle.md
+       reports/trades_v6_turtle_{seg}[_cost1_5,_cost2_0].csv
+       reports/equity_v6_turtle_{seg}[_cost1_5,_cost2_0].csv
 
-纪律(v6-protocol,冻结于任何 v6 运行之前):
-- 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役/(臂),隔离互不知晓;
+语义地位(规范链唯一回放入口):
+- A/B 二臂判选已终局(docs/v6-protocol.md §2-S2;reports/backtest_v6.json/.md
+  冻结产物:两臂 dev@1.5x 净期望均 ≤ 0,按冻结规则取 t 统计较好的臂 B,
+  如实声明非转正证据)。臂 B(turtle)自此固化为唯一策略语义:无固定目标,
+  初始防线 turtle_stop_atr·atr(2.0),trailing 只紧不松,§8.6 时间止损
+  关闭,减仓后 breakeven 允许(臂 A 的禁保本约束随臂 A 一并退役);F1
+  (k_is=0.8)闸保留。历史双臂版本:research/rounds/v6/(可复现 A/B 判定,
+  产物 reports/backtest_v6.json/.md 保持冻结,本脚本不再写入)。
+- test 段纪律:v6 轮已消耗 test 唯一一次评估曝光(research-log #12 终生
+  声明)。本脚本为规范链现状度量/复现入口,不再做任何"判选/转正判定";
+  样本量与升级线数字按同一冻结口径如实测量填报,不产生新协议判定。
+- 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役,隔离互不知晓;
   共享 equity + 组合容量 3%(最坏情景,按信号时间 FIFO 整笔跳过并记
   PORTFOLIO_CAP;成交时刻由 PR#9 已修 broker 口径第二层钳制,如实声明)。
-- 语义修复:S1 失效锚定结构区边界(E1/E7 沿用检测器冻结口径即区缘 ±
-  k_bm·atr;E6 重锚含 ref 的区缘 ± buf,无区拒);F1(k_is=0.8)闸保留。
-  S2:臂 A(clamp2R)target_1 = 决策收盘 ± 2.0R(实际 entry-invalid 计),
-  room < 1.5R 拒,减仓 50% 后禁保本、只 trailing;臂 B(turtle,dev-only)
-  无目标、初始防线 2.0·atr、trailing 只紧不松、关时间止损。§8.1/§8.5
-  (§8.6 仅臂 B 关)不变;加仓仍关闭。
 - 路由 = v5 质量路由(E1 市价优先 / E6 STRONG 市价 WEAK=E7 前缘限价)双向。
 - 执行路径:TF=1h → 15m;TF ≥ 2h → 1h(认知 bar 区间 [t,t+TF) 由细帧 bar
   无洞组成,对齐断言,违即 raise)。
-- 臂选择(只允许选臂,不允许调参):dev@1.5x 净期望较大者;两臂 dev@1.5x
-  净期望均 ≤ 0 则取显著性较好者(逐笔净额 t 统计大者)并在报告声明;test
-  只许跑判选臂一次(§4:test 段第 10 次曝光,终生声明后绝不再用于迭代)。
-- 样本量:test 合并战役成交 < 60 ⇒ INSUFFICIENT_DATA,报告不给转正叙述;
-  升级线:test≥60 ∧ 1.5x 净期望>0 ∧ 2x PF>1(主判定单元 = 合并战役)。
 - 对账硬约束(任一不符即 raise):15m↔1h(v4 同契约)+ 1h↔TF compaction
   OHLC 逐格一致;E7 发射/过 F1 计数(1h 战役)== reports/backtest_v2.json
   冻结产物;E1+E6|short(1h 全历史)== reports/backtest.json(v1)go_events
   (v1 parity 锚点);各 (symbol, TF≠1h) E7 计数 ==
   reports/event_study_v3.json(逐格,多 TF 证据锚)。
-- PR#9 的 opportunity.py 因果生命周期管线不参与本回测(其 15m 保护性止损/
-  执行账本为独立前向设施;本管线 §8 决策以认知 TF 收盘为口径,与 v1-v5 同;
-  如实声明共存,不混用)。
+- PR#9 的 opportunity.py 因果生命周期管线(现归档 research/rounds/external/)
+  不参与本回测;本管线 §8 决策以认知 TF 收盘为口径(v1-v6 同)。
 - 合约规格强制离线缓存(同 v3/v4/v5 纪律;data/contracts.json 逐条目
   sha256 校验)。
 """
@@ -54,30 +54,29 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import aggregate as agg                     # noqa: E402
 from market_operator import data as mo_data                      # noqa: E402
-from market_operator.backtest_v6 import compute_metrics, prepare_cognition  # noqa: E402
+from market_operator.backtest_v6 import (                        # noqa: E402
+    alignment_issues_ci,
+    compute_metrics,
+    prepare_cognition,
+)
 from market_operator.campaign import (                           # noqa: E402
-    ARM_CLAMP2R,
-    ARM_TURTLE,
     build_campaign_frame,
-    campaign_key,
     run_campaigns,
 )
-from market_operator.backtest_v6 import alignment_issues_ci      # noqa: E402
 from market_operator.broker import CONTRACTS_PATH, ContractSpec  # noqa: E402
 from market_operator.hypothesis import f1_invalid_distance_ok    # noqa: E402
 from market_operator.research import block_bootstrap_ci          # noqa: E402
 from market_operator.strategy_v6 import V6Params                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
 
-CONFIG_V6 = ROOT / "config" / "v6.json"
+CONFIG_CANONICAL = ROOT / "config" / "canonical.json"
 BT_V1_PATH = ROOT / "reports" / "backtest.json"
 BT_V2_PATH = ROOT / "reports" / "backtest_v2.json"
 ES_V3_PATH = ROOT / "reports" / "event_study_v3.json"
 REPORTS = ROOT / "reports"
-SEGMENTS = ("full", "dev")
+SEGMENTS = ("full", "dev", "test")
 COST_MULTS = (1.0, 1.5, 2.0)
-ARMS = (ARM_CLAMP2R, ARM_TURTLE)
-ARM_LABEL = {ARM_CLAMP2R: "臂A Target-Clamp(2R)", ARM_TURTLE: "臂B Turtle(dev对照)"}
+SEMANTICS = "turtle"                       # v6 臂 B 固化为唯一语义(见头注)
 MIN_TRADES_TEST = 60                       # v6-protocol §4 样本量阈
 MECHANISMS = ("E1", "E6", "E7")
 GIVEBACK_V1_BASELINE_R = 3.6               # v1 逐笔诊断回吐中位(协议 §4 锚点)
@@ -109,15 +108,6 @@ def _median(xs: list) -> float:
         return None
     mid = len(xs) // 2
     return xs[mid] if len(xs) % 2 else 0.5 * (xs[mid - 1] + xs[mid])
-
-
-def _tstat(nets: list) -> float:
-    """逐笔净额 t 统计(均正性显著性;两臂 dev 均负时的次序量)。"""
-    a = np.asarray(nets, dtype=np.float64)
-    if len(a) < 2 or a.std(ddof=1) <= 0.0:
-        return 0.0 if len(a) >= 1 and float(a.mean()) == 0.0 else float(
-            np.sign(float(a.mean())) * 1e9)
-    return float(a.mean() / (a.std(ddof=1) / math.sqrt(len(a))))
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +251,7 @@ def cross_checks(frames: dict, k_is: float) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def augment_trades(trades: list, frames: dict, arm: str) -> list:
+def augment_trades(trades: list, frames: dict) -> list:
     out = []
     for t in trades:
         f = frames[t["campaign"]]
@@ -279,7 +269,7 @@ def augment_trades(trades: list, frames: dict, arm: str) -> list:
             lows = min(b[3] for b in f.cog.bars[e_i:x_i + 1])
             mfe_px = (highs - t["entry"]) if d > 0 else (t["entry"] - lows)
             mfe_r = mfe_px / risk_px if risk_px > 0 else None
-        out.append({**t, "arm": arm, "mfe_r": mfe_r,
+        out.append({**t, "arm": SEMANTICS, "mfe_r": mfe_r,
                     "giveback_r": (mfe_r - t["r_multiple"]
                                    if mfe_r is not None
                                    and t["r_multiple"] is not None else None)})
@@ -366,6 +356,10 @@ def equity_frame(res) -> pd.DataFrame:
                  "funding_accrued", "n_open"])
 
 
+def _grid() -> list:
+    return [(s, mm) for s in SEGMENTS for mm in COST_MULTS]
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -373,23 +367,23 @@ def equity_frame(res) -> pd.DataFrame:
 
 def main() -> None:
     t_start = time.time()
-    raw_cfg = json.loads(CONFIG_V6.read_text(encoding="utf-8"))
-    params = Params.from_json(CONFIG_V6)
+    raw_cfg = json.loads(CONFIG_CANONICAL.read_text(encoding="utf-8"))
+    params = Params.from_json(CONFIG_CANONICAL)
     dev_frac = float(raw_cfg["dev_frac"])
     symbols = list(raw_cfg["symbols"])
     tf_list = list(raw_cfg["tf_list"])
     if tf_list != ["1h", "2h", "4h", "12h", "1d"]:
-        raise RuntimeError(f"config/v6.json tf_list 冻结为 "
+        raise RuntimeError(f"config/canonical.json tf_list 冻结为 "
                            f"['1h','2h','4h','12h','1d']: {tf_list}")
-    if raw_cfg["arm"] not in (ARM_CLAMP2R, ARM_TURTLE):
-        raise RuntimeError(f"config/v6.json arm 非法: {raw_cfg['arm']}")
+    if raw_cfg.get("arm") not in (None, SEMANTICS):
+        raise RuntimeError(
+            f"config/canonical.json 不许声明臂:arm={raw_cfg.get('arm')!r}"
+            "(turtle 已固化为唯一语义;双臂历史见 research/rounds/v6/)")
     if raw_cfg["entry_mode"] != "quality_routed":
-        raise RuntimeError("config/v6.json entry_mode must be quality_routed")
+        raise RuntimeError("config/canonical.json entry_mode must be quality_routed")
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(arm=ARM_CLAMP2R, k_dq=float(raw_cfg["k_dq"]),
+    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
-                       r_min=float(raw_cfg["r_min"]),
-                       target_r=float(raw_cfg["target_r"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)
     cap_frac = float(raw_cfg["portfolio_cap_frac"])
@@ -415,82 +409,32 @@ def main() -> None:
                      contracts=contracts, params=params, n_fill=n_fill,
                      portfolio_cap_frac=cap_frac)
 
-    def run_one(arm: str, seg: str, mult: float) -> tuple:
-        res = run_campaigns(frames, arm=arm, segment=seg,
-                            cost_multiplier=mult,
-                            router_params=V6Params(
-                                arm=arm, k_dq=rp_base.k_dq, k_imp=rp_base.k_imp,
-                                k_is=rp_base.k_is, r_min=rp_base.r_min,
-                                target_r=rp_base.target_r,
-                                turtle_stop_atr=rp_base.turtle_stop_atr,
-                                k_bm=rp_base.k_bm, whitelist=whitelist),
-                            **broker_kw)
-        res.trades = augment_trades(res.trades, frames, arm)
+    def run_one(seg: str, mult: float) -> tuple:
+        res = run_campaigns(frames, segment=seg, cost_multiplier=mult,
+                            router_params=rp_base, **broker_kw)
+        res.trades = augment_trades(res.trades, frames)
         return res, compute_metrics(res)
 
     results: dict = {}
-    for arm in ARMS:
-        for seg in SEGMENTS:
-            for mult in COST_MULTS:
-                t0 = time.time()
-                res, m = run_one(arm, seg, mult)
-                results[(arm, seg, mult)] = (res, m)
-                c = res.counters
-                print(f"[bt] {arm:8s} {seg:4s} cost {mult}x: net={m['net_pnl']:+.2f} "
-                      f"trades={m['n_trades']} fills={c['opens_filled']}+"
-                      f"{c['limit_fills_entry']} cap_skips={c['portfolio_cap_skips']} "
-                      f"({time.time() - t0:.1f}s)", flush=True)
-    liq = sum(results[(a, s, mm)][0].counters["liquidations"]
-              for a in ARMS for s in SEGMENTS for mm in COST_MULTS)
+    for seg in SEGMENTS:
+        for mult in COST_MULTS:
+            t0 = time.time()
+            res, m = run_one(seg, mult)
+            results[(seg, mult)] = (res, m)
+            c = res.counters
+            print(f"[bt] turtle {seg:4s} cost {mult}x: net={m['net_pnl']:+.2f} "
+                  f"trades={m['n_trades']} fills={c['opens_filled']}+"
+                  f"{c['limit_fills_entry']} cap_skips={c['portfolio_cap_skips']} "
+                  f"({time.time() - t0:.1f}s)", flush=True)
+    liq = sum(results[(s, mm)][0].counters["liquidations"]
+              for s in SEGMENTS for mm in COST_MULTS)
     if liq != 0:
         raise RuntimeError(f"强平非预期触发: {liq}")
 
-    # -- 臂判选(仅 dev 证据;test 尚未运行) -------------------------------------
-    def dev_stats(arm: str) -> dict:
-        _, m = results[(arm, "dev", 1.5)]
-        nets = [t["net_pnl"] for t in results[(arm, "dev", 1.5)][0].trades
-                if t["in_segment_open"]]
-        return {"expectancy_usdt": m["expectancy_usdt"], "net_pnl": m["net_pnl"],
-                "n_trades": m["n_trades"], "t_stat": _tstat(nets)}
-
-    sel_a, sel_b = dev_stats(ARM_CLAMP2R), dev_stats(ARM_TURTLE)
-    both_neg = (sel_a["expectancy_usdt"] is not None
-                and sel_b["expectancy_usdt"] is not None
-                and sel_a["expectancy_usdt"] <= 0.0
-                and sel_b["expectancy_usdt"] <= 0.0)
-    if not both_neg:
-        winner = (ARM_CLAMP2R if (sel_a["expectancy_usdt"] or float("-inf"))
-                  >= (sel_b["expectancy_usdt"] or float("-inf"))
-                  else ARM_TURTLE)
-        rule = "dev@1.5x 净期望较大者"
-    else:
-        winner = (ARM_CLAMP2R if sel_a["t_stat"] >= sel_b["t_stat"]
-                  else ARM_TURTLE)
-        rule = ("两臂 dev@1.5x 净期望均 <= 0,取显著性较好者(t 统计较大);"
-                "如实声明,非转正证据")
-    arm_selection = {"rule": rule, "both_dev_negative": both_neg,
-                     "winner": {"arm": winner, "label": ARM_LABEL[winner]},
-                     "clamp2R": sel_a, "turtle": sel_b}
-    print(f"[arm] A exp={sel_a['expectancy_usdt']:+.4f} t={sel_a['t_stat']:+.2f} | "
-          f"B exp={sel_b['expectancy_usdt']:+.4f} t={sel_b['t_stat']:+.2f} -> "
-          f"winner={winner} ({rule})", flush=True)
-
-    # -- test 一次性(只跑判选臂) -----------------------------------------------
-    for mult in COST_MULTS:
-        t0 = time.time()
-        res, m = run_one(winner, "test", mult)
-        results[(winner, "test", mult)] = (res, m)
-        print(f"[bt] {winner:8s} test cost {mult}x: net={m['net_pnl']:+.2f} "
-              f"trades={m['n_trades']} ({time.time() - t0:.1f}s)", flush=True)
-    liq_t = sum(results[(winner, "test", mm)][0].counters["liquidations"]
-                for mm in COST_MULTS)
-    if liq_t != 0:
-        raise RuntimeError(f"test 段强平非预期触发: {liq_t}")
-
-    # -- 样本量与升级判据(先于叙述) ---------------------------------------------
-    m_test_1x = results[(winner, "test", 1.0)][1]
-    exp_test_15x = results[(winner, "test", 1.5)][1]["expectancy_usdt"]
-    pf_2x = results[(winner, "test", 2.0)][1]["profit_factor"]
+    # -- 样本量与升级线测量(同一冻结口径如实填报;test 纪律见头注,不再判定) ------
+    m_test_1x = results[("test", 1.0)][1]
+    exp_test_15x = results[("test", 1.5)][1]["expectancy_usdt"]
+    pf_2x = results[("test", 2.0)][1]["profit_factor"]
     n_test = m_test_1x["n_trades"]
     sample = {
         "n_trades_test_1x": n_test, "threshold": MIN_TRADES_TEST,
@@ -513,8 +457,10 @@ def main() -> None:
             n_test >= MIN_TRADES_TEST
             and exp_test_15x is not None and exp_test_15x > 0.0
             and pf_2x is not None and pf_2x > 1.0) else "RESEARCH_ONLY"),
+        "note": ("描述性复测(turtle 固化语义);非新协议判定 —— test 唯一一次"
+                 "评估曝光已于 v6 轮消耗(research-log #12 终生声明)。"),
     }
-    trades_test_1x = [t for t in results[(winner, "test", 1.0)][0].trades
+    trades_test_1x = [t for t in results[("test", 1.0)][0].trades
                       if t["in_segment_open"]]
     if trades_test_1x:
         ci_lo, ci_hi = block_bootstrap_ci(
@@ -528,8 +474,8 @@ def main() -> None:
     buckets: dict = {}
     givebacks: dict = {}
     cap_stats: dict = {}
-    for (arm, seg, mult), (res, m) in sorted(results.items()):
-        tag = f"{arm}|{seg}@{mult}x"
+    for (seg, mult), (res, m) in sorted(results.items()):
+        tag = f"{SEMANTICS}|{seg}@{mult}x"
         buckets[tag] = bucket_tables(res.trades)
         givebacks[tag] = giveback_summary(res.trades)
         cap_stats[tag] = {
@@ -546,28 +492,33 @@ def main() -> None:
         }
 
     REPORTS.mkdir(exist_ok=True)
-    for (arm, seg, mult), (res, m) in sorted(results.items()):
+    for (seg, mult), (res, m) in sorted(results.items()):
         suffix = "" if mult == 1.0 else f"_cost{str(mult).replace('.', '_')}"
         trades_frame(res.trades).to_csv(
-            REPORTS / f"trades_v6_{arm}_{seg}{suffix}.csv", index=False)
+            REPORTS / f"trades_v6_{SEMANTICS}_{seg}{suffix}.csv", index=False)
         equity_frame(res).to_csv(
-            REPORTS / f"equity_v6_{arm}_{seg}{suffix}.csv", index=False)
+            REPORTS / f"equity_v6_{SEMANTICS}_{seg}{suffix}.csv", index=False)
 
     payload = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "semantics": SEMANTICS,
         "protocol": {
-            "doc": "docs/v6-protocol.md(冻结于任何 v6 运行之前)",
+            "doc": "docs/v6-protocol.md(A/B 协议冻结原文,未改动)",
             "meta": raw_cfg["meta"],
-            "arm_selection": arm_selection,
-            "test_eval_declaration": "test 段第 10 次曝光(v6 唯一一次;research-log "
-                                     "#12 终生声明:此后绝不再用于研究迭代)",
+            "canonical_status": "turtle(原臂 B)固化为唯一策略语义;arm 切换与臂 A "
+                                "clamp2R 实现已移除;双臂归档 research/rounds/v6/",
+            "arm_selection_history": "reports/backtest_v6.json:arm_selection"
+                                     "(两臂 dev@1.5x 均 ≤ 0,取 t 统计较好者;非转正证据)",
+            "test_eval_declaration": "test 段曝光纪律:第 10 次曝光(v6 唯一一次)已于 "
+                                     "v6 轮消耗(research-log #12 终生声明);本运行"
+                                     "为规范链现状度量,不产生新协议判定。",
             "opportunity_coexistence": "PR#9 opportunity.py 因果生命周期/15m 保护"
-                                       "性止损管线不参与本回测;本管线 §8 决策以"
-                                       "认知 TF 收盘为口径(v1-v5 同);两设施共存"
-                                       "不混用,如实声明。",
+                                       "性止损管线(现归档 research/rounds/external/)"
+                                       "不参与本回测;本管线 §8 决策以认知 TF 收盘"
+                                       "为口径(v1-v6 同);不混用,如实声明。",
         },
         "config": {
-            "config_file": "config/v6.json",
+            "config_file": "config/canonical.json",
             "equity0": equity0, "dev_frac": dev_frac,
             "risk_frac": broker_kw["risk_frac"],
             "leverage_cap": broker_kw["leverage_cap"],
@@ -579,8 +530,7 @@ def main() -> None:
             "whitelist": [f"{i}|{'long' if d > 0 else 'short'}"
                           for i, d in sorted(whitelist)],
             "tf_list": tf_list, "k_is": rp_base.k_is, "k_dq": rp_base.k_dq,
-            "k_imp": rp_base.k_imp, "r_min": rp_base.r_min,
-            "target_r": rp_base.target_r,
+            "k_imp": rp_base.k_imp,
             "turtle_stop_atr": rp_base.turtle_stop_atr,
             "portfolio_cap_frac": cap_frac,
             "n_fill": n_fill, "exec_tf_seconds": 900,
@@ -604,7 +554,6 @@ def main() -> None:
         "compaction_report": compaction_report,
         "cross_checks": xcheck,
         "dev_signal_counts": signal_counts(frames, dev_frac),
-        "arm_selection": arm_selection,
         "sample_size": sample,
         "upgrade_v6": upgrade,
         "bucket_tables": buckets,
@@ -612,14 +561,15 @@ def main() -> None:
         "portfolio_capacity": cap_stats,
         "runs": {},
     }
-    for (arm, seg, mult), (res, m) in sorted(results.items()):
-        payload["runs"][f"{arm}|{seg}@{mult}x"] = {"metrics": m,
-                                                   "trades": res.trades}
+    for (seg, mult), (res, m) in sorted(results.items()):
+        payload["runs"][f"{SEMANTICS}|{seg}@{mult}x"] = {"metrics": m,
+                                                         "trades": res.trades}
 
-    (REPORTS / "backtest_v6.json").write_text(
+    (REPORTS / "backtest_v6_turtle.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-    (REPORTS / "backtest_v6.md").write_text(render_md(payload), encoding="utf-8")
-    print(f"-> reports/backtest_v6.json/.md, trades_v6/equity_v6 CSVs "
+    (REPORTS / "backtest_v6_turtle.md").write_text(render_md(payload), encoding="utf-8")
+    print(f"-> reports/backtest_v6_turtle.json/.md, "
+          f"trades_v6_turtle/equity_v6_turtle CSVs "
           f"(total {time.time() - t_start:.0f}s)", flush=True)
 
 
@@ -637,8 +587,6 @@ def _f(x, nd=2, dash="—"):
 def render_md(payload: dict) -> str:
     runs = payload["runs"]
     cfg = payload["config"]
-    sel = payload["arm_selection"]
-    winner = sel["winner"]["arm"]
 
     def m(tag):
         return runs[tag]["metrics"]
@@ -647,30 +595,29 @@ def render_md(payload: dict) -> str:
         == "INSUFFICIENT_DATA"
 
     lines = [
-        "# v6 回测报告(docs/v6-protocol.md:出口几何修复 × 多尺度并行战役)",
+        "# v6 规范链回测报告(turtle 唯一语义 × 多尺度并行战役)",
         "",
         f"生成时间(UTC):{payload['generated_at_utc']}",
         "",
-        "## 0. 协议与诚实性声明",
+        "## 0. 地位与诚实性声明",
         "",
-        "- 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役/臂,隔离互不知晓;"
+        "- 语义:turtle(v6 臂 B)固化为唯一策略语义 —— 无固定目标,初始防线 "
+        f"{cfg['turtle_stop_atr']}·atr,trailing 只紧不松,关 §8.6 时间止损;"
+        f"F1 k_is={cfg['k_is']} 闸保留。A/B 判选历史(两臂 dev@1.5x 均 ≤ 0,"
+        "按冻结规则取臂 B,非转正证据)见 reports/backtest_v6.json/.md;双臂"
+        "实现与协议 A/B 原文保留于 research/rounds/v6/ 与 docs/v6-protocol.md。",
+        "- 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役,隔离互不知晓;"
         f"共享权益 + 组合容量 {cfg['portfolio_cap_frac']}(最坏情景 FIFO 跳过,"
         "成交时刻 PR#9 broker 口径第二层钳制)。",
-        f"- 语义修复(唯一策略变更):S1 失效锚定结构区边界(F1 k_is={cfg['k_is']}"
-        " 闸保留);S2 臂 A clamp2R(target=决策收盘±2.0R,room<1.5R 拒,减仓后"
-        "**禁保本**只 trailing)vs 臂 B turtle(dev-only:无目标,初始防线 "
-        f"{cfg['turtle_stop_atr']}·atr,trailing 只紧不松,关时间止损)。"
-        "§8.1/§8.5/§8.6(臂 B 除外)不变;加仓仍关闭。",
         f"- 路由 = v5 质量路由双向(E1 市价优先/E6 STRONG 市价 WEAK=E7 前缘限价;"
         f"k_dq={cfg['k_dq']} k_imp={cfg['k_imp']};白名单 {cfg['whitelist']})。",
         "- 执行路径:TF=1h→15m,TF≥2h→1h(对齐断言;fill_after = 决策 bar 最末"
         f"细 bar;N_fill={cfg['n_fill']} 墙钟小时)。",
-        f"- **{payload['protocol']['test_eval_declaration']}**:本报告为该次评估"
-        "的回测侧产物,此后不再以 test 迭代。",
-        f"- 样本量(v6-protocol §4):test 合并战役成交 < "
+        f"- **{payload['protocol']['test_eval_declaration']}**",
+        "- 样本量(v6-protocol §4 口径,如实测量):test 合并战役成交 < "
         f"{payload['sample_size']['threshold']} ⇒ "
         f"**{payload['sample_size']['sample_size_verdict']}**"
-        + ("——按协议**本报告不给出任何转正叙述**。" if insufficient else "。"),
+        + ("——本报告不给出任何转正叙述。" if insufficient else "。"),
         f"- {payload['protocol']['opportunity_coexistence']}",
         f"- 合约规格:{payload['contracts']['source']}(离线强制)。",
         "- 认知对账(全部硬约束一致):E7 1h 计数 == v2 冻结产物("
@@ -681,54 +628,33 @@ def render_md(payload: dict) -> str:
         f"v1 go_events={payload['cross_checks']['e1e6_short_vs_v1']['v1']}"
         "(v1 parity 锚点,未破)。",
         "",
-        "## 1. 臂判选(dev 证据,先于 test;只允许选臂,不允许调参)",
+        "## 1. 总览(段 × 成本;权益 300 USDT 起)",
         "",
-        "| 臂 | dev@1.5x 净期望USDT | dev@1.5x 净额 | 笔数 | t统计 |",
-        "|---|---|---|---|---|",
-        f"| {ARM_LABEL[ARM_CLAMP2R]} | {_f(sel[ARM_CLAMP2R]['expectancy_usdt'], 4)} "
-        f"| {_f(sel[ARM_CLAMP2R]['net_pnl'])} | {sel[ARM_CLAMP2R]['n_trades']} "
-        f"| {_f(sel[ARM_CLAMP2R]['t_stat'])} |",
-        f"| {ARM_LABEL[ARM_TURTLE]} | {_f(sel[ARM_TURTLE]['expectancy_usdt'], 4)} "
-        f"| {_f(sel[ARM_TURTLE]['net_pnl'])} | {sel[ARM_TURTLE]['n_trades']} "
-        f"| {_f(sel[ARM_TURTLE]['t_stat'])} |",
-        "",
-        f"**判选规则**:{sel['rule']} ⇒ **test 只跑 {sel['winner']['label']}**"
-        + ("(两臂 dev@1.5x 均 ≤ 0,如实声明:此为显著性次序选择,非转正证据)。"
-           if sel["both_dev_negative"] else "。"),
-        "",
-        "## 2. 总览(臂 × 段 × 成本;test 仅判选臂;权益 300 USDT 起)",
-        "",
-        "| 臂 | 段 | 成本 | 净盈亏 | 收益率 | 最大回撤% | 交易数 | 胜率 | 盈亏因子 | 期望USDT | 期望R |",
-        "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for (arm, seg, mult) in [(a, s, mm) for a in ARMS for s in SEGMENTS
-                             for mm in COST_MULTS] + \
-                            [(winner, "test", mm) for mm in COST_MULTS]:
-        g = m(f"{arm}|{seg}@{mult}x")
+        "| 段 | 成本 | 净盈亏 | 收益率 | 最大回撤% | 交易数 | 胜率 | 盈亏因子 | 期望USDT | 期望R |",
+        "|---|---|---|---|---|---|---|---|---|---|"]
+    for (seg, mult) in _grid():
+        g = m(f"{SEMANTICS}|{seg}@{mult}x")
         lines.append(
-            f"| {ARM_LABEL[arm]} | {seg} | {mult}x | {_f(g['net_pnl'])} "
+            f"| {seg} | {mult}x | {_f(g['net_pnl'])} "
             f"| {_f(100 * g['return_pct'])}% "
             f"| {_f(100 * g['max_dd_pct'])}% "
             f"| {g['n_trades']} | {_f(g['winrate'], 3)} "
             f"| {_f(g['profit_factor'])} | {_f(g['expectancy_usdt'], 4)} "
             f"| {_f(g['expectancy_r'], 4)} |")
 
-    lines += ["", "## 3. 回吐中位 R(核心判别量;战役认知帧 OHLC;v1 基线 3.6R,",
+    lines += ["", "## 2. 回吐中位 R(核心判别量;战役认知帧 OHLC;v1 基线 3.6R,",
               f"协议目标 ≤ {GIVEBACK_TARGET_R}R)", "",
-              "| 臂 | 段 | 成本 | n | MFE_R 中位 | 回吐中位 R |",
-              "|---|---|---|---|---|---|"]
-    for (arm, seg, mult) in [(a, s, mm) for a in ARMS for s in SEGMENTS
-                             for mm in COST_MULTS] + \
-                            [(winner, "test", mm) for mm in COST_MULTS]:
-        gb = payload["giveback"][f"{arm}|{seg}@{mult}x"]
-        lines.append(f"| {ARM_LABEL[arm]} | {seg} | {mult}x | {gb['n']} "
+              "| 段 | 成本 | n | MFE_R 中位 | 回吐中位 R |",
+              "|---|---|---|---|---|"]
+    for (seg, mult) in _grid():
+        gb = payload["giveback"][f"{SEMANTICS}|{seg}@{mult}x"]
+        lines.append(f"| {seg} | {mult}x | {gb['n']} "
                      f"| {_f(gb['mfe_median_r'])} | {_f(gb['giveback_median_r'])} |")
 
-    lines += ["", "## 4. 强制分桶(机制 × TF × 方向;笔数/胜率/平均R/净额)", ""]
-    for (arm, seg, mult) in [(a, s, mm) for a in ARMS for s in SEGMENTS
-                             for mm in COST_MULTS] + \
-                            [(winner, "test", mm) for mm in COST_MULTS]:
-        tag = f"{arm}|{seg}@{mult}x"
-        lines += [f"### {ARM_LABEL[arm]} {seg}@{mult}x", "",
+    lines += ["", "## 3. 强制分桶(机制 × TF × 方向;笔数/胜率/平均R/净额)", ""]
+    for (seg, mult) in _grid():
+        tag = f"{SEMANTICS}|{seg}@{mult}x"
+        lines += [f"### {seg}@{mult}x", "",
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         bt = payload["bucket_tables"][tag]
@@ -753,27 +679,26 @@ def render_md(payload: dict) -> str:
     for k, v in payload["dev_signal_counts"].items():
         lines.append(f"| {k} | {v} |")
 
-    lines += ["", "## 5. 组合容量(3% 最坏情景 FIFO 命中统计)", "",
-              "| 臂 | 段 | 成本 | cap_skips | 市价成交 | 限价武装 | 限价成交 | 过期 | E1撤单 |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
-    for (arm, seg, mult) in [(a, s, mm) for a in ARMS for s in SEGMENTS
-                             for mm in COST_MULTS] + \
-                            [(winner, "test", mm) for mm in COST_MULTS]:
-        cs = payload["portfolio_capacity"][f"{arm}|{seg}@{mult}x"]
-        lines.append(f"| {ARM_LABEL[arm]} | {seg} | {mult}x "
+    lines += ["", "## 4. 组合容量(3% 最坏情景 FIFO 命中统计)", "",
+              "| 段 | 成本 | cap_skips | 市价成交 | 限价武装 | 限价成交 | 过期 | E1撤单 |",
+              "|---|---|---|---|---|---|---|---|---|"]
+    for (seg, mult) in _grid():
+        cs = payload["portfolio_capacity"][f"{SEMANTICS}|{seg}@{mult}x"]
+        lines.append(f"| {seg} | {mult}x "
                      f"| {cs['portfolio_cap_skips']} | {cs['opens_filled']} "
                      f"| {cs['limits_armed']} | {cs['limit_fills_entry']} "
                      f"| {cs['limit_expired']} | {cs['e1_priority_cancels']} |")
 
     up = payload["upgrade_v6"]
     ss = payload["sample_size"]
-    lines += ["", "## 6. 样本量判定与升级判据(v6-protocol §4,先于叙述)", "",
-              f"- test 合并战役成交笔数(判选臂 {ARM_LABEL[winner]},1x,OPEN 决策 ∈ "
+    lines += ["", "## 5. 样本量与升级线测量(v6-protocol §4 同一口径,如实填报)", "",
+              f"- test 合并战役成交笔数(turtle,1x,OPEN 决策 ∈ "
               f"test):**{ss['n_trades_test_1x']}**(阈值 ≥ {ss['threshold']})⇒ "
               f"**{ss['sample_size_verdict']}**。",
               f"- test@1x 逐笔净盈亏均值 95% CI(自然日 block bootstrap,2000 次,"
               f"固定种子):{_f(ss['test_net_pnl_mean_ci95_1x'][0], 4)} ~ "
               f"{_f(ss['test_net_pnl_mean_ci95_1x'][1], 4)} USDT —— 如实报告。",
+              f"- {up['note']}",
               "",
               "| 判据 | 值 | 通过 |", "|---|---|---|",
               f"| test 成交 ≥ 60(合并战役) | {up['criteria']['n_trades_test_ge_60']}"
@@ -783,27 +708,27 @@ def render_md(payload: dict) -> str:
               f"| {'✓' if up['criteria']['expectancy_test_1_5x_gt_0'] else '✗'} |",
               f"| test@2x PF > 1 | {_f(up['criteria']['pf_test_2x'])} "
               f"| {'✓' if up['criteria']['pf_test_2x_gt_1'] else '✗'} |",
-              f"| **结论(全部满足才升级)** | — | **{up['verdict']}** |"]
+              f"| **测量结论(同一口径)** | — | **{up['verdict']}** |"]
     if insufficient:
         lines += ["",
                   "> INSUFFICIENT_DATA 处置(v6-protocol §4):不产生任何『看起来转"
-                  "正』的叙述;样本量按格如实报告;两种结局都关闭协议级优化循环,基"
-                  "础设施(战役引擎)保留为永久资产。"]
+                  "正』的叙述;样本量按格如实报告;基础设施(战役引擎)保留为永久资产。"]
 
-    lines += ["", "## 7. 已知近似与如实声明", "",
+    lines += ["", "## 6. 已知近似与如实声明", "",
               "① E6→E7『同 episode』以 E7 attrs ref == 登记 ref 操作化(零检测器"
               "改动,浮点同源 1e-9);② 每战役至多保留最新一个 weak-E6 登记;③ 限"
               "价严格穿过才成交、穿透缺口按 limit 价成交(保守);④ 武装成交的认"
               "知 bar 不做 §8 裁决(同 v4/v5);⑤ 组合容量按决策时刻参考价估算"
               "(不取整,略高估=保守),成交时刻 PR#9 broker 口径第二层钳制;⑥ "
-              "N_fill 按墙钟 12 小时统一(各 TF 不引入新先验);⑦ E1/E7 的 S1 "
-              "invalid 即检测器冻结 attrs 区缘口径(无改动),E6 重锚含 ref 的"
-              "结构区缘(无区拒,不编造宽度);⑧ 决策时刻容量检查为预算口径,"
-              "不含资金费;强弱路由质量量(impulse/margin)以认知 TF bar 度量。"
+              "N_fill 按墙钟 12 小时统一(各 TF 不引入新先验);⑦ turtle 语义无"
+              "结构目标(target_1=None),§8.2 目标减仓恒退化为其市价回退分支"
+              "(无仓/无目标 ⇒ 市价,如机制设计);⑧ 决策时刻容量检查为预算口径,"
+              "不含资金费;强弱路由质量量(impulse/margin)以认知 TF bar 度量。",
               "",
-              "机器可读全量:`reports/backtest_v6.json`;逐笔:"
-              "`reports/trades_v6_*.csv`(增列 campaign/tf/arm/route/mfe_r/"
-              "giveback_r);逐执行细 bar 权益:`reports/equity_v6_*.csv`。",
+              "机器可读全量:`reports/backtest_v6_turtle.json`;逐笔:"
+              "`reports/trades_v6_turtle_*.csv`(增列 campaign/tf/arm/route/"
+              "mfe_r/giveback_r);逐执行细 bar 权益:`reports/equity_v6_turtle_*.csv`。",
+              "历史 A/B 全网格:`reports/backtest_v6.json/.md`(冻结,本脚本不再写入)。",
               ""]
     return "\n".join(lines)
 
