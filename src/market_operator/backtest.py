@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Optional
 
 import pandas as pd
 
@@ -59,14 +60,15 @@ class SymbolCognition:
     views: dict                      # bar index → StructureView(仅事件 bar)
 
 
-def prepare_cognition(df: pd.DataFrame, params: Params, symbol: str
-                      ) -> SymbolCognition:
+def prepare_cognition(df: pd.DataFrame, params: Params, symbol: str,
+                      enable_e7: bool = False) -> SymbolCognition:
     """严格时间序回放 EventDetector,缓存逐 bar 认知产物。
 
     与 research.collect_events 同一检测路径;本缓存额外保留逐 bar atr 与
-    每 bar 新确认 pivot(§8.3 移动防线输入)。
+    每 bar 新确认 pivot(§8.3 移动防线输入)。`enable_e7` 打开 v2 E7 发射
+    (docs/v2-protocol.md;v1 默认关,行为不变)。
     """
-    detector = EventDetector(params)
+    detector = EventDetector(params, enable_e7=enable_e7)
     bars: list = []
     atrs: list = []
     events_by: dict = {}
@@ -118,7 +120,8 @@ def run_backtest(cogs: dict, *, segment: str, dev_frac: float, equity0: float,
                  risk_frac: float, leverage_cap: float, taker_fee: float,
                  slippage_per_side: float, funding_per_8h: float,
                  cost_multiplier: float, contracts: dict,
-                 params: Params) -> BacktestResult:
+                 params: Params, strategy: Optional[Strategy] = None,
+                 whitelist: Optional[frozenset] = None) -> BacktestResult:
     """合并三品种 bar 为统一时间序列逐 ts 推进(同 ts 按 symbol 字典序)。
 
     每根 bar 的因果序:① t+1 开盘撮合(broker.on_bar_open,含上一 bar 决策的
@@ -147,7 +150,10 @@ def run_backtest(cogs: dict, *, segment: str, dev_frac: float, equity0: float,
                     taker_fee=taker_fee, slippage_per_side=slippage_per_side,
                     funding_per_8h=funding_per_8h, contracts=contracts,
                     cost_multiplier=cost_multiplier)
-    strategy = Strategy()                                # GO 白名单,r_min=1.5
+    # strategy/whitelist 为 v2 入口(docs/v2-protocol.md):None ⇒ v1 行为
+    # (GO 白名单 Strategy,r_min=1.5);go_events 计数集与策略白名单保持一致。
+    go_set = GO_MECHANISMS if whitelist is None else whitelist
+    strategy = strategy if strategy is not None else Strategy()
     pos_mgr = PositionManager(params, allow_add=False)   # E4 NO-GO ⇒ 加仓关闭
     equity_rows: list = []
     counters = {"go_events": 0, "open_intents": 0, "opens_filled": 0,
@@ -189,7 +195,7 @@ def run_backtest(cogs: dict, *, segment: str, dev_frac: float, equity0: float,
             if lo <= i < hi:
                 counters["go_events"] += sum(
                     1 for e in new_events
-                    if (e.id, e.direction) in GO_MECHANISMS)
+                    if (e.id, e.direction) in go_set)
                 state = broker.position_of(sym)
                 for intent in strategy.on_bar(sym, bar, cog.views.get(i),
                                               new_events,

@@ -52,7 +52,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .events import E1, E2, E3, E4, E5, E6, EventDetector, MarketEvent
+from .events import E1, E2, E3, E4, E5, E6, E7, EventDetector, MarketEvent
 from .hypothesis import Hypothesis, StructureView, build
 from .structure import Params, Regime, ZoneRole
 
@@ -119,6 +119,9 @@ def expected_direction(event: MarketEvent) -> int:
         return +1 if a["leg_start"] > a["pb_price"] else -1
     if event.id == E6:      # 反向:TREND_UP 破坏 → 空
         return -1 if a["regime_before"] == Regime.TREND_UP.value else +1
+    if event.id == E7:      # v2 FLIP_RETEST(v2-protocol §1):role_new 阻力 → 空;
+        # from_role(旧区角色)为独立可核对证据:旧支撑破位 ⇒ role_new=resistance
+        return -1 if a["from_role"] == ZoneRole.SUPPORT.value else +1
     raise ValueError(f"unknown event id: {event.id}")
 
 
@@ -137,12 +140,16 @@ class StructureTimeline:
     views: dict                   # known_index -> StructureView(仅事件 bar)
 
 
-def collect_events(df: pd.DataFrame, params: Params) -> tuple:
+def collect_events(df: pd.DataFrame, params: Params,
+                   event_ids: Optional[frozenset] = None,
+                   enable_e7: bool = False) -> tuple:
     """严格时间序回放,返回 (events, StructureTimeline)。
 
     每个事件的方向按 §9.1-3 映射硬核对一次(不一致即 ValueError)。
+    `event_ids` 为可选机制过滤器(v2 事件研究用,如 frozenset({"E7"}));
+    None = 全量(v1 路径,行为不变)。`enable_e7` 打开 v2 E7 发射(v1 默认关)。
     """
-    detector = EventDetector(params)
+    detector = EventDetector(params, enable_e7=enable_e7)
     n = len(df)
     regimes = np.empty(n, dtype=object)
     atrs = np.zeros(n, dtype=np.float64)
@@ -153,6 +160,8 @@ def collect_events(df: pd.DataFrame, params: Params) -> tuple:
     for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
         bar = (row.ts, row.open, row.high, row.low, row.close, row.volume)
         emitted = detector.update(bar)
+        if event_ids is not None:
+            emitted = [e for e in emitted if e.id in event_ids]
         s = detector.structure
         t = s.bars_seen - 1
         regimes[t] = s.regime().value

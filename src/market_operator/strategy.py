@@ -29,6 +29,11 @@ dup(同 symbol 已有持仓去重)/risk_budget(风险预算占用)。
 open_position_state 契约:调用方(回测/执行层)每 bar 传入该 symbol 当前
 持仓对象(或 None);本模块只做 None 判定。传入 None 即视为该 symbol 已
 平仓,解除 _open 锁(假定上一 bar 的 OPEN 意图已在下一 bar 成交)。
+
+v2 增量(docs/v2-protocol.md §1,冻结于实现前):StrategyParams.whitelist
+参数化入场白名单(None = v1 GO_MECHANISMS,v1 路径不变);k_is > 0 时启用
+F1 失效距离下限(dist(close(t), invalid) ≥ k_is·atr(t),白名单内事件适用)。
+v2 回测 whitelist = {(E7,-1),(E7,1)},k_is = 0.8(先验,不做择优)。
 """
 
 from __future__ import annotations
@@ -38,10 +43,10 @@ from enum import Enum
 from typing import Optional, Sequence
 
 from .events import E1, E6, MarketEvent
-from .hypothesis import Hypothesis, StructureView, build
+from .hypothesis import Hypothesis, StructureView, build, f1_invalid_distance_ok
 from .structure import _bar_parts
 
-GO_MECHANISMS = frozenset({(E1, -1), (E6, -1)})
+GO_MECHANISMS = frozenset({(E1, -1), (E6, -1)})   # v1 白名单(冻结,不改)
 
 
 class OrderKind(str, Enum):
@@ -70,6 +75,10 @@ class StrategyParams:
     r_min: float = 1.5                          # §7 行动门槛先验
     allow_add: bool = False                     # §8.4 v1 关闭(E4 NO-GO)
     max_open_positions: Optional[int] = None    # 风险预算上限(None=不封顶)
+    # v2(docs/v2-protocol.md §1):whitelist = None ⇒ v1 GO_MECHANISMS(行为不变);
+    # 显式集合则替代白名单(v2 回测 = {(E7,-1),(E7,1)},来自 config/v2.json)。
+    whitelist: Optional[frozenset] = None
+    k_is: float = 0.0                           # F1 失效距离下限先验倍率;0 = 不应用
 
 
 class Strategy:
@@ -114,47 +123,71 @@ class Strategy:
     def _evaluate(self, symbol: str, ev: MarketEvent, view: StructureView,
                   close: float, ts: object, holding: bool
                   ) -> Optional[OrderIntent]:
-        if (ev.id, ev.direction) not in GO_MECHANISMS:
-            if ev.direction >= 0:
-                self._notes.append(
-                    f"dir|{symbol} {ev.id}|long not in GO set (short-only v1)")
-            else:
-                self._notes.append(
-                    f"nogo|{symbol} {ev.id}|short mechanism not GO "
-                    f"(whitelist: E1|short, E6|short)")
+        side = "long" if ev.direction > 0 else "short"
+        if self.params.whitelist is None:       # v1 路径(GO_MECHANISMS,冻结不变)
+            if (ev.id, ev.direction) not in GO_MECHANISMS:
+                if ev.direction >= 0:
+                    self._notes.append(
+                        f"dir|{symbol} {ev.id}|long not in GO set (short-only v1)")
+                else:
+                    self._notes.append(
+                        f"nogo|{symbol} {ev.id}|short mechanism not GO "
+                        f"(whitelist: E1|short, E6|short)")
+                return None
+        elif (ev.id, ev.direction) not in self.params.whitelist:
+            self._notes.append(
+                f"nogo|{symbol} {ev.id}|{side} not in configured whitelist "
+                f"(v2 entry gate)")
             return None
         if holding:
-            self._notes.append(
-                f"dup|{symbol} {ev.id}|short GO but position already open, "
-                f"v1 no add (allow_add={self.params.allow_add})")
+            if self.params.whitelist is None:
+                self._notes.append(
+                    f"dup|{symbol} {ev.id}|short GO but position already open, "
+                    f"v1 no add (allow_add={self.params.allow_add})")
+            else:
+                self._notes.append(
+                    f"dup|{symbol} {ev.id}|{side} whitelisted but position "
+                    f"already open, no add (allow_add={self.params.allow_add})")
             return None
         if (self.params.max_open_positions is not None
                 and len(self._open) >= self.params.max_open_positions):
             self._notes.append(
-                f"risk_budget|{symbol} {ev.id}|short open slots "
+                f"risk_budget|{symbol} {ev.id}|{side} open slots "
                 f"{len(self._open)}/{self.params.max_open_positions} occupied")
+            return None
+        # F1 失效距离下限(docs/v2-protocol.md §1;k_is>0 时启用,v2 入场门)
+        if self.params.k_is > 0.0 \
+                and not f1_invalid_distance_ok(ev, close, self.params.k_is):
+            inv0 = float(ev.attrs.get("invalid", close))
+            atr0 = float(ev.attrs.get("atr", 0.0))
+            dist = ev.direction * (close - inv0)
+            self._notes.append(
+                f"f1|{symbol} {ev.id}|{side} dist={dist:.4g} < "
+                f"k_is={self.params.k_is}·atr={self.params.k_is * atr0:.4g} "
+                f"(F1 invalid-distance floor, v2-protocol §1)")
             return None
 
         hyp = build(ev, view, None)
         if hyp is None:
             self._notes.append(
-                f"no_hypo|{symbol} {ev.id}|short attrs['invalid'] missing")
+                f"no_hypo|{symbol} {ev.id}|{side} attrs['invalid'] missing")
             return None
         hyp = hyp.with_entry(close)       # §7 entry 以决策 bar 收盘近似
         if hyp.target_1 is None:
             self._notes.append(
-                f"no_target|{symbol} {ev.id}|short no structural target "
+                f"no_target|{symbol} {ev.id}|{side} no structural target "
                 f"(no fixed-R fabrication, §7)")
             return None
         if hyp.r_mult is None or hyp.r_mult < self.params.r_min:
             r = "None" if hyp.r_mult is None else f"{hyp.r_mult:.3f}"
             self._notes.append(
-                f"r_min|{symbol} {ev.id}|short r_mult={r} < "
+                f"r_min|{symbol} {ev.id}|{side} r_mult={r} < "
                 f"r_min={self.params.r_min}")
             return None
 
         self._taken[symbol] = hyp
-        reason = (f"{ev.id}|short GO entry_ref={close:.8g} "
+        tag = "GO" if self.params.whitelist is None else "whitelist"
+        reason = (f"{ev.id}|{side} {tag} entry_ref={close:.8g} "
                   f"invalid={hyp.invalid:.8g} target_1={hyp.target_1:.8g} "
                   f"r_mult={hyp.r_mult:.3f}")
         return OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
