@@ -661,10 +661,29 @@ class Broker:
             return self._skip_row(po, ts, "MIN_SIZE",
                                   "add exceeds portfolio gross-leverage budget "
                                   "or exchange minimum")
+        new_invalid = pos.invalid
+        if po.meta.get("role") == "deferred_add":
+            candidate = po.meta.get("add_invalid")
+            if candidate is None or new_invalid is None:
+                return self._skip_row(po, ts, "BAD_INVALID",
+                                      "deferred add missing structural stop")
+            candidate = float(candidate)
+            new_invalid = (min(new_invalid, candidate) if pos.direction < 0
+                           else max(new_invalid, candidate))
+            # Decision-time approval is not sufficient: gap/slippage can turn
+            # the real fill into a risk-increasing addition. Reject at fill.
+            before = pos.direction * (pos.entry - pos.invalid) * pos.qty
+            after = (pos.direction * (pos.entry - new_invalid) * pos.qty
+                     + pos.direction * (price - new_invalid) * qty)
+            if after > before + 1e-9:
+                return self._skip_row(po, ts, "ADD_RISK",
+                                      "actual fill violates risk-neutral add")
         fee = qty * price * self.taker_fee
         self.cash -= fee
         pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
         pos.qty += qty
+        if new_invalid is not None:
+            pos.invalid = new_invalid
         self.last_mark[sym] = price
         return self._row(po, ts, sym, side, "ADD", qty, price, o, fee,
                          0.0, 0.0, pos.trade_id, meta=dict(po.meta))
