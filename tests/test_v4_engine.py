@@ -433,3 +433,24 @@ def test_unfilled_reduce_limit_must_not_trigger_phantom_breakeven_exit():
     assert exits[0]["qty"] == pytest.approx(1.5)
     assert len([r for r in res.ledger if r["kind"] == "CANCEL"]) == 1
     assert len([r for r in res.ledger if r["kind"] == "REDUCE"]) == 0
+
+
+def test_execution_ledger_replays_only_broker_confirmed_fills(tmp_path):
+    """E7 intent and resting orders have no qty until actual maker/taker fills."""
+    from market_operator.orders import OrderLedger
+
+    with OrderLedger(tmp_path / "actual-executions.db") as journal:
+        kw = {"execution_ledger": journal, "ledger_run_id": "maker-reduce-exit"}
+        result = _run(main_hours(), _open_script(10), **kw)
+        fills = [r for r in result.ledger if r["kind"] in
+                 ("OPEN", "LIMIT_FILL", "REDUCE", "EXIT", "ADD", "LIQUIDATION")]
+        assert len(fills) == 3
+        assert journal.net_positions() == {}
+        assert journal.dispatch_allowed()
+        # Replaying the identical run must never double-book the same fills.
+        _run(main_hours(), _open_script(10), **kw)
+        assert journal.net_positions() == {}
+        assert journal.dispatch_allowed()
+        total = sum(journal.execution_totals(
+            f"replay:maker-reduce-exit:{r['symbol']}:{r['seq']}")[0] for r in fills)
+        assert float(total) == pytest.approx(sum(r["qty"] for r in fills))
