@@ -52,7 +52,8 @@ class Position:
     opened_index: int
     initial_risk: float            # |entry_open − invalid_open|(R 基准,>0)
     size_frac: float = 1.0         # 剩余名义(以 OPEN 为 1.0)
-    reduced: bool = False          # §8.2 减仓仅一次
+    reduced: bool = False          # §8.2 仅在实际成交后为 True
+    pending_reduce: bool = False   # v4:限价减仓待成交;不提前减量或移止损
     added: bool = False            # §8.4 加仓仅一次
     bars_held: int = 0             # 已收盘 bar 数(入场 bar 记第 1 根)
     _best: Optional[float] = None  # 入场以来最有利极值(空=min low,多=max high)
@@ -107,7 +108,8 @@ class PositionManager:
 
     def on_bar(self, symbol: str, bar, atr: float,
                new_pivots: Sequence[Pivot] = (),
-               new_events: Sequence[MarketEvent] = ()) -> list[OrderIntent]:
+               new_events: Sequence[MarketEvent] = (),
+               defer_reduce: bool = False) -> list[OrderIntent]:
         """按优先级 §8.1>§8.5>§8.2>§8.3>§8.6 评估;返回订单意图列表。"""
         pos = self.positions.get(symbol)
         if pos is None:
@@ -133,11 +135,14 @@ class PositionManager:
         intents: list[OrderIntent] = []
 
         # 3. §8.2 target_1 触及:减仓 50%(仅一次),余仓 invalid 移至 entry
-        if pos.target_1 is not None and not pos.reduced:
+        if pos.target_1 is not None and not pos.reduced and not pos.pending_reduce:
             hit = (l <= pos.target_1) if pos.direction < 0 \
                 else (h >= pos.target_1)
             if hit:
-                intents.append(self._reduce(pos, ts, c, l if pos.direction < 0 else h))
+                if defer_reduce:
+                    intents.append(self._defer_reduce(pos, ts, c, l if pos.direction < 0 else h))
+                else:
+                    intents.append(self._reduce(pos, ts, c, l if pos.direction < 0 else h))
 
         # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松)
         self._trail(pos, new_pivots, atr)
@@ -170,6 +175,41 @@ class PositionManager:
         return OrderIntent(kind=OrderKind.EXIT, symbol=pos.symbol,
                            qty_frac=qty, reason=reason, ref_price=float(ref),
                            ts=ts)
+
+    def _defer_reduce(self, pos: Position, ts: object, ref: float,
+                      extreme: float) -> OrderIntent:
+        """限价委托只锁定一次减仓意图,未成交前仓位和失效位保持真实。"""
+        if pos.pending_reduce or pos.reduced:
+            raise AssertionError("duplicate deferred reduce")
+        pos.pending_reduce = True
+        qty = pos.size_frac * 0.5
+        reason = (f"§8.2|target_1 hit reduce 50% target={pos.target_1:.8g} "
+                  f"extreme={extreme:.8g} awaiting fill before breakeven")
+        self.last.append(reason)
+        return OrderIntent(kind=OrderKind.REDUCE, symbol=pos.symbol,
+                           qty_frac=qty, reason=reason, ref_price=float(ref), ts=ts)
+
+    def confirm_reduce(self, symbol: str, actual_qty_frac: float) -> None:
+        """经纪商实际成交后才减少仓位并收紧止损。数量以初始 OPEN 仓位为基准。"""
+        pos = self.positions.get(symbol)
+        if pos is None or not pos.pending_reduce:
+            raise AssertionError(f"unexpected reduce fill without pending order: {symbol}")
+        if not 0.0 < actual_qty_frac <= pos.size_frac:
+            raise ValueError(f"invalid confirmed reduce fraction {actual_qty_frac}")
+        pos.size_frac -= actual_qty_frac
+        pos.pending_reduce = False
+        pos.reduced = True
+        old = pos.invalid
+        pos.invalid = min(pos.invalid, pos.entry) if pos.direction < 0 \
+            else max(pos.invalid, pos.entry)
+        pos.log.append(f"§8.2|reduce FILLED qty_frac={actual_qty_frac:.8g} "
+                       f"invalid {old:.8g}->{pos.invalid:.8g}")
+
+    def cancel_reduce(self, symbol: str) -> None:
+        """下单失败时撤销待成交标记;不凭未成交指令修改真实仓位。"""
+        pos = self.positions.get(symbol)
+        if pos is not None:
+            pos.pending_reduce = False
 
     def _reduce(self, pos: Position, ts: object, ref: float,
                 extreme: float) -> OrderIntent:
