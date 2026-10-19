@@ -1,0 +1,495 @@
+"""市场认知核心:ATR、确认波段、区域生命周期、状态(regime)。
+
+实现 docs/methodology.md §2(ATR)、§3(SwingTracker)、§4(Zone)、§5(Regime),
+知时纪律遵循 §0.3 与 §6A-A10:任何事实只在 `known_index <= t` 时参与认知。
+
+解释性决定(方法论文字未完全展开处,取最符合因果语义的读法,标注条款):
+- [§2/§3] ATR 在 bar t 报告用 `tr(t)` 更新后的平滑值(§3 确认判据即在 bar t 使用
+  `atr(t)`);前 `atr_n` 根 ATR 不可用(返回 0.0),期间不确认 pivot(确认需 `k_rev*atr`
+  阈值,阈值为正才能判断"达到")。
+- [§3/§8.4] 超宽 bar 的处理:SwingTracker 先对本 bar 之前的极值判确认,再考虑以
+  本 bar 极值推进——bar 内路径不可知,而 §0.3/A10 要求 forming_index 指向严格的历史
+  位置,此读法保证 `known_index > forming_index` 恒成立(测试断言);代价是同根新高
+  不会被记为上一腿的极值(保守、宁可延迟成形也不提前知时)。§8.4 的路径启发式
+  (close < open 视为先高后低)仍用于事件检测层 E3 的同根"ex 建立→回退"次序
+  (见 events.py)与 SwingTracker 未定向时的首腿定向。
+- [§4.1] "origin 保留最早者"取最早 `origin_known_index`;新 pivot 生成的区域自带
+  touches=1(波段端点处的市场反应即该区域的第一次触碰,§4 开头"市场曾经在那里给出
+  过明确反应")。
+- [§4.1] 新区域与现存同向区域重叠时以并集收敛(可链式搭接);被并入的非 ACTIVE 区域
+  重新激活为 ACTIVE(并集区间取代旧生命周期,即 A3"zone 返回 ACTIVE 开始新 episode")。
+- [§4.2] 状态机按冻结图实现:BROKEN 后"首次从远侧返回带内"= 之后任一根 bar 的
+  [low,high] 与带相交(破位收盘本身已接受于远侧,其后相交必来自远侧,A1);
+  "回踩被拒绝"以 A6 同语义度量:自回踩最深极值向远侧回退 ≥ k_rj*atr(收盘或极值
+  先到),成立则 FLIPPED:旧区 DEAD,同边界反向新区继承 touches/rejects/origin;
+  "回踩后反向重新 acceptance 穿回"(收盘越过正缘 k_bm*atr)则旧区 DEAD,不生成新区。
+  终止态(FLIPPED/DEAD)在发生 bar 处理完毕后即从 `zones` 视图移除,
+  其继承事实由新生反向区携带(A10:知时即刻生效)。
+- [§5] "价格未破坏最近抬升低点(见 E6)"纳入 regime 谓词,以当前 bar 收盘判定:
+  收盘已破坏最近 HL/LH 则不报告趋势。因此 E6 恰好发射于 regime 退出趋势的那一根
+  (E6 检测器以 `regime(t-1)` 为"TREND_UP/…中"之判定,见 events.py)。
+- [§5/§6A-A8] 趋势与区间结构统一由最近至多 `range_max_pivots` 个 confirmed pivots 判定
+  (A8 明示 RANGE 窗口;趋势取同一窗口内的最近两个高/低点序列,即"最近 4+ 个交错
+  pivot"的冻结读法)。
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Optional, Union
+
+import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# 参数(§2-§6 先验,来自 config/defaults.json,冻结)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Params:
+    atr_n: int = 14                      # §2 ATR(14, Wilder)
+    k_rev: float = 1.0                   # §3 反转确认幅度(ATR 倍数)
+    k_zw: float = 0.5                    # §4.1 区域半宽(ATR 倍数)
+    k_bm: float = 0.1                    # §4.2 acceptance 破位余量(ATR 倍数)
+    k_rj: float = 0.3                    # §6 E3 / §4.2 回踩拒绝回退幅度(ATR 倍数)
+    k_span: float = 3.0                  # §5 RANGE 总跨度上限(ATR 倍数)
+    k_room: float = 2.0                  # §6 E5 对侧空间下限(ATR 倍数)
+    tol_atr: float = 0.1                 # §5 pivot 相等容差(ATR 倍数)
+    n_a: int = 3                         # §6 E1 连续接受根数 N_a
+    n_f: int = 3                         # §6 E2/E3/E4 窗口 N_f
+    n_time: int = 24                     # §7 时间失效(认知层不用,契约保留)
+    e4_depth_atr: tuple = (0.5, 2.5)     # §6A-A7 E4 回调深度区间
+    e4_recovery: float = 0.5             # §6A-A7 E4 回收比例
+    range_max_pivots: int = 8            # §6A-A8 结构判定的最多 pivot 数
+    e5_edge_atr: float = 0.75            # §6A-A8 带边缘容差(ATR 倍数)
+
+    @classmethod
+    def from_json(cls, path: Union[str, Path]) -> "Params":
+        """从 config/defaults.json 加载冻结先验(未知键忽略)。"""
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        wanted = {f: raw[f] for f in cls.__dataclass_fields__ if f in raw}
+        if "e4_depth_atr" in wanted:
+            wanted["e4_depth_atr"] = tuple(wanted["e4_depth_atr"])
+        for k in ("atr_n", "n_a", "n_f", "n_time", "range_max_pivots"):
+            if k in wanted:
+                wanted[k] = int(wanted[k])
+        return cls(**wanted)
+
+
+# ---------------------------------------------------------------------------
+# 数据契约
+# ---------------------------------------------------------------------------
+
+
+class PivotKind(str, Enum):
+    HIGH = "high"
+    LOW = "low"
+
+
+@dataclass(frozen=True)
+class Pivot:
+    """确认的波段端点(§3)。forming_index 为极值发生 bar,known_index 为确认 bar。"""
+
+    price: float
+    forming_index: int
+    known_index: int
+    kind: PivotKind
+
+
+class ZoneRole(str, Enum):
+    SUPPORT = "support"
+    RESISTANCE = "resistance"
+
+
+class ZoneState(str, Enum):
+    ACTIVE = "ACTIVE"
+    BROKEN = "BROKEN"
+    RETESTED = "RETESTED"
+    FLIPPED = "FLIPPED"
+    DEAD = "DEAD"
+
+
+@dataclass
+class Zone:
+    """关键价格区域(§4)。属性为事实记录(§4.3:不设评分)。"""
+
+    lo: float
+    hi: float
+    role: ZoneRole
+    state: ZoneState = ZoneState.ACTIVE
+    touches: int = 0
+    rejects: int = 0
+    origin_known: int = 0        # origin_known_index:最早来源 pivot 的知时(§4.1)
+    last_change_known: int = 0   # 最近一次状态/属性变化的知时
+    merged: int = 1              # 合并来源数(§4.1)
+    _retest_extreme: Optional[float] = None  # BROKEN→RETESTED 后向正面最深回踩极值(§4.2)
+
+    def clone(self) -> "Zone":
+        return Zone(
+            lo=self.lo, hi=self.hi, role=self.role, state=self.state,
+            touches=self.touches, rejects=self.rejects,
+            origin_known=self.origin_known,
+            last_change_known=self.last_change_known, merged=self.merged,
+            _retest_extreme=self._retest_extreme,
+        )
+
+
+class Regime(str, Enum):
+    TREND_UP = "TREND_UP"
+    TREND_DOWN = "TREND_DOWN"
+    RANGE = "RANGE"
+    TRANSITION = "TRANSITION"
+
+
+Bar = Union[tuple, list, dict, pd.Series]
+
+
+def _bar_parts(bar: Bar) -> tuple:
+    """只读提取 (ts, open, high, low, close, volume);元组序即契约列序。"""
+    if isinstance(bar, pd.Series):
+        return (bar["ts"], float(bar["open"]), float(bar["high"]),
+                float(bar["low"]), float(bar["close"]), float(bar["volume"]))
+    if isinstance(bar, dict):
+        return (bar["ts"], float(bar["open"]), float(bar["high"]),
+                float(bar["low"]), float(bar["close"]), float(bar["volume"]))
+    t, o, h, l, c, v = bar
+    return t, float(o), float(h), float(l), float(c), float(v)
+
+
+# ---------------------------------------------------------------------------
+# ATR(§2,Wilder 1978)
+# ---------------------------------------------------------------------------
+
+
+class ATR:
+    """Wilder 平滑 ATR。前 n 根不可用(值 0.0);第 n 根为 tr 均值,其后递推。"""
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self._value: float = 0.0
+        self._seed_sum: float = 0.0
+        self._bars: int = 0
+        self._prev_close: Optional[float] = None
+
+    def update(self, high: float, low: float, close: float) -> float:
+        if self._prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low, abs(high - self._prev_close),
+                     abs(low - self._prev_close))
+        self._bars += 1
+        if self._bars <= self.n:
+            self._seed_sum += tr
+            self._value = self._seed_sum / self.n if self._bars == self.n else 0.0
+        else:
+            self._value = (self._value * (self.n - 1) + tr) / self.n
+        self._prev_close = close
+        return self._value
+
+    @property
+    def value(self) -> float:
+        return self._value
+
+
+# ---------------------------------------------------------------------------
+# SwingTracker(§3,确认驱动波段)
+# ---------------------------------------------------------------------------
+
+
+class SwingTracker:
+    """事件驱动状态机。方向由首次达到 k_rev*atr 的推进决定(§3 初始化)。"""
+
+    def __init__(self, k_rev: float) -> None:
+        self.k_rev = k_rev
+        self.direction: Optional[int] = None  # +1 up / -1 down(当前腿)
+        self.ext_price: float = 0.0
+        self.ext_index: int = 0
+        self._anchor_price: float = 0.0  # 未定向时的参考价(bar0 close)
+
+    def update(self, index: int, o: float, h: float, l: float, c: float,
+               atr_val: float) -> Optional[Pivot]:
+        if index == 0:
+            self._anchor_price = c
+        if atr_val <= 0.0:
+            return None
+
+        if self.direction is None:
+            # §3 初始化:第一腿方向 = 先走出 k_rev*atr 推进的方向;
+            # 同一根双向同时满足时按 §8.4 路径启发式(close < open → 先高,取 up)。
+            up_push = h - self._anchor_price >= self.k_rev * atr_val
+            down_push = self._anchor_price - l >= self.k_rev * atr_val
+            if up_push and (not down_push or c < o):
+                self.direction = +1
+                self.ext_price, self.ext_index = h, index
+            elif down_push:
+                self.direction = -1
+                self.ext_price, self.ext_index = l, index
+            return None
+
+        rev = self.k_rev * atr_val
+        if self.direction > 0:
+            # 确认只对本 bar 之前的极值判定:本 bar 不做"先推进极值再确认"的同根
+            # 处理(见模块 docstring §3/§8.4 条款注),保证 known_index > forming_index。
+            if self.ext_price - l >= rev:
+                pivot = Pivot(self.ext_price, self.ext_index, index, PivotKind.HIGH)
+                self.direction = -1
+                self.ext_price, self.ext_index = l, index
+                return pivot
+            if h > self.ext_price:
+                self.ext_price, self.ext_index = h, index
+        else:
+            if h - self.ext_price >= rev:
+                pivot = Pivot(self.ext_price, self.ext_index, index, PivotKind.LOW)
+                self.direction = +1
+                self.ext_price, self.ext_index = h, index
+                return pivot
+            if l < self.ext_price:
+                self.ext_price, self.ext_index = l, index
+        return None
+
+
+# ---------------------------------------------------------------------------
+# ZoneBook(§4:生成、合并、生命周期状态机)
+# ---------------------------------------------------------------------------
+
+
+class ZoneBook:
+    """区域集合与生命周期,全部以已知时生效(A10)。
+
+    同一 bar 的因果序:先生成/合并新 pivot 区域(§4.1),再按本 bar 遍历状态机
+    (A2 触碰、§4.2 acceptance 破位、远侧回踩、回踩拒绝翻转/穿回消亡)。
+    终止态(FLIPPED/DEAD)在该 bar 处理结束后移出 `zones` 视图(见模块 docstring)。
+    """
+
+    def __init__(self, params: Params) -> None:
+        self.p = params
+        self.zones: list[Zone] = []
+
+    # -- §4.1 生成与合并 ----------------------------------------------------
+
+    def on_pivot(self, pivot: Pivot, known: int, atr_val: float) -> None:
+        """confirmed pivot 生成区域:阻力=[P-k_zw*atr, P],支撑=[P, P+k_zw*atr](知时 atr)。"""
+        w = self.p.k_zw * atr_val
+        if pivot.kind is PivotKind.HIGH:
+            zone = Zone(lo=pivot.price - w, hi=pivot.price, role=ZoneRole.RESISTANCE,
+                        touches=1, origin_known=known, last_change_known=known)
+        else:
+            zone = Zone(lo=pivot.price, hi=pivot.price + w, role=ZoneRole.SUPPORT,
+                        touches=1, origin_known=known, last_change_known=known)
+        self._insert_merged(zone, known)
+
+    def _insert_merged(self, new: Zone, known: int) -> None:
+        """与现存同向区域重叠则合并:并集边界、touches 相加、origin 取最早(§4.1)。
+
+        并集可能搭接到下一个同向区域,以不动点方式收敛(保持前缀不变性)。
+        """
+        changed = True
+        while changed:
+            changed = False
+            for i, z in enumerate(self.zones):
+                if z.role == new.role and z.lo <= new.hi and new.lo <= z.hi:
+                    new = Zone(
+                        lo=min(z.lo, new.lo), hi=max(z.hi, new.hi), role=new.role,
+                        state=ZoneState.ACTIVE,
+                        touches=z.touches + new.touches,
+                        rejects=z.rejects + new.rejects,
+                        origin_known=min(z.origin_known, new.origin_known),
+                        last_change_known=known,
+                        merged=z.merged + new.merged,
+                    )
+                    self.zones.pop(i)
+                    changed = True
+                    break
+        self.zones.append(new)
+
+    # -- §4.2 状态机 ---------------------------------------------------------
+
+    def on_bar(self, index: int, o: float, h: float, l: float, c: float,
+               prev_close: Optional[float], atr_val: float) -> None:
+        if atr_val <= 0.0:
+            return
+        for z in list(self.zones):
+            self._advance(z, index, h, l, c, prev_close, atr_val)
+        self.zones = [z for z in self.zones
+                      if z.state not in (ZoneState.FLIPPED, ZoneState.DEAD)]
+
+    def _advance(self, z: Zone, index: int, h: float, l: float, c: float,
+                 prev_close: Optional[float], atr_val: float) -> None:
+        up = z.role is ZoneRole.RESISTANCE   # A1:阻力正面=下侧,远侧=上侧;支撑镜像
+        bm = self.p.k_bm * atr_val
+
+        if z.state is ZoneState.ACTIVE:
+            # A2 触碰:bar [low,high] 与带相交,且前一根收盘在正面之外
+            if prev_close is not None and h >= z.lo and l <= z.hi:
+                outside = (prev_close < z.lo) if up else (prev_close > z.hi)
+                if outside:
+                    z.touches += 1
+                    z.last_change_known = index
+            # acceptance 破位(§4.2):收盘越过外缘 + k_bm*atr → BROKEN
+            if (c > z.hi + bm) if up else (c < z.lo - bm):
+                z.state = ZoneState.BROKEN
+                z._retest_extreme = None
+                z.last_change_known = index
+            return
+
+        if z.state is ZoneState.BROKEN:
+            # 首次从远侧返回带内(§4.2;A1 远侧:阻力=上,支撑=下)→ RETESTED
+            back = (l <= z.hi) if up else (h >= z.lo)
+            if back:
+                z.state = ZoneState.RETESTED
+                z._retest_extreme = l if up else h
+                z.last_change_known = index
+                self._retest(z, index, h, l, c, atr_val)  # 同根 bar 继续判回踩结果
+            return
+
+        if z.state is ZoneState.RETESTED:
+            self._retest(z, index, h, l, c, atr_val)
+            return
+
+        # FLIPPED / DEAD:终止态,由 on_bar 收尾移除(模块 docstring,A10)
+
+    def _retest(self, z: Zone, index: int, h: float, l: float, c: float,
+                atr_val: float) -> None:
+        up = z.role is ZoneRole.RESISTANCE
+        bm = self.p.k_bm * atr_val
+        rj = self.p.k_rj * atr_val
+        ex = z._retest_extreme
+        ex = min(ex, l) if up else max(ex, h)
+        z._retest_extreme = ex
+        # 回踩被拒绝(§4.2,回退度量同 A6):自回踩极值向远侧回退 ≥ k_rj*atr
+        # → FLIPPED:旧区 DEAD,同边界反向新区继承 touches/rejects/origin
+        if ((h - ex >= rj) or (c - ex >= rj)) if up else ((ex - l >= rj) or (ex - c >= rj)):
+            flipped = Zone(
+                lo=z.lo, hi=z.hi,
+                role=ZoneRole.SUPPORT if up else ZoneRole.RESISTANCE,
+                state=ZoneState.ACTIVE,
+                touches=z.touches, rejects=z.rejects,
+                origin_known=z.origin_known, last_change_known=index,
+                merged=z.merged,
+            )
+            z.state = ZoneState.FLIPPED
+            z.last_change_known = index
+            self._insert_merged(flipped, index)
+            return
+        # 回踩后反向重新 acceptance 穿回(§4.2)→ DEAD(不生成新区)
+        if (c < z.lo - bm) if up else (c > z.hi + bm):
+            z.state = ZoneState.DEAD
+            z.last_change_known = index
+
+
+# ---------------------------------------------------------------------------
+# Regime(§5,查询式,由当前 confirmed pivots 推出)
+# ---------------------------------------------------------------------------
+
+
+def _regime_from(pivots: list[Pivot], atr_val: float, p: Params,
+                 close: Optional[float]) -> Regime:
+    if atr_val <= 0.0:
+        return Regime.TRANSITION
+    recent = pivots[-p.range_max_pivots:]           # §6A-A8 窗口
+    if len(recent) < 4:
+        return Regime.TRANSITION
+    highs = [pv.price for pv in recent if pv.kind is PivotKind.HIGH]
+    lows = [pv.price for pv in recent if pv.kind is PivotKind.LOW]
+    if len(highs) < 2 or len(lows) < 2:
+        return Regime.TRANSITION
+    tol = p.tol_atr * atr_val
+    bm = p.k_bm * atr_val
+    up_struct = highs[-1] > highs[-2] + tol and lows[-1] > lows[-2] + tol
+    dn_struct = highs[-1] < highs[-2] - tol and lows[-1] < lows[-2] - tol
+    # §5:"且价格未破坏最近抬升低点(见 E6)"(以当前收盘判定,镜像同理)
+    if up_struct and (close is None or close >= lows[-1] - bm):
+        return Regime.TREND_UP
+    if dn_struct and (close is None or close <= highs[-1] + bm):
+        return Regime.TREND_DOWN
+    # §5 RANGE:无递升/递降结构且总跨度 ≤ k_span*atr(A8 合成带口径)
+    if not up_struct and not dn_struct:
+        span = max(highs) - min(lows)
+        if span <= p.k_span * atr_val:
+            return Regime.RANGE
+    return Regime.TRANSITION
+
+
+# ---------------------------------------------------------------------------
+# MarketStructure:增量式认知核心
+# ---------------------------------------------------------------------------
+
+
+class MarketStructure:
+    """逐 bar 增量认知(§0.3:bar t 的认知只用 [0,t])。
+
+    每根 bar 的因果推进顺序:ATR → 波段确认(§3)→ 区域生成/合并(§4.1)
+    → 区域状态机(§4.2)→ regime 快照(§5)。全部以当前 bar 收盘为知时(A10)。
+    """
+
+    def __init__(self, params: Params) -> None:
+        self.params = params
+        self._atr = ATR(params.atr_n)
+        self._swing = SwingTracker(params.k_rev)
+        self._zones = ZoneBook(params)
+        self._pivots: list[Pivot] = []
+        self._bars: list[tuple] = []  # (ts, o, h, l, c, v)
+        self._regime = Regime.TRANSITION
+
+    # -- 输入 ----------------------------------------------------------------
+
+    def update(self, bar: Bar) -> None:
+        ts, o, h, l, c, v = _bar_parts(bar)
+        index = len(self._bars)
+        prev_close = self._bars[-1][4] if self._bars else None
+        atr_val = self._atr.update(h, l, c)
+        self._bars.append((ts, o, h, l, c, v))
+
+        pivot = self._swing.update(index, o, h, l, c, atr_val)
+        if pivot is not None:
+            self._pivots.append(pivot)
+            self._zones.on_pivot(pivot, pivot.known_index, atr_val)
+        self._zones.on_bar(index, o, h, l, c, prev_close, atr_val)
+        self._regime = _regime_from(self._pivots, atr_val, self.params, c)
+
+    # -- 只读视图 ------------------------------------------------------------
+
+    @property
+    def pivots(self) -> tuple[Pivot, ...]:
+        return tuple(self._pivots)
+
+    @property
+    def zones(self) -> tuple[Zone, ...]:
+        return tuple(z.clone() for z in self._zones.zones)
+
+    def atr(self) -> float:
+        return self._atr.value
+
+    def regime(self) -> Regime:
+        return self._regime
+
+    @property
+    def bars_seen(self) -> int:
+        return len(self._bars)
+
+    # -- 批量便捷 ------------------------------------------------------------
+
+
+def replay(df: pd.DataFrame, params: Optional[Params] = None):
+    """逐 bar 回放(与逐根 update 同一条路径)。返回 (structure, events_list)。
+
+    events 由 market_operator.events.EventDetector 在同样的 bar 流上同步检出(§6/§6A)。
+    """
+    from .events import EventDetector  # 延迟导入避免环
+
+    if params is None:
+        params = Params.from_json(_default_config_path())
+    detector = EventDetector(params)
+    events: list = []
+    for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
+        bar = (row.ts, row.open, row.high, row.low, row.close, row.volume)
+        events.extend(detector.update(bar))
+    return detector.structure, events
+
+
+def _default_config_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "config" / "defaults.json"
