@@ -131,18 +131,21 @@ def test_e2_e3_local_reactions_are_not_trade_ideas():
 def test_e4_trend_continuation_has_structural_identity_and_single_campaign():
     r=OpportunityRouter()
     trend_view=view(Regime.TREND_DOWN)
-    assert step(r,0,99,[trend_event(0)],context=trend_view)==[]
-    first=step(r,1,98.5)
+    # First establish a real break, rather than treating a 2-pivot recovery
+    # in isolation as an entire directional campaign.
+    step(r,0,99,[ev(E6,0,pivot_forming=0)],context=view(zone=break_zone()))
+    assert step(r,1,99,[trend_event(1)],context=trend_view)==[]
+    first=step(r,2,98.5)
     assert len(first)==1 and first[0].hyp.direction==-1
     assert first[0].hyp.target_1 is None
     # A replay of the SAME defended pullback must not open another trade.
-    assert step(r,2,98,[trend_event(2)],context=trend_view)==[]
+    assert step(r,3,98,[trend_event(3)],context=trend_view)==[]
     assert r.counters["previously_consumed_area"]==1
-    assert step(r,3,97.5)==[]
+    assert step(r,4,97.5)==[]
     assert r.counters["confirmed_entry"]==1
     # A genuinely different confirmed pullback starts a new campaign.
-    step(r,4,97,[trend_event(4,pb=99,leg=97)],context=trend_view)
-    assert len(step(r,5,96.7))==1
+    step(r,5,97,[trend_event(5,pb=99,leg=97)],context=trend_view)
+    assert len(step(r,6,96.7))==1
     assert r.counters["confirmed_entry"]==2
 
 
@@ -201,9 +204,30 @@ def test_pullback_scale_is_observed_pivot_formation_time_not_fixed_bars():
         Pivot(98.0,forming_index=2,known_index=4,kind=PivotKind.LOW),
         Pivot(100.0,forming_index=8,known_index=9,kind=PivotKind.HIGH))
     v=StructureView(Regime.TREND_DOWN, (), 1, pivots=known_pivots)
+    step(r,0,99,[ev(E6,0,pivot_forming=0)],context=view(zone=break_zone()))
     assert step(r,10,99,[trend_event(10)],context=v)==[]
     o=r.opportunities["BTC"]
     assert o.scale_bars==6  # actual 8-2 formation span; NOT a 6-bar rule
     dec=step(r,11,98.5)
     assert dec[0].meta["structure_span_bars"]==6
     assert dec[0].hyp.target_1 is None
+
+
+def test_isolated_e4_without_prior_structural_expansion_is_not_a_trade():
+    r=OpportunityRouter()
+    trend_view=view(Regime.TREND_DOWN)
+    assert step(r,0,99,[trend_event(0)],context=trend_view)==[]
+    assert r.counters["trend_without_prior_expansion"]==1
+    assert step(r,1,98.5)==[]
+    assert r.counters.get("confirmed_entry",0)==0
+
+
+def test_local_trend_pivot_has_no_expansion_beyond_last_broken_defended_level():
+    r=OpportunityRouter()
+    step(r,0,99,[ev(E6,0,pivot_forming=0)],context=view(zone=break_zone()))
+    trend_view=view(Regime.TREND_DOWN)
+    # Leg low 100.2 is still above old support at 100; no directional
+    # expansion regardless of the E4 event label.
+    step(r,1,100,[trend_event(1,pb=101,leg=100.2)],context=trend_view)
+    assert r.counters["trend_without_prior_expansion"]==1
+    assert "BTC" not in r.opportunities
