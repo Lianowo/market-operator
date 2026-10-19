@@ -405,7 +405,8 @@ class EventDetector:
                 if c < l_star - bm:
                     return [MarketEvent(
                         id=E6, direction=-1, ts=ts, known_index=t,
-                        attrs={"ref": l_star, "invalid": l_star,
+                        # §7: invalid = 结构价 + buf(与 E1-E4 一致;研究日志#5 修正)
+                        attrs={"ref": l_star, "invalid": l_star + bm,
                                "pivot_forming": lows[-1].forming_index,
                                "regime_before": Regime.TREND_UP.value},
                     )]
@@ -416,7 +417,8 @@ class EventDetector:
                 if c > h_star + bm:
                     return [MarketEvent(
                         id=E6, direction=+1, ts=ts, known_index=t,
-                        attrs={"ref": h_star, "invalid": h_star,
+                        # §7: invalid = 结构价 - buf(与 E1-E4 一致;研究日志#5 修正)
+                        attrs={"ref": h_star, "invalid": h_star - bm,
                                "pivot_forming": highs[-1].forming_index,
                                "regime_before": Regime.TREND_DOWN.value},
                     )]
