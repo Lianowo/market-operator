@@ -297,6 +297,29 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()})
     if protective_execution:
+        # Every actual exchange/simulator fill must be included in the
+        # journal. Intent logs must never substitute for trade executions.
+        reconstructed_cash = equity0 + sum(
+            float(r["realized_pnl"]) - float(r["fee"])
+            + float(r["funding_delta"]) for r in broker.ledger)
+        if abs(reconstructed_cash - broker.cash) > 1e-6:
+            raise AssertionError(
+                f"cash != fill ledger: {broker.cash} != {reconstructed_cash}")
+        signed = {}
+        for row in broker.ledger:
+            if row["kind"] not in ("OPEN","ADD","REDUCE","EXIT",
+                                   "LIMIT_FILL","LIQUIDATION"):
+                continue
+            d = 1 if row["side"] == "buy" else -1
+            signed[row["symbol"]] = (signed.get(row["symbol"], 0.0)
+                                     + d * float(row["qty"]))
+        for sym in symbols:
+            acct = broker.position_of(sym)
+            actual = acct.qty * acct.direction if acct else 0.0
+            if abs(signed.get(sym, 0.0) - actual) > 1e-6:
+                raise AssertionError(
+                    f"{sym} open quantity != journal: "
+                    f"{actual} != {signed.get(sym, 0.0)}")
         # An entry and its installed stop may be crossed in the *same 15m
         # OHLC bar*: no tick ordering is available. Our deliberate pessimistic
         # convention is fill-entry-then-stop, both with the same bar label.
