@@ -4,6 +4,7 @@ on:
     branches:
       - 'audit/**'
       - 'fix/trade-lifecycle-semantic-20261019'
+      - 'feat/area-centric-opportunity-v2-20261019'
   pull_request:
     branches:
       - main
