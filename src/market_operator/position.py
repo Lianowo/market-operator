@@ -21,6 +21,13 @@
 OrderIntent.qty_frac 约定:以该仓 OPEN 名义为基准 1.0;REDUCE=减仓部分
 (0.5),EXIT=剩余全部(未减仓 1.0 / 减仓后 0.5),ADD=新增部分;账本可对账
 (OPEN 1.0 − REDUCE 0.5 − EXIT 0.5 = 0)。权益占比换算属 sizing/记账层。
+
+v6 增量(docs/v6-protocol.md §2-S2,加性开关,默认参数行为逐位不变):
+- breakeven_on_reduce=False(臂 A "Target-Clamp"):§8.2 减仓成交后**不再**
+  把 invalid 移至 entry(反模式实证禁令:保本移动),防线只随 §8.3 pivot
+  收紧;默认 True ⇒ v1/v4/v5 逐位旧行为。
+- time_stop=False(对照臂 B "Turtle"):§8.6 时间止损整条关闭;默认 True
+  ⇒ v1/v4/v5 逐位旧行为。
 """
 
 from __future__ import annotations
@@ -78,9 +85,13 @@ class PositionManager:
     """§8 六条规则状态机;每 symbol 一个持仓,逐 bar 裁决。"""
 
     def __init__(self, params: Optional[Params] = None,
-                 allow_add: bool = False) -> None:
+                 allow_add: bool = False,
+                 breakeven_on_reduce: bool = True,
+                 time_stop: bool = True) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
+        self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
+        self.time_stop = time_stop                      # v6 臂 B:False=关 §8.6
         self.positions: dict[str, Position] = {}
         self.last: list[str] = []            # 最近 on_bar 判定记录(解释性)
 
@@ -159,8 +170,9 @@ class PositionManager:
                     if intent is not None:
                         intents.append(intent)
 
-        # 6. §8.6 时间止损:N_time 根内 MFE < 0.5R
-        if pos.bars_held >= self.p.n_time and pos.mfe_r < MFE_MIN_R:
+        # 6. §8.6 时间止损:N_time 根内 MFE < 0.5R(v6 臂 B 整条关闭)
+        if self.time_stop and pos.bars_held >= self.p.n_time \
+                and pos.mfe_r < MFE_MIN_R:
             intents.append(self._exit(
                 pos, ts, c,
                 f"§8.6|time stop bars_held={pos.bars_held} >= "
@@ -204,8 +216,9 @@ class PositionManager:
         pos.pending_reduce = False
         pos.reduced = True
         old = pos.invalid
-        pos.invalid = min(pos.invalid, pos.entry) if pos.direction < 0 \
-            else max(pos.invalid, pos.entry)
+        if self.breakeven_on_reduce:
+            pos.invalid = min(pos.invalid, pos.entry) if pos.direction < 0 \
+                else max(pos.invalid, pos.entry)
         pos.log.append(f"§8.2|reduce FILLED qty_frac={actual_qty_frac:.8g} "
                        f"invalid {old:.8g}->{pos.invalid:.8g}")
 
@@ -251,11 +264,13 @@ class PositionManager:
         pos.size_frac -= qty
         pos.reduced = True
         old = pos.invalid
-        # 保本(§8.2 后半):invalid 移至 entry;只收紧不放松(已 trailing 更优则不动)
-        if pos.direction < 0:
-            pos.invalid = min(pos.invalid, pos.entry)
-        else:
-            pos.invalid = max(pos.invalid, pos.entry)
+        # 保本(§8.2 后半):invalid 移至 entry;只收紧不放松(已 trailing 更优则不动)。
+        # v6 臂 A 禁令:breakeven_on_reduce=False ⇒ 保本移动整条关闭。
+        if self.breakeven_on_reduce:
+            if pos.direction < 0:
+                pos.invalid = min(pos.invalid, pos.entry)
+            else:
+                pos.invalid = max(pos.invalid, pos.entry)
         reason = (f"§8.2|target_1 hit reduce 50% target={pos.target_1:.8g} "
                   f"extreme={extreme:.8g} breakeven invalid {old:.8g}"
                   f"->{pos.invalid:.8g}")
