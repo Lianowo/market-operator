@@ -97,13 +97,24 @@ def test_event_free_followthrough_uses_known_snapshot_without_lookahead():
     assert len(decisions)==1 and decisions[0].hyp.direction==-1
 
 
-def test_other_reaction_families_share_same_state_machine():
-    from market_operator.events import E2, E3, E4, E5
-    for name in (E2,E3,E4,E5):
+def test_local_e2_e3_rejections_are_facts_not_trade_orders():
+    from market_operator.events import E2, E3
+    for name in (E2,E3):
+        r=OpportunityRouter()
+        assert drive(r,10,99,[event(name,10)])==[]
+        assert r.opportunities=={}
+        assert drive(r,11,98.7,snapshot=None)==[]
+        assert r.counters[f"local_rejection_observed_{name}"]==1
+
+
+def test_completed_trend_range_and_flip_reactions_share_trade_lifecycle():
+    from market_operator.events import E4,E5,E7
+    for name in (E4,E5,E7):
         router=OpportunityRouter()
         first=drive(router,10,99,[event(name,10)])
         assert first==[]
-        assert router.opportunities["BTC"].stage=="REACTION_PENDING"
+        assert router.opportunities["BTC"].stage in (
+            "REACTION_PENDING", "RETEST_REJECTED")
         second=drive(router,11,98.7,snapshot=None)
         assert len(second)==1
         assert second[0].meta["source_event"]==name
