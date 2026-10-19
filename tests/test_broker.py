@@ -13,6 +13,7 @@ import pytest
 from market_operator.broker import (
     ContractSpec,
     Broker,
+    RestingLimitOrder,
     _floor_step,
     fetch_contract_specs,
 )
@@ -348,3 +349,66 @@ def test_fetch_contract_specs_cache_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(br.requests, "get", _boom)
     specs2, src2 = fetch_contract_specs(["AAA"], cache)
     assert src2.startswith("cache(") and specs2["AAA"].size_place == 2
+
+
+# ---------------------------------------------------------------------------
+# Shared-account gross leverage, across symbols and order types
+# ---------------------------------------------------------------------------
+
+
+def _multi_symbol_broker():
+    def spec(symbol):
+        return ContractSpec(symbol=symbol, size_min=0.01, size_step=0.01,
+                            size_place=2, price_place=2, min_trade_usdt=5.0)
+
+    return Broker(300.0, contracts={"A": spec("A"), "B": spec("B")},
+                  risk_frac=0.5, leverage_cap=1.0,
+                  taker_fee=0.0006, slippage_per_side=0.0002,
+                  funding_per_8h=0.0001, maker_fee=0.0002)
+
+
+def _open_multi(b, symbol, ts):
+    intent = OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
+                         reason="E7|portfolio", ref_price=100.0, ts=ts)
+    b.submit(intent, decision_ts=ts, direction=+1, invalid=99.0,
+             target_1=105.0, event_id="E7")
+
+
+def test_portfolio_cap_blocks_second_symbol_market_entry():
+    b = _multi_symbol_broker()
+    _open_multi(b, "A", T0)
+    first = b.on_bar_open("A", T0 + H, 100.0)[0]
+    assert first["kind"] == "OPEN" and first["qty"] > 0
+    _open_multi(b, "B", T0)
+    second = b.on_bar_open("B", T0 + H, 100.0)[0]
+    assert second["kind"] == "SKIP" and second["reason_code"] == "MIN_SIZE"
+    assert b.position_of("B") is None
+    assert b._gross_notional() <= b.leverage_cap * b.equity_mtm() + 1e-6
+
+
+def test_portfolio_cap_blocks_second_symbol_maker_entry():
+    b = _multi_symbol_broker()
+    _open_multi(b, "A", T0)
+    assert b.on_bar_open("A", T0 + H, 100.0)[0]["kind"] == "OPEN"
+    b.submit_limit(RestingLimitOrder(
+        direction=+1, limit_price=100.0, armed_at_ts=T0,
+        expiry_ts=T0 + 2 * H, symbol="B", role="entry",
+        invalid=99.0, target_1=105.0, event_id="E7",
+        reason="E7|long limit"))
+    fills = b.on_15m_bar("B", T0 + H, 100.0, 101.0, 99.0, 100.0)
+    assert len(fills) == 1
+    assert fills[0]["kind"] == "SKIP" and fills[0]["reason_code"] == "MIN_SIZE"
+    assert b.position_of("B") is None
+
+
+def test_portfolio_cap_blocks_add_that_exceeds_remaining_capacity():
+    b = _multi_symbol_broker()
+    _open_multi(b, "A", T0)
+    assert b.on_bar_open("A", T0 + H, 100.0)[0]["kind"] == "OPEN"
+    intent = OrderIntent(kind=OrderKind.ADD, symbol="A", qty_frac=1.0,
+                         reason="§8.4|add", ref_price=100.0, ts=T0 + H)
+    b.submit(intent, decision_ts=T0 + H)
+    before = b.position_of("A").qty
+    result = b.on_bar_open("A", T0 + 2 * H, 100.0)[0]
+    assert result["kind"] == "SKIP" and result["reason_code"] == "MIN_SIZE"
+    assert b.position_of("A").qty == before
