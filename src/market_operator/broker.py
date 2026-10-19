@@ -715,6 +715,41 @@ class Broker:
         return self._row(po, ts, sym, side, kind, qty, price, o, fee,
                          funding_delta, pnl, pos.trade_id, meta=dict(po.meta))
 
+    def execute_protective_stop(self, symbol: str, ts: int, open_price: float,
+                                high: float, low: float) -> Optional[dict]:
+        """15m native stop-market: actually close, not 1h close-only invalidation.
+
+        Stop is live immediately after a confirmed entry fill. The stop fill
+        reference is its structural stop, unless the candle OPENS across it,
+        in which case use the adverse opening price (plus modeled taker
+        slippage). An OHLC candle cannot establish intrabar ordering; this
+        path makes a protective fill assumption rather than fabricating an
+        exchange guarantee. Caller handles its rows as broker executions.
+        """
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return None
+        stop = pos.invalid
+        if stop is None or not (math.isfinite(stop) and stop > 0):
+            raise AssertionError("active position has no executable protective stop")
+        breached = low <= stop if pos.direction > 0 else high >= stop
+        if not breached:
+            return None
+        reference = (min(open_price, stop) if pos.direction > 0
+                     else max(open_price, stop))
+        order = OrderIntent(
+            kind=OrderKind.EXIT, symbol=symbol, qty_frac=None,
+            reason=(f"PROTECTIVE_STOP|15m trigger stop={stop:.8g} "
+                    f"ref={reference:.8g} gap={'yes' if reference != stop else 'no'}"),
+            ref_price=reference, ts=ts)
+        pending = _Pending(intent=order, decision_ts=int(ts), meta={
+            "role": "protective_stop", "stop_level": stop,
+            "gap_at_open": reference != stop})
+        # All actual trading/accounting uses the same _close_qty as normal
+        # taker EXIT; no signal-intent state is mistaken for a fill.
+        return self._close_qty(pending, pos, pos.qty, int(ts), reference,
+                               full=True)
+
     # -- mark-to-market(每 bar,权益/资金费/强平) ------------------------------
 
     def mark(self, symbol: str, ts: int, close: float) -> None:
