@@ -88,3 +88,46 @@ its parameters by outcome.
 
 See `tests/test_market_areas.py` and `tests/test_opportunity.py` for causal
 invariants and `scripts/diagnose_trade_lifecycle.py` for attribution.
+
+## Final implementation evidence — continuous market cognition and trend linkage
+
+The initial area binding was insufficient: merely knowing a price level
+and seeing a second confirming close still let ordinary E4 swing recoveries
+become complete trend-trades. The next structural correction connects each
+E4 pullback to a **causally observed earlier E1/E6 defended-level break**.
+Its completed directional leg must actually have expanded beyond the old
+broken ref; otherwise the E4 remains a market fact, not a trade plan. This
+is a relationship between real structure events, not a score/tuned filter.
+
+Additional risk-critical decoupling: the area book keeps observing market
+events while an account already holds a position, even though **new orders**
+are disabled during that time. A position cannot silence the market's
+historical context and make a later retest look like a newly discovered
+break. This is explicitly tested as a hold → new break → close → subsequent
+retest causal sequence.
+
+### Frozen-data diagnostics after final code change
+
+Source: [historical CI diagnostic 39259114279](https://github.com/Lianowo/market-operator/actions/runs/39259114279).
+All results use original BTC/ETH/SOL data, 1h causal market structure,
+15m protected stop simulation and one shared 300 U account.
+
+| Partition | Costs | n trades | Net USDT | PF | Max drawdown |
+|---|---:|---:|---:|---:|---:|
+| full | 1x | 1,619 | -229.51 | 0.7025 | 77.92% |
+| previously reused test | 1x | 409 | -122.82 | 0.5714 | 41.01% |
+| previously reused test | 2x | 410 | -184.57 | 0.3603 | 61.54% |
+
+Full-history individual market mechanisms at 1x:
+- **E4**: 1,231 trades, -168.80 U, 1,179 protective-stop exits.
+- **E7**: 352 trades, -87.37 U, 342 protective-stop exits.
+- **E5**: 36 trades, +26.66 U; on reused test 11 trades +0.24 U
+  at 1x but -2.68 U at 2x. Too few observations and too fragile to
+  claim transferable positive expectancy.
+
+The market-cognition correctness changes are now distinct from profitability:
+**all directional strategy variants remain NO-GO**. Relative improvements
+on multiply-reused backtests must not be treated as optimized evidence.
+The economical next research question is whether *price can traverse the
+specific proposed opportunity path before invalidation* when conditioned
+on identified structural context, not how to add another binary filter.
