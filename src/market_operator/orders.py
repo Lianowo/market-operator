@@ -261,3 +261,25 @@ class OrderLedger:
         gross = sum((r[0] * r[1] for r in rows), Decimal(0))
         fees = sum((r[2] for r in rows), Decimal(0))
         return qty, gross / qty if qty else Decimal(0), fees
+
+    def record_backtest_fill(self, row: Mapping[str, object], *, run_id: str) -> bool:
+        """Mirror real BROKER FILLS into the identical execution ledger.
+
+        A simulation's signal/intent/SKIP/EXPIRED/CANCEL is deliberately not a
+        position-changing execution. run_id MUST be unique across replay runs;
+        a repeated identical run is safe due to deterministic IDs.
+        """
+        if not run_id:
+            raise ValueError("explicit replay run_id is required")
+        if row.get("kind") not in {"OPEN", "ADD", "REDUCE", "EXIT",
+                                   "LIMIT_FILL", "LIQUIDATION"}:
+            return False
+        qty = _d(row["qty"], positive=True)
+        symbol = str(row["symbol"])
+        side = str(row["side"]).upper()
+        if side not in ("BUY", "SELL"):
+            raise ValueError("broker fill must include buy/sell")
+        key = f"replay:{run_id}:{symbol}:{row['seq']}"
+        self.submit(key, symbol, side, qty, str(row["kind"]))
+        return self.record_fill(key, "broker-execution", qty,
+                                row["price"], row["fee"])
