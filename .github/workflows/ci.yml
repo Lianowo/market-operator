@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - 'audit/**'
+      - 'feat/standalone-trade-core-20261019'
   pull_request:
     branches:
       - main
