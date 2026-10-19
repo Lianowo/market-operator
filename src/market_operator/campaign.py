@@ -53,20 +53,18 @@ from typing import Optional
 import pandas as pd
 
 from .aggregate import TF_HOURS
-from .backtest import (
-    BacktestResult,
-    SymbolCognition,
-    assert_fill_after_decision,
-)
-from .backtest_v4 import (
+from .backtest_v6 import (
     MS_15M,
     MS_1H,
+    BacktestResult,
+    SymbolCognition,
     assert_aligned,
+    assert_fill_after_decision,
+    reconstruct_trades_v5,
 )
-from .broker import Broker, RestingLimitOrder, _floor_step
+from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, _floor_step
 from .position import PositionManager
 from .research import split_boundary
-from .strategy import OrderIntent, OrderKind
 from .strategy_v6 import ARM_CLAMP2R, ARM_TURTLE, V6Params, V6Router
 from .structure import Params
 
@@ -517,7 +515,6 @@ def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
 
 
 def _reconstruct_trades_v6(ledger: list, seg_bounds: dict) -> list:
-    from .backtest_v5 import reconstruct_trades_v5   # 局部导入避免顶端环依赖
     trades = reconstruct_trades_v5(ledger, seg_bounds)
     for t in trades:
         key = t["symbol"]                    # reconstruct 以复合键为 symbol

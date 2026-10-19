@@ -54,7 +54,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import aggregate as agg                     # noqa: E402
 from market_operator import data as mo_data                      # noqa: E402
-from market_operator.backtest import compute_metrics, prepare_cognition  # noqa: E402
+from market_operator.backtest_v6 import compute_metrics, prepare_cognition  # noqa: E402
 from market_operator.campaign import (                           # noqa: E402
     ARM_CLAMP2R,
     ARM_TURTLE,
@@ -62,7 +62,7 @@ from market_operator.campaign import (                           # noqa: E402
     campaign_key,
     run_campaigns,
 )
-from market_operator.backtest_v4 import alignment_issues_ci      # noqa: E402
+from market_operator.backtest_v6 import alignment_issues_ci      # noqa: E402
 from market_operator.broker import CONTRACTS_PATH, ContractSpec  # noqa: E402
 from market_operator.hypothesis import f1_invalid_distance_ok    # noqa: E402
 from market_operator.research import block_bootstrap_ci          # noqa: E402

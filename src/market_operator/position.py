@@ -37,7 +37,7 @@ from typing import Optional, Sequence
 
 from .events import E4, E6, MarketEvent
 from .hypothesis import Hypothesis
-from .strategy import OrderIntent, OrderKind
+from .broker import OrderIntent, OrderKind
 from .structure import Params, Pivot, PivotKind, _bar_parts
 
 MFE_MIN_R = 0.5          # §7 expiry 先验:N_time 根内 MFE < 0.5R

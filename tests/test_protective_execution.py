@@ -2,7 +2,7 @@
 import pytest
 
 from market_operator.broker import Broker, ContractSpec
-from market_operator.strategy import OrderIntent, OrderKind
+from market_operator.broker import OrderIntent, OrderKind
 
 T0=1700000000000
 H=3600000

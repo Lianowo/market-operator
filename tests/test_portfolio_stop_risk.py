@@ -5,7 +5,7 @@ loss from current marked equity, not guaranteed fills through a gap.
 """
 import pytest
 from market_operator.broker import Broker, ContractSpec
-from market_operator.strategy import OrderKind, OrderIntent
+from market_operator.broker import OrderKind, OrderIntent
 
 T0 = 1_700_000_000_000
 H = 3_600_000

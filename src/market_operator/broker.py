@@ -77,12 +77,37 @@ import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 import requests
 
-from .strategy import OrderIntent, OrderKind
+
+class OrderKind(str, Enum):
+    OPEN = "OPEN"
+    REDUCE = "REDUCE"
+    ADD = "ADD"
+    EXIT = "EXIT"
+
+
+@dataclass(frozen=True)
+class OrderIntent:
+    """下单意图(与 broker 对接,字段固定)。qty_frac 为仓位名义额占权益的
+    比例建议;OPEN 时为 None,由 sizing 模块决定。reason 为 "code|detail"。
+    ref_price 为决策时点参考价(事件 bar 收盘;实际成交在下一 bar 开盘)。
+
+    规范家园:v1 起定义于 strategy.py;语义合并后订单意图词表固化为执行
+    边界(broker)的规范类型,全链(策略/持仓/回放引擎)统一从这里导入。
+    """
+
+    kind: OrderKind
+    symbol: str
+    qty_frac: Optional[float]
+    reason: str
+    ref_price: float
+    ts: object
+
 
 CONTRACTS_URL = "https://api.bitget.com/api/v2/mix/market/contracts"
 PRODUCT_TYPE = "USDT-FUTURES"

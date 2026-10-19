@@ -41,9 +41,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
+from .broker import OrderIntent, OrderKind
 from .events import E1, E6, E7, MarketEvent
 from .hypothesis import Hypothesis, StructureView, build
-from .strategy import OrderIntent, OrderKind
 from .structure import _bar_parts
 
 # 同 episode 匹配容差:两侧价格同源(破位 pivot 价 / zone 前缘价,浮点原值

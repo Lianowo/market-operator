@@ -17,7 +17,7 @@ from market_operator.broker import (
     _floor_step,
     fetch_contract_specs,
 )
-from market_operator.strategy import OrderIntent, OrderKind
+from market_operator.broker import OrderIntent, OrderKind
 
 H = 3_600_000
 T0 = 1_700_000_000_000
