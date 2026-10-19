@@ -30,7 +30,7 @@ jobs:
               digest=lambda b: hashlib.sha256(b).hexdigest()
               print(name, "expected:",expected,
                     "checked_in:",digest(raw),
-                    "crlf_expanded:",digest(raw.replace(b"\\r\\n",b"\\n").replace(b"\\n",b"\\r\\n")))
+                    "crlf_expanded:",digest(raw.replace(bytes([13,10]),bytes([10])).replace(bytes([10]),bytes([13,10]))))
           PY
       - name: Run tests
         run: python -m pytest tests -q
