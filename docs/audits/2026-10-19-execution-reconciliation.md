@@ -2,7 +2,7 @@
 
 ## Scope and verdict
 
-**ENGINE NO-GO pending regression and independent re-run; STRATEGY NO-GO / Research Only unchanged.**
+**Execution-correctness regression GO (225 tests passing); overall ENGINE/PAPER/LIVE NO-GO, STRATEGY NO-GO / Research Only unchanged.**
 
 This is a correctness intervention, **not a strategy optimization**. The original reports
 `reports/backtest_v4.*`, `reports/v4_counterfactual.*`, and trade/equity CSVs
@@ -94,3 +94,16 @@ The manifest now preserves `source_sha256_crlf` and sets `sha256` to the
 actual committed LF bytes. The regression suite verifies **both** hashes.
 `.gitattributes` explicitly fixes `data/raw/*.csv` to LF across platforms.
 This does not change any parsed bar, strategy rule or historical report.
+
+## Verified GitHub Actions evidence
+
+- Full regression suite: [CI run 39238149595](https://github.com/Lianowo/market-operator/actions/runs/39238149595), **225 passed** on commit `7768a76b79c4c19a4b547fd42574e585aab1d32c`.
+- Full nine-cell v4 replay: [diagnostic run 39238141413](https://github.com/Lianowo/market-operator/actions/runs/39238141413), **success**. Run used the original frozen `config/v4.json` and checked-in historical datasets. Its results were generated in GitHub Actions and uploaded as an artifact; checked-in historical reports were left unchanged.
+- Old vs repaired **rounded summary** results matched in all 9 cells. In particular,
+  `full@1x` remained 140 trades, -56.00%, PF 0.39 and
+  `test@1x` remained 32 trades, -25.13%, PF 0.29.
+  This is an execution correction without a demonstrated performance change
+  for these historical paths. It is **not evidence of positive edge** or
+  an untouched test, and does not prove byte-for-byte ledger parity.
+- The dedicated synthetic regression explicitly demonstrates the unfilled-maker
+  counterexample, which may not occur in the limited historical sample.
