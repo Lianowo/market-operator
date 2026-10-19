@@ -6,6 +6,8 @@ target_1=94;n_time=3(合成, Params 直接构造,非改 config)。
 
 from __future__ import annotations
 
+import pytest
+
 from market_operator.events import E4, E6, MarketEvent
 from market_operator.position import PositionManager
 from market_operator.strategy import OrderKind
@@ -378,3 +380,40 @@ def test_deferred_reduce_cancellation_restores_entry_eligibility():
     result = m.on_bar("BTCUSDT", _bar(2, 99.5, 93.5, 98.0), ATR,
                       defer_reduce=True)
     assert len(result) == 1 and result[0].kind is OrderKind.REDUCE
+
+
+# ---------------------------------------------------------------------------
+# Fill-confirmed trend ADD. Order intent is never an actual position increase.
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_add_waits_for_fill_then_updates_weighted_entry_and_stop():
+    m = _mgr(allow_add=True)
+    pos = _trailed_short(m)  # short 99, trailed stop 97, MFE>=1R
+    intents = m.on_bar("BTCUSDT", _bar(2, 97.5, 94.5, 95.0), ATR,
+                       new_events=[_e4_short(96.0)], defer_add=True)
+    assert len(intents) == 1 and intents[0].kind is OrderKind.ADD
+    assert pos.pending_add and not pos.added
+    assert pos.size_frac == 1.0 and pos.entry == 99.0 and pos.invalid == 97.0
+    # Signal cannot repeat while order is pending.
+    assert m.on_bar("BTCUSDT", _bar(3, 96.5, 94.5, 95.0), ATR,
+                    new_events=[_e4_short(96.0)], defer_add=True) == []
+    m.confirm_add("BTCUSDT", actual_qty_frac=0.5, fill_price=95.0)
+    assert not pos.pending_add and pos.added
+    assert pos.size_frac == 1.5
+    assert pos.entry == pytest.approx((99.0 + 0.5 * 95.0) / 1.5)
+    assert pos.invalid == 96.0
+
+
+def test_deferred_add_rejection_keeps_real_position_unchanged():
+    m = _mgr(allow_add=True)
+    pos = _trailed_short(m)
+    got = m.on_bar("BTCUSDT", _bar(2, 97.5, 94.5, 95.0), ATR,
+                   new_events=[_e4_short(96.0)], defer_add=True)
+    assert got and pos.pending_add
+    m.cancel_add("BTCUSDT")
+    assert not pos.pending_add and not pos.added
+    assert pos.entry == 99.0 and pos.invalid == 97.0 and pos.size_frac == 1.0
+    again = m.on_bar("BTCUSDT", _bar(3, 97.5, 94.5, 95.0), ATR,
+                     new_events=[_e4_short(96.0)], defer_add=True)
+    assert len(again) == 1 and again[0].kind is OrderKind.ADD
