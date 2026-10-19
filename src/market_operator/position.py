@@ -54,6 +54,8 @@ class Position:
     size_frac: float = 1.0         # 剩余名义(以 OPEN 为 1.0)
     reduced: bool = False          # §8.2 仅在实际成交后为 True
     pending_reduce: bool = False   # v4:限价减仓待成交;不提前减量或移止损
+    pending_add: bool = False      # future engine:加仓委托待成交,不提前滚仓
+    pending_add_invalid: Optional[float] = None
     added: bool = False            # §8.4 加仓仅一次
     bars_held: int = 0             # 已收盘 bar 数(入场 bar 记第 1 根)
     _best: Optional[float] = None  # 入场以来最有利极值(空=min low,多=max high)
@@ -109,7 +111,8 @@ class PositionManager:
     def on_bar(self, symbol: str, bar, atr: float,
                new_pivots: Sequence[Pivot] = (),
                new_events: Sequence[MarketEvent] = (),
-               defer_reduce: bool = False) -> list[OrderIntent]:
+               defer_reduce: bool = False,
+               defer_add: bool = False) -> list[OrderIntent]:
         """按优先级 §8.1>§8.5>§8.2>§8.3>§8.6 评估;返回订单意图列表。"""
         pos = self.positions.get(symbol)
         if pos is None:
@@ -148,10 +151,11 @@ class PositionManager:
         self._trail(pos, new_pivots, atr)
 
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
-        if self.allow_add and not pos.added:
+        if self.allow_add and not pos.added and not pos.pending_add:
             for ev in new_events:
                 if ev.id == E4 and ev.direction == pos.direction:
-                    intent = self.try_add(pos, ev, c, add_frac=pos.size_frac, ts=ts)
+                    intent = self.try_add(pos, ev, c, add_frac=pos.size_frac,
+                                          ts=ts, defer=defer_add)
                     if intent is not None:
                         intents.append(intent)
 
@@ -211,6 +215,36 @@ class PositionManager:
         if pos is not None:
             pos.pending_reduce = False
 
+    def confirm_add(self, symbol: str, actual_qty_frac: float,
+                    fill_price: float) -> None:
+        """加仓成交确认:金额和实际成交价来自 broker,而不是决策时 close。"""
+        pos = self.positions.get(symbol)
+        if pos is None or not pos.pending_add:
+            raise AssertionError(f"unexpected add fill without pending order: {symbol}")
+        if actual_qty_frac <= 0.0 or fill_price <= 0.0:
+            raise ValueError("invalid add fill")
+        new_size = pos.size_frac + actual_qty_frac
+        pos.entry = ((pos.size_frac * pos.entry +
+                      actual_qty_frac * fill_price) / new_size)
+        pos.size_frac = new_size
+        proposed = pos.pending_add_invalid
+        if proposed is not None:
+            pos.invalid = (min(pos.invalid, proposed) if pos.direction < 0
+                           else max(pos.invalid, proposed))
+        pos.added = True
+        pos.pending_add = False
+        pos.pending_add_invalid = None
+        pos.log.append(
+            f"§8.4|ADD FILLED qty_frac={actual_qty_frac:.8g} "
+            f"actual_price={fill_price:.8g} avg={pos.entry:.8g}")
+
+    def cancel_add(self, symbol: str) -> None:
+        """拒单/撤单不得创造一个已经加仓的持仓。"""
+        pos = self.positions.get(symbol)
+        if pos is not None:
+            pos.pending_add = False
+            pos.pending_add_invalid = None
+
     def _reduce(self, pos: Position, ts: object, ref: float,
                 extreme: float) -> OrderIntent:
         qty = pos.size_frac * 0.5
@@ -253,14 +287,16 @@ class PositionManager:
                     pos.invalid = cand
 
     def try_add(self, pos: Position, event: MarketEvent, price: float,
-                add_frac: float, ts: object = None) -> Optional[OrderIntent]:
+                add_frac: float, ts: object = None,
+                defer: bool = False) -> Optional[OrderIntent]:
         """§8.4 风险中性加仓(v1 由 allow_add 门控)。
 
         条件:同向 E4、浮盈 ≥ 1R、加仓仅一次。合并口径:合并仓位的失效价取
         min/max(现 invalid, E4 建议 invalid)(只收紧),合并均价按名义加权;
         风险中性约束 = 合并后最坏情景损失 ≤ 加仓前,不满足则拒绝(记录理由)。
         """
-        if event.id != E4 or event.direction != pos.direction or pos.added:
+        if (event.id != E4 or event.direction != pos.direction or
+                pos.added or pos.pending_add):
             return None
         if pos.mfe_r < ADD_MIN_R:
             self.last.append(
@@ -282,10 +318,14 @@ class PositionManager:
                 f"§8.4|add rejected: risk-neutral violated worst "
                 f"{worst_before:.8g}->{worst_after:.8g}")
             return None
-        pos.entry = avg
-        pos.size_frac = merged_size
-        pos.invalid = new_inv
-        pos.added = True
+        if defer:
+            pos.pending_add = True
+            pos.pending_add_invalid = new_inv
+        else:
+            pos.entry = avg
+            pos.size_frac = merged_size
+            pos.invalid = new_inv
+            pos.added = True
         reason = (f"§8.4|E4 add risk-neutral avg_entry={avg:.8g} "
                   f"invalid={new_inv:.8g} worst {worst_before:.8g}"
                   f"->{worst_after:.8g}")
