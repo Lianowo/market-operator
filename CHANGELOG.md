@@ -1,0 +1,25 @@
+# Changelog
+
+## [v0.1.0] - 2026-10-19 — Research Only verdict
+
+### Phase 1 — Methodology & OSS audits
+- 冻结交易方法论 `docs/methodology.md`（因果语义、区域生命周期、事件目录 E1-E6、
+  研究协议与 GO/NO-GO 判据；全部参数为先验）。
+- 独立深度审计：`docs/audits/`(pymarket-structure(MIT) / quant-trading（专有，仅思想） /
+  OrderFlow-absorption（无 LICENSE，仅思想） / TapeFlow(MIT))。
+
+### Phase 2 — Cognition core & data
+- `structure`:ATR 波动率尺度、波动率自适应确认波段、区域生命周期状态机、regime。
+- `events`:E1-E6 因果事件检测，forming/known 双时间戳；前缀不变性与增量==批量测试。
+- `data`:Bitget 2 年 1h 三品种真实数据，0 缺口，sha256 manifest。
+
+### Phase 3 — Event study
+- 事件研究 + 同 regime 匹配对照 + block bootstrap + 成本压力；诚实性日志全程。
+- 判定：E1|E6 short 相对增量 GO（绝对净期望 ≤ 0)；做多与 E2/E3/E4 NO-GO;E5 样本不足。
+
+### Phase 4+5 — Strategy, position mgmt, full-cost backtest
+- 白名单仅 GO 机制；§8 六条事件驱动持仓管理全部实现且可解释。
+- 真实合约规格/费用/资金费/强平约束；300 USDT 复利；9 段×成本压力全部为负 → **NO-GO, Research Only**。
+- 验收报告 `docs/acceptance.md`（任务书八问逐项，含失败分解与 v2 冻结议程）。
+
+[v0.1.0]: https://github.com/Lianowo/market-operator/releases/tag/v0.1.0
