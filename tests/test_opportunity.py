@@ -231,3 +231,24 @@ def test_local_trend_pivot_has_no_expansion_beyond_last_broken_defended_level():
     step(r,1,100,[trend_event(1,pb=101,leg=100.2)],context=trend_view)
     assert r.counters["trend_without_prior_expansion"]==1
     assert "BTC" not in r.opportunities
+
+
+def test_market_structure_observation_continues_during_real_position():
+    router=OpportunityRouter()
+    # A trader may already hold a position when a genuinely new defended
+    # structural area breaks. Cognition cannot stop because order-taking
+    # was disabled. A later exit must not erase the market's actual history.
+    assert step(router,10,99,
+                [ev(E6,10,pivot_forming=2)],
+                context=view(zone=break_zone()),
+                holding=True)==[]
+    assert len(router.areas.active["BTC"])==1
+    assert router.counters["break_observed"]==1
+    assert step(router,11,99,
+                [ev(E2,11)],
+                holding=True)==[]
+    assert router.counters["local_rejection_observed_E2"]==1
+    assert step(router,12,99,[ev(E7,12,zone=flip_zone())])==[]
+    assert router.opportunities["BTC"].stage=="RETEST_REJECTED"
+    accepted=step(router,13,98.7)
+    assert len(accepted)==1 and accepted[0].meta["source_event"]==E7
