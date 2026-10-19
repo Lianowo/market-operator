@@ -742,8 +742,9 @@ class Broker:
             reason=(f"PROTECTIVE_STOP|15m trigger stop={stop:.8g} "
                     f"ref={reference:.8g} gap={'yes' if reference != stop else 'no'}"),
             ref_price=reference, ts=ts)
-        pending = _Pending(intent=order, decision_ts=int(ts), meta={
+        pending = _Pending(intent=order, decision_ts=int(pos.opened_ts), meta={
             "role": "protective_stop", "stop_level": stop,
+            "stop_install_ts": int(pos.opened_ts),
             "gap_at_open": reference != stop})
         # All actual trading/accounting uses the same _close_qty as normal
         # taker EXIT; no signal-intent state is mistaken for a fill.
