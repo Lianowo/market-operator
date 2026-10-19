@@ -23,3 +23,9 @@
 - 验收报告 `docs/acceptance.md`（任务书八问逐项，含失败分解与 v2 冻结议程）。
 
 [v0.1.0]: https://github.com/Lianowo/market-operator/releases/tag/v0.1.0
+
+## [Unreleased v2] - 2026-10-19
+
+- 归因驱动优化轮：E7 FLIP_RETEST + F1(docs/v2-protocol.md);test 一次评估仍 NO-GO,
+  Research Only 维持；优化循环按反过拟合原则停止(docs/acceptance.md v2 附章)。
+  120 tests;v1 行为 parity 锁定。
