@@ -288,9 +288,12 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     counters["limit_expired"] += 1
                 elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
                     counters["reduce_timeout_taker"] += 1
-                elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
-                    counters["min_size_skips"] += 1
-                    counters["limit_min_size_skips"] += 1
+                elif k == "SKIP":
+                    if row["meta"].get("role") == "reduce":
+                        pos_mgr.cancel_reduce(sym)
+                    if row["reason_code"] == "MIN_SIZE":
+                        counters["min_size_skips"] += 1
+                        counters["limit_min_size_skips"] += 1
             # ③ 持仓路径解决:结构性解决(同根因果序 ①先于②),见模块 docstring
             # ④ mark-to-market(15m 收盘)
             broker.mark(sym, ts, c)
