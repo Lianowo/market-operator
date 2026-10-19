@@ -78,7 +78,7 @@
       "rows": 735,
       "ts_first": 1728950400000,
       "ts_last": 1792368000000,
-      "span_days": 734.0,
+      "span_days": 734,
       "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=1d)",
       "aggregated_from": {
         "file": "BTCUSDT_1h.csv",
@@ -134,7 +134,7 @@
       "rows": 735,
       "ts_first": 1728950400000,
       "ts_last": 1792368000000,
-      "span_days": 734.0,
+      "span_days": 734,
       "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=1d)",
       "aggregated_from": {
         "file": "ETHUSDT_1h.csv",
@@ -190,7 +190,7 @@
       "rows": 735,
       "ts_first": 1728950400000,
       "ts_last": 1792368000000,
-      "span_days": 734.0,
+      "span_days": 734,
       "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=1d)",
       "aggregated_from": {
         "file": "SOLUSDT_1h.csv",
@@ -200,7 +200,7 @@
     },
     "BTCUSDT_15m.csv": {
       "path": "data\\raw\\BTCUSDT_15m.csv",
-      "sha256": "773946161353283f5d8efd657a62f9dfccc9451d844321ea5b4f3b42db106cc4",
+      "sha256": "e84018b6250aa0fe3f5b589a6d6ad216c51560d96493566b0231153e0628465a",
       "rows": 70400,
       "ts_first": 1729022400000,
       "ts_last": 1792381500000,
@@ -208,11 +208,13 @@
       "span_days": 733.32,
       "granularity": "15m",
       "step_ms": 900000,
-      "validation_issues": []
+      "validation_issues": [],
+      "source_sha256_crlf": "773946161353283f5d8efd657a62f9dfccc9451d844321ea5b4f3b42db106cc4",
+      "git_line_ending": "LF (source CRLF; verified same CSV rows)"
     },
     "ETHUSDT_15m.csv": {
       "path": "data\\raw\\ETHUSDT_15m.csv",
-      "sha256": "877c0e091253c61e80244bf23f22b74e30b596868da7edca3ec0f81475a6cca8",
+      "sha256": "ec419e6eaaf4a13fe0fba97cc60d6e80cc4746cc5bb36d5df1d512637a5c1b2b",
       "rows": 70400,
       "ts_first": 1729022400000,
       "ts_last": 1792381500000,
@@ -220,11 +222,13 @@
       "span_days": 733.32,
       "granularity": "15m",
       "step_ms": 900000,
-      "validation_issues": []
+      "validation_issues": [],
+      "source_sha256_crlf": "877c0e091253c61e80244bf23f22b74e30b596868da7edca3ec0f81475a6cca8",
+      "git_line_ending": "LF (source CRLF; verified same CSV rows)"
     },
     "SOLUSDT_15m.csv": {
       "path": "data\\raw\\SOLUSDT_15m.csv",
-      "sha256": "07b4a12690dfffec23fa623237f17629f60de7016db553b642b7bb8f0adb0fd8",
+      "sha256": "e1a7e4fbc85aef196999f2b75461a0a03db9ce4ffbc4fc7a6fa7d4cbb2b6c4e2",
       "rows": 70400,
       "ts_first": 1729022400000,
       "ts_last": 1792381500000,
@@ -232,7 +236,9 @@
       "span_days": 733.32,
       "granularity": "15m",
       "step_ms": 900000,
-      "validation_issues": []
+      "validation_issues": [],
+      "source_sha256_crlf": "07b4a12690dfffec23fa623237f17629f60de7016db553b642b7bb8f0adb0fd8",
+      "git_line_ending": "LF (source CRLF; verified same CSV rows)"
     }
   }
 }
