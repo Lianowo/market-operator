@@ -24,7 +24,8 @@ def event(id_, i, direction=-1, ref=100, invalid=102):
 
 
 def drive(router,i,price,evs=(),**kw):
-    return router.on_bar("BTC",bar(i,price),i,view(),1,evs,
+    return router.on_bar("BTC",bar(i,price),i,
+                         kw.get("snapshot", view()),1,evs,
                          position_open=kw.get("holding",False),
                          entry_resting=kw.get("resting",False))
 
@@ -86,3 +87,24 @@ def test_position_blocks_redundant_pending_thesis():
     drive(r,0,99,[event(E7,0)])
     assert drive(r,1,98,[event(E1,1)],holding=True)==[]
     assert r.opportunities=={}
+
+
+def test_event_free_followthrough_uses_known_snapshot_without_lookahead():
+    r=OpportunityRouter()
+    drive(r,4,99,[event(E7,4,ref=100,invalid=102)])
+    # prepare_cognition only retains views at event bars, none here.
+    decisions=drive(r,5,98.8,snapshot=None)
+    assert len(decisions)==1 and decisions[0].hyp.direction==-1
+
+
+def test_other_reaction_families_share_same_state_machine():
+    from market_operator.events import E2, E3, E4, E5
+    for name in (E2,E3,E4,E5):
+        router=OpportunityRouter()
+        first=drive(router,10,99,[event(name,10)])
+        assert first==[]
+        assert router.opportunities["BTC"].stage=="REACTION_PENDING"
+        second=drive(router,11,98.7,snapshot=None)
+        assert len(second)==1
+        assert second[0].meta["source_event"]==name
+        assert second[0].intent.reason.startswith(name)
