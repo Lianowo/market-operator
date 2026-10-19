@@ -43,6 +43,9 @@ class StructureView:
     regime: Regime
     zones: tuple  # tuple[Zone],只取状态仍在视图中的区域
     atr: float
+    # The minimum causally confirmed pivot history used by the current
+    # structure model. Optional to preserve all frozen v1-v5 call sites.
+    pivots: tuple = ()
 
 
 @dataclass(frozen=True)
