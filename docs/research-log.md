@@ -115,3 +115,8 @@
      i. `tests/test_e7_v2.py`(9 项）：支撑/阻力两侧 FLIP 正向场景、两个不触发
         对照、F1 恰 k_is 两侧断言、k_is=0 旁路、v1 回归 parity；全仓
         `python -m pytest tests -q` = 111(v1)+ 9(v2)全过。
+
+7. **2026-10-19 v3 预注册(先于任何 v3 运行)**
+   - `docs/v3-protocol.md` 已冻结:尺度家族 {2h,4h,12h,1d} × {E7±1},全部 ATR 先验零改动;
+     升级判据与 v2 §3-4 逐字相同;本轮为 test 段第 5 次评估且为 v3 唯一一次。
+   - 聚合路径:由 data/raw/*_1h.csv UTC 对齐聚合,不重抓 API;新文件入 manifest。
