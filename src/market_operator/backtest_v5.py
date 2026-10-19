@@ -296,7 +296,22 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                          trades=reconstruct_trades_v5(broker.ledger, seg_bounds),
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()})
-    assert_fill_after_decision(res.ledger)
+    if protective_execution:
+        # An entry and its installed stop may be crossed in the *same 15m
+        # OHLC bar*: no tick ordering is available. Our deliberate pessimistic
+        # convention is fill-entry-then-stop, both with the same bar label.
+        # All other rows retain the strict decision < fill invariant.
+        for row in res.ledger:
+            if (row["meta"].get("role") == "protective_stop"
+                    and row["ts"] == row["decision_ts"]):
+                if row["meta"].get("stop_install_ts") != row["ts"]:
+                    raise AssertionError("same-candle stop lacks entry provenance")
+        assert_fill_after_decision([
+            r for r in res.ledger if not (
+                r["meta"].get("role") == "protective_stop"
+                and r["ts"] == r["decision_ts"])])
+    else:
+        assert_fill_after_decision(res.ledger)
     return res
 
 
