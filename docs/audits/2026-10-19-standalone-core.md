@@ -33,6 +33,16 @@ selects different signals or promotes paper/live trading.
   invalidation. No separate risk service or new package.
 - `src/market_operator/backtest_v4.py`: synchronize only confirmed structural
   invalidation changes to broker; do not treat unfilled limit orders as fills.
+  Optional `execution_ledger` projects actual historical Broker execution rows
+  into the same durable journal and checks reconstructed final positions against
+  the Broker; replay is idempotent by explicit `ledger_run_id`.
+- `src/market_operator/position.py` + `broker.py`: trend ADD now also supports
+  a deferred execution path. Intent does not change quantity/entry/stop;
+  confirmed ADD applies exact fill qty and VWAP, while rejected ADD clears the
+  pending flag and leaves original position unchanged. The Broker recomputes
+  the risk-neutral constraint at *actual fill price* before allowing addition.
+  Frozen v4 still has `allow_add=False`; this is a correctness mechanism, **not**
+  evidence of profitable pyramiding.
 - `tests/test_orders.py` and `tests/test_portfolio_stop_risk.py`: regression
   cases for idempotency, late fills, restart, position mismatch, portfolio risk,
   stop tightening, and frozen v4 compatibility.
