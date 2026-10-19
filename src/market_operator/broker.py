@@ -354,7 +354,8 @@ class Broker:
                 ref_price=od.limit_price, ts=ts)
             self.pending.setdefault(od.symbol, []).append(_Pending(
                 intent=intent, decision_ts=ts,
-                direction=-od.direction, meta=dict(od.meta)))
+                direction=-od.direction,
+                meta={**od.meta, "role": "deferred_reduce"}))
             return row
         return self._admin_row(od, ts, kind="EXPIRED", reason_code="EXPIRED",
                                detail=f"entry limit {od.limit_price:.8g} not filled "
