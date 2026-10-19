@@ -46,6 +46,21 @@ python scripts/run_backtest.py                 # -> reports/backtest.{json,md}, 
 - 交易层面（§8 持仓管理 + 真实成交 + 全部成本, 300 USDT)：9 段×成本全负，full@1x 净 −240.7 USDT, PF 0.76。成本吞噬全部毛利。
 - 判定：**无机制在真实成本后正期望 → Research Only**。失败分解与 v2 方向见 `docs/acceptance.md`。
 
+## 2026-10-19 独立交易核心提取（施工分支）
+
+按照“开源源码级提取、独立重写、无大型交易框架依赖”的约束，
+从 Hummingbot 的订单追踪机制与 Jesse 的成交驱动持仓语义中独立实现以下功能：
+
+- `market_operator/orders.py`：SQLite 持久化订单及唯一成交、部分成交、
+  撤单与迟到成交、重启未决订单恢复与交易所持仓对账。
+- `market_operator/broker.py`：可选 `portfolio_stop_risk_frac`，约束 BTC/ETH/SOL
+  组合整体从当前盯市价到有效结构止损之间的预期风险；与全组合名义杠杆上限联合生效。
+- `backtest_v4.py`：仅将已经确认的结构失效价同步至 Broker；减仓仍以真实成交确认为准。
+
+**不添加 Freqtrade/Jesse/Hummingbot 或其他任何运行依赖，不连接实盘交易所，不启用真实下单。**
+冻结的 v4 配置不会因新风控选项自动改变。全部源码审查、来源、许可证、范围与验证：
+`docs/audits/2026-10-19-standalone-core.md`。当前交易策略仍处于 NO-GO。
+
 ## 来源与许可证
 
 本仓库代码全部为原创实现，项目许可证 MIT（见 `LICENSE`)。研究中借鉴开源算法之处均已在 `docs/audits/` 记录来源/许可证/差异：pymarket-structure(MIT)、TapeFlow(MIT) 借鉴了思想级原语；quant-trading（专有许可）与 OrderFlow-absorption（无 LICENSE 文件）仅借鉴思想，无任何代码复制。
