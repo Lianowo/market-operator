@@ -132,6 +132,27 @@ class OpportunityRouter(V5Router):
         self.areas.on_bar(symbol, bar_index, h, l, close)
         previous = self.opportunities.get(symbol)
 
+        # Record every observed break EVEN IF we are not ready to trade it.
+        # E1 and E6 cannot silently claim a directional market order.
+        for ev in new_events:
+            if ev.id not in (E1, E6):
+                continue
+            if "ref" not in ev.attrs or "invalid" not in ev.attrs:
+                continue
+            zones = () if view is None else view.zones
+            episode = self.areas.observe_break(symbol, ev, zones)
+            self._bump("break_observed")
+            self._notes.append(
+                f"BROKEN|{ev.id} {episode.area.lo:.8g}..{episode.area.hi:.8g}"
+                " no entry")
+
+        # E2/E3 are pure market observations (local rejection/test).
+        for ev in new_events:
+            if ev.id in (E2, E3):
+                self._bump(f"local_rejection_observed_{ev.id}")
+
+        # Market cognition never shuts down because we happen to hold a
+        # position. Only ORDER generation is disabled while risk is open.
         if position_open or entry_resting:
             # Trade cycle is owned by actual Broker fills and PositionManager.
             self.opportunities.pop(symbol, None)
@@ -188,25 +209,6 @@ class OpportunityRouter(V5Router):
                 self._bump("invalid_hypothesis")
             else:
                 self._notes.append("WAIT|area still unresolved")
-
-        # Record every observed break EVEN IF we are not ready to trade it.
-        # E1 and E6 cannot silently claim a directional market order.
-        for ev in new_events:
-            if ev.id not in (E1, E6):
-                continue
-            if "ref" not in ev.attrs or "invalid" not in ev.attrs:
-                continue
-            zones = () if view is None else view.zones
-            episode = self.areas.observe_break(symbol, ev, zones)
-            self._bump("break_observed")
-            self._notes.append(
-                f"BROKEN|{ev.id} {episode.area.lo:.8g}..{episode.area.hi:.8g}"
-                " no entry")
-
-        # E2/E3 are pure market observations (local rejection/test).
-        for ev in new_events:
-            if ev.id in (E2, E3):
-                self._bump(f"local_rejection_observed_{ev.id}")
 
         candidates = [e for e in new_events if e.id in (E4, E5, E7)]
         # Competing unrelated locations or sides on one bar cannot be
