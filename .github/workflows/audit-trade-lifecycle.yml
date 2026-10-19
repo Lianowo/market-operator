@@ -3,9 +3,11 @@ on:
   push:
     branches:
       - fix/trade-lifecycle-semantic-20261019
+      - feat/area-centric-opportunity-v2-20261019
     paths:
       - '.github/workflows/audit-trade-lifecycle.yml'
       - 'src/market_operator/opportunity.py'
+      - 'src/market_operator/market_areas.py'
       - 'src/market_operator/broker.py'
       - 'src/market_operator/backtest_v5.py'
       - 'scripts/diagnose_trade_lifecycle.py'

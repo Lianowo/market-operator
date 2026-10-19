@@ -68,6 +68,24 @@ def main() -> None:
         )
         metrics = compute_metrics(res)
         key = f"{segment}@{cost}x"
+        # Economic attribution by pre-defined MARKET THESIS, not fitted gates.
+        raw_trades = [t for t in res.trades if t["in_segment_open"]]
+        by_thesis = {}
+        for source in sorted({str(t.get("event_id")) for t in raw_trades}):
+            group = [t for t in raw_trades if str(t.get("event_id")) == source]
+            closed = [t for t in group if t["closed"]]
+            net = sum(float(t["net_pnl"]) for t in group)
+            by_thesis[source] = {
+                "trades": len(group), "closed": len(closed),
+                "net": net, "net_per_trade": net / len(group),
+                "fees": sum(float(t["fees"]) for t in group),
+                "funding": sum(float(t["funding"]) for t in group),
+                "winrate": (sum(t["net_pnl"] > 0 for t in closed)
+                            / len(closed)) if closed else None,
+                "protective_exits": sum(
+                    str(t.get("reason_exit") or "").startswith("PROTECTIVE_STOP|")
+                    for t in closed),
+            }
         outcome["runs"][key] = {
             "metrics": {name:metrics.get(name) for name in (
                 "net_pnl","return_pct","n_trades","winrate",
@@ -76,8 +94,9 @@ def main() -> None:
             "counters": res.counters,
             "by_symbol": metrics.get("by_symbol"),
             "n_closed": sum(1 for x in res.trades if x["closed"]),
-            "n_rejected_hypotheses": router.counters.get("retest_failed", 0)
-                + router.counters.get("retest_reentered", 0),
+            "by_trade_thesis": by_thesis,
+            "n_rejected_hypotheses": router.counters.get("thesis_failed", 0),
+            "n_unanchored_local_flips": router.counters.get("unanchored_flip", 0),
         }
         print("REPLAY", key, json.dumps(outcome["runs"][key], ensure_ascii=False),
               flush=True)
