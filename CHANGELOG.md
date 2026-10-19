@@ -29,3 +29,9 @@
 - 归因驱动优化轮：E7 FLIP_RETEST + F1(docs/v2-protocol.md);test 一次评估仍 NO-GO,
   Research Only 维持；优化循环按反过拟合原则停止(docs/acceptance.md v2 附章)。
   120 tests;v1 行为 parity 锁定。
+
+## [v0.4.0] - 2026-10-19
+
+- v4 成熟度优先（E7-only + F1 + 限价接回踩 + 15m 执行路径）：同信号 A/B 全面劣于 v2 市价
+  (test −75.4 vs −55.7),adverse selection > maker 节省；九段全负、test<60 判 INSUFFICIENT。
+  192 tests。优化循环关闭，Research Only 终态。
