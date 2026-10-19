@@ -1,0 +1,49 @@
+# 2026-10-19 修复：市场事件 ≠ 交易机会 ≠ 订单成交
+
+状态：**仅研究与诊断 / 策略 NO-GO / Live NO-GO**。主分支 v1-v5 的协议、原始事件检测器以及所有回测证据原样保留。
+
+## 根因与改动，不堆砌新过滤器
+
+1. **结构与事件**：保留原有因果 Pivot、Zone 与 E1-E7。E1（突破接受的历史事实）/E6（旧结构被破坏）不再直接自动开仓，仅产生 `BREAK_OBSERVED`。局部刺穿/拒绝 E2/E3 也只是事实，不能自行被命名为“已确认的交易”。
+2. **机会行为生命周期**：仅 E4（趋势恢复）、E5（区间轮转）、E7（区域翻转后回踩拒绝）能成为相应市场行为的候选；仍须下一根**不同的已收盘 bar**确实向候选方向延续。这个额外时间步不是任意 n 根入场过滤器，而是避免用同根 OHLC 的高低价假定真实先后顺序。若价格返回区域或穿越该假设的结构失效位置，则假设终止、不下单。
+3. **目标与风险**：首次尝试不使用额外 F1、最小 1.5R、k_dq、k_imp 这类与机会来源无关的门槛。结构目标不可见时保持 `target_1=None`，**不凭空制造固定 2R 止盈**；保护位来自事件的结构 invalid，由 Broker 在 15m OHLC 中模拟真实停止市场单。
+4. **执行事实**：移植已审查的 fill-confirmed maker 减仓与 ADD、共享名义杠杆上限、可选组合止损预算与 SQLite 订单账本。v5 新实验启用 `protective_execution=True` 时，止损由 Broker 真正平仓并入统一 ledger。15m 开盘跳空按不利开盘价执行，另外收取 taker/slippage。遇到同根保护性止损与 maker 减仓时选择止损优先。
+5. **账本硬不变量**：新实验结束检查 `cash = initial + sum(realized - fee + funding_delta)`，并逐 symbol 检查真实净仓位与已成交 BUY/SELL 流吻合；保护性止损漏记账会立即失败。
+
+### 为什么避免覆盖 v5
+
+`run_backtest_v5(..., protective_execution=False, router=None)` 维持历史协议默认行为；
+新实验专门使用 `OpportunityRouter`、`protective_execution=True`。
+旧 `reports/backtest_v5.*` 和交易 CSV 不修改，避免拿工程修复后数据覆盖原始试验。
+`scripts/diagnose_trade_lifecycle.py` 的产物只由 CI 上传为 artifact。
+
+### 严重测试发现与失败实验
+
+- 第一版新路由仍把 E2/E3 的普通局部反应当作完整交易候选，在 3 品种真实
+  1h/15m 历史上产生 2,242 笔 full@1x 交易，修复保护性 STOP 账本缺项后
+  full@1x 净 **−271.86 U / 300 U**、PF约0.72、最大回撤约90.6%；这是
+  **明确的语义失败反证**，已如实保存于对应 GitHub Actions 运行，不是新 OOS。
+- 本分支随后纠正语义：E2/E3 保留为结构观察事实，不再被轻易转换成交易假设；
+  E4/E5/E7 是具有相应完整市场情境的行为反应，仍要独立证据确认。这个变更的理由
+  是结构逻辑，而不是按参数/历史收益做性能择优。
+- 不因某个版本在已被反复使用的 test 表现较好而挑参数；新实验的最终结果
+  **无论盈亏都属于诊断，绝非新的独立 OOS 或正期望证明**。
+
+### 剩余边界 / 为什么不应直接 Live
+
+- 新状态机尚未拥有完整的多尺度接近 → 试探 → 破位竞争状态、跨品种同步机会选择，
+  也不具备经验证的趋势**滚仓**。这些不能靠一个新数值过滤器替代。
+- 新保护性止损使用 15m OHLC 并假定 stop-market 可按止损或跳空开盘成交，
+  不是来自真实撮合队列、盘口或交易所原生保护委托的认证填单证据。
+- 300 U 资金进行高杠杆复利仍可能因真实滑点/清算事件快速归零。没有任何
+  自动实盘下单、密钥、网络发送。
+- 目前多轮 dev/test 已被历史 v1-v5 看过，不存在干净的历史检验区间；
+  未来策略必须冻结语义后再用新前向数据完成严格 OOS。
+
+## 源码与参考
+
+`src/market_operator/opportunity.py`: 轻量事件过程状态机，不增加运行包。
+`src/market_operator/broker.py`: 15m stop-market、实际成交账本和组合风险。
+`src/market_operator/backtest_v5.py`: 显式新执行模型与报表对账。
+`tests/test_opportunity.py`、`tests/test_protective_execution.py`：时间顺序、真实状态、跳空、对账硬断言。
+`scripts/diagnose_trade_lifecycle.py`: 不覆写 v5 的独立真实数据诊断。
