@@ -56,12 +56,14 @@ re-run would be a diagnostic, not new independent strategy evidence.
 
 1. **No independent net-positive edge**: current v4 test PF 0.29, net -25.13%
    according to the original report; n=32, below the declared threshold.
-2. **Shared portfolio leverage/risk limits** need explicit proof. The broker's
-   `_fill_open` and `_fill_open_limit` cap each new position by
-   `leverage_cap * equity` without deducting *existing positions' notional*.
-   This is a per-entry cap and does not, by itself, prove a shared-account
-   gross-leverage cap or simultaneous-loss budget. It must be corrected or
-   explicitly named a per-position limit before live use.
+2. **Shared portfolio gross-leverage entry cap: corrected on this branch.**
+   Open market, open maker limit and enabled ADD fill paths now subtract all
+   existing positions' absolute marked notional before allocating another
+   order, preventing a new position from using a second copy of the same
+   global `leverage_cap * equity`. Three cross-symbol tests cover market,
+   limit and ADD. **This is not yet a proven total portfolio stop-risk budget**,
+   and it does not constitute intrabar margin liquidation or volatility
+   stress-testing certification. Those remain blockers to Live.
 3. **Intrabar and exchange realism**: 15m OHLCV cannot prove the ordering of
    all events inside the candle, nor actual passive queue fills. The current
    simulated maker fill rule is an assumption, not a verified exchange fill.
@@ -81,3 +83,14 @@ re-run would be a diagnostic, not new independent strategy evidence.
 The work only repairs and tests the invariant **intent != fill** on the
 v4 maker partial-reduction path. A full architecture/strategy certification
 would require separate follow-up work and independently verified data.
+
+## Existing raw data SHA mismatch — resolved with provenance
+
+The three committed 15m CSVs contain LF line endings while the original
+manifest recorded SHA256 of source CRLF bytes. In independent GitHub Actions
+checks, CRLF-expanding **each exact committed LF file** yielded the original
+SHA256 for BTC, ETH and SOL, proving the distinction is line endings only.
+The manifest now preserves `source_sha256_crlf` and sets `sha256` to the
+actual committed LF bytes. The regression suite verifies **both** hashes.
+`.gitattributes` explicitly fixes `data/raw/*.csv` to LF across platforms.
+This does not change any parsed bar, strategy rule or historical report.
