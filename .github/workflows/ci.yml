@@ -1,0 +1,37 @@
+name: CI (audit branch)
+on:
+  push:
+    branches:
+      - 'audit/**'
+      - 'fix/trade-lifecycle-semantic-20261019'
+  pull_request:
+    branches:
+      - main
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Verify original CSV newline provenance
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          manifest=json.loads(Path("data/manifest.json").read_text())
+          for name in ("BTCUSDT_15m.csv","ETHUSDT_15m.csv","SOLUSDT_15m.csv"):
+              raw=Path("data/raw",name).read_bytes()
+              expected=manifest["files"][name]["sha256"]
+              digest=lambda b: hashlib.sha256(b).hexdigest()
+              print(name, "expected:",expected,
+                    "checked_in:",digest(raw),
+                    "crlf_expanded:",digest(raw.replace(bytes([13,10]),bytes([10])).replace(bytes([10]),bytes([13,10]))))
+          PY
+      - name: Run tests
+        run: python -m pytest tests -q
