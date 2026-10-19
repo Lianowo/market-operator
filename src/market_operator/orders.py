@@ -217,7 +217,15 @@ class OrderLedger:
             order = self.order(client_id)
             if order.exchange_id and exchange_id and order.exchange_id != exchange_id:
                 raise ReconciliationError("exchange order ID changed")
-            if exchange_state == "FILLED" and order.filled_qty != order.qty:
+            if order.filled_qty == order.qty:
+                # Unique executions are authoritative even if an old OPEN or
+                # CANCEL acknowledgement arrives after the final fill.
+                state, verified = "FILLED", 1
+            elif exchange_state == "FILLED":
+                state, verified = "UNKNOWN", 0  # missing execution details
+            elif (order.state == "CANCELED" and exchange_state in {"OPEN", "PARTIAL"}):
+                state, verified = "UNKNOWN", 0  # stale or conflicting venue status
+            elif (order.state == "REJECTED" and exchange_state != "REJECTED"):
                 state, verified = "UNKNOWN", 0
             elif exchange_state == "OPEN":
                 state, verified = ("PARTIAL" if order.filled_qty else "SUBMITTED"), 1
