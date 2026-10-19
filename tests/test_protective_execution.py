@@ -55,3 +55,18 @@ def test_confirmed_trailing_stop_is_executable():
     b.update_protective_invalid("BTC",99)
     assert b.execute_protective_stop("BTC",T0+H+900000,98.8,99.1,97.9)
     assert b.position_of("BTC") is None
+
+
+def test_protective_execution_is_booked_exactly_once_and_realized():
+    b=broker()
+    enter(b,-1,101)
+    initial_cash=b.cash
+    stop=b.execute_protective_stop("BTC",T0+H+900000,100,101.5,99)
+    assert len([r for r in b.ledger if r["kind"]=="EXIT"])==1
+    assert b.ledger[-1] is stop
+    assert stop["realized_pnl"]<0
+    assert b.cash<initial_cash
+    assert b.position_of("BTC") is None
+    # Replaying the same 15m bar must not double-pay, double-count or re-open.
+    assert b.execute_protective_stop("BTC",T0+H+900000,100,101.5,99) is None
+    assert len([r for r in b.ledger if r["kind"]=="EXIT"])==1
