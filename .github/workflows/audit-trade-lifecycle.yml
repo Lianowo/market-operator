@@ -9,6 +9,8 @@ on:
       - 'src/market_operator/broker.py'
       - 'src/market_operator/backtest_v5.py'
       - 'scripts/diagnose_trade_lifecycle.py'
+      - 'tests/test_opportunity.py'
+      - 'tests/test_protective_execution.py'
 jobs:
   forensic-replay:
     runs-on: ubuntu-latest
