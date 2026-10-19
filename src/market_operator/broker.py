@@ -208,6 +208,11 @@ class RestingLimitOrder:
     armed_at_ts: int               # 武装(1h 决策)bar 标签
     expiry_ts: int                 # armed_at_ts + n_fill×1h(最后一根允许成交的 1h bar)
     maker: bool = True             # 挂单成交恒为 maker(如实声明)
+    # v6 增量(docs/v6-protocol.md §1,加性):认知帧 TF ≥ 2h 时,决策 TF bar 的
+    # 更细执行 bar 全部落在 [armed, armed+TF) —— 决策须早于成交 ⇒ 这些执行 bar
+    # 不可成交。fill_after_ts = 最后一个不可成交的执行 bar 标签(决策 TF bar 最
+    # 末细 bar);None ⇒ 沿用 armed_at_ts(v4/v5 行为逐位不变)。
+    fill_after_ts: Optional[int] = None
     symbol: str = ""
     role: str = "entry"            # "entry"(G3 入场)/ "reduce"(§8.2 目标减仓)
     # entry 侧(open 成交所需,与 _Pending OPEN 字段同语义)
@@ -310,8 +315,10 @@ class Broker:
                    c: float) -> list[dict]:
         """15m bar 上的挂单处理:先判超时,再判严格穿过成交(FIFO)。
 
-        可成交窗口 = 本 15m bar 所属 1h bar 标签 ∈ (armed_at_ts, expiry_ts];
-        armed 小时自身的子 bar 不参与(因果:决策须早于成交)。
+        可成交窗口 = 本 15m bar 所属 1h bar 标签 ∈ (fill_after_ts(缺省 =
+        armed_at_ts), expiry_ts];决策 bar 自身(及其全部细 bar)不参与(因果:
+        决策须早于成交)。v6:认知 TF ≥ 2h 的战役在执行帧(1h)上调用本方法,
+        fill_after_ts 把决策 TF bar 的全部执行细 bar 排除出成交窗口。
         """
         hour_label = int(ts) - (int(ts) % MS_1H)
         rows: list[dict] = []
@@ -320,8 +327,10 @@ class Broker:
             if hour_label > od.expiry_ts:
                 rows.append(self._timeout(od, int(ts)))
                 continue
-            if hour_label <= od.armed_at_ts:
-                kept.append(od)                       # 武装小时自身,不可成交
+            barred = (od.fill_after_ts if od.fill_after_ts is not None
+                      else od.armed_at_ts)
+            if hour_label <= barred:
+                kept.append(od)                       # 决策 bar 覆盖区间,不可成交
                 continue
             od.wait_bars += 1
             cross = (h > od.limit_price) if od.direction < 0 \

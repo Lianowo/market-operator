@@ -111,6 +111,8 @@ class BacktestResult:
     counters: dict = field(default_factory=dict)
     seg_bounds: dict = field(default_factory=dict)      # symbol → {lo, hi, n}
     contracts: dict = field(default_factory=dict)
+    cap_skips: list = field(default_factory=list)       # v6:组合容量 FIFO 跳过明细
+    campaign_states: dict = field(default_factory=dict)  # v6:白盒内省(各战役状态)
 
 
 # ---------------------------------------------------------------------------
