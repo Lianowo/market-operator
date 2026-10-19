@@ -67,7 +67,12 @@ class OpportunityRouter(V5Router):
             # price noise; a NEW pivot makes a NEW structural campaign.
             if not all(k in ev.attrs for k in ("pb_price", "leg_start", "regime")):
                 return None
+            if linked_break is None:
+                return None
+            # The same pullback may only be taken once *per established
+            # directional break campaign*, not once per ticker.
             return (symbol, "TREND", ev.direction,
+                    linked_break.area.break_known, linked_break.area.ref,
                     float(ev.attrs["pb_price"]), float(ev.attrs["leg_start"]))
         if ev.id == E5:
             zone, band = ev.attrs.get("zone"), ev.attrs.get("band")
@@ -97,12 +102,11 @@ class OpportunityRouter(V5Router):
                         bar_index: int,
                         linked: Optional[AreaEpisode]) -> Optional[int]:
         """Measure actual known pivot/area span, never select on its value."""
-        if linked is not None:
-            return bar_index - linked.area.origin_known
         if ev.id == E5:
             return bar_index - int(ev.attrs["zone"].origin_known)
         if ev.id != E4 or view is None:
-            return None
+            return (bar_index - linked.area.origin_known
+                    if linked is not None else None)
         pb_price = float(ev.attrs["pb_price"])
         opposite = PivotKind.HIGH if ev.direction > 0 else PivotKind.LOW
         pb_kind = PivotKind.LOW if ev.direction > 0 else PivotKind.HIGH
@@ -159,7 +163,8 @@ class OpportunityRouter(V5Router):
                     identity = previous.identity
                     if identity in self.consumed:
                         raise AssertionError("same structural trade already consumed")
-                    if previous.break_episode is not None:
+                    if (previous.break_episode is not None
+                            and previous.source_event.id == E7):
                         self.areas.consume(symbol, previous.break_episode, bar_index)
                     self.consumed.add(identity)
                     self.opportunities.pop(symbol, None)
@@ -220,7 +225,18 @@ class OpportunityRouter(V5Router):
             if not self._context_consistent(ev, view):
                 self._bump("inconsistent_market_context")
                 continue
-            linked = self.areas.matched_retest(symbol, ev) if ev.id == E7 else None
+            linked = (self.areas.matched_retest(symbol, ev)
+                      if ev.id == E7 else
+                      self.areas.last_expansion_for_trend(
+                          symbol, ev.direction, float(ev.attrs["leg_start"]),
+                          bar_index)
+                      if ev.id == E4 and "leg_start" in ev.attrs
+                      else None)
+            if ev.id == E4 and linked is None:
+                # A local two-pivot E4 in an unrelated range is not yet an
+                # identified continuation of a defensible larger campaign.
+                self._bump("trend_without_prior_expansion")
+                continue
             if ev.id == E7 and linked is None:
                 self._bump("unanchored_flip")  # a local zone flip, not a campaign
                 continue
