@@ -115,11 +115,16 @@ class OpportunityRouter(V5Router):
             self._bump("break_observed")
             self._notes.append(f"OBSERVE|{ev.id} structural change, no order")
 
-        # One structural reaction is a *candidate*, not permission to trade:
-        # E2/E3 rejected price at a zone, E4 trend resumed, E5 range rotated,
-        # E7 zone flipped. Same OHLC ambiguity applies to every candidate.
-        candidates = [e for e in new_events
-                      if e.id in (E2, E3, E4, E5, E7)]
+        # E2/E3 are a LOCAL test/rejection fact only. They do not establish
+        # a tradable opportunity or a range rotation by themselves. Their
+        # unconfirmed count remains visible, never silently filtered away.
+        for ev in new_events:
+            if ev.id in (E2, E3):
+                self._bump(f"local_rejection_observed_{ev.id}")
+        # E4 resumes a confirmed trend leg; E5 rotates an established range;
+        # E7 flips a known zone after its retest. These are distinct lifecycle
+        # events with a structural context, still not instantaneous orders.
+        candidates = [e for e in new_events if e.id in (E4, E5, E7)]
         # Two conflicting directions or levels in one bar are ambiguous; do
         # not silently prefer an arbitrary detector iteration order.
         signatures = {(e.direction, e.attrs.get("ref")) for e in candidates}
