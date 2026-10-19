@@ -235,6 +235,7 @@ class _AcctPosition:
     opened_ts: int             # OPEN 成交 bar ts
     funding_acc: float = 0.0   # 已计提未结算资金费(正数 = 成本)
     last_funding_ts: int = 0   # 上次计提时刻
+    invalid: Optional[float] = None  # 当前结构失效位置;组合风险预算的真实输入
 
 
 class Broker:
@@ -244,7 +245,8 @@ class Broker:
                  leverage_cap: float, taker_fee: float, slippage_per_side: float,
                  funding_per_8h: float, contracts: dict,
                  maker_fee: Optional[float] = None,
-                 cost_multiplier: float = 1.0, liq_frac: float = 0.9) -> None:
+                 cost_multiplier: float = 1.0, liq_frac: float = 0.9,
+                 portfolio_stop_risk_frac: Optional[float] = None) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
         self.initial_equity = float(equity)
@@ -260,6 +262,9 @@ class Broker:
         self.cost_multiplier = float(cost_multiplier)
         self.contracts = contracts
         self.liq_frac = float(liq_frac)
+        if portfolio_stop_risk_frac is not None and not (0 < portfolio_stop_risk_frac <= 1):
+            raise ValueError("portfolio_stop_risk_frac must be in (0,1]")
+        self.portfolio_stop_risk_frac = portfolio_stop_risk_frac
 
         self.positions: dict[str, _AcctPosition] = {}
         self.pending: dict[str, list[_Pending]] = {}
@@ -354,7 +359,8 @@ class Broker:
                 ref_price=od.limit_price, ts=ts)
             self.pending.setdefault(od.symbol, []).append(_Pending(
                 intent=intent, decision_ts=ts,
-                direction=-od.direction, meta=dict(od.meta)))
+                direction=-od.direction,
+                meta={**od.meta, "role": "deferred_reduce"}))
             return row
         return self._admin_row(od, ts, kind="EXPIRED", reason_code="EXPIRED",
                                detail=f"entry limit {od.limit_price:.8g} not filled "
@@ -391,6 +397,37 @@ class Broker:
                 for od in self.resting.pop(symbol, [])]
         return rows
 
+    def _gross_notional(self) -> float:
+        """当前全部品种未平仓名义敞口(多空均取绝对值,不得互相抵扣)。"""
+        return sum(abs(pos.qty * self.last_mark.get(sym, pos.entry))
+                   for sym, pos in self.positions.items())
+
+    def _available_entry_notional(self, equity: float) -> float:
+        """账户级剩余总敞口;防止每个 symbol 各自使用完整 leverage_cap。"""
+        return max(0.0, self.leverage_cap * equity - self._gross_notional())
+
+    def update_protective_invalid(self, symbol: str, invalid: float) -> None:
+        """同步已确认市场结构失效位置;只允许收紧,不可用未成交意图提前移动。"""
+        pos = self.positions[symbol]
+        if not math.isfinite(invalid) or invalid <= 0:
+            raise ValueError("invalid protective price")
+        prev = pos.invalid
+        if prev is not None and pos.direction * (invalid - prev) < -1e-10:
+            raise ValueError("stop may not be loosened")
+        pos.invalid = float(invalid)
+
+    def _available_stop_risk(self, equity: float) -> float:
+        """从当前盯市价到结构止损的总账户风险;未启用时保持 v4 原始口径。"""
+        if self.portfolio_stop_risk_frac is None:
+            return float("inf")
+        outstanding = 0.0
+        for sym, pos in self.positions.items():
+            if pos.invalid is None:
+                return 0.0  # stop 未知,不接受任何新增风险
+            mark = self.last_mark.get(sym, pos.entry)
+            outstanding += pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
+        return max(0.0, equity * self.portfolio_stop_risk_frac - outstanding)
+
     def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
         """入场挂单成交:limit_price 精确成交(无滑点),maker 费,sizing 同 OPEN。"""
         sym = od.symbol
@@ -409,8 +446,10 @@ class Broker:
         equity = self.equity_mtm()
         risk_per_unit = abs(price - od.invalid)
         qty_risk = self.risk_frac * equity / risk_per_unit
-        qty_cap = self.leverage_cap * equity / price
-        qty = _floor_step(min(qty_risk, qty_cap), spec.size_step, spec.size_place)
+        qty_cap = self._available_entry_notional(equity) / price
+        qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
+        qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
+                          spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
             return self._limit_skip(
@@ -423,7 +462,7 @@ class Broker:
         trade_id = f"{sym}#{self._seq}"
         pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
                             entry=price, trade_id=trade_id, opened_ts=ts,
-                            last_funding_ts=ts)
+                            last_funding_ts=ts, invalid=float(od.invalid))
         self.positions[sym] = pos
         self.last_mark[sym] = price
         meta = dict(od.meta)
@@ -551,8 +590,10 @@ class Broker:
         equity = self.equity_mtm()
         risk_per_unit = abs(price - po.invalid)
         qty_risk = self.risk_frac * equity / risk_per_unit
-        qty_cap = self.leverage_cap * equity / price
-        qty = _floor_step(min(qty_risk, qty_cap), spec.size_step, spec.size_place)
+        qty_cap = self._available_entry_notional(equity) / price
+        qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
+        qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
+                          spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
             return self._skip_row(po, ts, "MIN_SIZE",
@@ -567,7 +608,7 @@ class Broker:
         trade_id = f"{sym}#{self._seq}"
         pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
                             entry=price, trade_id=trade_id, opened_ts=ts,
-                            last_funding_ts=ts)
+                            last_funding_ts=ts, invalid=float(po.invalid))
         self.positions[sym] = pos
         self.last_mark[sym] = price
         meta = dict(po.meta)
@@ -603,17 +644,49 @@ class Broker:
         if pos is None:
             return self._skip_row(po, ts, "NO_POSITION",
                                   f"no open position for {sym}")
-        qty = _floor_step((po.intent.qty_frac or 0.0) * pos.open_qty,
-                          self.contracts[sym].size_step,
-                          self.contracts[sym].size_place)
-        if qty <= 0.0:
-            return self._skip_row(po, ts, "MIN_SIZE", "add qty rounds to 0")
         side = "buy" if pos.direction > 0 else "sell"
         price = self._slipped(o, side)
+        spec = self.contracts[sym]
+        requested = (po.intent.qty_frac or 0.0) * pos.open_qty
+        equity = self.equity_mtm()
+        cap_qty = self._available_entry_notional(equity) / price
+        if self.portfolio_stop_risk_frac is not None:
+            if pos.invalid is None or pos.direction * (price - pos.invalid) <= 0:
+                return self._skip_row(po, ts, "BAD_INVALID", "add without protective stop")
+            stop_qty = self._available_stop_risk(equity) / (
+                pos.direction * (price - pos.invalid))
+            cap_qty = min(cap_qty, stop_qty)
+        qty = _floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
+        if qty < spec.size_min or qty * price < spec.min_trade_usdt:
+            return self._skip_row(po, ts, "MIN_SIZE",
+                                  "add exceeds portfolio gross-leverage budget "
+                                  "or exchange minimum")
+        new_invalid = pos.invalid
+        if po.meta.get("role") == "deferred_add":
+            candidate = po.meta.get("add_invalid")
+            if candidate is None or new_invalid is None:
+                return self._skip_row(po, ts, "BAD_INVALID",
+                                      "deferred add missing structural stop")
+            candidate = float(candidate)
+            new_invalid = (min(new_invalid, candidate) if pos.direction < 0
+                           else max(new_invalid, candidate))
+            if pos.direction * (price - new_invalid) <= 0.0:
+                return self._skip_row(po, ts, "BAD_INVALID",
+                                      "actual add fill beyond protective stop")
+            # Decision-time approval is not sufficient: gap/slippage can turn
+            # the real fill into a risk-increasing addition. Reject at fill.
+            before = pos.direction * (pos.entry - pos.invalid) * pos.qty
+            after = (pos.direction * (pos.entry - new_invalid) * pos.qty
+                     + pos.direction * (price - new_invalid) * qty)
+            if after > before + 1e-9:
+                return self._skip_row(po, ts, "ADD_RISK",
+                                      "actual fill violates risk-neutral add")
         fee = qty * price * self.taker_fee
         self.cash -= fee
         pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
         pos.qty += qty
+        if new_invalid is not None:
+            pos.invalid = new_invalid
         self.last_mark[sym] = price
         return self._row(po, ts, sym, side, "ADD", qty, price, o, fee,
                          0.0, 0.0, pos.trade_id, meta=dict(po.meta))
