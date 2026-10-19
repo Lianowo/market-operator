@@ -413,7 +413,14 @@ def test_unfilled_reduce_limit_must_not_trigger_phantom_breakeven_exit():
     # 收盘100处于初始止损101下方但原代码提前生效的保本99.5上方。
     hours[17] = calm(95.4, 96.0, 98.0, 100.0,
                      hi_pad=0.1, lo_pad=0.0)
-    res = _run(hours, _open_script(10))
+    # 隔离其他结构事件(Pivot trail / reverse E6),只验证 maker 意图与实际成交。
+    frame = _frame(hours)
+    frame.cog.events_by.clear()
+    frame.cog.pivots_by.clear()
+    res = run_backtest_v4(
+        {"TEST": frame}, segment="full", equity0=300.0,
+        whitelist=frozenset({(E7, -1), (E7, 1)}),
+        strategy=_Scripted(_open_script(10)), **KW)
     assert res.counters["reduce_limits_armed"] == 1
     assert res.counters["reduce_limit_fills"] == 0
     exits = [r for r in res.ledger if r["kind"] == "EXIT"]
