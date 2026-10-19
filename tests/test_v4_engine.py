@@ -405,3 +405,52 @@ def test_strategy_default_mode_no_limit_recorded():
     assert len(intents) == 1
     assert s._taken_limit == {}                              # 默认 = v1/v2 市价路径
     assert "limit_front_edge=" not in intents[0].reason
+
+
+def test_unfilled_reduce_limit_must_not_trigger_phantom_breakeven_exit():
+    hours = main_hours()
+    # hour16 触及 target,只武装减仓限价;hour17 严格不穿过 target。
+    # 收盘100处于初始止损101下方但原代码提前生效的保本99.5上方。
+    hours[17] = calm(95.4, 96.0, 98.0, 100.0,
+                     hi_pad=0.1, lo_pad=0.0)
+    # hour18 原始测试路径曾穿过95.0,导致减仓限价真实成交;此处必须始终在95之上。
+    hours[18] = calm(95.3, 96.4, 97.9, 98.4, lo_pad=0.0)
+    # 隔离其他结构事件(Pivot trail / reverse E6),只验证 maker 意图与实际成交。
+    frame = _frame(hours)
+    frame.cog.events_by.clear()
+    frame.cog.pivots_by.clear()
+    res = run_backtest_v4(
+        {"TEST": frame}, segment="full", equity0=300.0,
+        whitelist=frozenset({(E7, -1), (E7, 1)}),
+        strategy=_Scripted(_open_script(10)), **KW)
+    assert res.counters["reduce_limits_armed"] == 1
+    assert res.counters["reduce_limit_fills"] == 0
+    exits = [r for r in res.ledger if r["kind"] == "EXIT"]
+    assert len(exits) == 1
+    # 应等到 hour20 真正穿越原始结构失效位101,下一小时开盘全仓退出。
+    assert exits[0]["decision_ts"] == T0 + 20 * H
+    assert exits[0]["ts"] == T0 + 21 * H
+    assert exits[0]["qty"] == pytest.approx(1.5)
+    assert len([r for r in res.ledger if r["kind"] == "CANCEL"]) == 1
+    assert len([r for r in res.ledger if r["kind"] == "REDUCE"]) == 0
+
+
+def test_execution_ledger_replays_only_broker_confirmed_fills(tmp_path):
+    """E7 intent and resting orders have no qty until actual maker/taker fills."""
+    from market_operator.orders import OrderLedger
+
+    with OrderLedger(tmp_path / "actual-executions.db") as journal:
+        kw = {"execution_ledger": journal, "ledger_run_id": "maker-reduce-exit"}
+        result = _run(main_hours(), _open_script(10), **kw)
+        fills = [r for r in result.ledger if r["kind"] in
+                 ("OPEN", "LIMIT_FILL", "REDUCE", "EXIT", "ADD", "LIQUIDATION")]
+        assert len(fills) == 3
+        assert journal.net_positions() == {}
+        assert journal.dispatch_allowed()
+        # Replaying the identical run must never double-book the same fills.
+        _run(main_hours(), _open_script(10), **kw)
+        assert journal.net_positions() == {}
+        assert journal.dispatch_allowed()
+        total = sum(journal.execution_totals(
+            f"replay:maker-reduce-exit:{r['symbol']}:{r['seq']}")[0] for r in fills)
+        assert float(total) == pytest.approx(sum(r["qty"] for r in fills))
