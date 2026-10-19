@@ -1,4 +1,6 @@
-"""市场行为事件 E1-E6(docs/methodology.md §6,精确定义 §6A 附录 A1-A9)。
+"""市场行为事件 E1-E6(docs/methodology.md §6,精确定义 §6A 附录 A1-A9)+
+v2 增量 E7(docs/v2-protocol.md §1,冻结;默认关闭,`enable_e7=True` 开启,
+发射与否不影响 E1-E6 任何输出)。
 
 检测器与 MarketStructure 同步逐 bar 喂数据(内部持有结构实例),所有事件在
 `known_index = t` 的 bar 收盘判出,仅用 [0,t](§6 表头纪律)。
@@ -30,6 +32,13 @@
 - [§5/A9] regime 谓词本身含"价格未破坏最近抬升低点"条款(以当前收盘判定,
   见 structure.py),故 E6 以 `regime(t-1)` 为"TREND_UP/…中"之判定,恰好发射于
   regime 退出趋势的那一根。E6 的 L*/H* 取最近 confirmed 低/高 pivot。
+- [v2/docs/v2-protocol.md §1] E7 FLIP_RETEST:某 zone 状态转为 FLIPPED 的 bar
+  (破位→首次回踩→回踩被拒绝→角色互换,控制权易手确认)发射。信息来源是
+  structure.ZoneBook 的只读事实记录 `flips`(转移发生时 zone 尚在场内,终止后
+  移除前已由记录携带旧边界/旧角色/新角色)。方向:role_new=resistance ⇒ -1
+  (旧支撑破位),role_new=support ⇒ +1(旧阻力破位)。invalid(v2-protocol §1):
+  short = zone.hi + k_bm·atr,long = zone.lo − k_bm·atr;ref 取破位边缘
+  (short = zone.lo,long = zone.hi,与 E1 的 ref=被破边缘一致,供 §7 目标搜索)。
 - [§7] `attrs["invalid"]` 为失效价建议:E1 取 zone 正缘外侧(lo - buf / hi + buf,
   buf = k_bm*atr);E2/E3 取外缘外侧;E4 取回调终点外侧。均仅建议,不撮合。
 """
@@ -55,6 +64,8 @@ E3 = "E3"  # REJECTION 关键位拒绝
 E4 = "E4"  # TREND_RESUMPTION 趋势恢复
 E5 = "E5"  # RANGE_ROTATION 区间回归
 E6 = "E6"  # STRUCTURE_BREAK 结构破坏
+# v2(docs/v2-protocol.md §1,机制定义冻结;与 v1 事件同管线发射,E1-E6 语义不变)
+E7 = "E7"  # FLIP_RETEST 破位→回踩拒绝→角色互换
 
 
 @dataclass(frozen=True)
@@ -131,8 +142,11 @@ class EventDetector:
     → E2/A5、E3/A6 逐 episode 判 → E5 合成(A8)→ E4 激活/触发(A7)→ E6(A9)。
     """
 
-    def __init__(self, params: Params) -> None:
+    def __init__(self, params: Params, *, enable_e7: bool = False) -> None:
         self.params = params
+        # enable_e7 = False ⇒ 只发 v1 目录(E1-E6,行为与 v1 完全一致);
+        # True ⇒ 追加 v2 E7(docs/v2-protocol.md §1),E1-E6 不受影响。
+        self.enable_e7 = enable_e7
         self.structure = MarketStructure(params)
         self.events: list[MarketEvent] = []
         self._episodes: list[_Episode] = []
@@ -154,6 +168,8 @@ class EventDetector:
             emitted.extend(self._zone_events(t, ts, o, h, l, c, prev_close, atr))
             emitted.extend(self._trend_resumption(t, ts, c, atr))
             emitted.extend(self._structure_break(t, ts, c, atr))
+            if self.enable_e7:
+                emitted.extend(self._flip_retest(t, ts, atr))
         self._prev_regime = s.regime()
         self.events.extend(emitted)
         return emitted
@@ -423,3 +439,28 @@ class EventDetector:
                                "regime_before": Regime.TREND_DOWN.value},
                     )]
         return []
+
+    # -- E7:FLIP_RETEST(docs/v2-protocol.md §1,v2 增量) -----------------------
+
+    def _flip_retest(self, t: int, ts: object, atr: float) -> list[MarketEvent]:
+        """本 bar 发生的全部 FLIPPED 角色互换 → E7(破位→回踩→被拒绝→控制权易手)。
+
+        role_new=resistance(旧支撑破位)⇒ -1;role_new=support ⇒ +1(v2-protocol
+        §1,对称测、不做方向挑选)。invalid = zone 远端边缘 ± k_bm·atr;ref = 破位
+        边缘(short=lo,long=hi);atr = 转移 bar 的 ATR(供 F1 查验)。
+        """
+        bm = self.params.k_bm * atr
+        events: list[MarketEvent] = []
+        for flip in self.structure._zones.flips:
+            if flip.index != t:
+                continue
+            z = flip.zone                       # 新角色区快照(边界 = 旧区边界)
+            direction = -1 if z.role is ZoneRole.RESISTANCE else +1
+            ref = z.lo if direction < 0 else z.hi
+            invalid = (z.hi + bm) if direction < 0 else (z.lo - bm)
+            events.append(MarketEvent(
+                id=E7, direction=direction, ts=ts, known_index=t,
+                attrs={"zone": z.clone(), "ref": ref, "invalid": invalid,
+                       "from_role": flip.from_role.value, "atr": atr},
+            ))
+        return events

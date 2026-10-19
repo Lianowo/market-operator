@@ -20,6 +20,9 @@ target_1 = 结构目标(§7:"最近的对侧区域边缘 / RANGE 对侧边缘"):
 r_mult = direction·(target_1 − entry) / (direction·(entry − invalid)),
 仅当 entry 与 target_1 均存在且方向风险为正时计算;否则为 None。
 行动门槛(r_mult ≥ 1.5,§7 先验)属建仓决策,本模块只度量,不过滤。
+
+v2 增量(docs/v2-protocol.md §1):F1 失效距离下限 `f1_invalid_distance_ok`,
+dist(close(t), invalid) ≥ k_is·atr(t);由 v2 入口调用,不改变 §7 构建口径。
 """
 
 from __future__ import annotations
@@ -117,3 +120,23 @@ def build(event: MarketEvent, structure_view: StructureView,
         r_mult=_r_mult(event.direction, entry, float(invalid), target),
         regime=structure_view.regime,
     )
+
+
+# ---------------------------------------------------------------------------
+# F1 失效距离下限(docs/v2-protocol.md §1;v2 增量,不进入 v1 白名单路径)
+# ---------------------------------------------------------------------------
+
+
+def f1_invalid_distance_ok(event: MarketEvent, close: float, k_is: float) -> bool:
+    """F1 门:dist(close(t), invalid) ≥ k_is·atr(t) 才允许 E7 入场。
+
+    距离取事件 bar(t)收盘至 invalid 的沿方向距离;atr 用事件 attrs["atr"]
+    (发射 bar 时写入,与 invalid 同一知时刻度)。attrs 缺 "invalid"/"atr" 或
+    atr 非正 ⇒ 判 False(无法验证不满足)。
+    """
+    invalid = event.attrs.get("invalid")
+    atr = event.attrs.get("atr")
+    if invalid is None or atr is None or float(atr) <= 0.0:
+        return False
+    dist = event.direction * (float(close) - float(invalid))
+    return dist >= float(k_is) * float(atr)

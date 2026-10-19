@@ -74,3 +74,44 @@
    - `docs/methodology.md` §8.3 措辞澄清(非参数修改):原文"顺向新 pivot"
      系多头视角,空方无法执行;改为"防线一侧新确认的 pivot(多单=pivot low,
      空单=pivot high)"。语义自始即此,测试与实现均按此执行。
+
+
+6. **2026-10-19 v2 研究轮协议冻结 + test 段第四次评估声明 + v2 改动清单**
+   - **协议冻结**:`docs/v2-protocol.md` 在任何 v2 实现与 v2 运行之前冻结
+     （机制 E7 FLIP_RETEST 定义、F1 失效距离下限先验 k_is=0.8、对称双方向、
+     {0.6, 1.0} 敏感性仅报告不择优、H1/H2/H3 可证伪假设、评估协议 = methodology
+     §9 全流程原样）。`config/defaults.json`、`docs/methodology.md`、v1 全部
+     报告与 `docs/acceptance.md` 在本轮中零改动。
+   - **test 段第四次评估声明(唯一一次)**:v2 设计依据全部来自 v1 既有产物
+     （其 test 段已经三次评估，见条目 4/5)。v2 首次运行脚本
+     `scripts/run_event_study_v2.py` 与 `scripts/run_backtest_v2.py` 均含 test
+     段 ⇒ **为 test 第 4 次评估，且是 v2 唯一一次**；此后任何 v2 迭代只许用
+     dev,test 不再服务于 v2 结论；真正 OOS 只能等 2026-10-19 之后的前向数据
+     (v2-protocol §3-2)。若 n<60 判 INSUFFICIENT_DATA，不做叙述性补救。
+   - **v2 改动清单（全部可追溯至 v2-protocol 条款；E1-E6 检测输出不变，由
+     `tests/test_e7_v2.py::test_v1_regression_parity` 以 v1 产物
+     `reports/event_study_events_test.csv` 逐事件比对守护）**:
+     a. `structure.py`：新增只读事实记录 `ZoneBook.flips`/`ZoneFlip`(FLIPPED
+        转移 bar 的旧角色 + 新角色区快照，只读追加，不改变 §4.2 状态机与
+        视图移除时序）——v2-protocol §1 事件信息来源。
+     b. `events.py`:E7 常量与 `_flip_retest` 发射器（direction 由 role_new
+        决定；invalid = 远端边缘 ± k_bm·atr;ref = 破位边缘；atr = 转移 bar
+        ATR)；默认 `enable_e7=False`(v1 目录行为字节级不变）。
+     c. `hypothesis.py`:`f1_invalid_distance_ok`(v2-protocol §1 F1 门）。
+     d. `research.py`:`expected_direction` 增 E7 分支（以 from_role 为独立
+        核对证据）;`collect_events` 增可选 `event_ids` 过滤与 `enable_e7`
+        （默认均不变）。
+     e. `strategy.py`:`StrategyParams.whitelist`/`k_is` 参数化入口（None/0 =
+        v1 路径，explain 文本与 reason 字段逐字兼容）;F1 门按 k_is 生效。
+     f. `backtest.py`:`run_backtest`/`prepare_cognition` 增可选
+        strategy/whitelist/enable_e7 参数（默认 = v1)。
+     g. `config/v2.json`：继承 defaults 全部键（逐项照抄）+ k_is=0.8 +
+        whitelist_v2=[["E7",-1],["E7",1]] + k_is_sensitivity_report[0.6,1.0] +
+        meta{parent:defaults, protocol:docs/v2-protocol.md}。
+     h. `scripts/run_event_study_v2.py`、`scripts/run_backtest_v2.py`：产物
+        `reports/event_study_v2.{json,md}`、`reports/event_study_events_v2_*.csv`、
+        `reports/backtest_v2.{json,md}`、`reports/trades_v2_*.csv`、
+        `reports/equity_v2_*.csv`（与 v1 产物文件名隔离，v1 产物不动）。
+     i. `tests/test_e7_v2.py`(9 项）：支撑/阻力两侧 FLIP 正向场景、两个不触发
+        对照、F1 恰 k_is 两侧断言、k_is=0 旁路、v1 回归 parity；全仓
+        `python -m pytest tests -q` = 111(v1)+ 9(v2)全过。

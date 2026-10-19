@@ -31,6 +31,9 @@
 - [§5/§6A-A8] 趋势与区间结构统一由最近至多 `range_max_pivots` 个 confirmed pivots 判定
   (A8 明示 RANGE 窗口;趋势取同一窗口内的最近两个高/低点序列,即"最近 4+ 个交错
   pivot"的冻结读法)。
+- [v2] ZoneBook.flips:每根 bar 的 FLIPPED 角色互换事实记录(见 ZoneFlip)。只读追加,
+  不改变任何生命周期判断与视图移除时序(v1 行为不变);供 v2 事件 E7 使用,机制
+  定义见 docs/v2-protocol.md §1。
 """
 
 from __future__ import annotations
@@ -143,6 +146,20 @@ class Regime(str, Enum):
     TREND_DOWN = "TREND_DOWN"
     RANGE = "RANGE"
     TRANSITION = "TRANSITION"
+
+
+@dataclass(frozen=True)
+class ZoneFlip:
+    """一只 zone 在本 bar 转为 FLIPPED 的事实记录(§4.2;v2 扩展,v2-protocol §1)。
+
+    `zone` 为翻转生成的新角色区域的快照(`_insert_merged` 合并前):边界即旧区
+    边界、`role` 为角色互换后的新角色(role_new),touches/rejects/origin/merged
+    继承自旧区。旧区的 face 语义以 `from_role` 保留(结构移除后仍可追溯,A10)。
+    """
+
+    index: int              # 转移知时 bar(= on_bar 的 index)
+    from_role: ZoneRole     # 旧区角色
+    zone: Zone              # 新角色区快照(role = role_new,合并前边界 = 旧区边界)
 
 
 Bar = Union[tuple, list, dict, pd.Series]
@@ -268,6 +285,7 @@ class ZoneBook:
     def __init__(self, params: Params) -> None:
         self.p = params
         self.zones: list[Zone] = []
+        self.flips: list[ZoneFlip] = []   # 最近一根 bar 的 FLIPPED 事实(v2 只读记录)
 
     # -- §4.1 生成与合并 ----------------------------------------------------
 
@@ -312,6 +330,7 @@ class ZoneBook:
                prev_close: Optional[float], atr_val: float) -> None:
         if atr_val <= 0.0:
             return
+        self.flips = []
         for z in list(self.zones):
             self._advance(z, index, h, l, c, prev_close, atr_val)
         self.zones = [z for z in self.zones
@@ -373,6 +392,8 @@ class ZoneBook:
             )
             z.state = ZoneState.FLIPPED
             z.last_change_known = index
+            self.flips.append(ZoneFlip(index=index, from_role=z.role,
+                                       zone=flipped.clone()))
             self._insert_merged(flipped, index)
             return
         # 回踩后反向重新 acceptance 穿回(§4.2)→ DEAD(不生成新区)
