@@ -92,7 +92,7 @@ def fetch_klines(
     return df[COLUMNS]
 
 
-def validate(df: pd.DataFrame) -> list[str]:
+def validate(df: pd.DataFrame, step_ms: int = STEP_MS) -> list[str]:
     issues: list[str] = []
     d = df.sort_values("ts").reset_index(drop=True)
 
@@ -102,9 +102,9 @@ def validate(df: pd.DataFrame) -> list[str]:
 
     ts = d["ts"].to_numpy()
     diffs = ts[1:] - ts[:-1]
-    bad = (diffs != STEP_MS) & (diffs > 0)
+    bad = (diffs != step_ms) & (diffs > 0)
     for i in bad.nonzero()[0]:
-        missing = int(diffs[i] // STEP_MS) - 1
+        missing = int(diffs[i] // step_ms) - 1
         issues.append(f"gap: {int(ts[i])} -> {int(ts[i + 1])} ({missing} bars missing)")
 
     bad_ohlc = d[(d["low"] > d["open"]) | (d["open"] > d["high"]) | (d["low"] > d["close"]) | (d["close"] > d["high"])]
