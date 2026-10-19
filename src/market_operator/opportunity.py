@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from .events import E1, E2, E3, E6, E7, MarketEvent
+from .events import E1, E2, E3, E4, E5, E6, E7, MarketEvent
 from .hypothesis import StructureView, build
 from .strategy import OrderIntent, OrderKind
 from .strategy_v5 import RouteDecision, V5Params, V5Router
@@ -32,7 +32,7 @@ class Opportunity:
     invalid: float
     observed_index: int
     source_event: MarketEvent
-    stage: str              # BREAK_OBSERVED or RETEST_REJECTED
+    stage: str              # BREAK_OBSERVED / RETEST_REJECTED / REACTION_PENDING
     reject_close: Optional[float] = None
 
 
@@ -42,7 +42,7 @@ class OpportunityRouter(V5Router):
     def __init__(self) -> None:
         # Whitelist here describes OBSERVABLE facts, not trade-entry approval.
         super().__init__(V5Params(whitelist=frozenset(
-            (eid, side) for eid in (E1, E6, E7) for side in (-1, 1))))
+            (eid, side) for eid in (E1, E2, E3, E4, E5, E6, E7) for side in (-1, 1))))
         self.opportunities: dict[str, Opportunity] = {}
 
     def on_bar(self, symbol: str, bar, bar_index: int, view: StructureView,
@@ -61,7 +61,7 @@ class OpportunityRouter(V5Router):
 
         # Advance only a previously known E7 hypothesis; never confirm E7
         # using the very candle that created it.
-        if previous and previous.stage == "RETEST_REJECTED":
+        if previous and previous.stage in ("RETEST_REJECTED", "REACTION_PENDING"):
             d = previous.direction
             if d * (close - previous.invalid) <= 0:
                 self.opportunities.pop(symbol, None)
@@ -113,11 +113,20 @@ class OpportunityRouter(V5Router):
             self._bump("break_observed")
             self._notes.append(f"OBSERVE|{ev.id} structural change, no order")
 
-        # A FLIPPED/RETESTED zone is merely a candidate. Need subsequent
-        # market evidence (different closed candle) before risk is committed.
-        for ev in new_events:
-            if ev.id != E7:
-                continue
+        # One structural reaction is a *candidate*, not permission to trade:
+        # E2/E3 rejected price at a zone, E4 trend resumed, E5 range rotated,
+        # E7 zone flipped. Same OHLC ambiguity applies to every candidate.
+        candidates = [e for e in new_events
+                      if e.id in (E2, E3, E4, E5, E7)]
+        # Two conflicting directions or levels in one bar are ambiguous; do
+        # not silently prefer an arbitrary detector iteration order.
+        signatures = {(e.direction, e.attrs.get("ref")) for e in candidates}
+        if len(signatures) > 1:
+            self.opportunities.pop(symbol, None)
+            self._bump("ambiguous_reactions")
+            self._notes.append("FLAT|conflicting same-bar reaction hypotheses")
+            return results
+        for ev in candidates:
             ref, invalid = ev.attrs.get("ref"), ev.attrs.get("invalid")
             if ref is None or invalid is None:
                 continue
@@ -128,7 +137,10 @@ class OpportunityRouter(V5Router):
             # and invalidation, never fabricate same-episode equality.
             self.opportunities[symbol] = Opportunity(
                 symbol, ev.direction, float(ref), float(invalid),
-                bar_index, ev, "RETEST_REJECTED", float(close))
-            self._bump("retest_observed")
-            self._notes.append("OBSERVE|E7 rejected retest; waiting a later close")
+                bar_index, ev,
+                "RETEST_REJECTED" if ev.id == E7 else "REACTION_PENDING",
+                float(close))
+            self._bump(f"reaction_observed_{ev.id}")
+            self._notes.append(
+                f"OBSERVE|{ev.id} reaction; waiting separate closed-bar continuation")
         return results
