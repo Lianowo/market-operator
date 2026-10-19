@@ -115,3 +115,19 @@ def test_entry_and_exit_are_reconstructed_only_from_unique_fills(tmp_path):
         l.submit("t:exit", "BTCUSDT", "SELL", "0.03", "exit")
         l.record_fill("t:exit", "exit-a", "0.03", "90", "0.0027")
         assert l.net_positions() == {}
+
+
+def test_out_of_order_exchange_status_cannot_reopen_terminal_order(tmp_path):
+    with OrderLedger(tmp_path / "out_of_order.db") as l:
+        l.submit("a", "SOLUSDT", "BUY", "2", "entry")
+        l.record_fill("a", "f-1", "2", "100")
+        assert l.reconcile_order("a", "OPEN").state == "FILLED"
+        assert l.reconcile_order("a", "CANCELED").state == "FILLED"
+        assert l.net_positions()["SOLUSDT"] == Decimal("2")
+
+        l.submit("b", "ETHUSDT", "SELL", "1", "entry")
+        l.reconcile_order("b", "CANCELED")
+        stale = l.reconcile_order("b", "OPEN")
+        assert stale.state == "UNKNOWN"
+        assert not l.dispatch_allowed()
+        assert l.unverified() == ("b",)
