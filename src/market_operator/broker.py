@@ -670,6 +670,9 @@ class Broker:
             candidate = float(candidate)
             new_invalid = (min(new_invalid, candidate) if pos.direction < 0
                            else max(new_invalid, candidate))
+            if pos.direction * (price - new_invalid) <= 0.0:
+                return self._skip_row(po, ts, "BAD_INVALID",
+                                      "actual add fill beyond protective stop")
             # Decision-time approval is not sufficient: gap/slippage can turn
             # the real fill into a risk-increasing addition. Reject at fill.
             before = pos.direction * (pos.entry - pos.invalid) * pos.qty
