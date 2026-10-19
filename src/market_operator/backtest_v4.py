@@ -251,6 +251,11 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                                  frames[sym].hour_index[
                                      ts - (ts % MS_1H)])
                     counters["opens_filled"] += 1
+                elif k == "REDUCE":
+                    acct = broker.position_of(sym)
+                    if acct is None:
+                        raise AssertionError("reduce fill must leave a live residual position")
+                    pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
                 elif k in ("EXIT", "LIQUIDATION"):
                     pos_mgr.positions.pop(sym, None)
                     counters["resting_canceled"] += len(broker.cancel_resting(
@@ -259,11 +264,17 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                                "limit canceled"))
                 elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
                     counters["min_size_skips"] += 1
+                if k == "SKIP" and row["meta"].get("role") == "deferred_reduce":
+                    pos_mgr.cancel_reduce(sym)
             # ② 挂单处理(严格穿过成交;超时撤单/转市价)
             for row in broker.on_15m_bar(sym, ts, _o, _h, _l, c):
                 k = row["kind"]
                 if k == "LIMIT_FILL":
                     if row["meta"].get("role") == "reduce":
+                        acct = broker.position_of(sym)
+                        if acct is None:
+                            raise AssertionError("reduce limit fill must leave a residual position")
+                        pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
                         counters["reduce_limit_fills"] += 1
                     else:
                         counters["limit_fills_entry"] += 1
@@ -301,7 +312,8 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     mgmt = []
                 else:
                     mgmt = pos_mgr.on_bar(sym, bar, cog.atrs[i],
-                                          new_pivots, new_events)
+                                          new_pivots, new_events,
+                                          defer_reduce=(entry_mode == "limit_front_edge"))
                 for intent in mgmt:
                     armed = (intent.kind is OrderKind.REDUCE
                              and entry_mode == "limit_front_edge"
@@ -311,7 +323,11 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     if armed:
                         counters["reduce_limits_armed"] += 1
                     else:
-                        broker.submit(intent, decision_ts=cog.bars[i][0])
+                        broker.submit(
+                            intent, decision_ts=cog.bars[i][0],
+                            meta=({"role": "deferred_reduce"}
+                                  if intent.kind is OrderKind.REDUCE
+                                  and entry_mode == "limit_front_edge" else None))
                 # §7 策略(仅段内启用 OPEN;GO 白名单由 Strategy 内部裁决)
                 lo, hi = seg_bounds[sym]["lo"], seg_bounds[sym]["hi"]
                 if lo <= i < hi:
