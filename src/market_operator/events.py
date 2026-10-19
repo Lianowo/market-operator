@@ -41,6 +41,35 @@ v2 增量 E7(docs/v2-protocol.md §1,冻结;默认关闭,`enable_e7=True` 开启
   (short = zone.lo,long = zone.hi,与 E1 的 ref=被破边缘一致,供 §7 目标搜索)。
 - [§7] `attrs["invalid"]` 为失效价建议:E1 取 zone 正缘外侧(lo - buf / hi + buf,
   buf = k_bm*atr);E2/E3 取外缘外侧;E4 取回调终点外侧。均仅建议,不撮合。
+
+v8 增量(docs/v8-protocol.md §1,冻结;默认关闭,`enable_e8=True` 开启,
+发射与否不影响 E1-E7 任何输出):E8 EDGE_RECLAIM 边缘收复。解释性决定
+(协议文字未完全展开处,取最符合因果语义的读法,标注条款):
+- [§1 触发] E8 的"区域刺穿+≤N_f 根收复"判据逐字复用 A2/A3/A5(协议"沿用
+  E2/E3 的区域触碰判据"原话):即与 E2 同一 episode、同一刺穿、同一收复窗口
+  (刺穿 bar 计入窗口,offset ∈ [0, N_f-1])、同一竞争次序(A4 破位候选在先即
+  终止)。因此 E8 以"伴随 E2 发射"实现:E2 成立的 episode 才可能有 E8;
+  A3 去重随之继承(每 episode 至多一枚 E8)。**多区并存取舍** = 逐 zone
+  episode 独立判定(与 E2 完全同语义):同 bar 不同 zone 的 episode 可各自
+  发射 E8,各携本 zone;"哪个 zone 计为触发区"即"哪个 episode 的 A5 收复
+  成立",不存在跨 zone 的任选取舍。A3 的"E1/E2/E3 之一"清单不含 E8(与 E5
+  伴随 E3 同构):episode 终结体现在 E2 上,E8 是该 episode 拒绝事实的第二枚
+  只读记录。
+- [§1 语境] band B=[L*,H*] = 已 confirmed pivots 名单中最后 low/high pivot
+  价(全名单,非 range_max_pivots 窗口,口径同 scripts/analyze_entry_position.py
+  的结构尺;pivot 只在确认 bar 收盘知时入库(A10),故 L*/H* 与 pos 恒为因果量)。
+  pos = (close(t) − L*) / (H* − L*),"当时 pos" = 收复(候选发射)bar 收盘值,
+  含该 bar 新确认 pivot 对 band 的更新(同 bar 因果序:结构推进在前)。
+  L*/H* 缺一侧或 H*−L* ≤ 0 ⇒ 门不可判,不发(fail-closed,不编造语境)。
+- [§1 位置门] 多头候选需 pos ≤ pos_edge(冻结先验 0.20,敏感性 {0.15, 0.25}
+  仅 dev);空头镜像 pos ≥ 1 − pos_edge。边界取值 inclusive(协议符号 ≤/≥)。
+  regime 无关(协议§1:band 语境是唯一语境条件)。
+- [§1 失效] invalid = "刺穿极值 ∓ k_bm·atr" 读作:自 episode 起至收复 bar(
+  含)远侧最深极值(episode ex ∪ 本 bar 极值,收听盘知时)外侧 k_bm·atr;
+  止损锚在被扫流动性最深价之外,而非 zone 边缘(E2 的 invalid=edge∓bm 不变)。
+  ref = 收复边缘(多 zone.lo / 空 zone.hi,与 E2 的 ref 口径一致)。
+- attrs:zone(收复边缘所在区,克隆)/ref/invalid/pos/band (L*, H*)/atr(收复
+  bar 的 ATR)/puncture_index(A5 刺穿 bar)/ex(上述刺穿极值,用于 invalid)。
 """
 
 from __future__ import annotations
@@ -66,6 +95,8 @@ E5 = "E5"  # RANGE_ROTATION 区间回归
 E6 = "E6"  # STRUCTURE_BREAK 结构破坏
 # v2(docs/v2-protocol.md §1,机制定义冻结;与 v1 事件同管线发射,E1-E6 语义不变)
 E7 = "E7"  # FLIP_RETEST 破位→回踩拒绝→角色互换
+# v8(docs/v8-protocol.md §1,机制定义冻结;伴随 E2 发射,E1-E7 语义不变)
+E8 = "E8"  # EDGE_RECLAIM 边缘收复(摆动带边缘 + 收复确认 + pos 门)
 
 
 @dataclass(frozen=True)
@@ -142,11 +173,17 @@ class EventDetector:
     → E2/A5、E3/A6 逐 episode 判 → E5 合成(A8)→ E4 激活/触发(A7)→ E6(A9)。
     """
 
-    def __init__(self, params: Params, *, enable_e7: bool = False) -> None:
+    def __init__(self, params: Params, *, enable_e7: bool = False,
+                 enable_e8: bool = False, e8_pos_edge: float = 0.20) -> None:
         self.params = params
         # enable_e7 = False ⇒ 只发 v1 目录(E1-E6,行为与 v1 完全一致);
         # True ⇒ 追加 v2 E7(docs/v2-protocol.md §1),E1-E6 不受影响。
         self.enable_e7 = enable_e7
+        # enable_e8 = False ⇒ 不发 v8 目录;True ⇒ 追加 E8(docs/v8-protocol.md
+        # §1,伴随 E2 发射,E1-E7 不受影响)。e8_pos_edge = 边缘带位置门
+        # (冻结先验 0.20;敏感性 {0.15, 0.25} 仅 dev,见协议§1)。
+        self.enable_e8 = enable_e8
+        self.e8_pos_edge = float(e8_pos_edge)
         self.structure = MarketStructure(params)
         self.events: list[MarketEvent] = []
         self._episodes: list[_Episode] = []
@@ -290,6 +327,11 @@ class EventDetector:
 
             if fired is not None:                        # A3:episode 终结,去重
                 events.append(fired)
+                # v8 E8:伴随 E2 发射(模块 docstring v8 条款);与 A3 去重正交互
+                if self.enable_e8 and fired.id == E2:
+                    e8 = self._edge_reclaim(ep, z, res, t, ts, c, h, l, atr)
+                    if e8 is not None:
+                        events.append(e8)
             else:
                 # 后序情形:判完回退后再以本 bar 极值推进 ex
                 if not extreme_first:
@@ -302,6 +344,49 @@ class EventDetector:
         events.extend(self._range_rotation(
             t, ts, c, atr, [e for e in events if e.id == E3]))
         return events
+
+    # -- E8:EDGE_RECLAIM(docs/v8-protocol.md §1,v8 增量) ------------------------
+
+    def _edge_reclaim(self, ep: _Episode, z: Zone, res: bool, t: int,
+                      ts: object, c: float, h: float, l: float, atr: float
+                      ) -> Optional[MarketEvent]:
+        """E2 成立的 episode 上过 pos 门 ⇒ E8(多=支撑区收复,空=阻力区收复)。
+
+        band L*/H* = 已 confirmed pivots 全名单最后 low/high 价(口径同
+        analyze_entry_position.py 结构尺,因果);pos 以本 bar 收盘计门
+        (多 pos ≤ pos_edge;空 pos ≥ 1 − pos_edge,inclusive)。invalid =
+        刺穿行程极值(episode ex ∪ 本 bar 极值)∓ k_bm·atr;ref = 收复边缘。
+        """
+        pivots = self.structure.pivots
+        l_star = h_star = None
+        for pv in pivots:                            # 全名单,升序,末位 = 最近知时
+            if pv.kind is PivotKind.LOW:
+                l_star = pv.price
+            else:
+                h_star = pv.price
+        if l_star is None or h_star is None:
+            return None                              # 语境带不完整 ⇒ 门不可判
+        rg = h_star - l_star
+        if rg <= 0.0:
+            return None
+        pos = (c - l_star) / rg
+        direction = -1 if res else +1
+        edge = self.e8_pos_edge
+        if direction > 0:
+            if pos > edge:
+                return None
+        elif pos < 1.0 - edge:
+            return None
+        bm = self.params.k_bm * atr
+        ex = max(ep.ex, h) if res else min(ep.ex, l)  # 刺穿极值(含本 bar,因果)
+        return MarketEvent(
+            id=E8, direction=direction, ts=ts, known_index=t,
+            attrs={"zone": z.clone(),
+                   "ref": (z.hi if res else z.lo),
+                   "invalid": (ex + bm) if res else (ex - bm),
+                   "pos": pos, "band": (l_star, h_star), "atr": atr,
+                   "puncture_index": ep.puncture_index, "ex": ex},
+        )
 
     # -- E5:RANGE_ROTATION(A8) ------------------------------------------------
 

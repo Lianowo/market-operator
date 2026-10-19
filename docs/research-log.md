@@ -154,3 +154,8 @@
     - `docs/v7-protocol.md`:quattro(MIT, upstream/crypto_systematic_research)逐字复刻对照,
       零改动零调参,仅 venue sizing 落地;数据窗差异(2年 vs 上游4.1年)已声明;
       结果仅裁决"同场座照抄规则的正/负",移植与否另立协议。
+
+14. **2026-10-20 v8 预注册(先于任何 v8 运行)**
+    - `docs/v8-protocol.md`:新事件家族 E8 EDGE_RECLAIM(摆动带边缘+收复确认,
+      pos≤0.20 多 / ≥0.80 空,先验);test 段第 11 次曝光且此后只许前向;
+      判别量(入场 pos 构造集中 + 胜率相对 E6/E7 桶差异)已写死在先。
