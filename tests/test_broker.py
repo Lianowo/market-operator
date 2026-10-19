@@ -412,3 +412,41 @@ def test_portfolio_cap_blocks_add_that_exceeds_remaining_capacity():
     result = b.on_bar_open("A", T0 + 2 * H, 100.0)[0]
     assert result["kind"] == "SKIP" and result["reason_code"] == "MIN_SIZE"
     assert b.position_of("A").qty == before
+
+
+def test_deferred_add_actual_fill_rechecks_risk_neutrality():
+    b = _broker()
+    _open_short(b, invalid=101.0)
+    first = b.on_bar_open("TEST", T0 + H, 100.0)[0]
+    assert first["kind"] == "OPEN"
+    b.mark("TEST", T0 + 2 * H, 98.4)
+    b.update_protective_invalid("TEST", 99.0)
+    before_qty = b.position_of("TEST").qty
+    before_avg = b.position_of("TEST").entry
+
+    it = _intent(OrderKind.ADD, frac=10.0, ts=T0 + 2 * H)
+    b.submit(it, decision_ts=T0 + 2 * H,
+             meta={"role": "deferred_add", "add_invalid": 98.5})
+    result = b.on_bar_open("TEST", T0 + 3 * H, 98.4)[0]
+    assert result["kind"] == "SKIP" and result["reason_code"] == "ADD_RISK"
+    assert b.position_of("TEST").qty == before_qty
+    assert b.position_of("TEST").entry == before_avg
+    assert b.position_of("TEST").invalid == 99.0
+
+
+def test_deferred_add_verified_fill_tightens_stop():
+    b = _broker()
+    _open_short(b, invalid=101.0)
+    first = b.on_bar_open("TEST", T0 + H, 100.0)[0]
+    assert first["kind"] == "OPEN"
+    b.mark("TEST", T0 + 2 * H, 95.0)
+    b.update_protective_invalid("TEST", 97.0)
+    prior_qty = b.position_of("TEST").qty
+    it = _intent(OrderKind.ADD, frac=0.5, ts=T0 + 2 * H)
+    b.submit(it, decision_ts=T0 + 2 * H,
+             meta={"role": "deferred_add", "add_invalid": 96.0})
+    result = b.on_bar_open("TEST", T0 + 3 * H, 95.0)[0]
+    assert result["kind"] == "ADD"
+    assert 0 < result["qty"] <= prior_qty * 0.5
+    assert b.position_of("TEST").qty == pytest.approx(prior_qty + result["qty"])
+    assert b.position_of("TEST").invalid == 96.0
