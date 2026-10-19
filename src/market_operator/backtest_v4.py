@@ -256,6 +256,7 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     if acct is None:
                         raise AssertionError("reduce fill must leave a live residual position")
                     pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
+                    broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                 elif k in ("EXIT", "LIQUIDATION"):
                     pos_mgr.positions.pop(sym, None)
                     counters["resting_canceled"] += len(broker.cancel_resting(
@@ -275,6 +276,7 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                         if acct is None:
                             raise AssertionError("reduce limit fill must leave a residual position")
                         pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
+                        broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                         counters["reduce_limit_fills"] += 1
                     else:
                         counters["limit_fills_entry"] += 1
@@ -317,6 +319,9 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     mgmt = pos_mgr.on_bar(sym, bar, cog.atrs[i],
                                           new_pivots, new_events,
                                           defer_reduce=(entry_mode == "limit_front_edge"))
+                # 已确认 pivot/成交后,同步当前有效结构防线至 broker 风险账本。
+                if sym in pos_mgr.positions and broker.position_of(sym) is not None:
+                    broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                 for intent in mgmt:
                     armed = (intent.kind is OrderKind.REDUCE
                              and entry_mode == "limit_front_edge"
