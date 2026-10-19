@@ -321,3 +321,60 @@ def test_full_lifecycle_qty_sums_to_flat():
     r = m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR)  # REDUCE 0.5
     x = m.on_bar("BTCUSDT", _bar(2, 102.5, 97.0, 102.0), ATR)  # §8.1 EXIT
     assert r[0].qty_frac + x[0].qty_frac == 1.0
+
+
+# ---------------------------------------------------------------------------
+# v4 延迟确认:发出 maker 限价减仓指令不等于减仓成交
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_reduce_does_not_change_size_or_stop_before_fill():
+    m = _mgr()
+    pos = _short(m)
+    intents = m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
+                       defer_reduce=True)
+    assert len(intents) == 1 and intents[0].kind is OrderKind.REDUCE
+    assert pos.pending_reduce and not pos.reduced
+    assert pos.size_frac == 1.0 and pos.invalid == 101.0
+
+    # 市场反弹到初始止损下方、保本止损上方,但 maker 减仓尚未成交:
+    # 不得以尚不存在的保本止损提前退出,也不得重复挂第二张减仓单。
+    assert m.on_bar("BTCUSDT", _bar(2, 100.5, 97.0, 100.0), ATR,
+                    defer_reduce=True) == []
+    assert pos.size_frac == 1.0 and pos.invalid == 101.0
+    assert pos.pending_reduce and not pos.reduced
+
+    m.confirm_reduce("BTCUSDT", 0.5)
+    assert not pos.pending_reduce and pos.reduced
+    assert pos.size_frac == 0.5 and pos.invalid == 99.0
+
+    # 只有实际减仓成交之后,保本止损才生效。
+    result = m.on_bar("BTCUSDT", _bar(3, 100.5, 99.0, 100.0), ATR,
+                      defer_reduce=True)
+    assert len(result) == 1 and result[0].kind is OrderKind.EXIT
+    assert result[0].qty_frac == 0.5
+
+
+def test_pending_reduce_then_invalidation_exits_entire_live_position():
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
+             defer_reduce=True)
+    result = m.on_bar("BTCUSDT", _bar(2, 102.5, 97.0, 102.0), ATR,
+                      defer_reduce=True)
+    assert result[0].kind is OrderKind.EXIT
+    assert result[0].qty_frac == 1.0
+    assert "BTCUSDT" not in m.positions
+
+
+def test_deferred_reduce_cancellation_restores_entry_eligibility():
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
+             defer_reduce=True)
+    m.cancel_reduce("BTCUSDT")
+    assert not pos.pending_reduce and not pos.reduced
+    assert pos.size_frac == 1.0 and pos.invalid == 101.0
+    result = m.on_bar("BTCUSDT", _bar(2, 99.5, 93.5, 98.0), ATR,
+                      defer_reduce=True)
+    assert len(result) == 1 and result[0].kind is OrderKind.REDUCE
