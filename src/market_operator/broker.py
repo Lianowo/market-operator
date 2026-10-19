@@ -392,6 +392,15 @@ class Broker:
                 for od in self.resting.pop(symbol, [])]
         return rows
 
+    def _gross_notional(self) -> float:
+        """当前全部品种未平仓名义敞口(多空均取绝对值,不得互相抵扣)。"""
+        return sum(abs(pos.qty * self.last_mark.get(sym, pos.entry))
+                   for sym, pos in self.positions.items())
+
+    def _available_entry_notional(self, equity: float) -> float:
+        """账户级剩余总敞口;防止每个 symbol 各自使用完整 leverage_cap。"""
+        return max(0.0, self.leverage_cap * equity - self._gross_notional())
+
     def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
         """入场挂单成交:limit_price 精确成交(无滑点),maker 费,sizing 同 OPEN。"""
         sym = od.symbol
@@ -410,7 +419,7 @@ class Broker:
         equity = self.equity_mtm()
         risk_per_unit = abs(price - od.invalid)
         qty_risk = self.risk_frac * equity / risk_per_unit
-        qty_cap = self.leverage_cap * equity / price
+        qty_cap = self._available_entry_notional(equity) / price
         qty = _floor_step(min(qty_risk, qty_cap), spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
@@ -552,7 +561,7 @@ class Broker:
         equity = self.equity_mtm()
         risk_per_unit = abs(price - po.invalid)
         qty_risk = self.risk_frac * equity / risk_per_unit
-        qty_cap = self.leverage_cap * equity / price
+        qty_cap = self._available_entry_notional(equity) / price
         qty = _floor_step(min(qty_risk, qty_cap), spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
@@ -604,13 +613,16 @@ class Broker:
         if pos is None:
             return self._skip_row(po, ts, "NO_POSITION",
                                   f"no open position for {sym}")
-        qty = _floor_step((po.intent.qty_frac or 0.0) * pos.open_qty,
-                          self.contracts[sym].size_step,
-                          self.contracts[sym].size_place)
-        if qty <= 0.0:
-            return self._skip_row(po, ts, "MIN_SIZE", "add qty rounds to 0")
         side = "buy" if pos.direction > 0 else "sell"
         price = self._slipped(o, side)
+        spec = self.contracts[sym]
+        requested = (po.intent.qty_frac or 0.0) * pos.open_qty
+        cap_qty = self._available_entry_notional(self.equity_mtm()) / price
+        qty = _floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
+        if qty < spec.size_min or qty * price < spec.min_trade_usdt:
+            return self._skip_row(po, ts, "MIN_SIZE",
+                                  "add exceeds portfolio gross-leverage budget "
+                                  "or exchange minimum")
         fee = qty * price * self.taker_fee
         self.cash -= fee
         pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
