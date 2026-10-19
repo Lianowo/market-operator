@@ -60,14 +60,18 @@ class SymbolCognition:
 
 
 def prepare_cognition(df: pd.DataFrame, params: Params, symbol: str,
-                      enable_e7: bool = False) -> SymbolCognition:
+                      enable_e7: bool = False, enable_e8: bool = False,
+                      e8_pos_edge: float = 0.20) -> SymbolCognition:
     """严格时间序回放 EventDetector,缓存逐 bar 认知产物。
 
     与 research.collect_events 同一检测路径;本缓存额外保留逐 bar atr 与
     每 bar 新确认 pivot(§8.3 移动防线输入)。`enable_e7` 打开 v2 E7 发射
-    (docs/v2-protocol.md;v1 默认关,行为不变)。
+    (docs/v2-protocol.md;v1 默认关,行为不变)。v8 增量:`enable_e8` 打开
+    E8 发射(docs/v8-protocol.md §1,伴随 E2;默认关,E1-E7 输出不变),
+    `e8_pos_edge` 为 E8 位置门(冻结先验 0.20)。
     """
-    detector = EventDetector(params, enable_e7=enable_e7)
+    detector = EventDetector(params, enable_e7=enable_e7, enable_e8=enable_e8,
+                             e8_pos_edge=e8_pos_edge)
     bars: list = []
     atrs: list = []
     events_by: dict = {}

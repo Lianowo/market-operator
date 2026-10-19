@@ -229,9 +229,15 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   portfolio_cap_frac: float = 0.03,
                   maker_fee: Optional[float] = None,
                   router_params: Optional[V6Params] = None,
+                  router_factory: Optional[type] = None,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
-    docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。"""
+    docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。
+
+    v8 接插缝(非策略变更):`router_factory` = 可调用 (router_params) → 路由
+    实例,默认 None ⇒ V6Router(行为逐位不变);v8 轮传入 V8Router
+    (docs/v8-protocol.md,strategy_v8.py),执行/持仓/容量/账目层不变。
+    """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
     if not (0.0 < portfolio_cap_frac <= 1.0):
@@ -239,6 +245,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
 
     keys = sorted(frames)
     base_rp = router_params or V6Params()
+    router_cls = router_factory or V6Router
     seg_bounds: dict = {}
     states: dict[str, _CampaignState] = {}
     for key in keys:
@@ -251,7 +258,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                            "ts_lo": f.cog.bars[lo][0] if lo < n else None,
                            "ts_hi": f.cog.bars[hi - 1][0] if hi > 0 else None}
         states[key] = _CampaignState(
-            frame=f, router=V6Router(base_rp),
+            frame=f, router=router_cls(base_rp),
             pos_mgr=PositionManager(
                 params, allow_add=False,
                 breakeven_on_reduce=True,    # turtle 固化(原臂 B 接线)
