@@ -88,7 +88,9 @@ def prepare_cognition(df: pd.DataFrame, params: Params, symbol: str,
             pivots_by[t] = new_pivots
         if emitted:
             events_by[t] = list(emitted)
-            views[t] = StructureView(regime=s.regime(), zones=s.zones, atr=s.atr())
+            views[t] = StructureView(
+                regime=s.regime(), zones=s.zones, atr=s.atr(),
+                pivots=s.pivots[-params.range_max_pivots:])
     return SymbolCognition(symbol=symbol, bars=bars, atrs=atrs,
                            events_by=events_by, pivots_by=pivots_by, views=views)
 
