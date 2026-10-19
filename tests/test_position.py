@@ -6,6 +6,8 @@ target_1=94;n_time=3(合成, Params 直接构造,非改 config)。
 
 from __future__ import annotations
 
+import pytest
+
 from market_operator.events import E4, E6, MarketEvent
 from market_operator.position import PositionManager
 from market_operator.strategy import OrderKind
@@ -321,3 +323,97 @@ def test_full_lifecycle_qty_sums_to_flat():
     r = m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR)  # REDUCE 0.5
     x = m.on_bar("BTCUSDT", _bar(2, 102.5, 97.0, 102.0), ATR)  # §8.1 EXIT
     assert r[0].qty_frac + x[0].qty_frac == 1.0
+
+
+# ---------------------------------------------------------------------------
+# v4 延迟确认:发出 maker 限价减仓指令不等于减仓成交
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_reduce_does_not_change_size_or_stop_before_fill():
+    m = _mgr()
+    pos = _short(m)
+    intents = m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
+                       defer_reduce=True)
+    assert len(intents) == 1 and intents[0].kind is OrderKind.REDUCE
+    assert pos.pending_reduce and not pos.reduced
+    assert pos.size_frac == 1.0 and pos.invalid == 101.0
+
+    # 市场反弹到初始止损下方、保本止损上方,但 maker 减仓尚未成交:
+    # 不得以尚不存在的保本止损提前退出,也不得重复挂第二张减仓单。
+    assert m.on_bar("BTCUSDT", _bar(2, 100.5, 97.0, 100.0), ATR,
+                    defer_reduce=True) == []
+    assert pos.size_frac == 1.0 and pos.invalid == 101.0
+    assert pos.pending_reduce and not pos.reduced
+
+    m.confirm_reduce("BTCUSDT", 0.5)
+    assert not pos.pending_reduce and pos.reduced
+    assert pos.size_frac == 0.5 and pos.invalid == 99.0
+
+    # 只有实际减仓成交之后,保本止损才生效。
+    result = m.on_bar("BTCUSDT", _bar(3, 100.5, 99.0, 100.0), ATR,
+                      defer_reduce=True)
+    assert len(result) == 1 and result[0].kind is OrderKind.EXIT
+    assert result[0].qty_frac == 0.5
+
+
+def test_pending_reduce_then_invalidation_exits_entire_live_position():
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
+             defer_reduce=True)
+    result = m.on_bar("BTCUSDT", _bar(2, 102.5, 97.0, 102.0), ATR,
+                      defer_reduce=True)
+    assert result[0].kind is OrderKind.EXIT
+    assert result[0].qty_frac == 1.0
+    assert "BTCUSDT" not in m.positions
+
+
+def test_deferred_reduce_cancellation_restores_entry_eligibility():
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
+             defer_reduce=True)
+    m.cancel_reduce("BTCUSDT")
+    assert not pos.pending_reduce and not pos.reduced
+    assert pos.size_frac == 1.0 and pos.invalid == 101.0
+    result = m.on_bar("BTCUSDT", _bar(2, 99.5, 93.5, 98.0), ATR,
+                      defer_reduce=True)
+    assert len(result) == 1 and result[0].kind is OrderKind.REDUCE
+
+
+# ---------------------------------------------------------------------------
+# Fill-confirmed trend ADD. Order intent is never an actual position increase.
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_add_waits_for_fill_then_updates_weighted_entry_and_stop():
+    m = _mgr(allow_add=True)
+    pos = _trailed_short(m)  # short 99, trailed stop 97, MFE>=1R
+    intents = m.on_bar("BTCUSDT", _bar(2, 97.5, 94.5, 95.0), ATR,
+                       new_events=[_e4_short(96.0)], defer_add=True)
+    assert len(intents) == 1 and intents[0].kind is OrderKind.ADD
+    assert pos.pending_add and not pos.added
+    assert pos.size_frac == 1.0 and pos.entry == 99.0 and pos.invalid == 97.0
+    # Signal cannot repeat while order is pending.
+    assert m.on_bar("BTCUSDT", _bar(3, 96.5, 94.5, 95.0), ATR,
+                    new_events=[_e4_short(96.0)], defer_add=True) == []
+    m.confirm_add("BTCUSDT", actual_qty_frac=0.5, fill_price=95.0)
+    assert not pos.pending_add and pos.added
+    assert pos.size_frac == 1.5
+    assert pos.entry == pytest.approx((99.0 + 0.5 * 95.0) / 1.5)
+    assert pos.invalid == 96.0
+
+
+def test_deferred_add_rejection_keeps_real_position_unchanged():
+    m = _mgr(allow_add=True)
+    pos = _trailed_short(m)
+    got = m.on_bar("BTCUSDT", _bar(2, 97.5, 94.5, 95.0), ATR,
+                   new_events=[_e4_short(96.0)], defer_add=True)
+    assert got and pos.pending_add
+    m.cancel_add("BTCUSDT")
+    assert not pos.pending_add and not pos.added
+    assert pos.entry == 99.0 and pos.invalid == 97.0 and pos.size_frac == 1.0
+    again = m.on_bar("BTCUSDT", _bar(3, 97.5, 94.5, 95.0), ATR,
+                     new_events=[_e4_short(96.0)], defer_add=True)
+    assert len(again) == 1 and again[0].kind is OrderKind.ADD

@@ -1,0 +1,41 @@
+name: Trade Lifecycle Diagnostic (not OOS)
+on:
+  push:
+    branches:
+      - fix/trade-lifecycle-semantic-20261019
+    paths:
+      - '.github/workflows/audit-trade-lifecycle.yml'
+      - 'src/market_operator/opportunity.py'
+      - 'src/market_operator/broker.py'
+      - 'src/market_operator/backtest_v5.py'
+      - 'scripts/diagnose_trade_lifecycle.py'
+      - 'tests/test_opportunity.py'
+      - 'tests/test_protective_execution.py'
+jobs:
+  forensic-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Run old v5 unit tests + new correctness assertions
+        run: python -m pytest tests/test_v5_engine.py tests/test_v5_routing.py tests/test_opportunity.py tests/test_protective_execution.py -q
+      - name: Replay revised lifecycle using frozen Bitget history
+        run: |
+          python scripts/diagnose_trade_lifecycle.py > trade-lifecycle.log 2>&1 || {
+            tail -n 120 trade-lifecycle.log
+            exit 1
+          }
+          tail -n 30 trade-lifecycle.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trade-lifecycle-no-oos-diagnostic
+          path: |
+            diagnostics/trade-lifecycle-20261019.json
+            trade-lifecycle.log
+          retention-days: 14

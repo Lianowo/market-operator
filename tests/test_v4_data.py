@@ -54,7 +54,11 @@ def test_15m_frame_integrity_and_manifest(sym):
         encoding="utf-8"))
     rec = manifest["files"][f"{sym}_15m.csv"]
     raw = (ROOT / "data" / "raw" / f"{sym}_15m.csv").read_bytes()
-    assert rec["sha256"] == hashlib.sha256(raw).hexdigest()  # manifest sha256 追加
+    assert rec["sha256"] == hashlib.sha256(raw).hexdigest()  # Git canonical LF payload
+    # Source capture produced CRLF files on Windows; Git stores LF. Preserve and
+    # cryptographically verify source provenance without weakening on-disk checks.
+    source_crlf = raw.replace(bytes([10]), bytes([13, 10]))
+    assert rec["source_sha256_crlf"] == hashlib.sha256(source_crlf).hexdigest()
     assert rec["rows"] == 4 * N_1H
     assert rec["ts_first"] == int(ts15[0]) and rec["ts_last"] == int(ts15[-1])
     assert rec["granularity"] == "15m" and rec["step_ms"] == MS_Q

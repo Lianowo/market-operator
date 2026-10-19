@@ -62,7 +62,9 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                     funding_per_8h: float, cost_multiplier: float,
                     contracts: dict, params: Params, n_fill: int,
                     maker_fee: Optional[float] = None,
-                    router: Optional[V5Router] = None) -> BacktestResult:
+                    router: Optional[V5Router] = None,
+                    protective_execution: bool = False,
+                    portfolio_stop_risk_frac: Optional[float] = None) -> BacktestResult:
     """v5 多品种合并 15m 时间序回放;主循环与缝见模块 docstring 与 v4 同源。"""
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -84,7 +86,8 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
     broker = Broker(equity=equity0, risk_frac=risk_frac, leverage_cap=leverage_cap,
                     taker_fee=taker_fee, slippage_per_side=slippage_per_side,
                     funding_per_8h=funding_per_8h, contracts=contracts,
-                    maker_fee=maker_fee, cost_multiplier=cost_multiplier)
+                    maker_fee=maker_fee, cost_multiplier=cost_multiplier,
+                    portfolio_stop_risk_frac=portfolio_stop_risk_frac)
     pos_mgr = PositionManager(params, allow_add=False)
     equity_rows: list = []
     counters = {"go_events": 0, "open_intents": 0, "opens_filled": 0,
@@ -93,7 +96,7 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                 "limit_min_size_skips": 0,
                 "reduce_limits_armed": 0, "reduce_limit_fills": 0,
                 "reduce_timeout_taker": 0, "resting_canceled": 0,
-                "e1_priority_cancels": 0}
+                "e1_priority_cancels": 0, "protective_exits": 0}
 
     fine_ts = sorted({q[0] for sym in symbols for qs in frames[sym].quarters.values()
                       for q in qs})
@@ -121,19 +124,45 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                                  frames[sym].hour_index[
                                      ts - (ts % MS_1H)])
                     counters["opens_filled"] += 1
+                elif k == "REDUCE" and protective_execution:
+                    acct = broker.position_of(sym)
+                    if acct is None:
+                        raise AssertionError("REDUCE must leave open residual position")
+                    pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
+                    broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                 elif k in ("EXIT", "LIQUIDATION"):
                     pos_mgr.positions.pop(sym, None)
                     counters["resting_canceled"] += len(broker.cancel_resting(
                         sym, ts, reason_code="POSITION_CLOSED",
                         detail="position closed by EXIT/LIQUIDATION; resting "
                                "limit canceled"))
-                elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
-                    counters["min_size_skips"] += 1
+                elif k == "SKIP":
+                    if protective_execution and row["meta"].get("role") == "deferred_reduce":
+                        pos_mgr.cancel_reduce(sym)
+                    if row["reason_code"] == "MIN_SIZE":
+                        counters["min_size_skips"] += 1
+            if protective_execution:
+                # Stop before pending passive reduction: ambiguous intrabar
+                # order prefers loss prevention to fictional maker profit.
+                stop_row = broker.execute_protective_stop(sym, ts, _o, _h, _l)
+                if stop_row is not None:
+                    pos_mgr.positions.pop(sym, None)
+                    counters["protective_exits"] += 1
+                    counters["resting_canceled"] += len(broker.cancel_resting(
+                        sym, ts, reason_code="PROTECTIVE_STOP",
+                        detail="stop filled before later maker operations"))
             # ② 挂单处理(严格穿过成交;超时撤单/转市价)
             for row in broker.on_15m_bar(sym, ts, _o, _h, _l, c):
                 k = row["kind"]
                 if k == "LIMIT_FILL":
                     if row["meta"].get("role") == "reduce":
+                        if protective_execution:
+                            acct = broker.position_of(sym)
+                            if acct is None:
+                                raise AssertionError("reduce limit must leave residual")
+                            pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
+                            broker.update_protective_invalid(
+                                sym, pos_mgr.positions[sym].invalid)
                         counters["reduce_limit_fills"] += 1
                     else:
                         counters["limit_fills_entry"] += 1
@@ -143,13 +172,29 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                                      str(m.get("event_id")), ts,
                                      frames[sym].hour_index[
                                          ts - (ts % MS_1H)])
+                        if protective_execution:
+                            # A stop and a passive entry may both occur inside
+                            # the same 15m OHLC bar. Model stop as touched
+                            # after entry (conservative; sequence unknowable).
+                            new_stop = broker.execute_protective_stop(
+                                sym, ts, _o, _h, _l)
+                            if new_stop is not None:
+                                pos_mgr.positions.pop(sym, None)
+                                counters["protective_exits"] += 1
+                                counters["resting_canceled"] += len(
+                                    broker.cancel_resting(
+                                        sym, ts, reason_code="PROTECTIVE_STOP",
+                                        detail="entry candle stop"))
                 elif k == "EXPIRED":
                     counters["limit_expired"] += 1
                 elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
                     counters["reduce_timeout_taker"] += 1
-                elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
-                    counters["min_size_skips"] += 1
-                    counters["limit_min_size_skips"] += 1
+                elif k == "SKIP":
+                    if protective_execution and row["meta"].get("role") == "reduce":
+                        pos_mgr.cancel_reduce(sym)
+                    if row["reason_code"] == "MIN_SIZE":
+                        counters["min_size_skips"] += 1
+                        counters["limit_min_size_skips"] += 1
             # ③ 持仓路径解决:同 v4(同根因果序 ①先于② 结构性解决)
             # ④ mark-to-market(15m 收盘)
             broker.mark(sym, ts, c)
@@ -168,7 +213,11 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                     mgmt = []
                 else:
                     mgmt = pos_mgr.on_bar(sym, bar, cog.atrs[i],
-                                          new_pivots, new_events)
+                                          new_pivots, new_events,
+                                          defer_reduce=protective_execution)
+                if protective_execution and sym in pos_mgr.positions and broker.position_of(sym):
+                    broker.update_protective_invalid(sym,
+                                                      pos_mgr.positions[sym].invalid)
                 for intent in mgmt:
                     armed_r = (intent.kind is OrderKind.REDUCE
                                and _arm_reduce_limit(broker, pos_mgr, sym, intent,
@@ -176,7 +225,11 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                     if armed_r:
                         counters["reduce_limits_armed"] += 1
                     else:
-                        broker.submit(intent, decision_ts=cog.bars[i][0])
+                        broker.submit(
+                            intent, decision_ts=cog.bars[i][0],
+                            meta=({"role": "deferred_reduce"}
+                                  if protective_execution and
+                                  intent.kind is OrderKind.REDUCE else None))
                 # v5 路由(仅段内启用;白名单与闸门在 V5Router 内部)
                 lo, hi = seg_bounds[sym]["lo"], seg_bounds[sym]["hi"]
                 if lo <= i < hi:
@@ -243,7 +296,45 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                          trades=reconstruct_trades_v5(broker.ledger, seg_bounds),
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()})
-    assert_fill_after_decision(res.ledger)
+    if protective_execution:
+        # Every actual exchange/simulator fill must be included in the
+        # journal. Intent logs must never substitute for trade executions.
+        reconstructed_cash = equity0 + sum(
+            float(r["realized_pnl"]) - float(r["fee"])
+            + float(r["funding_delta"]) for r in broker.ledger)
+        if abs(reconstructed_cash - broker.cash) > 1e-6:
+            raise AssertionError(
+                f"cash != fill ledger: {broker.cash} != {reconstructed_cash}")
+        signed = {}
+        for row in broker.ledger:
+            if row["kind"] not in ("OPEN","ADD","REDUCE","EXIT",
+                                   "LIMIT_FILL","LIQUIDATION"):
+                continue
+            d = 1 if row["side"] == "buy" else -1
+            signed[row["symbol"]] = (signed.get(row["symbol"], 0.0)
+                                     + d * float(row["qty"]))
+        for sym in symbols:
+            acct = broker.position_of(sym)
+            actual = acct.qty * acct.direction if acct else 0.0
+            if abs(signed.get(sym, 0.0) - actual) > 1e-6:
+                raise AssertionError(
+                    f"{sym} open quantity != journal: "
+                    f"{actual} != {signed.get(sym, 0.0)}")
+        # An entry and its installed stop may be crossed in the *same 15m
+        # OHLC bar*: no tick ordering is available. Our deliberate pessimistic
+        # convention is fill-entry-then-stop, both with the same bar label.
+        # All other rows retain the strict decision < fill invariant.
+        for row in res.ledger:
+            if (row["meta"].get("role") == "protective_stop"
+                    and row["ts"] == row["decision_ts"]):
+                if row["meta"].get("stop_install_ts") != row["ts"]:
+                    raise AssertionError("same-candle stop lacks entry provenance")
+        assert_fill_after_decision([
+            r for r in res.ledger if not (
+                r["meta"].get("role") == "protective_stop"
+                and r["ts"] == r["decision_ts"])])
+    else:
+        assert_fill_after_decision(res.ledger)
     return res
 
 

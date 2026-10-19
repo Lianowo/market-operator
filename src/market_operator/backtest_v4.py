@@ -188,7 +188,9 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     contracts: dict, params: Params, n_fill: int,
                     maker_fee: Optional[float] = None,
                     strategy: Optional[Strategy] = None,
-                    whitelist: Optional[frozenset] = None) -> BacktestResult:
+                    whitelist: Optional[frozenset] = None,
+                    execution_ledger=None,
+                    ledger_run_id: Optional[str] = None) -> BacktestResult:
     """v4 多品种合并 15m 时间序回放;主循环与缝见模块 docstring。"""
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -251,6 +253,20 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                                  frames[sym].hour_index[
                                      ts - (ts % MS_1H)])
                     counters["opens_filled"] += 1
+                elif k == "ADD":
+                    acct = broker.position_of(sym)
+                    if acct is None:
+                        raise AssertionError("add fill must leave a live position")
+                    pos_mgr.confirm_add(sym, float(row["qty"]) / acct.open_qty,
+                                        float(row["price"]))
+                    broker.update_protective_invalid(sym,
+                                                     pos_mgr.positions[sym].invalid)
+                elif k == "REDUCE":
+                    acct = broker.position_of(sym)
+                    if acct is None:
+                        raise AssertionError("reduce fill must leave a live residual position")
+                    pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
+                    broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                 elif k in ("EXIT", "LIQUIDATION"):
                     pos_mgr.positions.pop(sym, None)
                     counters["resting_canceled"] += len(broker.cancel_resting(
@@ -259,11 +275,20 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                                "limit canceled"))
                 elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
                     counters["min_size_skips"] += 1
+                if k == "SKIP" and row["meta"].get("role") == "deferred_reduce":
+                    pos_mgr.cancel_reduce(sym)
+                if k == "SKIP" and row["meta"].get("role") == "deferred_add":
+                    pos_mgr.cancel_add(sym)
             # ② 挂单处理(严格穿过成交;超时撤单/转市价)
             for row in broker.on_15m_bar(sym, ts, _o, _h, _l, c):
                 k = row["kind"]
                 if k == "LIMIT_FILL":
                     if row["meta"].get("role") == "reduce":
+                        acct = broker.position_of(sym)
+                        if acct is None:
+                            raise AssertionError("reduce limit fill must leave a residual position")
+                        pos_mgr.confirm_reduce(sym, float(row["qty"]) / acct.open_qty)
+                        broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                         counters["reduce_limit_fills"] += 1
                     else:
                         counters["limit_fills_entry"] += 1
@@ -277,9 +302,12 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     counters["limit_expired"] += 1
                 elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
                     counters["reduce_timeout_taker"] += 1
-                elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
-                    counters["min_size_skips"] += 1
-                    counters["limit_min_size_skips"] += 1
+                elif k == "SKIP":
+                    if row["meta"].get("role") == "reduce":
+                        pos_mgr.cancel_reduce(sym)
+                    if row["reason_code"] == "MIN_SIZE":
+                        counters["min_size_skips"] += 1
+                        counters["limit_min_size_skips"] += 1
             # ③ 持仓路径解决:结构性解决(同根因果序 ①先于②),见模块 docstring
             # ④ mark-to-market(15m 收盘)
             broker.mark(sym, ts, c)
@@ -301,7 +329,12 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     mgmt = []
                 else:
                     mgmt = pos_mgr.on_bar(sym, bar, cog.atrs[i],
-                                          new_pivots, new_events)
+                                          new_pivots, new_events,
+                                          defer_reduce=(entry_mode == "limit_front_edge"),
+                                          defer_add=True)
+                # 已确认 pivot/成交后,同步当前有效结构防线至 broker 风险账本。
+                if sym in pos_mgr.positions and broker.position_of(sym) is not None:
+                    broker.update_protective_invalid(sym, pos_mgr.positions[sym].invalid)
                 for intent in mgmt:
                     armed = (intent.kind is OrderKind.REDUCE
                              and entry_mode == "limit_front_edge"
@@ -311,7 +344,14 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                     if armed:
                         counters["reduce_limits_armed"] += 1
                     else:
-                        broker.submit(intent, decision_ts=cog.bars[i][0])
+                        broker.submit(
+                            intent, decision_ts=cog.bars[i][0],
+                            meta=({"role": "deferred_reduce"}
+                                  if intent.kind is OrderKind.REDUCE
+                                  and entry_mode == "limit_front_edge" else
+                                  {"role": "deferred_add",
+                                   "add_invalid": pos_mgr.positions[sym].pending_add_invalid}
+                                  if intent.kind is OrderKind.ADD else None))
                 # §7 策略(仅段内启用 OPEN;GO 白名单由 Strategy 内部裁决)
                 lo, hi = seg_bounds[sym]["lo"], seg_bounds[sym]["hi"]
                 if lo <= i < hi:
@@ -368,6 +408,20 @@ def run_backtest_v4(frames: dict, *, segment: str, dev_frac: float,
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()})
     assert_fill_after_decision(res.ledger)
+    if execution_ledger is not None:
+        # Optional full-path ledger audit. Broker is still the simulator, and
+        # we import only actual execution rows, never signals or attempted orders.
+        if not ledger_run_id:
+            raise ValueError("ledger_run_id required when execution_ledger is set")
+        from decimal import Decimal
+        for fill_row in broker.ledger:
+            execution_ledger.record_backtest_fill(fill_row, run_id=ledger_run_id)
+        expected = {
+            sym: Decimal(str(pos.qty)) * pos.direction
+            for sym, pos in broker.positions.items() if pos.qty > 0
+        }
+        # Block promotion if journal and simulated real positions disagree.
+        execution_ledger.verify_exchange_positions(expected)
     return res
 
 

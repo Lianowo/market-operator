@@ -135,3 +135,11 @@
     - `docs/v5-protocol.md` 已冻结:破位质量路由(E6 STRONG=市价/WEAK=E7限价)+ E1 市价
       (最高优先级)+ F1 全入口 + short-only(无信息规则)。新先验仅 k_dq=0.5/k_imp=1.5,
       敏感性仅 dev。test 第 7 次评估且最终;升级线不变;无论结局关闭协议级优化循环。
+
+11. **2026-10-19 PR#9(外来贡献)合并前合规登记**
+    - 事实登记:PR#9 的诊断脚本 `scripts/diagnose_trade_lifecycle.py` 在 test 段执行两轮
+      ⇒ 构成 test 段第 8/9 次曝光;作者声明"diagnostic, 不作 OOS 定论",
+      与脚本行为一致,照此登记,不追加任何结论主张。
+    - errata:PR#9 对 broker 的修复(跨品种组合杠杆账、幻影保本去除、跳空成交规则)
+      使 v1–v5 冻结回放不再逐字可复现;冻结产物保留为历史快照,见 acceptance errata。
+    - 数字勘误:PR 说明称基线"225 测试",主线实际为 218(PR#9 后为 257)。
