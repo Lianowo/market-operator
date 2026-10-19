@@ -35,3 +35,9 @@
 - v4 成熟度优先（E7-only + F1 + 限价接回踩 + 15m 执行路径）：同信号 A/B 全面劣于 v2 市价
   (test −75.4 vs −55.7),adverse selection > maker 节省；九段全负、test<60 判 INSUFFICIENT。
   192 tests。优化循环关闭，Research Only 终态。
+
+## [v0.5.0] - 2026-10-19 — Final form, definitive
+
+- v5 破位质量路由（STRONG=市价/WEAK=E7限价）+ E1 优先 + F1 全入口 + short-only:
+  test −22.5/22 笔/CI 含 0(INSUFFICIENT)；胜率随成熟度单调升(28%→41% 桶)，总亏单调降。
+  五轮干预全部落定：低频、低亏、不赚。Research Only 定版，协议级优化关闭。218 tests。

@@ -130,3 +130,8 @@
    - `docs/v4-protocol.md` 已冻结:成熟度三闸门(E7-only + k_is=0.8 沿用 + 限价接回踩
      N_fill=12)、15m 执行路径、maker/taker 非对称费用;test 段第 6 次评估,v4 唯一一次;
      低样本预期与 INSUFFICIENT 处置已预先声明。
+
+10. **2026-10-19 v5 预注册(先于任何 v5 运行,最终轮)**
+    - `docs/v5-protocol.md` 已冻结:破位质量路由(E6 STRONG=市价/WEAK=E7限价)+ E1 市价
+      (最高优先级)+ F1 全入口 + short-only(无信息规则)。新先验仅 k_dq=0.5/k_imp=1.5,
+      敏感性仅 dev。test 第 7 次评估且最终;升级线不变;无论结局关闭协议级优化循环。
