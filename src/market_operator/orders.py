@@ -80,6 +80,7 @@ class OrderLedger:
         self.db.execute("UPDATE orders SET verified=0 WHERE state IN "
                         "('NEW','SUBMITTED','PARTIAL','CANCEL_PENDING','UNKNOWN')")
         self._position_verified = False
+        self._fresh_new: set[str] = set()  # only NEW orders created this process
 
     def close(self) -> None:
         self.db.close()
@@ -114,25 +115,26 @@ class OrderLedger:
             raise ValueError("invalid order identifiers, side or role")
         amount = _d(qty, positive=True)
         with self.db:
-            self.db.execute(
+            cursor = self.db.execute(
                 "INSERT OR IGNORE INTO orders "
                 "(client_id,symbol,side,qty,role,state) VALUES (?,?,?,?,?,?)",
                 (client_id, symbol, side, str(amount), role, "NEW"))
+            if cursor.rowcount == 1:
+                self._fresh_new.add(client_id)
             found = self.order(client_id)
             if (found.symbol, found.side, found.qty, found.role) != (
                     symbol, side, amount, role):
                 raise ValueError(f"client ID collision with different order: {client_id}")
-        self._position_verified = False
         return found
 
     def dispatch_allowed(self) -> bool:
         """No unknown orders and account exposure reconciled after restart."""
         if not self._position_verified:
             return False
-        return not self.unverified()
+        return not (set(self.unverified()) - self._fresh_new)
 
     def mark_submitted(self, client_id: str) -> None:
-        """Called after network dispatch, not before; no automatic retries."""
+        """Persist send-attempt BEFORE the network call. Never blindly retry."""
         if not self.dispatch_allowed():
             raise ReconciliationError("order or account has not been reconciled")
         order = self.order(client_id)
@@ -142,6 +144,7 @@ class OrderLedger:
             self.db.execute(
                 "UPDATE orders SET state='SUBMITTED', verified=0 WHERE client_id=?",
                 (client_id,))
+        self._fresh_new.discard(client_id)
 
     def unverified(self) -> tuple[str, ...]:
         return tuple(row[0] for row in self.db.execute(
@@ -157,6 +160,7 @@ class OrderLedger:
             self.db.execute(
                 "UPDATE orders SET state='CANCEL_PENDING', verified=0 WHERE client_id=?",
                 (client_id,))
+        self._fresh_new.discard(client_id)
 
     def record_fill(self, client_id: str, fill_id: str,
                     qty: str | Decimal, price: str | Decimal,
