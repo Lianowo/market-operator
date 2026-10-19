@@ -450,3 +450,20 @@ def test_deferred_add_verified_fill_tightens_stop():
     assert 0 < result["qty"] <= prior_qty * 0.5
     assert b.position_of("TEST").qty == pytest.approx(prior_qty + result["qty"])
     assert b.position_of("TEST").invalid == 96.0
+
+
+def test_deferred_add_gap_beyond_structural_stop_is_rejected():
+    b = _broker()
+    _open_short(b, invalid=101.0)
+    b.on_bar_open("TEST", T0 + H, 100.0)
+    b.mark("TEST", T0 + 2 * H, 98.4)
+    b.update_protective_invalid("TEST", 99.0)
+    original_qty = b.position_of("TEST").qty
+    it = _intent(OrderKind.ADD, frac=0.5, ts=T0 + 2 * H)
+    b.submit(it, decision_ts=T0 + 2 * H,
+             meta={"role": "deferred_add", "add_invalid": 98.5})
+    # Sell-fill is ABOVE invalid (short requires fill below protective stop).
+    result = b.on_bar_open("TEST", T0 + 3 * H, 102.0)[0]
+    assert result["kind"] == "SKIP" and result["reason_code"] == "BAD_INVALID"
+    assert b.position_of("TEST").qty == original_qty
+    assert b.position_of("TEST").invalid == 99.0
