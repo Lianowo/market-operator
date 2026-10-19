@@ -47,6 +47,27 @@ cash = equity0 + Σ(realized_pnl − fee + funding_delta))。
 (sizePlace)、sizeMultiplier(size step)、pricePlace、minTradeUSDT,
 缓存 data/contracts.json(含抓取时间与各原始条目 sha256);离线或抓取失败
 回退读缓存。实时规格与 2024-2026 历史可能存在最小下单量差异,报告如实声明。
+
+v4 增量(docs/v4-protocol.md §1-G3,执行路径细化;不改变任何既有市价路径):
+- RestingLimitOrder(挂单):{direction, limit_price, armed_at_ts, expiry_ts
+  (= armed + n_fill×1h,最后一根允许成交的 1h bar 标签),maker=True}。
+  武装时刻 = 1h 决策 bar 标签(与 v1/v2 decision_ts 同约定);15m bar ts 的
+  可成交窗口 = 其所属 1h bar 标签 ∈ (armed_at_ts, expiry_ts]。
+- 成交规则(保守):仅当 15m bar **严格穿过**限价才算成交(sell limit L:
+  bar.high > L;buy limit L:bar.low < L),持平不成交 —— 不假设排队靠前
+  (协议如实声明的残余乐观风险);穿过后按 limit_price 成交(穿透缺口不给
+  价格改善,保守如实声明),无滑点;成交 ts = 该 15m bar 标签,恒 > 武装 ts
+  (因果:首根可成交 15m bar 即决策小时之后的第一根,行内 assert)。
+- 费用非对称:挂单成交 = maker(默认 maker_fee=taker_fee,不影响 v1/v2 构造;
+  v4 传入 maker_fee=0.0002);cost_multiplier 同时乘 maker/taker/slippage/funding。
+- 超时:入场挂单超时 ⇒ 撤单,kind=EXPIRED(没有这笔交易);目标减仓挂单
+  (armed 时快照数量)超时 ⇒ kind=CANCEL(reason_code=TIMEOUT_TO_TAKER)
+  并自动转 1h 决策语义的市价 REDUCE(taker+滑点,下一根 15m 开盘成交)。
+- 仓位平仓(EXIT/LIQUIDATION 成交)后,该 symbol 残余挂单由调用方
+  cancel_resting 撤销 ⇒ kind=CANCEL(reason_code=POSITION_CLOSED)。
+- 账本新增 kind:LIMIT_FILL(挂单成交,maker 费、slippage_cost=0,
+  meta 携带 entry_mode='limit'/limit_price/fill_wait_bars(成交时已过的
+  可成交 15m bar 数))/EXPIRED/CANCEL;资金费口径不变(dt 毫秒比例)。
 """
 
 from __future__ import annotations
@@ -169,6 +190,38 @@ class _Pending:
     meta: dict = field(default_factory=dict)
 
 
+MS_1H = 3_600_000
+
+
+@dataclass
+class RestingLimitOrder:
+    """v4 挂单(docs/v4-protocol.md §1-G3):1h 收盘武装,15m 严格穿过成交。
+
+    协议字段:direction/limit_price/armed_at_ts/expiry_ts(= armed+N_fill×1h)/maker。
+    armed_at_ts = 武装的 1h 决策 bar 标签(= decision_ts);expiry_ts = 最后
+    一根允许成交的 1h bar 标签;15m bar ts 可成交 ⇔ ts//1h·1h ∈ (armed, expiry]。
+    wait_bars = 已度过的可成交 15m bar 数(成交时 = fill_wait_bars)。
+    """
+
+    direction: int                 # 挂单方向:+1 buy limit / -1 sell limit
+    limit_price: float
+    armed_at_ts: int               # 武装(1h 决策)bar 标签
+    expiry_ts: int                 # armed_at_ts + n_fill×1h(最后一根允许成交的 1h bar)
+    maker: bool = True             # 挂单成交恒为 maker(如实声明)
+    symbol: str = ""
+    role: str = "entry"            # "entry"(G3 入场)/ "reduce"(§8.2 目标减仓)
+    # entry 侧(open 成交所需,与 _Pending OPEN 字段同语义)
+    invalid: Optional[float] = None
+    target_1: Optional[float] = None
+    event_id: Optional[str] = None
+    meta: dict = field(default_factory=dict)
+    reason: str = ""
+    # reduce 侧(武装时对 open_qty 向 step 下取整的快照;超时转市价同数量)
+    reduce_qty: Optional[float] = None
+    qty_frac_snap: Optional[float] = None
+    wait_bars: int = 0             # 已度过的可成交 15m bar 数
+
+
 @dataclass
 class _AcctPosition:
     """经纪商侧仓位(数量、加权均价、计提资金费)。"""
@@ -190,6 +243,7 @@ class Broker:
     def __init__(self, equity: float = 300.0, *, risk_frac: float,
                  leverage_cap: float, taker_fee: float, slippage_per_side: float,
                  funding_per_8h: float, contracts: dict,
+                 maker_fee: Optional[float] = None,
                  cost_multiplier: float = 1.0, liq_frac: float = 0.9) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
@@ -198,6 +252,9 @@ class Broker:
         self.risk_frac = float(risk_frac)
         self.leverage_cap = float(leverage_cap)
         self.taker_fee = float(taker_fee) * cost_multiplier
+        # maker 费率(v4 非对称成本);缺省 = taker(v1/v2 构造与行为不变)
+        self.maker_fee = (self.taker_fee if maker_fee is None
+                          else float(maker_fee) * cost_multiplier)
         self.slippage = float(slippage_per_side) * cost_multiplier
         self.funding_8h = float(funding_per_8h) * cost_multiplier
         self.cost_multiplier = float(cost_multiplier)
@@ -206,6 +263,7 @@ class Broker:
 
         self.positions: dict[str, _AcctPosition] = {}
         self.pending: dict[str, list[_Pending]] = {}
+        self.resting: dict[str, list[RestingLimitOrder]] = {}   # v4 挂单
         self.ledger: list[dict] = []
         self.last_mark: dict[str, float] = {}          # symbol → 最近 mark 价
         self.n_liquidations = 0                        # 强平触发次数(报告断言 0)
@@ -225,6 +283,229 @@ class Broker:
                       direction=direction, invalid=invalid, target_1=target_1,
                       event_id=event_id, meta=dict(meta or {}))
         self.pending.setdefault(intent.symbol, []).append(po)
+
+    # -- v4 挂单(docs/v4-protocol.md §1-G3) ------------------------------------
+
+    def submit_limit(self, order: RestingLimitOrder) -> None:
+        """武装一只挂单(1h 决策 bar 收盘)。expiry_ts 由调用方 = armed+n_fill×1h。"""
+        if order.direction not in (+1, -1):
+            raise ValueError("RestingLimitOrder.direction must be ±1")
+        if order.expiry_ts <= order.armed_at_ts:
+            raise ValueError("expiry_ts must be > armed_at_ts")
+        if order.role == "entry" and order.invalid is None:
+            raise ValueError("entry limit requires invalid")
+        if order.role == "reduce" and order.reduce_qty is None:
+            raise ValueError("reduce limit requires reduce_qty snapshot")
+        self.resting.setdefault(order.symbol, []).append(order)
+
+    def has_entry_limit(self, symbol: str) -> bool:
+        return any(o.role == "entry" for o in self.resting.get(symbol, ()))
+
+    def on_15m_bar(self, symbol: str, ts: int, o: float, h: float, l: float,
+                   c: float) -> list[dict]:
+        """15m bar 上的挂单处理:先判超时,再判严格穿过成交(FIFO)。
+
+        可成交窗口 = 本 15m bar 所属 1h bar 标签 ∈ (armed_at_ts, expiry_ts];
+        armed 小时自身的子 bar 不参与(因果:决策须早于成交)。
+        """
+        hour_label = int(ts) - (int(ts) % MS_1H)
+        rows: list[dict] = []
+        kept: list[RestingLimitOrder] = []
+        for od in self.resting.pop(symbol, []):
+            if hour_label > od.expiry_ts:
+                rows.append(self._timeout(od, int(ts)))
+                continue
+            if hour_label <= od.armed_at_ts:
+                kept.append(od)                       # 武装小时自身,不可成交
+                continue
+            od.wait_bars += 1
+            cross = (h > od.limit_price) if od.direction < 0 \
+                else (l < od.limit_price)
+            if not cross:                             # 严格穿过;持平不成交
+                kept.append(od)
+                continue
+            if int(ts) <= od.armed_at_ts:             # 因果硬断言:成交晚于武装
+                raise AssertionError(
+                    f"limit fill ts {ts} <= armed_at_ts {od.armed_at_ts}")
+            row = (self._fill_open_limit(od, int(ts)) if od.role == "entry"
+                   else self._fill_reduce_limit(od, int(ts)))
+            rows.append(row)
+        if kept:
+            self.resting[symbol] = kept
+        return rows
+
+    def _timeout(self, od: RestingLimitOrder, ts: int) -> dict:
+        """超时:entry ⇒ EXPIRED(撤单,没有这笔交易);
+        reduce ⇒ CANCEL(TIMEOUT_TO_TAKER)并转同数量市价 REDUCE(taker+滑点,
+        下一根 15m 开盘成交,决策 ts = 检出超时的本 15m bar)。"""
+        if od.role == "reduce":
+            row = self._admin_row(od, ts, kind="CANCEL",
+                                  reason_code="TIMEOUT_TO_TAKER",
+                                  detail=f"reduce limit {od.limit_price:.8g} not "
+                                         f"filled within window; convert to taker "
+                                         f"market REDUCE ({od.wait_bars} 15m bars)")
+            intent = OrderIntent(
+                kind=OrderKind.REDUCE, symbol=od.symbol,
+                qty_frac=od.qty_frac_snap,
+                reason=(f"TIMEOUT_TO_TAKER|reduce limit {od.limit_price:.8g} "
+                        f"expired after {od.wait_bars} 15m bars "
+                        f"(armed {od.armed_at_ts}, expiry {od.expiry_ts}); "
+                        f"taker market at next open"),
+                ref_price=od.limit_price, ts=ts)
+            self.pending.setdefault(od.symbol, []).append(_Pending(
+                intent=intent, decision_ts=ts,
+                direction=-od.direction, meta=dict(od.meta)))
+            return row
+        return self._admin_row(od, ts, kind="EXPIRED", reason_code="EXPIRED",
+                               detail=f"entry limit {od.limit_price:.8g} not filled "
+                                      f"within N_fill 1h bars ({od.wait_bars} 15m "
+                                      f"bars waited); no trade")
+
+    def _admin_row(self, od: RestingLimitOrder, ts: int, *, kind: str,
+                   reason_code: str, detail: str) -> dict:
+        """EXPIRED/CANCEL 账本行(无成交;fee/pnl 全 0;ts > armed 由
+        on_15m_bar 窗口保证,cancel_resting 由调用方保证)。"""
+        if ts <= od.armed_at_ts:
+            raise AssertionError(
+                f"{kind} ts {ts} <= armed_at_ts {od.armed_at_ts}")
+        row = {
+            "seq": self._next_seq_row(), "ts": int(ts), "symbol": od.symbol,
+            "side": None, "kind": kind, "qty": 0.0, "price": od.limit_price,
+            "open_price": None, "fee": 0.0, "funding_delta": 0.0,
+            "realized_pnl": 0.0, "decision_ts": int(od.armed_at_ts),
+            "reason_code": reason_code, "reason": f"{reason_code}|{detail}",
+            "trade_id": None, "used_leverage": None, "slippage_cost": 0.0,
+            "cash_after": self.cash,
+            "meta": {**od.meta, "limit_price": od.limit_price, "role": od.role,
+                     "fill_wait_bars": od.wait_bars,
+                     "expiry_ts": od.expiry_ts},
+        }
+        self.ledger.append(row)
+        return row
+
+    def cancel_resting(self, symbol: str, ts: int, *, reason_code: str,
+                       detail: str) -> list[dict]:
+        """撤销该 symbol 全部残余挂单(仓位平仓后由调用方触发)。"""
+        rows = [self._admin_row(od, int(ts), kind="CANCEL",
+                                reason_code=reason_code, detail=detail)
+                for od in self.resting.pop(symbol, [])]
+        return rows
+
+    def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
+        """入场挂单成交:limit_price 精确成交(无滑点),maker 费,sizing 同 OPEN。"""
+        sym = od.symbol
+        spec = self.contracts[sym]
+        d = od.direction
+        side = "buy" if d > 0 else "sell"
+        price = od.limit_price
+        ref = {"armed_at_ts": od.armed_at_ts, "intent_reason": od.reason}
+        if sym in self.positions:
+            return self._limit_skip(od, ts, "DUP_POSITION",
+                                    f"position already open for {sym}", ref)
+        if d * (price - od.invalid) <= 0.0:
+            return self._limit_skip(od, ts, "BAD_INVALID",
+                                    f"limit {price} not protective vs "
+                                    f"invalid={od.invalid}", ref)
+        equity = self.equity_mtm()
+        risk_per_unit = abs(price - od.invalid)
+        qty_risk = self.risk_frac * equity / risk_per_unit
+        qty_cap = self.leverage_cap * equity / price
+        qty = _floor_step(min(qty_risk, qty_cap), spec.size_step, spec.size_place)
+        notional = qty * price
+        if qty < spec.size_min or notional < spec.min_trade_usdt:
+            return self._limit_skip(
+                od, ts, "MIN_SIZE",
+                f"qty={qty} < size_min={spec.size_min} or notional={notional:.4f} "
+                f"< min_trade_usdt={spec.min_trade_usdt} (limit fill)", ref)
+        fee = notional * self.maker_fee
+        self.cash -= fee
+        self._seq += 1
+        trade_id = f"{sym}#{self._seq}"
+        pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
+                            entry=price, trade_id=trade_id, opened_ts=ts,
+                            last_funding_ts=ts)
+        self.positions[sym] = pos
+        self.last_mark[sym] = price
+        meta = dict(od.meta)
+        meta.update({"invalid": od.invalid, "target_1": od.target_1,
+                     "event_id": od.event_id, "risk_usdt": qty * risk_per_unit,
+                     "entry_mode": "limit", "limit_price": od.limit_price,
+                     "fill_wait_bars": od.wait_bars})
+        row = {
+            "seq": self._next_seq_row(), "ts": int(ts), "symbol": sym,
+            "side": side, "kind": "LIMIT_FILL", "qty": qty, "price": price,
+            "open_price": None, "fee": fee, "funding_delta": 0.0,
+            "realized_pnl": 0.0, "decision_ts": int(od.armed_at_ts),
+            "reason_code": od.reason.split("|", 1)[0] if od.reason else "G3",
+            "reason": od.reason, "trade_id": trade_id,
+            "used_leverage": notional / equity, "slippage_cost": 0.0,
+            "cash_after": self.cash, "meta": meta,
+        }
+        self.ledger.append(row)
+        return row
+
+    def _fill_reduce_limit(self, od: RestingLimitOrder, ts: int) -> dict:
+        """目标减仓挂单成交(部分平仓,maker 费);仍随最终 EXIT 结算资金费。"""
+        sym = od.symbol
+        pos = self.positions.get(sym)
+        ref = {"armed_at_ts": od.armed_at_ts, "intent_reason": od.reason}
+        if pos is None:
+            return self._limit_skip(od, ts, "NO_POSITION",
+                                    f"no open position for {sym}", ref)
+        qty = min(float(od.reduce_qty), pos.qty)
+        if qty <= 0.0:
+            return self._limit_skip(od, ts, "MIN_SIZE",
+                                    "reduce limit qty rounds to 0", ref)
+        side = "sell" if pos.direction > 0 else "buy"
+        price = od.limit_price
+        self._accrue_funding(pos, price, ts)
+        pnl = pos.direction * (price - pos.entry) * qty
+        fee = qty * price * self.maker_fee
+        full = qty >= pos.qty
+        funding_delta = 0.0
+        if full:
+            funding_delta = -pos.funding_acc
+            self.cash -= pos.funding_acc
+            pos.funding_acc = 0.0
+        self.cash += pnl - fee
+        pos.qty -= qty
+        if full:
+            self.positions.pop(sym, None)
+        self.last_mark[sym] = price
+        meta = dict(od.meta)
+        meta.update({"role": "reduce", "limit_price": od.limit_price,
+                     "fill_wait_bars": od.wait_bars})
+        row = {
+            "seq": self._next_seq_row(), "ts": int(ts), "symbol": sym,
+            "side": side, "kind": "LIMIT_FILL", "qty": qty, "price": price,
+            "open_price": None, "fee": fee, "funding_delta": funding_delta,
+            "realized_pnl": pnl, "decision_ts": int(od.armed_at_ts),
+            "reason_code": od.reason.split("|", 1)[0] if od.reason else "§8.2",
+            "reason": od.reason, "trade_id": pos.trade_id,
+            "used_leverage": None, "slippage_cost": 0.0,
+            "cash_after": self.cash, "meta": meta,
+        }
+        self.ledger.append(row)
+        return row
+
+    def _limit_skip(self, od: RestingLimitOrder, ts: int, code: str,
+                    detail: str, ref: dict) -> dict:
+        """挂单成交时刻的拒绝路径(MIN_SIZE/DUP/BAD_INVALID/NO_POSITION)。"""
+        self.n_skips[code] = self.n_skips.get(code, 0) + 1
+        row = {
+            "seq": self._next_seq_row(), "ts": int(ts),
+            "symbol": od.symbol, "side": None, "kind": "SKIP",
+            "qty": 0.0, "price": od.limit_price, "open_price": None, "fee": 0.0,
+            "funding_delta": 0.0, "realized_pnl": 0.0,
+            "decision_ts": int(od.armed_at_ts), "reason_code": code,
+            "reason": f"{code}|{detail} (order: {od.reason})",
+            "trade_id": None, "used_leverage": None, "slippage_cost": 0.0,
+            "cash_after": self.cash,
+            "meta": {**od.meta, "limit_price": od.limit_price, "role": od.role,
+                     **ref},
+        }
+        self.ledger.append(row)
+        return row
 
     # -- 撮合(成交 bar 开盘) --------------------------------------------------
 

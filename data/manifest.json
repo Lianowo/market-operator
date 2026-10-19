@@ -197,6 +197,42 @@
         "sha256": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13"
       },
       "validation_issues": []
+    },
+    "BTCUSDT_15m.csv": {
+      "path": "data\\raw\\BTCUSDT_15m.csv",
+      "sha256": "773946161353283f5d8efd657a62f9dfccc9451d844321ea5b4f3b42db106cc4",
+      "rows": 70400,
+      "ts_first": 1729022400000,
+      "ts_last": 1792381500000,
+      "fetched_at_utc": "2026-10-19T08:02:27+00:00",
+      "span_days": 733.32,
+      "granularity": "15m",
+      "step_ms": 900000,
+      "validation_issues": []
+    },
+    "ETHUSDT_15m.csv": {
+      "path": "data\\raw\\ETHUSDT_15m.csv",
+      "sha256": "877c0e091253c61e80244bf23f22b74e30b596868da7edca3ec0f81475a6cca8",
+      "rows": 70400,
+      "ts_first": 1729022400000,
+      "ts_last": 1792381500000,
+      "fetched_at_utc": "2026-10-19T08:06:13+00:00",
+      "span_days": 733.32,
+      "granularity": "15m",
+      "step_ms": 900000,
+      "validation_issues": []
+    },
+    "SOLUSDT_15m.csv": {
+      "path": "data\\raw\\SOLUSDT_15m.csv",
+      "sha256": "07b4a12690dfffec23fa623237f17629f60de7016db553b642b7bb8f0adb0fd8",
+      "rows": 70400,
+      "ts_first": 1729022400000,
+      "ts_last": 1792381500000,
+      "fetched_at_utc": "2026-10-19T08:09:57+00:00",
+      "span_days": 733.32,
+      "granularity": "15m",
+      "step_ms": 900000,
+      "validation_issues": []
     }
   }
 }

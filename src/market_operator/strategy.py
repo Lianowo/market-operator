@@ -34,6 +34,13 @@ v2 增量(docs/v2-protocol.md §1,冻结于实现前):StrategyParams.whitelist
 参数化入场白名单(None = v1 GO_MECHANISMS,v1 路径不变);k_is > 0 时启用
 F1 失效距离下限(dist(close(t), invalid) ≥ k_is·atr(t),白名单内事件适用)。
 v2 回测 whitelist = {(E7,-1),(E7,1)},k_is = 0.8(先验,不做择优)。
+
+v4 增量(docs/v4-protocol.md §1,冻结于实现前):StrategyParams.entry_mode
+= "limit_front_edge" 时启用 G3 限价接回踩 —— 采纳的假设直线限价取事件
+attrs["zone"] 前缘(short:zone.lo;long:zone.hi,偏向成交率的方向,协议
+如实声明),记录于 _taken_limit 供执行层挂单;默认 "market_next_open"
+(v1/v2 路径逐 bar 行为不变)。G1 = 白名单,G2 = k_is F1(同款复用),
+gates 顺序不变;每 symbol 一单纪律(开仓/挂单中拒绝新单)由执行层维持。
 """
 
 from __future__ import annotations
@@ -79,6 +86,9 @@ class StrategyParams:
     # 显式集合则替代白名单(v2 回测 = {(E7,-1),(E7,1)},来自 config/v2.json)。
     whitelist: Optional[frozenset] = None
     k_is: float = 0.0                           # F1 失效距离下限先验倍率;0 = 不应用
+    # v4(docs/v4-protocol.md §1-G3):"limit_front_edge" ⇒ 采纳时按事件 zone
+    # 前缘记限价(short:zone.lo,long:zone.hi);默认 = v1/v2 次开盘市价,行为不变。
+    entry_mode: str = "market_next_open"
 
 
 class Strategy:
@@ -87,7 +97,8 @@ class Strategy:
     def __init__(self, params: Optional[StrategyParams] = None) -> None:
         self.params = params or StrategyParams()
         self._open: set[str] = set()
-        self._taken: dict[str, Hypothesis] = {}   # symbol → 已采纳假设(记录)
+        self._taken: dict[str, Hypothesis] = {}      # symbol → 已采纳假设(记录)
+        self._taken_limit: dict[str, float] = {}     # v4:symbol → G3 前缘限价
         self._notes: list[str] = []
 
     # -- 主入口 ---------------------------------------------------------------
@@ -102,6 +113,7 @@ class Strategy:
         if open_position_state is None and symbol in self._open:
             self._open.discard(symbol)
             self._taken.pop(symbol, None)
+            self._taken_limit.pop(symbol, None)
             self._notes.append(f"flat|{symbol} prior position closed")
 
         holding = open_position_state is not None or symbol in self._open
@@ -190,6 +202,19 @@ class Strategy:
         reason = (f"{ev.id}|{side} {tag} entry_ref={close:.8g} "
                   f"invalid={hyp.invalid:.8g} target_1={hyp.target_1:.8g} "
                   f"r_mult={hyp.r_mult:.3f}")
+        # v4 G3(docs/v4-protocol.md §1):限价接回踩取翻转区域前缘
+        # (short ⇒ zone.lo,long ⇒ zone.hi);前缘缺失 = 信号不成熟 = 拒绝。
+        if self.params.entry_mode == "limit_front_edge":
+            zone = ev.attrs.get("zone")
+            if zone is None:
+                self._taken.pop(symbol, None)
+                self._notes.append(
+                    f"no_zone|{symbol} {ev.id}|{side} limit_front_edge requires "
+                    f"zone front edge (G3)")
+                return None
+            limit = float(zone.lo if ev.direction < 0 else zone.hi)
+            self._taken_limit[symbol] = limit
+            reason += f" limit_front_edge={limit:.8g}"
         return OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
                            reason=reason, ref_price=float(close), ts=ts)
 
