@@ -413,6 +413,8 @@ def test_unfilled_reduce_limit_must_not_trigger_phantom_breakeven_exit():
     # 收盘100处于初始止损101下方但原代码提前生效的保本99.5上方。
     hours[17] = calm(95.4, 96.0, 98.0, 100.0,
                      hi_pad=0.1, lo_pad=0.0)
+    # hour18 原始测试路径曾穿过95.0,导致减仓限价真实成交;此处必须始终在95之上。
+    hours[18] = calm(95.3, 96.4, 97.9, 98.4, lo_pad=0.0)
     # 隔离其他结构事件(Pivot trail / reverse E6),只验证 maker 意图与实际成交。
     frame = _frame(hours)
     frame.cog.events_by.clear()
