@@ -96,7 +96,7 @@ def run_backtest_v5(frames: dict, *, segment: str, dev_frac: float,
                 "limit_min_size_skips": 0,
                 "reduce_limits_armed": 0, "reduce_limit_fills": 0,
                 "reduce_timeout_taker": 0, "resting_canceled": 0,
-                "e1_priority_cancels": 0}
+                "e1_priority_cancels": 0, "protective_exits": 0}
 
     fine_ts = sorted({q[0] for sym in symbols for qs in frames[sym].quarters.values()
                       for q in qs})
