@@ -58,7 +58,7 @@ class OrderLedger:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self.db = sqlite3.connect(str(path), isolation_level=None)
+        self.db = sqlite3.connect(str(path), isolation_level="DEFERRED")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
@@ -79,6 +79,7 @@ class OrderLedger:
         # fill, cancel, or change state while the process was offline.
         self.db.execute("UPDATE orders SET verified=0 WHERE state IN "
                         "('NEW','SUBMITTED','PARTIAL','CANCEL_PENDING','UNKNOWN')")
+        self.db.commit()
         self._position_verified = False
         self._fresh_new: set[str] = set()  # only NEW orders created this process
 
