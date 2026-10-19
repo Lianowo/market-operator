@@ -9,7 +9,8 @@
    H ∈ {6,12,24,48} 内测 MFE/MAE(以事件时 ATR 为单位)、target/invalid 命中
    (同 bar 双命中按保守口径记 invalid 优先)、固定 H 收盘退出的毛/净收益
    (ATR 与 % 双口径;净 = 毛 − taker 成本模型,成本从 config/defaults.json 读,
-   持仓 H 小时,funding 按 0.01%/8h 双边保守收取 §9.2)。
+   持仓 H 小时,funding 按 0.01%/8h 双边保守收取 §9.2;v3 多尺度改为
+   H·bar_hours 小时,1h 数据恒等,见 measure_events)。
 3. 事件方向映射(§9.1-3 口径,与 events.py 的发射语义硬核对,见
    `expected_direction`;collect_events 对每个事件断言,不符即抛错):
    E1 顺势(阻力破位 → 多 / 支撑破位 → 空);E2 反向(刺穿收回 → 阻力空 / 支撑多);
@@ -235,13 +236,16 @@ def measure_path(o, h, l, c, entry_i: int, horizon: int, direction: int,
     return mfe, mae, gross, hit
 
 
-def _net_row(mfe, mae, gross, hit, entry, atr, horizon, cost: CostModel) -> dict:
+def _net_row(mfe, mae, gross, hit, entry, atr, horizon, cost: CostModel,
+             bar_hours: float = 1.0) -> dict:
     gross_atr = gross / atr
     gross_pct = gross / entry
     row = {"mfe_atr": mfe / atr, "mae_atr": mae / atr,
            "gross_atr": gross_atr, "gross_pct": gross_pct, "hit": hit}
     for m in COST_MULTS:
-        frac = cost.round_trip_frac(horizon, m)
+        # funding 按真实持仓时长计费(§9.2/v3-protocol §2):持仓时长 =
+        # horizon 根 × bar_hours 小时/根(v3 多尺度;1h 数据 bar_hours=1 恒等)。
+        frac = cost.round_trip_frac(horizon * bar_hours, m)
         tag = _mult_tag(m)
         row[f"net_atr_{tag}"] = gross_atr - frac * entry / atr
         row[f"net_pct_{tag}"] = gross_pct - frac
@@ -249,11 +253,12 @@ def _net_row(mfe, mae, gross, hit, entry, atr, horizon, cost: CostModel) -> dict
 
 
 def measure_events(df: pd.DataFrame, events: list, timeline: StructureTimeline,
-                   cost: CostModel) -> pd.DataFrame:
+                   cost: CostModel, bar_hours: float = 1.0) -> pd.DataFrame:
     """对每个事件建 §7 假设并按 §9.1-3/4 测量(全部 H × 成本压力)。
 
     前向窗不足 max(HORIZONS) 的事件整体跳过(保证各 H 样本一致,记入
-    n_dropped_tail 由调用方报告)。
+    n_dropped_tail 由调用方报告)。bar_hours = 数据 bar 长度(小时),v3 多
+    尺度用;默认 1.0 对应 1h(H 根 = H 小时,funding 口径不变)。
     """
     o = df["open"].to_numpy(np.float64)
     h = df["high"].to_numpy(np.float64)
@@ -290,7 +295,7 @@ def measure_events(df: pd.DataFrame, events: list, timeline: StructureTimeline,
                 hypo.invalid, hypo.target_1)
             rows.append({**base, "H": horizon,
                          **_net_row(mfe, mae, gross, hit, hypo.entry, atr,
-                                    horizon, cost)})
+                                    horizon, cost, bar_hours=bar_hours)})
     return pd.DataFrame(rows)
 
 
@@ -321,7 +326,8 @@ def control_pool(timeline: StructureTimeline, seg_lo: int, seg_hi: int,
 
 def measure_controls(df: pd.DataFrame, events: list, timeline: StructureTimeline,
                      event_rows: pd.DataFrame, cost: CostModel,
-                     seg_lo: int, seg_hi: int) -> pd.DataFrame:
+                     seg_lo: int, seg_hi: int, bar_hours: float = 1.0
+                     ) -> pd.DataFrame:
     """每事件 × 42 固定种子:同品种/同 regime/同方向/避事件窗口的随机入场。
 
     "避开事件窗口"(§9.1-5)的口径:**同机制**(event_id × direction)事件的
@@ -367,7 +373,7 @@ def measure_controls(df: pd.DataFrame, events: list, timeline: StructureTimeline
             mfe, mae, gross, _ = measure_path(o, h, l, c, entry_i, ev.H,
                                               ev.direction, None, None)
             r = _net_row(mfe, mae, gross, None, float(o[entry_i]), atr,
-                         ev.H, cost)
+                         ev.H, cost, bar_hours=bar_hours)
             mfes.append(r["mfe_atr"])
             maes.append(r["mae_atr"])
             grosses.append(r["gross_atr"])
