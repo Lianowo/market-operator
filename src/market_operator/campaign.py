@@ -489,7 +489,8 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     fill_after = (ts - (ts % MS_1H)) - MS_1H
     _submit_decisions(st, broker, decisions, ts, fill_after, ts,
                       {"mic": True, "cog_index": i}, counters, cap_skips,
-                      n_fill)
+                      n_fill,
+                      cancel_moment=ts + mic.trigger_tf_seconds * 1000)
 
 
 def _cog_index_of(frame: CampaignFrame, exec_ts: int) -> int:
@@ -551,27 +552,37 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
         entry_resting=broker.has_entry_limit(key))
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar
     _submit_decisions(st, broker, decisions, t, fill_after, fill_after, {},
-                      counters, cap_skips, n_fill)
+                      counters, cap_skips, n_fill,
+                      cancel_moment=t + f.tf_hours * MS_1H)
 
 
 def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       t: int, fill_after: int, expiry_base: int,
                       extra_meta: dict, counters: dict, cap_skips: list,
-                      n_fill: int) -> None:
+                      n_fill: int, cancel_moment: int) -> None:
     """路由决策 → 组合容量闸 → broker 提交(canonical 认知收盘与 v10 mic 触发
-    共用;t = 决策时刻标签;fill_after/expiry_base:挂单窗口锚点;extra_meta:
-    溯源附加 —— mic 路径带 {"mic": True, "cog_index": i})。"""
+    共用;t = 决策时刻标签(账本 decision_ts 口径,canonical 不变);
+    fill_after/expiry_base:挂单窗口锚点;extra_meta:溯源附加 —— mic 路径
+    带 {"mic": True, "cog_index": i};cancel_moment = 撤单因果护栏与撤单账
+    本行时标:决策的**收盘时刻**(认知路径 = 认知 bar 标签+TF,mic 路径 =
+    trigger 标签+step;任何 armed_at_ts ≥ 该时刻的挂单都是不可能的未来物)。
+
+    注:v10 之前撤单时标用认知标签 t,因 canonical 挂单 armed 只取认知标
+    签(< t)而恒成立;v10 mic 挂单合法以 trigger 标签武装(∈ [t, t+TF),
+    仍严格早于决策收盘时刻)⇒ 护栏/时标统一为收盘时刻,canonical 行为与
+    既有断言(fill>decision、撤单晚于武装)不变。
+    """
     key = st.frame.key
     for d in decisions:
         if d.kind == "cancel_entry":
             for od in broker.resting.get(key, ()):
-                if od.armed_at_ts >= t:
+                if od.armed_at_ts >= cancel_moment:
                     raise RuntimeError(
-                        f"E1 cancel ts {t} <= armed {od.armed_at_ts} "
-                        f"({key})")
+                        f"E1 cancel moment {cancel_moment} <= armed "
+                        f"{od.armed_at_ts} ({key})")
             counters["e1_priority_cancels"] += len(
                 broker.cancel_resting(
-                    key, t, reason_code="E1_PRIORITY",
+                    key, cancel_moment, reason_code="E1_PRIORITY",
                     detail=str(d.meta.get("reason"))))
             continue
         if d.kind not in ("market", "limit"):
