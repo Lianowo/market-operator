@@ -98,6 +98,9 @@ class CampaignFrame:
     = [认知 bar 索引 i, …](该执行细 bar 是这些认知 bar 的最末细 bar)。认知
     bar i 的执行路径区间 [t_i, t_i + TF) 恒为更细帧 bar 的真子序列(首/末
     不完整聚合桶如实,区间内无洞 —— 对齐断言)。
+
+    v10 增量(docs/v10-protocol.md §A,加性,默认 None ⇒ 逐位不变):mic =
+    trigger 帧认知缓存(trigger.MicCognition;事件知时细化层,可选挂载)。
     """
 
     key: str
@@ -110,10 +113,12 @@ class CampaignFrame:
     exec_labels: tuple                        # 升序全部执行标签
     close_edge: dict                          # 最末执行标签 → [认知 bar 索引]
     exec_index_of: dict                       # 认知 bar 索引 → 其区间细标签列表
+    mic: Optional[object] = None              # v10:MicCognition(可选)
 
 
 def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
-                         tf_label: str) -> CampaignFrame:
+                         tf_label: str,
+                         mic_cog: Optional[object] = None) -> CampaignFrame:
     """装配战役帧:认知 TF bar ⟷ 执行细 bar 对齐(硬约束,违即 raise)。
 
     认知 bar t 的执行区间 [t, t+TF) 必须由更细帧 bar 无洞组成:逐认知 bar
@@ -166,11 +171,21 @@ def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
                     f"{a} -> {b}")
         exec_index_of[i] = span
         close_edge.setdefault(span[-1], []).append(i)
+    if mic_cog is not None:
+        # v10 [§A-锚]:trigger 帧必须逐认知 bar 覆盖(prepare_mic_cognition
+        # 同名断言已保证;此处只对战役帧再钉一遍,违即 raise)
+        if len(mic_cog.bars) != len(mic_cog.cog_index_of):
+            raise AssertionError(f"{cog.symbol}@{tf_label} mic bars/index 错位")
+        have = set(mic_cog.cog_index_of)
+        missing = [i for i in range(len(cog.bars)) if i not in have]
+        if missing:
+            raise AssertionError(
+                f"{cog.symbol}@{tf_label} mic 缺认知 bar {missing[:4]}…")
     return CampaignFrame(
         key=campaign_key(cog.symbol, tf_label), symbol=cog.symbol,
         tf_label=tf_label, tf_hours=tf_hours, ms_exec=ms_exec, cog=cog,
         exec_bars=exec_bars, exec_labels=exec_labels, close_edge=close_edge,
-        exec_index_of=exec_index_of)
+        exec_index_of=exec_index_of, mic=mic_cog)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +245,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   maker_fee: Optional[float] = None,
                   router_params: Optional[V6Params] = None,
                   router_factory: Optional[type] = None,
+                  enable_mic: bool = False,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
     docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。
@@ -237,11 +253,23 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     v8 接插缝(非策略变更):`router_factory` = 可调用 (router_params) → 路由
     实例,默认 None ⇒ V6Router(行为逐位不变);v8 轮传入 V8Router
     (docs/v8-protocol.md,strategy_v8.py),执行/持仓/容量/账目层不变。
+
+    v10 接插缝(docs/v10-protocol.md §A;enable_mic=False ⇒ 逐位旧行为):
+    enable_mic=True 要求全部战役挂载 MicCognition;trigger 帧时间轴并入主
+    循环 —— mic 事件知时 = trigger bar 收盘、mic 市价 = 次一 trigger bar
+    开盘、mic 挂单自次一 trigger bar 可成交;认知收盘决策(bar 事件)、§8
+    收割、mark/费用/组合容量口径与粒度不变(纯增量:非 mic 订单的撮合时序
+    逐位照旧)。
     """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
     if not (0.0 < portfolio_cap_frac <= 1.0):
         raise ValueError("portfolio_cap_frac must be in (0, 1]")
+    if enable_mic:
+        for k, f in frames.items():
+            if f.mic is None:
+                raise RuntimeError(f"enable_mic 要求全部战役挂载 MicCognition;"
+                                   f"{k} 缺失 mic 帧")
 
     keys = sorted(frames)
     base_rp = router_params or V6Params()
@@ -280,75 +308,53 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 "limit_min_size_skips": 0,
                 "reduce_limits_armed": 0, "reduce_limit_fills": 0,
                 "reduce_timeout_taker": 0, "resting_canceled": 0,
-                "e1_priority_cancels": 0, "portfolio_cap_skips": 0}
+                "e1_priority_cancels": 0, "portfolio_cap_skips": 0,
+                "mic_go_events": 0}
 
     fine_ts = sorted({t for k in keys for t in frames[k].exec_labels})
+    exec_set = set(fine_ts)
+    if enable_mic:
+        # v10:trigger 帧时间轴并入(exec 网格 ⊂ trigger 网格;成交/决策全部
+        # 以"已收盘 bar"推进,无前馈 —— 测试钉死)
+        mic_index: dict = {}
+        for key in keys:
+            mic = frames[key].mic
+            mic_index[key] = {int(b[0]): a for a, b in enumerate(mic.bars)}
+        full_ts = sorted(exec_set | {t for key in keys for t in mic_index[key]})
+    else:
+        full_ts = fine_ts
 
-    for ts in fine_ts:
+    for ts in full_ts:
         for key in keys:                       # 同 ts 按 campaign key 字典序
             st = states[key]
             f = st.frame
             q = f.exec_bars.get(ts)
-            if q is None:
-                continue
-            sym = f.symbol
-            _ts, _o, _h, _l, c, _v = q
-            # ① 开盘撮合(认知决策 ⇒ 下一执行细 bar 开盘成交)
-            for row in broker.on_bar_open(key, ts, _o):
-                k = row["kind"]
-                if k == "OPEN":
-                    m = row["meta"]
-                    st.pos_mgr.open(sym, int(m["direction"]), row["price"],
-                                    float(m["invalid"]), m.get("target_1"),
-                                    str(m.get("event_id")), ts,
-                                    _cog_index_of(f, ts))
-                    counters["opens_filled"] += 1
-                elif k == "REDUCE":
-                    # TIMEOUT_TO_TAKER 市价转换(非 deferred 语义:pos_mgr 已
-                    # 在决策时按 §8.2 立即记账,此处仅同步 broker 侧 stop)
-                    if broker.position_of(key) is not None \
-                            and sym in st.pos_mgr.positions:
-                        broker.update_protective_invalid(
-                            key, st.pos_mgr.positions[sym].invalid)
-                elif k in ("EXIT", "LIQUIDATION"):
-                    st.pos_mgr.positions.pop(sym, None)
-                    counters["resting_canceled"] += len(broker.cancel_resting(
-                        key, ts, reason_code="POSITION_CLOSED",
-                        detail="position closed by EXIT/LIQUIDATION; resting "
-                               "limit canceled"))
-                elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
-                    counters["min_size_skips"] += 1
-            # ② 挂单处理(严格穿过成交;超时撤单/转市价)
-            for row in broker.on_15m_bar(key, ts, _o, _h, _l, c):
-                k = row["kind"]
-                if k == "LIMIT_FILL":
-                    if row["meta"].get("role") == "reduce":
-                        counters["reduce_limit_fills"] += 1
-                    else:
-                        counters["limit_fills_entry"] += 1
-                        m = row["meta"]
-                        st.pos_mgr.open(sym, int(m["direction"]), row["price"],
-                                        float(m["invalid"]), m.get("target_1"),
-                                        str(m.get("event_id")), ts,
-                                        _cog_index_of(f, ts))
-                elif k == "EXPIRED":
-                    counters["limit_expired"] += 1
-                elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
-                    counters["reduce_timeout_taker"] += 1
-                elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
-                    counters["min_size_skips"] += 1
-                    counters["limit_min_size_skips"] += 1
-            # ③ 持仓路径解决:同根因果序 ①先于② 结构性解决(同 v4 声明)
-            # ④ mark-to-market(执行细 bar 收盘;强平保护沿用,预期 0)
-            broker.mark(key, ts, c)
-            counters["liquidations"] = broker.n_liquidations
-            # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
-            for i in f.close_edge.get(ts, ()):
-                _cognition_step(st, broker, i, counters, cap_skips,
-                                seg_bounds[key], go_set, n_fill)
-        equity_rows.append((ts, broker.equity_mtm(), broker.cash,
-                            broker.unrealized(), broker.funding_accrued(),
-                            len(broker.positions)))
+            if q is not None:
+                sym = f.symbol
+                _ts, _o, _h, _l, c, _v = q
+                # ① 开盘撮合(认知决策 ⇒ 下一执行细 bar 开盘成交)
+                rows = broker.on_bar_open(key, ts, _o)
+                _apply_open_rows(st, broker, key, ts, rows, counters)
+                # ② 挂单处理(严格穿过成交;超时撤单/转市价)
+                rows = broker.on_15m_bar(key, ts, _o, _h, _l, c)
+                _apply_resting_rows(st, broker, key, ts, rows, counters)
+                # ③ 持仓路径解决:同根因果序 ①先于② 结构性解决(同 v4 声明)
+                # ④ mark-to-market(执行细 bar 收盘;强平保护沿用,预期 0)
+                broker.mark(key, ts, c)
+                counters["liquidations"] = broker.n_liquidations
+                # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
+                for i in f.close_edge.get(ts, ()):
+                    _cognition_step(st, broker, i, counters, cap_skips,
+                                    seg_bounds[key], go_set, n_fill)
+            if enable_mic:
+                a = mic_index[key].get(ts)
+                if a is not None:
+                    _mic_trigger_step(st, broker, a, ts, counters, cap_skips,
+                                      seg_bounds[key], go_set, n_fill)
+        if ts in exec_set:
+            equity_rows.append((ts, broker.equity_mtm(), broker.cash,
+                                broker.unrealized(), broker.funding_accrued(),
+                                len(broker.positions)))
 
     per_campaign: dict = {}
     for key in keys:
@@ -356,10 +362,24 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
         for k, v in states[key].router.counters.items():
             counters[k] = counters.get(k, 0) + v
     counters["campaigns"] = per_campaign
+    # v10:mic 决策决定时刻可晚至段末认知 bar 覆盖区间内(标签 > 末 bar 标签)
+    # ⇒ 段归属窗的上界延至末认知 bar 最末 trigger bar(只对 mic 回放;
+    # ts_lo/ts_hi 在 seg_bounds 内的 canonical 口径不变,对外存储不变)
+    attr_bounds = seg_bounds
+    if enable_mic:
+        attr_bounds = {}
+        for key in keys:
+            b = dict(seg_bounds[key])
+            if b["ts_hi"] is not None:
+                mic = frames[key].mic
+                b = {**b, "ts_hi": b["ts_hi"] + frames[key].tf_hours * MS_1H
+                     - mic.trigger_tf_seconds * 1000}
+            attr_bounds[key] = b
     res = BacktestResult(segment=segment, cost_multiplier=cost_multiplier,
                          equity0=equity0, ledger=list(broker.ledger),
                          equity_rows=equity_rows,
-                         trades=_reconstruct_trades_v6(broker.ledger, seg_bounds),
+                         trades=_reconstruct_trades_v6(broker.ledger,
+                                                       attr_bounds),
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()},
                          cap_skips=cap_skips,
@@ -368,6 +388,108 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                                           for k in keys})
     assert_fill_after_decision(res.ledger)
     return res
+
+
+def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
+                     rows: list, counters: dict) -> None:
+    """on_bar_open 账本行的战役侧处理(①;canonical 与 mic 触发共用)。"""
+    f = st.frame
+    sym = f.symbol
+    for row in rows:
+        k = row["kind"]
+        if k == "OPEN":
+            m = row["meta"]
+            st.pos_mgr.open(sym, int(m["direction"]), row["price"],
+                            float(m["invalid"]), m.get("target_1"),
+                            str(m.get("event_id")), ts,
+                            _cog_index_of(f, ts))
+            counters["opens_filled"] += 1
+        elif k == "REDUCE":
+            # TIMEOUT_TO_TAKER 市价转换(非 deferred 语义:pos_mgr 已在决策时
+            # 按 §8.2 立即记账,此处仅同步 broker 侧 stop)
+            if broker.position_of(key) is not None \
+                    and sym in st.pos_mgr.positions:
+                broker.update_protective_invalid(
+                    key, st.pos_mgr.positions[sym].invalid)
+        elif k in ("EXIT", "LIQUIDATION"):
+            st.pos_mgr.positions.pop(sym, None)
+            counters["resting_canceled"] += len(broker.cancel_resting(
+                key, ts, reason_code="POSITION_CLOSED",
+                detail="position closed by EXIT/LIQUIDATION; resting "
+                       "limit canceled"))
+        elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
+            counters["min_size_skips"] += 1
+
+
+def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
+                        rows: list, counters: dict) -> None:
+    """on_15m_bar 账本行的战役侧处理(②;canonical 与 mic 触发共用)。"""
+    f = st.frame
+    sym = f.symbol
+    for row in rows:
+        k = row["kind"]
+        if k == "LIMIT_FILL":
+            if row["meta"].get("role") == "reduce":
+                counters["reduce_limit_fills"] += 1
+            else:
+                counters["limit_fills_entry"] += 1
+                m = row["meta"]
+                st.pos_mgr.open(sym, int(m["direction"]), row["price"],
+                                float(m["invalid"]), m.get("target_1"),
+                                str(m.get("event_id")), ts,
+                                _cog_index_of(f, ts))
+        elif k == "EXPIRED":
+            counters["limit_expired"] += 1
+        elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
+            counters["reduce_timeout_taker"] += 1
+        elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
+            counters["min_size_skips"] += 1
+            counters["limit_min_size_skips"] += 1
+
+
+def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
+                      counters: dict, cap_skips: list, bounds: dict,
+                      go_set: frozenset, n_fill: int) -> None:
+    """v10 §A trigger bar 收盘推进:①' mic 市价撮合 → ②' mic 挂单 → mic 路由。
+
+    §8 收割/mark/费用计提不在此处(canonical 粒度不变);决策只在已收盘
+    trigger bar 上做出,成交严格在后(broker 行内断言)。
+    """
+    f = st.frame
+    key, sym = f.key, f.symbol
+    mic = f.mic
+    _ts, _o, _h, _l, c, _v = mic.bars[a]
+    # ①' mic 延迟单撮合(次一 trigger 开盘;执行帧处为 canonical ① 已兜底的
+    # no-op —— mic_only 只撮 meta["mic"] 单)
+    _apply_open_rows(st, broker, key, ts,
+                     broker.on_bar_open(key, ts, _o, mic_only=True), counters)
+    # ②' mic 挂单(自次一 trigger bar 可成交;非 mic 挂单不消耗窗口)
+    _apply_resting_rows(st, broker, key, ts,
+                        broker.on_15m_bar(key, ts, _o, _h, _l, c, mic_only=True),
+                        counters)
+    # ⑤' mic 路由(段内才启用 OPEN;白名单/闸门在 router 内部)
+    i = mic.cog_index_of[a]
+    lo, hi = bounds["lo"], bounds["hi"]
+    if not (lo <= i < hi):
+        return
+    new_events = mic.events_by.get(a)
+    if not new_events:
+        return
+    counters["go_events"] += sum(
+        1 for e in new_events if (e.id, e.direction) in go_set)
+    counters["mic_go_events"] += sum(
+        1 for e in new_events if (e.id, e.direction) in go_set)
+    decisions = st.router.on_bar(
+        sym, mic.bars[a], a, mic.views.get(a), mic.atrs[a], new_events,
+        position_open=broker.position_of(key) is not None,
+        entry_resting=broker.has_entry_limit(key))
+    # mic 挂单可成交窗口 = 本 trigger bar 之后任意更细 bar(小时桶口径与
+    # broker 窗口机制一致:fill_after = 本小时桶前一小时,即成交流程自次一
+    # trigger bar 起可成交);expiry = 决策时刻 + N_fill 墙钟小时(同 canonical)
+    fill_after = (ts - (ts % MS_1H)) - MS_1H
+    _submit_decisions(st, broker, decisions, ts, fill_after, ts,
+                      {"mic": True, "cog_index": i}, counters, cap_skips,
+                      n_fill)
 
 
 def _cog_index_of(frame: CampaignFrame, exec_ts: int) -> int:
@@ -428,13 +550,25 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
         position_open=broker.position_of(key) is not None,
         entry_resting=broker.has_entry_limit(key))
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar
+    _submit_decisions(st, broker, decisions, t, fill_after, fill_after, {},
+                      counters, cap_skips, n_fill)
+
+
+def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
+                      t: int, fill_after: int, expiry_base: int,
+                      extra_meta: dict, counters: dict, cap_skips: list,
+                      n_fill: int) -> None:
+    """路由决策 → 组合容量闸 → broker 提交(canonical 认知收盘与 v10 mic 触发
+    共用;t = 决策时刻标签;fill_after/expiry_base:挂单窗口锚点;extra_meta:
+    溯源附加 —— mic 路径带 {"mic": True, "cog_index": i})。"""
+    key = st.frame.key
     for d in decisions:
         if d.kind == "cancel_entry":
             for od in broker.resting.get(key, ()):
                 if od.armed_at_ts >= t:
                     raise RuntimeError(
                         f"E1 cancel ts {t} <= armed {od.armed_at_ts} "
-                        f"({key} bar {i})")
+                        f"({key})")
             counters["e1_priority_cancels"] += len(
                 broker.cancel_resting(
                     key, t, reason_code="E1_PRIORITY",
@@ -467,13 +601,13 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                       "regime": d.hyp.regime.value,
                       "r_mult": d.hyp.r_mult,
                       "route": d.route,
-                      **d.meta})
+                      **d.meta, **extra_meta})
         else:
             broker.submit_limit(RestingLimitOrder(
                 direction=int(d.hyp.direction),
                 limit_price=float(d.limit_price),
                 armed_at_ts=t,
-                expiry_ts=fill_after + int(n_fill) * MS_1H,
+                expiry_ts=expiry_base + int(n_fill) * MS_1H,
                 fill_after_ts=fill_after,
                 symbol=key, role="entry",
                 invalid=float(d.hyp.invalid),
@@ -483,7 +617,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                       "regime": d.hyp.regime.value,
                       "r_mult": d.hyp.r_mult,
                       "route": d.route,
-                      **d.meta}))
+                      **d.meta, **extra_meta}))
             counters["limits_armed"] += 1
 
 
