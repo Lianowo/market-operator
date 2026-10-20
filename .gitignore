@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 data/tape/
 reports/flow_study_events_*.csv
+runtime/
+logs/

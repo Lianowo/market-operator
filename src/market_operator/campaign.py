@@ -113,6 +113,15 @@ class ArmConfig:
     =True 时持仓侧启用夭折处置(半窗 MFE<0.3R / 连续≥3 根收盘全逆出仓,
     阈值协议写死 config/v19.json,数源 position.EARLY_HALF_MFE_R /
     EARLY_CONSEC_N;半窗基数 = time_cap_bars)。
+
+    v20 加性扩展(v20 收尾 S1/S2;全 False ⇒ 逐位旧行为):trail_arm_gate
+    =True 时持仓侧 S1 结构脉冲激活 trail(cont 家族 E1/E6/E7 + E4,trail
+    扶手只在 MFE≥1R 或新确认顺向 pivot 之后上线,Threshold 数源
+    position.S1_TRAIL_ARM_MFE_R / S1_FAMILY);harvest_fade_2leg=True 时持
+    仓侧 S2 fade 双格收割(缘前 25% 落袋 40% 仓、缘收剩 60%,数源
+    position.S2_LEVEL / S2_BANK_FRAC;与 harvest_ladder3 互斥,R4 死亡名
+    单不接线)。决策侧 S3/S4 不在本结构(在 lifecycle.V20Params,经
+    router_factory/router_params 注入)。
     """
 
     fill_model: str = "canonical"
@@ -127,6 +136,8 @@ class ArmConfig:
     cap_mfe_min: float = 0.5
     harvest_ladder3: bool = False
     early_exit: bool = False
+    trail_arm_gate: bool = False
+    harvest_fade_2leg: bool = False
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -358,6 +369,13 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     reason 桶标签 early_half_mfe/early_consec 路径)。v19 默认执行
     (fill_model="canonical" + stop_entry=False 的 arm)不退 _arm_route:
     决策全落 canonical 主路(market 提交),与 arm=None 数值逐位一致。
+
+    v20 加性钩(v20 收尾;全默认 ⇒ 逐位旧行为):arm.trail_arm_gate /
+    arm.harvest_fade_2leg 接通持仓侧 S1 扶手闸 / S2 双格收割(position.py);
+    S2 段/缘收计数 v20_s2_partial_banked / v20_s2_edge_collect(仅该路径
+    新增计数键);决策侧 S3(TRANSITION fade 事件层抑制)与 S4(E3 前缘限
+    价改单,落 canonical 限价主路 = E7 G3 同一通道)在 lifecycle.V20Router,
+    经 router_factory/router_params 注入,引擎零新增缝。
     """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -399,7 +417,12 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 harvest_ladder3=(arm.harvest_ladder3 if arm is not None
                                  else False),
                 # v19 夭折处置接线(arm=None ⇒ False,逐位旧行为)
-                early_exit=(arm.early_exit if arm is not None else False)),
+                early_exit=(arm.early_exit if arm is not None else False),
+                # v20 S1 扶手闸 / S2 双格收割接线(arm=None ⇒ False,逐位旧行为)
+                trail_arm_gate=(arm.trail_arm_gate if arm is not None
+                                else False),
+                harvest_fade_2leg=(arm.harvest_fade_2leg if arm is not None
+                                   else False)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -715,15 +738,20 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
         broker.update_protective_invalid(key, st.pos_mgr.positions[sym].invalid)
     for intent in mgmt:
         intent = _rekey(intent, key)
-        # v18 R4:三段收割段落 = REDUCE 市价(次一执行细 bar 开盘,不转
-        # maker 限价;机器可读桶标签前缀只在 harvest_ladder3 开启时出现)
+        # v18 R4 / v20 S2:分层收割段落 = REDUCE 市价(次一执行细 bar 开盘,
+        # 不转 maker 限价;机器可读桶标签前缀只在对应开关开启时出现)
         r4p = intent.kind is OrderKind.REDUCE and \
             intent.reason.startswith("v16|target_partial|")
         if r4p:
-            _lc(counters, "v18_r4_partial_banked")
+            _lc(counters, "v20_s2_partial_banked"
+                if intent.reason.startswith("v16|target_partial|S2|")
+                else "v18_r4_partial_banked")
         if intent.kind is OrderKind.EXIT and \
                 intent.reason.startswith("v16|target|R4|"):
             _lc(counters, "v18_r4_edge_collect")
+        if intent.kind is OrderKind.EXIT and \
+                intent.reason.startswith("v16|target|S2|"):
+            _lc(counters, "v20_s2_edge_collect")
         armed_r = (intent.kind is OrderKind.REDUCE and not r4p
                    and _arm_reduce_limit(broker, st, intent, t, n_fill))
         if armed_r:
