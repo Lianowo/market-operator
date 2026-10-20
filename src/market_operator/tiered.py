@@ -232,6 +232,17 @@ class V19Router(V6Router):
     def set_ctx18(self, ctx: Optional[dict]) -> None:
         self._ctx19 = ctx
 
+    # -- 前缘改单接插缝(v20 S4 重载;tiered 路径默认逐位旧行为) -----------------
+
+    def _front_edge_maker(self, tp: TieredParams, ev_id: str) -> bool:
+        """fade 前缘改单谓词(v19 maker 臂 = tp.fade_front_edge;v20 S4 对 E3
+        重载,见 lifecycle.V20Router)。默认逐位旧行为。"""
+        return bool(tp.fade_front_edge)
+
+    def _front_edge_label(self, ev_id: str) -> str:
+        """前缘改单溯源标签(v20 S4 E3 重载为 v20_e3_front_edge)。"""
+        return "v19_fade_front_edge"
+
     def on_bar(self, symbol: str, bar, bar_index: int, view, atr: float,
                new_events, *, position_open: bool, entry_resting: bool):
         decisions = super().on_bar(symbol, bar, bar_index, view, atr,
@@ -266,7 +277,7 @@ class V19Router(V6Router):
                     f"(attrs invalid 不在场;fail-closed,沿链)")
                 continue
             # maker 臂:fade ⇒ 前缘改单(计划限价 = zone 接近侧缘,同 v16)
-            if fade and tp.fade_front_edge:
+            if fade and self._front_edge_maker(tp, ev):
                 if "zone_lo" not in dn.meta or "zone_hi" not in dn.meta:
                     self._bump("v19_tier_reject_no_zone")
                     self._notes.append(
@@ -277,7 +288,7 @@ class V19Router(V6Router):
                                         float(dn.meta["zone_hi"]), d)
                 dn = replace(dn, kind="limit", limit_price=front,
                              meta={**dn.meta,
-                                   "limit_from": "v19_fade_front_edge"})
+                                   "limit_from": self._front_edge_label(ev)})
             entry_ref = (float(dn.limit_price) if dn.kind == "limit"
                          else float(dn.intent.ref_price))
             v = evaluate_tiered(

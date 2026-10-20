@@ -74,6 +74,31 @@ early_exit=False ⇒ 逐位旧行为,parity 钉死):
   桶标签 "v16|early_consec|"。
 - 全家族持仓同受(含 fade 收割模式);early_exit 要求 time_cap_bars(k_cap)
   在场(半窗基数),缺场 raise。
+
+v20 增量(v20 收尾 S1/S2,冻结 2026-10-20;加性开关,默认参数行为逐位
+不变,parity 钉死):
+- **S1 结构脉冲激活 trail**(trail_arm_gate=False ⇒ 逐位旧行为):扶手对
+  象 = cont 家族(E1/E6/E7)与 E4(trail_arm_family);该族持仓的 §8.3
+  trail 扶手只在 (a) MFE ≥ s1_mfe_r(1R,恰界 inclusive 上线)或 (b) 本
+  bar 出现新确认顺向 pivot(空=pivot high / 多=pivot low,即 §8.3 消费
+  的同一 pivot 类)之后才上线;未上线整段不裁决(扶手不收紧,破位
+  §8.1 / CHoCH §8.5 / 到目标收割照先行不受限);一旦上线恢复只紧不松
+  (§8.3 原文义,arm 一经 True 不回落,上线 bar 的新 pivot 即可用于收
+  紧,如实声明)。桶标签:§8.1 出场对扶手族改贴 "v16|trail_armed|"
+  (已上线)/ "v16|trail_pending|"(未上线),替换 trail/invalid 旧
+  贴(非扶手族与 fade 收割模式照旧);S1 只做扶手闸,不改 §8.1 谓词本
+  身。
+- **S2 fade 双格收割**(harvest_fade_2leg=False ⇒ 逐位 v16 收割行为):
+  fade 收割模式持仓的收割改**两格**:缘前 s2_level(25%,entry→target
+  行程)落袋 s2_bank_frac(40%)仓(以 OPEN 为 1.0,REDUCE 市价意图,次
+  一执行细 bar 开盘成交),到缘(EXIT)收净剩 60%(收割目标缘口径不
+  变);不是 R4 三段(层级兑现不回锅)。段序:25% 先于缘;同一 bar 同触
+  ⇒ 段序内同批(REDUCE → EXIT);bar 极值口径(h/l 恰触 inclusive,同
+  v16 收割 hit 口径);不睬中间 trail 与保本(invalid 不动,同收割模式铁
+  律);部分段桶标签 "v16|target_partial|S2|",缘收标签 "v16|target|S2|"
+  (出场桶沿用 v16 target)。目标方向不齐(d·(target−entry) ≤ 0)⇒ 退
+  回 v16 单段收割(同 R4 纪律);harvest_fade_2leg 与 harvest_ladder3 互
+  斥(同栈 raise ValueError;R4 死亡名单不接线,双栏只在 v20 S2 臂接)。
 """
 
 from __future__ import annotations
@@ -95,6 +120,11 @@ R4_PARTIAL_FRAC = 1.0 / 6.0   # 各段落袋半仓的 1/3 = 全仓 1/6(以 OPEN 
 # v19 夭折处置(协议 §3 写死;恰界 inclusive 持有,config/v19.json 硬对账)
 EARLY_HALF_MFE_R = 0.3   # 半窗(k_cap/2 后)MFE < 0.3R ⇒ 出
 EARLY_CONSEC_N = 3       # 连续 ≥3 根收盘全逆(认知帧,d·(c−o)<0)⇒ 出
+# v20 收尾 S1/S2(任务书写死;恰界 inclusive 触/上线,config/v20.json 硬对账)
+S1_TRAIL_ARM_MFE_R = 1.0          # S1:trail 上线 MFE 闸(恰 1R 上线)
+S1_FAMILY = ("E1", "E6", "E7", "E4")   # S1 扶手对象:cont 家族 + E4
+S2_LEVEL = 0.25                   # S2:缘前 25%(entry→target 行程,恰触 inclusive)
+S2_BANK_FRAC = 0.4                # S2:缘前 25% 落袋 40% 仓(缘收剩 60%)
 
 
 @dataclass
@@ -124,6 +154,8 @@ class Position:
     invalid0: Optional[float] = None  # v16:开仓时原始结构失效位(trail/invalid 分桶)
     r4_stage: int = 0              # v18 R4:已完成落袋段数(0/1/2;错峰段序)
     consec_adverse: int = 0        # v19:连续逆根计数(d·(c−o)<0;恰 0 复位)
+    trail_armed: bool = False      # v20 S1:trail 扶手已上线(一经 True 不回落)
+    s2_banked: bool = False        # v20 S2:缘前 25% 段已落袋
 
     @property
     def mfe_r(self) -> float:
@@ -153,7 +185,13 @@ class PositionManager:
                  harvest_ladder3: bool = False,
                  early_exit: bool = False,
                  early_half_mfe_r: float = EARLY_HALF_MFE_R,
-                 early_consec_n: int = EARLY_CONSEC_N) -> None:
+                 early_consec_n: int = EARLY_CONSEC_N,
+                 trail_arm_gate: bool = False,
+                 trail_arm_family: tuple = S1_FAMILY,
+                 trail_arm_mfe_r: float = S1_TRAIL_ARM_MFE_R,
+                 harvest_fade_2leg: bool = False,
+                 s2_level: float = S2_LEVEL,
+                 s2_bank_frac: float = S2_BANK_FRAC) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
@@ -173,6 +211,16 @@ class PositionManager:
                              "(半窗基数;协议 §3)")
         self._early_half_bars = (int(time_cap_bars) // 2
                                  if time_cap_bars is not None else None)
+        # v20 S1 扶手闸 / S2 双格收割(全默认关 ⇒ 逐位旧行为,parity 钉死)
+        self.trail_arm_gate = bool(trail_arm_gate)
+        self.trail_arm_family = tuple(trail_arm_family)
+        self.trail_arm_mfe_r = float(trail_arm_mfe_r)
+        self.harvest_fade_2leg = bool(harvest_fade_2leg)
+        self.s2_level = float(s2_level)
+        self.s2_bank_frac = float(s2_bank_frac)
+        if self.harvest_fade_2leg and self.harvest_ladder3:
+            raise ValueError("v20 S2 双格收割与 v18 R4 三段收割互斥"
+                             "(R4 死亡名单不接线;同栈即语义冲突)")
         self.positions: dict[str, Position] = {}
         self.last: list[str] = []            # 最近 on_bar 判定记录(解释性)
 
@@ -229,12 +277,15 @@ class PositionManager:
                 pos.consec_adverse = 0
 
         # 1. §8.1 破位退出(结构失效,收盘口径;v16:防线已收紧 ⇒ trail 桶,
-        #    防线未动 ⇒ invalid 原始结构失效桶)
+        #    防线未动 ⇒ invalid 原始结构失效桶;v20 S1:扶手族改贴
+        #    trail_armed/trail_pending —— 破位判定本身不受 S1 限)
         if (c > pos.invalid) if pos.direction < 0 else (c < pos.invalid):
             reason = (f"§8.1|invalidation close close={c:.8g} "
                       f"invalid={pos.invalid:.8g} exit all")
             if self._v16:
                 tag = "trail" if pos.invalid != pos.invalid0 else "invalid"
+                if self._s1_gated(pos):
+                    tag = "trail_armed" if pos.trail_armed else "trail_pending"
                 reason = f"v16|{tag}|" + reason
             return [self._exit(pos, ts, c, reason)]
 
@@ -254,7 +305,12 @@ class PositionManager:
         ladder_intents: list[OrderIntent] = []
         if pos.harvest and pos.target_1 is not None:
             delta = float(pos.target_1) - float(pos.entry)
-            if self.harvest_ladder3 and pos.direction * delta > 0.0:
+            # v20 S2 双格收割(缘前 25% 落袋 40%,缘收剩 60%;与 R4 互斥)
+            if self.harvest_fade_2leg and pos.direction * delta > 0.0:
+                ladder_intents = self._s2_ladder(pos, ts, c, h, l)
+                if ladder_intents and ladder_intents[-1].kind is OrderKind.EXIT:
+                    return ladder_intents
+            elif self.harvest_ladder3 and pos.direction * delta > 0.0:
                 ladder_intents = self._r4_ladder(pos, ts, c, h, l)
                 if ladder_intents and ladder_intents[-1].kind is OrderKind.EXIT:
                     return ladder_intents
@@ -282,8 +338,25 @@ class PositionManager:
 
         # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松);
         #    v16 fade 收割模式禁用 trail(协议持仓第 4 条:trail 只对续涨保留)
+        #    v20 S1:扶手族(E1/E6/E7/E4)trail 扶手只在 (a) MFE≥1R 或 (b) 本
+        #    bar 新确认顺向 pivot 之后上线;未上线整段不裁决(扶手不收紧,
+        #    破位/CHoCH/到目标照先行);一经上线恢复只紧不松
         if not pos.harvest:
-            self._trail(pos, new_pivots, atr)
+            gated = self._s1_gated(pos)
+            if gated and not pos.trail_armed:
+                arm_mfe = pos.mfe_r >= self.trail_arm_mfe_r     # 恰 1R 上线
+                arm_pv = any(
+                    (pos.direction < 0 and pv.kind is PivotKind.HIGH)
+                    or (pos.direction > 0 and pv.kind is PivotKind.LOW)
+                    for pv in new_pivots)
+                if arm_mfe or arm_pv:
+                    pos.trail_armed = True
+                    pos.log.append(
+                        f"v20 S1|trail_armed mfe={pos.mfe_r:.4g}R "
+                        f"(cond:{'mfe' if arm_mfe else 'pivot'};扶手上线,"
+                        "一经上线只紧不松)")
+            if not gated or pos.trail_armed:
+                self._trail(pos, new_pivots, atr)
 
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
         if self.allow_add and not pos.added and not pos.pending_add:
@@ -475,6 +548,52 @@ class PositionManager:
                 f"v16|target|R4|缘起收净 target={pos.target_1:.8g} "
                 f"extreme={extreme:.8g} exit 剩余全部(三段收割:缘口径不"
                 f"变,已落袋至段 {pos.r4_stage})"))
+        return out
+
+    def _s1_gated(self, pos: Position) -> bool:
+        """v20 S1 扶手对象判定:扶手闸开 ∧ 持仓事件 ∈ 扶手族(cont+E4)。"""
+        return self.trail_arm_gate and str(pos.event_id) in self.trail_arm_family
+
+    def _s2_ladder(self, pos: Position, ts: object, c: float, h: float,
+                   l: float) -> list[OrderIntent]:
+        """v20 S2 双格收割(任务书 §S2;调用前提:harvest ∧ target 方向一致)。
+
+        缘前 s2_level(25%)落袋 s2_bank_frac(40%)仓(以 OPEN 为 1.0;同
+        一根 bar 段与缘同触 ⇒ 段序内同批 REDUCE → EXIT),到缘 EXIT 收净剩
+        60%(缘口径不变);不睬中间 trail/保本(invalid 不动,不调 _reduce/
+        §8.2 路径)。返回意图列表(可能空);若末位为 EXIT ⇒ 持仓已清(调
+        用方直接 return)。
+        """
+        d = pos.direction
+        delta = float(pos.target_1) - float(pos.entry)
+        out: list[OrderIntent] = []
+        if not pos.s2_banked:
+            lvl = float(pos.entry) + self.s2_level * delta
+            touched = (l <= lvl) if d < 0 else (h >= lvl)
+            if touched:
+                pos.s2_banked = True
+                qty = min(self.s2_bank_frac, pos.size_frac)
+                pos.size_frac -= qty
+                reason = (f"v16|target_partial|S2|缘前 "
+                          f"{int(round(self.s2_level * 100))}% 落袋 "
+                          f"{self.s2_bank_frac:.0%} 仓 level={lvl:.8g} "
+                          f"target={pos.target_1:.8g} "
+                          f"size_frac→{pos.size_frac:.8f}(双格收割,"
+                          f"无 trail 无保本)")
+                self.last.append(reason)
+                out.append(OrderIntent(kind=OrderKind.REDUCE,
+                                       symbol=pos.symbol, qty_frac=qty,
+                                       reason=reason, ref_price=float(c),
+                                       ts=ts))
+        hit = (l <= pos.target_1) if d < 0 else (h >= pos.target_1)
+        if hit:
+            extreme = l if d < 0 else h
+            out.append(self._exit(
+                pos, ts, c,
+                f"v16|target|S2|缘收剩 {1.0 - self.s2_bank_frac:.0%} 仓 "
+                f"target={pos.target_1:.8g} extreme={extreme:.8g} "
+                f"exit 剩余全部(双格收割:缘口径不变,25% 段落袋="
+                f"{'已' if pos.s2_banked else '未'})"))
         return out
 
     def _trail(self, pos: Position, new_pivots: Sequence[Pivot],
