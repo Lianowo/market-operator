@@ -250,6 +250,18 @@ class RestingLimitOrder:
     reduce_qty: Optional[float] = None
     qty_frac_snap: Optional[float] = None
     wait_bars: int = 0             # 已度过的可成交 15m bar 数
+    # v14 增量(docs/v14-protocol.md C2/C3,加性,默认值 ⇒ 逐位旧行为):
+    # fill_model="exchange" 即现有真挂单口径(严格穿过、maker 费);
+    # "virtual"=代码内虚拟挂单:可成交窗口内价达(含持平)即触发,按次一执行
+    # 细 bar 开盘 taker+滑点成交(保证成交、守序差一档 —— 真挂单于穿过时刻
+    # 限价成交,虚拟单晚一档及其后漂移如实承担);
+    # is_stop=True 为 C3 续涨 stop-entry 预埋:窗口内严格穿过触发(穿过即),
+    # 次一执行细 bar 开盘 taker+滑点成交,超时作废(EXPIRED,漏单如实统计);
+    # ladder_group 非 None 为 C4 分层组号:同组后续份在同战役持仓上按 maker
+    # 限价合并加仓(加权均价、同 trade_id、份间风险份额=size_mult 口径)。
+    fill_model: str = "exchange"
+    is_stop: bool = False
+    ladder_group: Optional[str] = None
 
 
 @dataclass
@@ -266,6 +278,7 @@ class _AcctPosition:
     funding_acc: float = 0.0   # 已计提未结算资金费(正数 = 成本)
     last_funding_ts: int = 0   # 上次计提时刻
     invalid: Optional[float] = None  # 当前结构失效位置;组合风险预算的真实输入
+    ladder_group: Optional[str] = None  # v14 C4 分层组号(见 RestingLimitOrder)
 
 
 class Broker:
@@ -369,6 +382,26 @@ class Broker:
                 kept.append(od)                       # 决策 bar 覆盖区间,不可成交
                 continue
             od.wait_bars += 1
+            if od.is_stop:
+                # v14 C3 stop-entry:严格穿过触发(穿过即;持平不触发,同既有
+                # 保守口径),触发后转次一执行细 bar 开盘 taker 成交
+                trig = (h > od.limit_price) if od.direction > 0 \
+                    else (l < od.limit_price)
+            elif od.fill_model == "virtual":
+                # v14 C2 虚拟挂单:价达(含持平)触发,次细 bar 开盘 taker 成交
+                trig = (l <= od.limit_price) if od.direction > 0 \
+                    else (h >= od.limit_price)
+            else:
+                trig = None
+            if trig is not None:
+                if trig:
+                    if int(ts) <= od.armed_at_ts:     # 因果硬断言(同 limit fill)
+                        raise AssertionError(
+                            f"trigger ts {ts} <= armed_at_ts {od.armed_at_ts}")
+                    rows.append(self._trigger_to_pending(od, int(ts)))
+                    continue
+                kept.append(od)
+                continue
             cross = (h > od.limit_price) if od.direction < 0 \
                 else (l < od.limit_price)
             if not cross:                             # 严格穿过;持平不成交
@@ -412,9 +445,39 @@ class Broker:
                                       f"within N_fill 1h bars ({od.wait_bars} 15m "
                                       f"bars waited); no trade")
 
+    def _trigger_to_pending(self, od: RestingLimitOrder, ts: int) -> dict:
+        """v14 触发单(virtual 价达 / stop-entry 穿过)→ 次一执行细 bar 开盘
+        taker 成交。
+
+        触发即把挂单转正为待成交 OPEN(决策 ts = 触发的执行细 bar 标签,恒
+        < 成交 bar,on_bar_open 行内断言);sizing/失效校验与市价 OPEN 同路
+        (taker 费 + 滑点,"费用=taker+滑点"的协议口径)。本行只记账本事实
+        (kind=TRIGGER,无成交、无费用;成交由 _fill_open 在下一细 bar 写)。
+        """
+        mode = "stop_entry" if od.is_stop else "virtual_limit"
+        intent = OrderIntent(
+            kind=OrderKind.OPEN, symbol=od.symbol, qty_frac=None,
+            reason=(f"{'STOP_TRIGGER' if od.is_stop else 'VIRTUAL_TRIGGER'}|"
+                    f"{mode} {od.limit_price:.8g} triggered at fine bar "
+                    f"(armed {od.armed_at_ts}, waited {od.wait_bars}); "
+                    f"taker market at next fine open"),
+            ref_price=od.limit_price, ts=ts)
+        self.pending.setdefault(od.symbol, []).append(_Pending(
+            intent=intent, decision_ts=int(ts), direction=od.direction,
+            invalid=od.invalid, target_1=od.target_1, event_id=od.event_id,
+            meta={**od.meta, "entry_mode": mode,
+                  "limit_price": od.limit_price, "fill_wait_bars": od.wait_bars,
+                  "trigger_ts": int(ts), "armed_at_ts": int(od.armed_at_ts),
+                  "ladder_group": od.ladder_group}))
+        return self._admin_row(
+            od, ts, kind="TRIGGER",
+            reason_code=("STOP_TRIGGER" if od.is_stop else "VIRTUAL_TRIGGER"),
+            detail=f"{mode} {od.limit_price:.8g} triggered "
+                   f"({od.wait_bars} fine bars waited); fill at next fine open")
+
     def _admin_row(self, od: RestingLimitOrder, ts: int, *, kind: str,
                    reason_code: str, detail: str) -> dict:
-        """EXPIRED/CANCEL 账本行(无成交;fee/pnl 全 0;ts > armed 由
+        """EXPIRED/CANCEL/TRIGGER 账本行(无成交;fee/pnl 全 0;ts > armed 由
         on_15m_bar 窗口保证,cancel_resting 由调用方保证)。"""
         if ts <= od.armed_at_ts:
             raise AssertionError(
@@ -429,7 +492,9 @@ class Broker:
             "cash_after": self.cash,
             "meta": {**od.meta, "limit_price": od.limit_price, "role": od.role,
                      "fill_wait_bars": od.wait_bars,
-                     "expiry_ts": od.expiry_ts},
+                     "expiry_ts": od.expiry_ts,
+                     **({"ladder_group": od.ladder_group}
+                        if od.ladder_group is not None else {})},
         }
         self.ledger.append(row)
         return row
@@ -482,6 +547,11 @@ class Broker:
         price = od.limit_price
         ref = {"armed_at_ts": od.armed_at_ts, "intent_reason": od.reason}
         if sym in self.positions:
+            pos_cur = self.positions[sym]
+            if od.ladder_group is not None \
+                    and pos_cur.ladder_group == od.ladder_group \
+                    and pos_cur.direction == d:
+                return self._fill_ladder_add(od, pos_cur, ts)
             return self._limit_skip(od, ts, "DUP_POSITION",
                                     f"position already open for {sym}", ref)
         if d * (price - od.invalid) <= 0.0:
@@ -490,7 +560,9 @@ class Broker:
                                     f"invalid={od.invalid}", ref)
         equity = self.equity_mtm()
         risk_per_unit = abs(price - od.invalid)
-        qty_risk = self.risk_frac * equity / risk_per_unit
+        # v14 C5/C4:size_mult(quality tier × 1/切份数;缺省 1.0 ⇒ 逐位旧口径)
+        size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
+        qty_risk = self.risk_frac * size_mult * equity / risk_per_unit
         qty_cap = self._available_entry_notional(equity) / price
         qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
         qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
@@ -507,14 +579,17 @@ class Broker:
         trade_id = f"{sym}#{self._seq}"
         pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
                             entry=price, trade_id=trade_id, opened_ts=ts,
-                            last_funding_ts=ts, invalid=float(od.invalid))
+                            last_funding_ts=ts, invalid=float(od.invalid),
+                            ladder_group=od.ladder_group)
         self.positions[sym] = pos
         self.last_mark[sym] = price
         meta = dict(od.meta)
         meta.update({"invalid": od.invalid, "target_1": od.target_1,
                      "event_id": od.event_id, "risk_usdt": qty * risk_per_unit,
                      "entry_mode": "limit", "limit_price": od.limit_price,
-                     "fill_wait_bars": od.wait_bars})
+                     "fill_wait_bars": od.wait_bars,
+                     **({"ladder_group": od.ladder_group}
+                        if od.ladder_group is not None else {})})
         row = {
             "seq": self._next_seq_row(), "ts": int(ts), "symbol": sym,
             "side": side, "kind": "LIMIT_FILL", "qty": qty, "price": price,
@@ -523,6 +598,61 @@ class Broker:
             "reason_code": od.reason.split("|", 1)[0] if od.reason else "G3",
             "reason": od.reason, "trade_id": trade_id,
             "used_leverage": notional / equity, "slippage_cost": 0.0,
+            "cash_after": self.cash, "meta": meta,
+        }
+        self.ledger.append(row)
+        return row
+
+    def _fill_ladder_add(self, od: RestingLimitOrder, pos: _AcctPosition,
+                         ts: int) -> dict:
+        """v14 C4 分层合并加仓:同组后续份在同战役持仓上按 maker 限价并入。
+
+        加权均价入账、同 trade_id(一笔交易)、invalid 不变(只收紧闸门不
+        在此触发);sizing 同 _fill_open_limit(risk_frac×size_mult 份额,
+        组合钳制不动);账本 LIMIT_FILL(role=entry,ladder_add=True)。
+        """
+        sym = od.symbol
+        spec = self.contracts[sym]
+        d = od.direction
+        price = od.limit_price
+        ref = {"armed_at_ts": od.armed_at_ts, "intent_reason": od.reason}
+        if d * (price - pos.invalid) <= 0.0:
+            return self._limit_skip(od, ts, "BAD_INVALID",
+                                    f"ladder add {price} not protective vs "
+                                    f"invalid={pos.invalid}", ref)
+        equity = self.equity_mtm()
+        risk_per_unit = abs(price - pos.invalid)
+        size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
+        qty_risk = self.risk_frac * size_mult * equity / risk_per_unit
+        qty_cap = self._available_entry_notional(equity) / price
+        qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
+        qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
+                          spec.size_step, spec.size_place)
+        if qty < spec.size_min or qty * price < spec.min_trade_usdt:
+            return self._limit_skip(
+                od, ts, "MIN_SIZE",
+                f"ladder add qty={qty} < size_min={spec.size_min} "
+                f"(limit fill)", ref)
+        fee = qty * price * self.maker_fee
+        self.cash -= fee
+        pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
+        pos.qty += qty
+        self.last_mark[sym] = price
+        meta = dict(od.meta)
+        meta.update({"invalid": pos.invalid, "target_1": od.target_1,
+                     "event_id": od.event_id, "risk_usdt": qty * risk_per_unit,
+                     "entry_mode": "limit", "limit_price": od.limit_price,
+                     "fill_wait_bars": od.wait_bars, "role": "entry",
+                     "ladder_add": True, "ladder_group": od.ladder_group})
+        row = {
+            "seq": self._next_seq_row(), "ts": int(ts), "symbol": sym,
+            "side": "buy" if d > 0 else "sell", "kind": "LIMIT_FILL",
+            "qty": qty, "price": price, "open_price": None, "fee": fee,
+            "funding_delta": 0.0, "realized_pnl": 0.0,
+            "decision_ts": int(od.armed_at_ts),
+            "reason_code": od.reason.split("|", 1)[0] if od.reason else "G3",
+            "reason": od.reason, "trade_id": pos.trade_id,
+            "used_leverage": qty * price / equity, "slippage_cost": 0.0,
             "cash_after": self.cash, "meta": meta,
         }
         self.ledger.append(row)
@@ -650,7 +780,9 @@ class Broker:
 
         equity = self.equity_mtm()
         risk_per_unit = abs(price - po.invalid)
-        qty_risk = self.risk_frac * equity / risk_per_unit
+        # v14 C5:size_mult(quality tier;缺省 1.0 ⇒ 逐位旧口径)
+        size_mult = float(po.meta.get("size_mult", 1.0) or 1.0)
+        qty_risk = self.risk_frac * size_mult * equity / risk_per_unit
         qty_cap = self._available_entry_notional(equity) / price
         qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
         qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
@@ -669,7 +801,8 @@ class Broker:
         trade_id = f"{sym}#{self._seq}"
         pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
                             entry=price, trade_id=trade_id, opened_ts=ts,
-                            last_funding_ts=ts, invalid=float(po.invalid))
+                            last_funding_ts=ts, invalid=float(po.invalid),
+                            ladder_group=po.meta.get("ladder_group"))
         self.positions[sym] = pos
         self.last_mark[sym] = price
         meta = dict(po.meta)
