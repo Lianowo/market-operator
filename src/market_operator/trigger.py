@@ -54,6 +54,15 @@ E6 破坏 A9 / E7 回踩拒绝翻转 §4.2)允许在 trigger_tf 收盘上先满�
 
 MicCognition = 单 campaign 的 trigger 帧认知缓存;prepare_mic_cognition
 为其唯一构建入口(脚本与测试共用,口径同源)。
+
+v13 增量(docs/v13-protocol.md,冻结 2026-10-20,加性,上述 v10 语义逐位
+不变):级联触发尺度 —— trigger_tf 不再是单一全局档(900),而按战役认知
+帧映射(TRIGGER_TF_MAP,用户指令 1h→15m/2h→30m/4h→1h/12h→2h/1d→4h,
+research-log #26 预注册);协议 §1"触发帧 = obs_tf/4(不支持则取最近的现
+有帧,声明)" ⇒ 12h/1d 的 obs/4(3h/6h)无现帧,按指令取 2h/4h 并在报告
+如实声明。resolve_trigger_tf 为映射解析的唯一实现;MicTracker /
+prepare_mic_cognition 本体对任意 trigger_tf 已通用(数量闸门
+N_a_mic/N_f_mic = N×scale,scale = obs/trigger 派生),不新增任何先验。
 """
 
 from __future__ import annotations
@@ -68,6 +77,48 @@ from .hypothesis import StructureView
 from .structure import (
     Params, PivotKind, Regime, Zone, ZoneRole, ZoneState,
 )
+
+# ---------------------------------------------------------------------------
+# v13 级联触发尺度映射(docs/v13-protocol.md;12h→2h、1d→4h 为协议 §1
+# "obs/4 不支持则取最近现有帧"的落地:3h/6h 无现帧 ⇒ 2h/4h,脚本如实声明)
+# ---------------------------------------------------------------------------
+
+TRIGGER_TF_MAP: dict = {3600: 900, 7200: 1800, 14400: 3600,
+                        43200: 7200, 86400: 14400}
+
+
+def resolve_trigger_tf(obs_tf_seconds: int, *, tf_map: dict = None,
+                       available: tuple = (900, 1800, 3600, 7200, 14400)
+                       ) -> tuple:
+    """obs_tf → trigger_tf 解析(v13 级联;返回值与声明由脚本/报告如实采用)。
+
+    返回 (trigger_tf_seconds, declaration):
+    - 映射命中且帧可用:declaration = None(精确档);
+    - 映射缺失或映射帧不可用:取"严格小于 obs 且整除 obs"的可用帧中与目标
+      (映射值,无映射则 obs//4)对数距离最近者(并列取更粗 —— 保守,提前
+      量更小),declaration = 如实声明字符串;无候选 ⇒ raise(该认知帧无法
+      承载 mic 语义,不得静默退回 bar)。
+    数量闸门 scale = obs // trigger 由 prepare_mic_cognition 派生。
+    """
+    obs = int(obs_tf_seconds)
+    tf_map = TRIGGER_TF_MAP if tf_map is None else {int(k): int(v) for k, v
+                                                    in dict(tf_map).items()}
+    avail = tuple(sorted(int(a) for a in available))
+    target = tf_map.get(obs, obs // 4)
+    if obs in tf_map and tf_map[obs] in avail and obs % tf_map[obs] == 0:
+        return tf_map[obs], None
+    cands = [a for a in avail if a < obs and obs % a == 0]
+    if not cands:
+        raise RuntimeError(f"obs_tf {obs}s 无可用 trigger 帧(候选需整除且小于 "
+                           f"obs;available={avail})")
+    import math
+    def _dist(f):
+        d = abs(math.log2(f / target)) if target > 0 else float("inf")
+        return (d, -f)                          # 并列取更粗(f 大者)
+    best = min(cands, key=_dist)
+    why = ("映射帧不可用" if obs in tf_map else "映射缺失")
+    return best, (f"obs_tf={obs}s {why}(目标 {target}s),取最近可用 "
+                  f"{best}s(scale={obs // best};协议 §1 声明)")
 
 # ---------------------------------------------------------------------------
 # 追踪状态(mic 层私有;认知层对象只读)
@@ -694,4 +745,5 @@ def prepare_mic_cognition(df_cog, df_trig, params: Params, symbol: str, *,
 
 __all__ = [
     "MicCognition", "MicTracker", "prepare_mic_cognition",
+    "TRIGGER_TF_MAP", "resolve_trigger_tf",
 ]
