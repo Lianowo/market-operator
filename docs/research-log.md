@@ -291,3 +291,9 @@
 29. **2026-10-20 v15 预注册(先于任何 v15 运行)**
     - `docs/v15-protocol.md`:四件套合成(v14 裁决存活件:位置带沿/maker 真挂单/stop-entry/
       canonical 其余不变);dev 主评+test 一次(第 18 次曝光)。
+
+30. **2026-10-20 v16 预注册(先于任何 v16 运行)**
+    - `docs/v16-protocol.md`:入场三闸(位置/空间/F1) + 家族执行差分
+      (fade=maker 限价,续涨=stop-entry) + 一生一表收割(结构目标 fade+CHoCH+
+      trailing 只紧+时间帽 48×TF或 MFE<0.5R 才出);test 第 19 次曝光;
+      级联/虚拟/分层/打包五问正式死亡。
