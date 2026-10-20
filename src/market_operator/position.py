@@ -80,14 +80,15 @@ v20 增量(v20 收尾 S1/S2,冻结 2026-10-20;加性开关,默认参数行为逐
 - **S1 结构脉冲激活 trail**(trail_arm_gate=False ⇒ 逐位旧行为):扶手对
   象 = cont 家族(E1/E6/E7)与 E4(trail_arm_family);该族持仓的 §8.3
   trail 扶手只在 (a) MFE ≥ s1_mfe_r(1R,恰界 inclusive 上线)或 (b) 本
-  bar 出现新确认顺向 pivot(空=pivot high / 多=pivot low,即 §8.3 消费
-  的同一 pivot 类)之后才上线;未上线整段不裁决(扶手不收紧,破位
-  §8.1 / CHoCH §8.5 / 到目标收割照先行不受限);一旦上线恢复只紧不松
-  (§8.3 原文义,arm 一经 True 不回落,上线 bar 的新 pivot 即可用于收
-  紧,如实声明)。桶标签:§8.1 出场对扶手族改贴 "v16|trail_armed|"
-  (已上线)/ "v16|trail_pending|"(未上线),替换 trail/invalid 旧
-  贴(非扶手族与 fade 收割模式照旧);S1 只做扶手闸,不改 §8.1 谓词本
-  身。
+  bar 出现新确认**顺向** pivot(多=pivot high 新高 / 空=pivot low 新
+  低 —— 脉冲向结构确认,与 §8.3 收紧消费的**逆向** pivot 互补;若与
+  §8.3 同种则条件 (b) 恒与基线同步,闸退化为 no-op,实证钉死)之后才
+  上线;未上线整段不裁决(扶手不收紧,破位 §8.1 / CHoCH §8.5 / 到目
+  标收割照先行不受限);一旦上线恢复只紧不松(§8.3 原文义,arm 一经
+  True 不回落,上线 bar 后首个逆向 pivot 起收紧,如实声明)。桶标签:
+  §8.1 出场对扶手族改贴 "v16|trail_armed|"(已上线)/ "v16|
+  trail_pending|"(未上线),替换 trail/invalid 旧贴(非扶手族与 fade
+  收割模式照旧);S1 只做扶手闸,不改 §8.1 谓词本身。
 - **S2 fade 双格收割**(harvest_fade_2leg=False ⇒ 逐位 v16 收割行为):
   fade 收割模式持仓的收割改**两格**:缘前 s2_level(25%,entry→target
   行程)落袋 s2_bank_frac(40%)仓(以 OPEN 为 1.0,REDUCE 市价意图,次
@@ -339,15 +340,17 @@ class PositionManager:
         # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松);
         #    v16 fade 收割模式禁用 trail(协议持仓第 4 条:trail 只对续涨保留)
         #    v20 S1:扶手族(E1/E6/E7/E4)trail 扶手只在 (a) MFE≥1R 或 (b) 本
-        #    bar 新确认顺向 pivot 之后上线;未上线整段不裁决(扶手不收紧,
-        #    破位/CHoCH/到目标照先行);一经上线恢复只紧不松
+        #    bar 新确认顺向 pivot(多=pivot high 新高 / 空=pivot low 新低 ——
+        #    脉冲向结构确认,与 §8.3 收紧消费的逆向 pivot 互补)之后上线;未
+        #    上线 §8.3 整段不裁决(扶手不收紧,破位/CHoCH/到目标照先行);
+        #    一经上线恢复只紧不松
         if not pos.harvest:
             gated = self._s1_gated(pos)
             if gated and not pos.trail_armed:
                 arm_mfe = pos.mfe_r >= self.trail_arm_mfe_r     # 恰 1R 上线
                 arm_pv = any(
-                    (pos.direction < 0 and pv.kind is PivotKind.HIGH)
-                    or (pos.direction > 0 and pv.kind is PivotKind.LOW)
+                    (pos.direction > 0 and pv.kind is PivotKind.HIGH)
+                    or (pos.direction < 0 and pv.kind is PivotKind.LOW)
                     for pv in new_pivots)
                 if arm_mfe or arm_pv:
                     pos.trail_armed = True

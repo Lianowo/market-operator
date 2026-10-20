@@ -7,10 +7,12 @@ S1 激活前后边界/break 类退出不受限/只紧不松与桶标签、S2 份
 - config/v20.json parent=v19 硬对账 + 臂开关矩阵 + v20_params 冻结阈值与
   position 模块常量同值 + arm-T 构建 == v19 arm-T 构建逐项同值 + arm-C 锚
   探针 == v17 arm-C 构建逐项同值;
-- S1:恰 1R inclusive 上线/不足不上线;新确认顺向 pivot 上线(空=HIGH/
-  多=LOW,非同类不激活);未上线扶手不收紧而破位/CHoCH/到目标不受限;
-  上线后只紧不松;桶标签 trail_armed/trail_pending 只换扶手族,E5 与收割
-  模式照旧;gate 关逐位旧行为;
+- S1:恰 1R inclusive 上线/不足不上线;新确认顺向 pivot 上线(多=pivot
+  high 新高/空=pivot low 新低 —— 脉冲向结构确认,与 §8.3 收紧消费的逆
+  向 pivot 互补;同种则闸退化 no-op,已实证钉死);逆向 pivot 未上线不
+  收紧(基线会收紧,S1 留存原 invalid);未上线破位/CHoCH/到目标不受
+  限;上线后只紧不松;桶标签 trail_armed/trail_pending 只换扶手族,E5
+  与收割模式照旧;gate 关逐位旧行为;
 - S2:缘前 25% 恰触 inclusive 落袋 40%、缘收剩 60%(0.4+0.6 对账);同一
   bar 段缘同触 REDUCE 先于 EXIT;目标方向不齐退回 v16 单段;与 R4 互斥
   raise;关 ⇒ 逐位 v16 单段;
@@ -279,20 +281,36 @@ def _pvh(price):
                   kind=PivotKind.HIGH)]
 
 
-def test_v20_s1_pending_withheld_then_arm_by_pivot():
+def test_v20_s1_pending_withheld_then_arm_by_impulse_pivot():
     pm = _pm_s1(True)
     pos = pm.open("X", +1, 100.0, 95.0, None, "E1", 0, 0)     # risk 5
     # 前:无 pivot 也无 MFE ⇒ 扶手未上线,invalid 不动
     pm.on_bar("X", (1000, 100.0, 102.0, 99.0, 101.0, 1.0), ATR)
     assert pos.invalid == 95.0 and not pos.trail_armed
-    # 非同新确认 pivot(多仓=HIGH ⇒ 非顺向确认)⇒ 不激活不收紧
-    pm.on_bar("X", (2000, 101.0, 103.0, 99.5, 100.5, 1.0), ATR, _pvh(101.0))
+    # 逆向 pivot(多仓=LOW 97):基线会收紧至 96.8,S1 未上线 ⇒ 不收紧不激活
+    pm.on_bar("X", (2000, 101.0, 101.5, 98.0, 100.5, 1.0), ATR, _pvl(97.0))
     assert pos.invalid == 95.0 and not pos.trail_armed
-    # 新确认顺向 pivot LOW 97 ⇒ 上线(未达 1R),同 bar 即可只紧不松
-    pm.on_bar("X", (3000, 100.5, 101.5, 98.0, 100.0, 1.0), ATR, _pvl(97.0))
-    assert pos.trail_armed
-    assert pos.invalid == pytest.approx(97.0 - 0.1 * ATR)
+    assert not any("§8.3" in str(l) for l in pos.log), "扶手未上线 §8.3 不裁决"
+    # 新确认顺向 pivot(多仓=pivot HIGH 新高)⇒ 上线(未达 1R);本 bar 无逆向
+    # pivot 故 invalid 尚不动
+    pm.on_bar("X", (3000, 100.5, 103.5, 99.5, 102.0, 1.0), ATR, _pvh(103.0))
+    assert pos.trail_armed and pos.invalid == 95.0
     assert any(l.startswith("v20 S1|trail_armed") for l in pos.log)
+    # 上线后首个逆向 pivot ⇒ 只紧不松恢复(收紧至 97.8)
+    pm.on_bar("X", (4000, 102.0, 103.0, 99.0, 101.0, 1.0), ATR, _pvl(98.0))
+    assert pos.invalid == pytest.approx(98.0 - 0.1 * ATR)
+
+
+def test_v20_s1_short_arms_on_low_pivot():
+    """空镜像:顺向 pivot = pivot LOW 新低;pivot HIGH(逆向)不激活。"""
+    pm = _pm_s1(True)
+    pos = pm.open("X", -1, 100.0, 105.0, None, "E1", 0, 0)    # risk 5
+    pm.on_bar("X", (1000, 100.0, 101.0, 98.5, 99.5, 1.0), ATR, _pvh(103.0))
+    assert pos.invalid == 105.0 and not pos.trail_armed        # 逆向(空)不激活
+    pm.on_bar("X", (2000, 99.5, 100.0, 97.0, 98.0, 1.0), ATR, _pvl(97.0))
+    assert pos.trail_armed and pos.invalid == 105.0            # 顺向(空)上线
+    pm.on_bar("X", (3000, 98.0, 98.5, 97.0, 97.5, 1.0), ATR, _pvh(102.0))
+    assert pos.invalid == pytest.approx(102.0 + 0.1 * ATR)     # 逆向 pivot 收紧
 
 
 def test_v20_s1_arm_by_mfe_boundary_inclusive():

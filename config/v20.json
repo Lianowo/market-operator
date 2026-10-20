@@ -277,6 +277,6 @@
     ],
     "s2_level": 0.25,
     "s2_bank_frac": 0.4,
-    "note": "v20 任务书写死,不许调:S1 trail 扶手 MFE 闸恰 1R inclusive 上线(cond a),cond b=新确认顺向 pivot(空=pivot high/多=pivot low，即 §8.3 消费的同一 pivot 类);扶手族=cont(E1/E6/E7)+E4;一经上线只紧不松,上线 bar 新 pivot 即可收紧;未上线扶手不收紧、§8.1/§8.5/收割不受限;桶标签 trail_armed/trail_pending。S2 双格:缘前 25%(entry→target 行程,h/l 恰触 inclusive)落袋 40% 仓(OPEN=1.0 口径,REDUCE 市价)、到缘 EXIT 收净剩 60%;目标方向不齐退回 v16 单段;与 R4 互斥(R4 死亡名单不接线)。S3/S4 为纯路由开关,无数值阈值(regime 取决策帧视图,E3 前缘=zone 接近侧缘 fade_front_edge 同口径)"
+    "note": "v20 任务书写死,不许调:S1 trail 扶手 MFE 闸恰 1R inclusive 上线(cond a);cond b=新确认顺向 pivot(多=pivot high 新高/空=pivot low 新低 —— 脉冲向结构确认,与 §8.3 收紧消费的逆向 pivot 互补;同种则闸退化 no-op,已实证钉死);扶手族=cont(E1/E6/E7)+E4;一经上线只紧不松,上线后首个逆向 pivot 起收紧;未上线扶手不收紧、§8.1/§8.5/收割不受限;桶标签 trail_armed/trail_pending。S2 双格:缘前 25%(entry→target 行程,h/l 恰触 inclusive)落袋 40% 仓(OPEN=1.0 口径,REDUCE 市价)、到缘 EXIT 收净剩 60%;目标方向不齐退回 v16 单段;与 R4 互斥(R4 死亡名单不接线)。S3/S4 为纯路由开关,无数值阈值(regime 取决策帧视图,E3 前缘=zone 接近侧缘 fade_front_edge 同口径)"
   }
 }
