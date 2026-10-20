@@ -289,8 +289,10 @@ class MicTracker:
             if k in self._adopted_e4:
                 continue
             self._adopted_e4.add(k)
-            deadline = span_end_of(min(cd.deadline,
-                                       len(det.structure._bars) - 1))
+            # deadline 是未来帧索引(activated+n_f):由调用方负责把帧索引
+            # 换算到 trigger 序号(含尾段超帧钳制);此处不得用当前已知 bar
+            # 数截断 —— 那会把窗口永远钳死在采用 bar(曾致 E4 零发射)
+            deadline = span_end_of(cd.deadline)
             self._e4.append(_MicE4(
                 direction=cd.direction, leg_start=cd.leg_start,
                 pb_price=cd.pb_price, depth=cd.depth,
@@ -677,9 +679,10 @@ def prepare_mic_cognition(df_cog, df_trig, params: Params, symbol: str, *,
         bar_emitted = detector.update(bar)
         if bar_emitted:
             bar_events_by[i] = list(bar_emitted)
+        n_cog = len(cog)
         tracker.sync(i, detector,
                      lambda p, _sp=spans: _sp[p][0],
-                     lambda p, _sp=spans: _sp[p][1])
+                     lambda p, _sp=spans, _n=n_cog: _sp[min(p, _n - 1)][1])
 
     return MicCognition(
         symbol=symbol, obs_tf_seconds=int(obs_tf_seconds),
