@@ -287,3 +287,7 @@
       漏单(expired)1-2 笔;两模式差价与分层均价差见 reports/v14_arms.json §4。
     - 产物:`reports/v14_arms.{json,md}` + `reports/trades_v14_arm{i}__{dev,test}*.csv`;
       组件裁决 = 上述逐格如实,不整包报喜;v14 之后 test 段只许前向。
+
+29. **2026-10-20 v15 预注册(先于任何 v15 运行)**
+    - `docs/v15-protocol.md`:四件套合成(v14 裁决存活件:位置带沿/maker 真挂单/stop-entry/
+      canonical 其余不变);dev 主评+test 一次(第 18 次曝光)。
