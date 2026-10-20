@@ -348,12 +348,16 @@ class Broker:
         v10 增量(docs/v10-protocol.md §A,加性,默认逐位不变):mic_only=True
         只处理 meta["mic"] 为真的挂单(mic 武装 ⇒ 自次一 trigger bar 可成交),
         非 mic 挂单原样保留、不消耗 wait_bars(canonical 窗口/超时口径不变)。
+        v13 修补(docs/v13-protocol.md,级联 trigger 可粗于执行帧):mic_only
+        =False 时对称排除 mic 挂单(原样保留、不消耗 wait_bars)—— 否则中间
+        执行细 bar 会先于 mic 决策收盘消耗其窗口(级联下构成前馈;v10 15m/5m
+        trigger 恒细于执行帧,同 ts 同价,数值不变)。
         """
         hour_label = int(ts) - (int(ts) % MS_1H)
         rows: list[dict] = []
         kept: list[RestingLimitOrder] = []
         for od in self.resting.pop(symbol, []):
-            if mic_only and not od.meta.get("mic"):
+            if bool(od.meta.get("mic")) != bool(mic_only):
                 kept.append(od)
                 continue
             if hour_label > od.expiry_ts:
@@ -596,14 +600,19 @@ class Broker:
         v10 增量(docs/v10-protocol.md §A,加性,默认逐位不变):mic_only=True
         只撮合 meta["mic"] 为真的延迟单(mic 决策 ⇒ 下一 trigger bar 开盘),
         非 mic 单原样保留待本战役执行帧撮合(canonical 时序不受影响)。
+        v13 修补(级联 trigger 可粗于执行帧):mic_only=False 时对称排除 mic
+        延迟单 —— 否则中间执行细 bar 会揪出 mic 单早于其决策收盘成交(级联
+        下构成前馈;v10 15m/5m trigger 恒细于执行帧,mic 单本就只在其 trigger
+        标签处到达,两个路径同 ts 同价,数值不变)。
         """
         orders = self.pending.pop(symbol, [])
         rows: list[dict] = []
-        if mic_only:
-            kept = [po for po in orders if not po.meta.get("mic")]
-            orders = [po for po in orders if po.meta.get("mic")]
-            if kept:
-                self.pending[symbol] = kept + self.pending.get(symbol, [])
+        kept = [po for po in orders
+                if bool(po.meta.get("mic")) != bool(mic_only)]
+        orders = [po for po in orders
+                  if bool(po.meta.get("mic")) == bool(mic_only)]
+        if kept:
+            self.pending[symbol] = kept + self.pending.get(symbol, [])
         for po in orders:
             if ts <= po.decision_ts:
                 raise AssertionError(

@@ -476,6 +476,63 @@
         "delta_bars_head": 0,
         "delta_bars_tail": 4
       }
+    },
+    "BTCUSDT_30m.csv": {
+      "path": "data\\raw\\BTCUSDT_30m.csv",
+      "sha256": "824dc8882bc5c435967db1425a0a30353ae64f4fdf8fe45e0995564da4871a30",
+      "rows": 35200,
+      "ts_first": 1729022400000,
+      "ts_last": 1792380600000,
+      "span_days": 733.31,
+      "source": "15m聚合(UTC 对齐,docs/v13-protocol.md §1;tf=30m)",
+      "aggregated_from": {
+        "file": "BTCUSDT_15m.csv",
+        "sha256": "e84018b6250aa0fe3f5b589a6d6ad216c51560d96493566b0231153e0628465a"
+      },
+      "anchored_to_1h": {
+        "file": "BTCUSDT_1h.csv",
+        "sha256": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
+        "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
+      },
+      "validation_issues": []
+    },
+    "ETHUSDT_30m.csv": {
+      "path": "data\\raw\\ETHUSDT_30m.csv",
+      "sha256": "d8cf78bf059fe2404603f1e1218875d1a922cf51313bdade08230880a5e0a4bc",
+      "rows": 35200,
+      "ts_first": 1729022400000,
+      "ts_last": 1792380600000,
+      "span_days": 733.31,
+      "source": "15m聚合(UTC 对齐,docs/v13-protocol.md §1;tf=30m)",
+      "aggregated_from": {
+        "file": "ETHUSDT_15m.csv",
+        "sha256": "ec419e6eaaf4a13fe0fba97cc60d6e80cc4746cc5bb36d5df1d512637a5c1b2b"
+      },
+      "anchored_to_1h": {
+        "file": "ETHUSDT_1h.csv",
+        "sha256": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
+        "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
+      },
+      "validation_issues": []
+    },
+    "SOLUSDT_30m.csv": {
+      "path": "data\\raw\\SOLUSDT_30m.csv",
+      "sha256": "1f21a2e63d2c9c3dda592a4b11b964bfad7825b34d488f5060ea86608f63afa1",
+      "rows": 35200,
+      "ts_first": 1729022400000,
+      "ts_last": 1792380600000,
+      "span_days": 733.31,
+      "source": "15m聚合(UTC 对齐,docs/v13-protocol.md §1;tf=30m)",
+      "aggregated_from": {
+        "file": "SOLUSDT_15m.csv",
+        "sha256": "e1a7e4fbc85aef196999f2b75461a0a03db9ce4ffbc4fc7a6fa7d4cbb2b6c4e2"
+      },
+      "anchored_to_1h": {
+        "file": "SOLUSDT_1h.csv",
+        "sha256": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
+        "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
+      },
+      "validation_issues": []
     }
   }
 }
