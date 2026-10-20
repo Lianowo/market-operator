@@ -74,11 +74,20 @@
     [
       "E7",
       1
+    ],
+    [
+      "E3",
+      -1
+    ],
+    [
+      "E3",
+      1
     ]
   ],
   "n_fill": 12,
   "exec_tf_seconds": 900,
   "maker_fee": 0.0002,
   "merge_max_atr": 2.0,
-  "merge_note": "区域合并封顶 2.0*ATR(2026-10-20 账面缺陷修复, research-log #15):无界链式并集滚出覆盖全价格带巨区吞细结构;仅影响 canonical 之后运行,历史 v1-v8 默认无界(0)保持 parity"
+  "merge_note": "区域合并封顶 2.0*ATR(2026-10-20 账面缺陷修复, research-log #15):无界链式并集滚出覆盖全价格带巨区吞细结构;仅影响 canonical 之后运行,历史 v1-v8 默认无界(0)保持 parity",
+  "whitelist_note": "2026-10-20 所有者决议:E3 双向放开入场(research-log #16);证据锚点:解剖台 E3|short 顺regime格 incr +0.744ATR/净-0.041(dev+test 池,H24,1x);未达历史 GO 判据,属所有者放开而非研究判 GO,前向数据裁决"
 }

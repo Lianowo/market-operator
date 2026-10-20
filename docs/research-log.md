@@ -165,3 +165,46 @@
       使系统近价区"没有锚"。修复:`Params.merge_max_atr`(默认 0=历史无界,freeze parity
       不动;canonical 启用 2.0)。历史 v1-v8 判定不受影响(其回放默认无界);修复后的
       canonical 回放与历史数字不可比,如实声明。测试:test_zone_merge_cap 3 项。
+
+16. **2026-10-20 所有者决议:E3 双向放开入场(覆盖式决策,非研究判 GO)**
+    - 指令:所有者明确指出"放开",之前白名单 {E1,E6,E7} 不含 E3 属过度执行;本条登记。
+    - 证据账本(如实):解剖台 scripts/autopsy_e234.py — E3|short 顺 regime 格 n=1106,
+      增量 +0.744 ATR、成本后净 −0.041 ATR(dev+test 池,H24,1x);全体平均 −0.172。
+      **增量显著但绝对期望未转正,不构成 GO 判据**;放行属所有者风险自担范围,
+      记账/风控/强平/容量约束全部不变,前向数据为唯一裁判。
+    - 实现:config/canonical.json whitelist += E3±1(带 note);strategy_v6 新增
+      ROUTE_E3=e3_market(拒绝获因后市价次开盘,同一 F1/room/turtle 收割);
+      默认 V6Params 白名单不变(E3 仅由配置开启);tests/test_e3_route.py 3 项。
+
+
+17. **2026-10-20 合并封顶后的基准重冻结(capped-v1;cross_checks 崩溃的处置)**
+    - 现象:条目 15 的 merge cap 修复改变区域生命周期 ⇒ E7(FLIP)等事件计数变化,
+      `scripts/run_backtest_v6.py::cross_checks` 与 event_study_v3/v2 冻结计数的
+      硬对账 RuntimeError 崩溃(例:BTCUSDT@12h capped=238/155 vs 冻结 104/55)。
+      **性质 = 语义分叉,预期内;不是检测器 bug。**
+    - 逐项对账诊断(同数据两次回放,`python scripts/freeze_canonical_baseline.py
+      --legacy-verify`):merge_max_atr=0(历史无界)重放与全部冻结产物**逐项
+      一致**——15 格 E7 fired/passed_f1(v2@1h:1057/550、953/537、989/498;
+      es_v3@2h/4h/12h/1d 共 12 格)+ E1+E6|short(1h)=1920 == v1 go_events +
+      E7 attrs['atr'] == 认知同 bar ATR。⇒ 计数分叉**仅**来自 merge cap 语义。
+    - 处置:canonical(merge_max_atr=2.0)语义下重放并重冻结新基准
+      **`config/canonical_baseline_counts.json`**(`python scripts/
+      freeze_canonical_baseline.py` 生成;含生成时间、merge_max_atr=2.0、
+      data/manifest.json sha256=eaff1807…、逐文件 sha256、生成命令)。
+      `run_backtest_v6.py`:merge_max_atr>0 时硬对账对象切换为该基准(15 格
+      E1/E6/E7 双向 + E7 fired/passed_f1 + E1+E6|short(1h) 逐项),运行头打印
+      "基准=capped-v1";merge_max_atr=0 的 legacy 路径行为一字不变(仍对账
+      v1/v2/event_study_v3 冻结产物);compaction 一致性、dev/test 拐点、
+      确定性等其余交叉检查全部保留不放松。
+    - 分叉幅度(E7 fired/passed_f1,capped vs legacy 冻结):1h——BTC 3822/2825
+      vs 1057/550、ETH 3788/2848 vs 953/537、SOL 3835/2854 vs 989/498;
+      2h——1829/1308 vs 545/285、1773/1267 vs 525/282、1800/1374 vs 536/302;
+      4h——878/622 vs 279/140、825/591 vs 260/135、843/618 vs 268/148;
+      12h——238/155 vs 104/55、235/167 vs 92/50、247/167 vs 117/58;
+      1d——111/76 vs 55/30、119/68 vs 61/35、110/72 vs 48/29。
+      合计 E7 fired 20453 vs 5889(约 ×3.5;封顶后细结构存活 ⇒ FLIP 更多)。
+      E1+E6|short(1h)4503 vs 1920(v1 parity 锚点对 canonical 不再适用,
+      历史 v1-v8 回放与判定不受影响,如实声明)。
+    - 测试:tests/test_canonical_baseline.py 5 项(capped 模式切换/逐项对账/
+      merge_max_atr 漂移拒绝/legacy 不读基准/基准文件与 canonical 形状一致);
+      全仓 347 + 5 全过。

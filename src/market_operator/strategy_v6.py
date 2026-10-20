@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from .broker import OrderIntent, OrderKind
-from .events import E1, E6, E7, MarketEvent
+from .events import E1, E3, E6, E7, MarketEvent
 from .hypothesis import Hypothesis, StructureView
 from .structure import _bar_parts
 
@@ -45,6 +45,7 @@ from .structure import _bar_parts
 _REF_REL_TOL = 1e-9
 
 ROUTE_E1 = "e1_market"               # E1 市价次开盘
+ROUTE_E3 = "e3_market"               # E3 拒绝获因后市价次开盘(2026-10-20 放开决议,log#16)
 ROUTE_STRONG_E6 = "strong_e6"        # STRONG E6 市价次开盘
 ROUTE_WEAK_E7 = "weak_e7_limit"      # WEAK E6 → 同 episode E7 前缘限价
 
@@ -159,6 +160,12 @@ class V6Router:
             elif ev.id == E1:
                 decision = self._route_market(
                     symbol, ev, view, c, atr, ROUTE_E1, "突破接受,永远市价次开盘")
+            elif ev.id == E3:
+                # E3 入场于 2026-10-20 所有者放开决议开放(research-log #16):
+                # 拒绝获因明确(区域刺穿/回退都已确认),市价次开盘;同一 F1/room 闸。
+                decision = self._route_market(
+                    symbol, ev, view, c, atr, ROUTE_E3, "拒绝确认,市价次开盘")
+                self._bump("e3_signals")
             else:  # E7
                 decision = self._route_e7(symbol, ev, view, c, atr, bar_index)
             if decision is not None:
@@ -298,5 +305,5 @@ class V6Router:
 
 __all__ = [
     "V6Params", "V6Router", "RouteDecision", "WHITELIST_V6",
-    "ROUTE_E1", "ROUTE_STRONG_E6", "ROUTE_WEAK_E7",
+    "ROUTE_E1", "ROUTE_E3", "ROUTE_STRONG_E6", "ROUTE_WEAK_E7",
 ]

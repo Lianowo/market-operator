@@ -73,6 +73,7 @@ CONFIG_CANONICAL = ROOT / "config" / "canonical.json"
 BT_V1_PATH = ROOT / "reports" / "backtest.json"
 BT_V2_PATH = ROOT / "reports" / "backtest_v2.json"
 ES_V3_PATH = ROOT / "reports" / "event_study_v3.json"
+BASELINE_PATH = ROOT / "config" / "canonical_baseline_counts.json"
 REPORTS = ROOT / "reports"
 SEGMENTS = ("full", "dev", "test")
 COST_MULTS = (1.0, 1.5, 2.0)
@@ -183,52 +184,70 @@ def prepare_frames(raw_cfg: dict, params: Params, tf_list: list) -> dict:
 # 冻结产物对账(v1 parity / v2 E7 / v3 多 TF E7)
 # ---------------------------------------------------------------------------
 
+BASELINE_FIELDS = ("E1_long", "E1_short", "E6_long", "E6_short",
+                   "E7_long", "E7_short", "E7_fired", "E7_passed_f1")
 
-def cross_checks(frames: dict, k_is: float) -> dict:
+
+def campaign_event_counts(frames: dict, k_is: float) -> tuple:
+    """逐战役(symbol×TF)事件计数:E1/E6/E7 双向 + E7 fired/passed_f1。
+
+    返回 (counts, atr_equal)。counts[key] 字段 = BASELINE_FIELDS;
+    atr_equal = E7 attrs['atr'] 恒等于认知缓存同 bar ATR(F1 口径核查)。
+    legacy(merge_max_atr=0)与 capped-v1 两路对账共用本计数器,口径同源。
+    """
+    counts: dict = {}
+    atr_equal = True
+    for key, f in sorted(frames.items()):
+        cog = f.cog
+        cell = {fld: 0 for fld in BASELINE_FIELDS}
+        for i, evs in cog.events_by.items():
+            for e in evs:
+                if e.id == "E7":
+                    if e.attrs.get("atr") != cog.atrs[i]:
+                        atr_equal = False
+                    cell["E7_fired"] += 1
+                    cell["E7_long" if e.direction > 0 else "E7_short"] += 1
+                    if f1_invalid_distance_ok(e, float(cog.bars[i][4]), k_is):
+                        cell["E7_passed_f1"] += 1
+                elif e.id in ("E1", "E6"):
+                    cell[f"{e.id}_{'long' if e.direction > 0 else 'short'}"] += 1
+        counts[key] = cell
+    return counts, atr_equal
+
+
+def cross_checks(frames: dict, k_is: float, merge_max_atr: float = 0.0) -> dict:
+    counts, atr_equal = campaign_event_counts(frames, k_is)
+    if merge_max_atr > 0:
+        return _cross_checks_capped(counts, atr_equal, merge_max_atr)
     bt_v2 = json.loads(BT_V2_PATH.read_text(encoding="utf-8"))
     bt_v1 = json.loads(BT_V1_PATH.read_text(encoding="utf-8"))
     es_v3 = json.loads(ES_V3_PATH.read_text(encoding="utf-8")) \
         if ES_V3_PATH.exists() else None
     e7_counts: dict = {}
     tf_counts: dict = {}
-    atr_equal = True
     e1e6_short_total = 0
     for key, f in sorted(frames.items()):
-        cog = f.cog
-        fired, passed = [], []
-        e1s = e6s = 0
-        for i, evs in cog.events_by.items():
-            for e in evs:
-                if e.id == "E7" and e.attrs.get("atr") != cog.atrs[i]:
-                    atr_equal = False
-                if e.id == "E7":
-                    fired.append(e)
-                    if f1_invalid_distance_ok(e, float(cog.bars[i][4]), k_is):
-                        passed.append(e)
-                elif e.id == "E1" and e.direction == -1:
-                    e1s += 1
-                elif e.id == "E6" and e.direction == -1:
-                    e6s += 1
-        rec = {"fired": len(fired), "passed_f1": len(passed),
-               "E1_short": e1s, "E6_short": e6s}
+        cell = counts[key]
+        rec = {"fired": cell["E7_fired"], "passed_f1": cell["E7_passed_f1"],
+               "E1_short": cell["E1_short"], "E6_short": cell["E6_short"]}
         if f.tf_label == "1h":
             e7_counts[f.symbol] = rec
-            e1e6_short_total += e1s + e6s
+            e1e6_short_total += rec["E1_short"] + rec["E6_short"]
             v2c = bt_v2["e7_counts"][f.symbol]
             if (v2c["whitelist_events"], v2c["passed_f1"]) \
-                    != (len(fired), len(passed)):
+                    != (rec["fired"], rec["passed_f1"]):
                 raise RuntimeError(
-                    f"E7 计数对账失败 {f.symbol}: v6 fired={len(fired)} "
-                    f"passed={len(passed)} vs v2 冻结产物 {v2c}")
+                    f"E7 计数对账失败 {f.symbol}: v6 fired={rec['fired']} "
+                    f"passed={rec['passed_f1']} vs v2 冻结产物 {v2c}")
         else:
             tf_counts[key] = rec
             if es_v3 is not None:
                 es_c = es_v3["timeframes"][f.tf_label]["symbols"][f.symbol]
                 if (es_c["n_events_fired"], es_c["n_passed_f1"]) \
-                        != (len(fired), len(passed)):
+                        != (rec["fired"], rec["passed_f1"]):
                     raise RuntimeError(
-                        f"E7 多TF对账失败 {key}: v6 fired={len(fired)} "
-                        f"passed={len(passed)} vs event_study_v3 冻结产物 "
+                        f"E7 多TF对账失败 {key}: v6 fired={rec['fired']} "
+                        f"passed={rec['passed_f1']} vs event_study_v3 冻结产物 "
                         f"{es_c['n_events_fired']}/{es_c['n_passed_f1']}")
     if not atr_equal:
         raise RuntimeError("E7 attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移)")
@@ -244,6 +263,69 @@ def cross_checks(frames: dict, k_is: float) -> dict:
             "e1e6_short_vs_v1": {"v6": e1e6_short_total, "v1": v1_go},
             "e7_attrs_atr_equals_cognition_atr": atr_equal,
             "es_v3_tf_match": es_v3 is not None}
+
+
+def _cross_checks_capped(counts: dict, atr_equal: bool,
+                         merge_max_atr: float) -> dict:
+    """canonical 合并封顶语义(merge_max_atr>0)硬对账:逐格比对
+    config/canonical_baseline_counts.json(capped-v1 重冻结基准,research-log #17)。
+
+    分叉说明(#15):merge cap 改变区域生命周期 ⇒ E7(FLIP)等事件计数与
+    v1/v2/event_study_v3 历史冻结产物(默认无界)语义性分叉,不可直接对账;
+    基准由 scripts/freeze_canonical_baseline.py 在同一 canonical 语义下重冻结。
+    """
+    if not BASELINE_PATH.exists():
+        raise RuntimeError(
+            f"canonical 基准缺失: {BASELINE_PATH}(先运行 "
+            "python scripts/freeze_canonical_baseline.py 生成 capped-v1)")
+    base = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    bgen = base.get("generator", {})
+    if float(bgen.get("merge_max_atr", 0.0)) != float(merge_max_atr):
+        raise RuntimeError(f"基准 merge_max_atr={bgen.get('merge_max_atr')} != "
+                           f"canonical 配置 {merge_max_atr}(基准须重新冻结)")
+    bad: list = []
+    e7_counts: dict = {}
+    tf_counts: dict = {}
+    e1e6_short_total = 0
+    for key, cell in sorted(counts.items()):
+        b = base.get("cells", {}).get(key)
+        if b is None:
+            bad.append(f"{key}: 基准缺格")
+            continue
+        for fld in BASELINE_FIELDS:
+            if b.get(fld) != cell[fld]:
+                bad.append(f"{key}.{fld}: 回放={cell[fld]} vs 基准={b.get(fld)}")
+        sym, tf = key.rsplit("@", 1)
+        rec = {"fired": cell["E7_fired"], "passed_f1": cell["E7_passed_f1"],
+               "E1_short": cell["E1_short"], "E6_short": cell["E6_short"]}
+        if tf == "1h":
+            e7_counts[sym] = rec
+            e1e6_short_total += rec["E1_short"] + rec["E6_short"]
+        else:
+            tf_counts[key] = rec
+    btot = base.get("totals", {}).get("e1e6_short_1h")
+    if btot != e1e6_short_total:
+        bad.append(f"E1+E6|short(1h): 回放={e1e6_short_total} vs 基准={btot}")
+    if bad:
+        raise RuntimeError("capped-v1 基准对账失败(逐格逐项): "
+                           + "; ".join(bad[:12]))
+    if not atr_equal:
+        raise RuntimeError("E7 attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移)")
+    try:
+        bpath = BASELINE_PATH.relative_to(ROOT).as_posix()
+    except ValueError:                                 # 测试注入的仓外路径
+        bpath = str(BASELINE_PATH)
+    print(f"[xcheck] 基准=capped-v1({bpath}, "
+          f"merge_max_atr={bgen.get('merge_max_atr')}): {len(counts)} 格 "
+          f"E1/E6/E7 双向 + E7 fired/passed_f1 逐项一致;E1+E6|short(1h)="
+          f"{e1e6_short_total} == 基准;E7 atr 一致", flush=True)
+    return {"baseline": "capped-v1",
+            "baseline_path": bpath,
+            "baseline_generated_at_utc": base.get("generated_at_utc"),
+            "baseline_merge_max_atr": bgen.get("merge_max_atr"),
+            "e7_counts_1h": e7_counts, "e7_counts_tf": tf_counts,
+            "e1e6_short_1h": {"replay": e1e6_short_total, "baseline": btot},
+            "e7_attrs_atr_equals_cognition_atr": atr_equal}
 
 
 # ---------------------------------------------------------------------------
@@ -392,12 +474,19 @@ def main() -> None:
         raise RuntimeError("exec_tf_seconds 冻结为 900(15m)")
     equity0 = 300.0
 
+    merge_max_atr = float(raw_cfg.get("merge_max_atr", 0.0))
+    if merge_max_atr > 0:
+        print(f"[xcheck] merge_max_atr={merge_max_atr} ⇒ 基准=capped-v1"
+              f"(config/canonical_baseline_counts.json;v1/v2/event_study_v3 "
+              f"历史冻结产物不再对账,语义分叉见 research-log #17)", flush=True)
+
     contracts, spec_src = load_contracts_cache(symbols)
     contracts_sha = hashlib.sha256(CONTRACTS_PATH.read_bytes()).hexdigest()
     print(f"[contracts] source={spec_src} sha256={contracts_sha[:12]}…", flush=True)
 
     frames, compaction_report = prepare_frames(raw_cfg, params, tf_list)
-    xcheck = cross_checks(frames, float(raw_cfg["k_is"]))
+    xcheck = cross_checks(frames, float(raw_cfg["k_is"]),
+                          merge_max_atr=merge_max_atr)
 
     broker_kw = dict(dev_frac=dev_frac, equity0=equity0,
                      risk_frac=float(raw_cfg["risk_frac"]),
@@ -530,6 +619,7 @@ def main() -> None:
             "whitelist": [f"{i}|{'long' if d > 0 else 'short'}"
                           for i, d in sorted(whitelist)],
             "tf_list": tf_list, "k_is": rp_base.k_is, "k_dq": rp_base.k_dq,
+            "merge_max_atr": merge_max_atr,
             "k_imp": rp_base.k_imp,
             "turtle_stop_atr": rp_base.turtle_stop_atr,
             "portfolio_cap_frac": cap_frac,
@@ -594,6 +684,32 @@ def render_md(payload: dict) -> str:
     insufficient = payload["sample_size"]["sample_size_verdict"] \
         == "INSUFFICIENT_DATA"
 
+    xc = payload["cross_checks"]
+    if xc.get("baseline") == "capped-v1":
+        xcheck_line = (
+            "- 认知对账(全部硬约束一致;基准=capped-v1 "
+            f"{xc['baseline_path']},merge_max_atr={xc['baseline_merge_max_atr']}"
+            "):E1/E6/E7 双向 + E7 fired/passed_f1 逐 symbol×TF 格一致(1h: "
+            + "; ".join(f"{s}={v['passed_f1']}/{v['fired']}"
+                        for s, v in xc["e7_counts_1h"].items())
+            + f";多 TF {len(xc['e7_counts_tf'])} 格);E1+E6|short(1h)="
+            f"{xc['e1e6_short_1h']['replay']} == 基准同值(与 v1 冻结 go_events"
+            " 的语义分叉如实在 research-log #17 对账);E7 atr 一致。")
+    else:
+        xcheck_line = (
+            "- 认知对账(全部硬约束一致):E7 1h 计数 == v2 冻结产物("
+            + "; ".join(f"{s}={v['passed_f1']}/{v['fired']}"
+                        for s, v in xc["e7_counts_1h"].items())
+            + f");E7 多TF计数 == event_study_v3 冻结产物({len(xc['e7_counts_tf'])} 格;"
+            f"E1+E6|short={xc['e1e6_short_vs_v1']['v6']} == "
+            f"v1 go_events={xc['e1e6_short_vs_v1']['v1']}"
+            "(v1 parity 锚点,未破)。")
+    merge_line = (
+        f"- 结构合并封顶:merge_max_atr={cfg.get('merge_max_atr', 0.0)}×ATR"
+        "(research-log #15 账面缺陷修复:无界链式并集滚出巨区吞细结构;历史 "
+        "v1-v8 默认无界 parity 不动,canonical 事件计数与历史冻结产物语义性"
+        "分叉,基准重冻结见 research-log #17)。")
+
     lines = [
         "# v6 规范链回测报告(turtle 唯一语义 × 多尺度并行战役)",
         "",
@@ -611,6 +727,7 @@ def render_md(payload: dict) -> str:
         "成交时刻 PR#9 broker 口径第二层钳制)。",
         f"- 路由 = v5 质量路由双向(E1 市价优先/E6 STRONG 市价 WEAK=E7 前缘限价;"
         f"k_dq={cfg['k_dq']} k_imp={cfg['k_imp']};白名单 {cfg['whitelist']})。",
+    ] + ([merge_line] if xc.get("baseline") == "capped-v1" else []) + [
         "- 执行路径:TF=1h→15m,TF≥2h→1h(对齐断言;fill_after = 决策 bar 最末"
         f"细 bar;N_fill={cfg['n_fill']} 墙钟小时)。",
         f"- **{payload['protocol']['test_eval_declaration']}**",
@@ -620,13 +737,7 @@ def render_md(payload: dict) -> str:
         + ("——本报告不给出任何转正叙述。" if insufficient else "。"),
         f"- {payload['protocol']['opportunity_coexistence']}",
         f"- 合约规格:{payload['contracts']['source']}(离线强制)。",
-        "- 认知对账(全部硬约束一致):E7 1h 计数 == v2 冻结产物("
-        + "; ".join(f"{s}={v['passed_f1']}/{v['fired']}"
-                    for s, v in payload["cross_checks"]["e7_counts_1h"].items())
-        + f");E7 多TF计数 == event_study_v3 冻结产物({len(payload['cross_checks']['e7_counts_tf'])} 格;"
-        f"E1+E6|short={payload['cross_checks']['e1e6_short_vs_v1']['v6']} == "
-        f"v1 go_events={payload['cross_checks']['e1e6_short_vs_v1']['v1']}"
-        "(v1 parity 锚点,未破)。",
+        xcheck_line,
         "",
         "## 1. 总览(段 × 成本;权益 300 USDT 起)",
         "",
