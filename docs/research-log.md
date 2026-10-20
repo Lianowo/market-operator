@@ -208,3 +208,14 @@
     - 测试:tests/test_canonical_baseline.py 5 项(capped 模式切换/逐项对账/
       merge_max_atr 漂移拒绝/legacy 不读基准/基准文件与 canonical 形状一致);
       全仓 347 + 5 全过。
+
+17. **2026-10-20 merge cap 后基准重冻结**
+    - 现象:canonical 硬对账拒绝通过(E7 计数分叉);legacy(mma=0)重放与 v1-v8 冻结计数
+      逐项逐位一致 ⇒ 分叉纯来自 merge_max_atr=2.0 语义,非 bug。
+    - 处置:新基准 `config/canonical_baseline_counts.json`(capped-v1,含 manifest sha256);
+      run_backtest_v6 按 merge_max_atr 是否 >0 切换对账源;历史回放行为不变。
+
+18. **2026-10-20 v9 预注册(先于任何 v9 运行;最后一轮协议级研究)**
+    - `docs/v9-protocol.md`:E9 PROCESS_ACCEPTED / E10 PROCESS_REJECTED(停留率/重心位移/
+      试探失败密度的 episode 相对过程语义,先验一次写死);test 第 12 次曝光,此后只许前向;
+      E9+E10 若都败,过程式世界观终结,项目进入纯前向时代。
