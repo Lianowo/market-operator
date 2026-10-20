@@ -28,6 +28,22 @@ v6 增量(docs/v6-protocol.md §2-S2,加性开关,默认参数行为逐位不变
   收紧;默认 True ⇒ v1/v4/v5 逐位旧行为。
 - time_stop=False(对照臂 B "Turtle"):§8.6 时间止损整条关闭;默认 True
   ⇒ v1/v4/v5 逐位旧行为。
+
+v16 增量(docs/v16-protocol.md,收割婚配;加性开关,默认参数行为逐位不变):
+- harvest_family(缺省 None ⇒ 关):开仓 event_id 命中 fade 家族(E2/E3/E8)
+  的持仓进入收割模式 —— **到达对面结构缘(target_1)⇒ 全部落袋**(结构
+  目标收割,EXIT 全平,不走 §8.2 50% 减仓),**收割模式禁用 §8.3 trailing**
+  (协议持仓第 2/4 条:fade 走 target-harvest,trail 只对续涨保留);续涨
+  (及任何非家族事件)行为逐位同 canonical。
+- time_cap_bars(= k_cap_hours,缺省 None ⇒ 关):时间帽 = k_cap×TF 小时,
+  实现为 bars_held ≥ k_cap 根认知 bar(1h→48h、12h→24d,同协议);**到期且
+  MFE < cap_mfe_min(0.5R)⇒ 出;MFE ≥ cap_mfe_min 不放逐**(恰界 0.5R
+  inclusive 持有;到期后逐收盘 bar 复核,同 §8.6 的 bars_held >= idiom,
+  如实声明)。
+- v16 模式下出场 reason 带机器可读桶标签前缀 "v16|<bucket>|*(target /
+  choch / trail / invalid / time_cap;trail = 防线已被 §8.3 收紧后的破位
+  出场,invalid = 防线未动的原始结构失效);标签只在前置开关开启时出现,
+  canonical(reason 逐位旧文本)不受影响。
 """
 
 from __future__ import annotations
@@ -67,6 +83,8 @@ class Position:
     bars_held: int = 0             # 已收盘 bar 数(入场 bar 记第 1 根)
     _best: Optional[float] = None  # 入场以来最有利极值(空=min low,多=max high)
     log: list = field(default_factory=list)   # 无订单的决策记录(§8.3 防线等)
+    harvest: bool = False          # v16:收割模式(fade 家族;target 全平+禁 trail)
+    invalid0: Optional[float] = None  # v16:开仓时原始结构失效位(trail/invalid 分桶)
 
     @property
     def mfe_r(self) -> float:
@@ -79,6 +97,8 @@ class Position:
         if self._best is None:
             self._best = self.entry
         self._entry0 = self.entry   # 开盘口径均价(加仓不改变 R 度量基准)
+        if self.invalid0 is None:
+            self.invalid0 = self.invalid   # v16:原始结构失效位快照
 
 
 class PositionManager:
@@ -87,13 +107,25 @@ class PositionManager:
     def __init__(self, params: Optional[Params] = None,
                  allow_add: bool = False,
                  breakeven_on_reduce: bool = True,
-                 time_stop: bool = True) -> None:
+                 time_stop: bool = True,
+                 harvest_family: Optional[tuple] = None,
+                 time_cap_bars: Optional[int] = None,
+                 cap_mfe_min: float = MFE_MIN_R) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
         self.time_stop = time_stop                      # v6 臂 B:False=关 §8.6
+        # v16 收割婚配开关(全 None ⇒ 逐位 canonical 旧行为,回归钉死)
+        self.harvest_family = harvest_family            # fade 家族(E2/E3/E8)
+        self.time_cap_bars = time_cap_bars              # k_cap_hours(48)
+        self.cap_mfe_min = float(cap_mfe_min)           # MFE 恰界 inclusive 持有
         self.positions: dict[str, Position] = {}
         self.last: list[str] = []            # 最近 on_bar 判定记录(解释性)
+
+    @property
+    def _v16(self) -> bool:
+        """v16 收割婚配任一开关在场(决定出场 reason 是否带桶标签前缀)。"""
+        return self.harvest_family is not None or self.time_cap_bars is not None
 
     # -- 建仓 ------------------------------------------------------------------
 
@@ -108,6 +140,9 @@ class PositionManager:
                        invalid=float(invalid), target_1=target_1,
                        event_id=event_id, opened_ts=ts, opened_index=index,
                        initial_risk=float(risk))
+        # v16:fade 家族持仓进入收割模式(达对面结构缘全平;trail 禁用)
+        if self.harvest_family is not None and str(event_id) in self.harvest_family:
+            pos.harvest = True
         self.positions[symbol] = pos
         return pos
 
@@ -133,18 +168,36 @@ class PositionManager:
         pos.bars_held += 1
         pos._best = min(pos._best, l) if pos.direction < 0 else max(pos._best, h)
 
-        # 1. §8.1 破位退出(结构失效,收盘口径)
+        # 1. §8.1 破位退出(结构失效,收盘口径;v16:防线已收紧 ⇒ trail 桶,
+        #    防线未动 ⇒ invalid 原始结构失效桶)
         if (c > pos.invalid) if pos.direction < 0 else (c < pos.invalid):
-            return [self._exit(pos, ts, c,
-                               f"§8.1|invalidation close close={c:.8g} "
-                               f"invalid={pos.invalid:.8g} exit all")]
+            reason = (f"§8.1|invalidation close close={c:.8g} "
+                      f"invalid={pos.invalid:.8g} exit all")
+            if self._v16:
+                tag = "trail" if pos.invalid != pos.invalid0 else "invalid"
+                reason = f"v16|{tag}|" + reason
+            return [self._exit(pos, ts, c, reason)]
 
         # 2. §8.5 反向 E6(CHoCH 出场)
         for ev in new_events:
             if ev.id == E6 and ev.direction == -pos.direction:
-                return [self._exit(pos, ts, c,
-                                   f"§8.5|E6 reverse CHoCH event_ts={ev.ts} "
-                                   f"exit all")]
+                reason = (f"§8.5|E6 reverse CHoCH event_ts={ev.ts} "
+                          f"exit all")
+                if self._v16:
+                    reason = "v16|choch|" + reason
+                return [self._exit(pos, ts, c, reason)]
+
+        # 2.5 v16 收割婚配:fade 家族达对面结构缘 ⇒ 全部落袋(结构目标收割,
+        #    EXIT 全平,不走 §8.2 50% 减仓;协议持仓第 2 条;不加仓)
+        if pos.harvest and pos.target_1 is not None:
+            hit = (l <= pos.target_1) if pos.direction < 0 \
+                else (h >= pos.target_1)
+            if hit:
+                extreme = l if pos.direction < 0 else h
+                return [self._exit(
+                    pos, ts, c,
+                    f"v16|target|对面结构缘收割 target={pos.target_1:.8g} "
+                    f"extreme={extreme:.8g} exit all(结构目标全平,禁 trail)")]
 
         intents: list[OrderIntent] = []
 
@@ -158,8 +211,10 @@ class PositionManager:
                 else:
                     intents.append(self._reduce(pos, ts, c, l if pos.direction < 0 else h))
 
-        # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松)
-        self._trail(pos, new_pivots, atr)
+        # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松);
+        #    v16 fade 收割模式禁用 trail(协议持仓第 4 条:trail 只对续涨保留)
+        if not pos.harvest:
+            self._trail(pos, new_pivots, atr)
 
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
         if self.allow_add and not pos.added and not pos.pending_add:
@@ -178,6 +233,17 @@ class PositionManager:
                 f"§8.6|time stop bars_held={pos.bars_held} >= "
                 f"n_time={self.p.n_time} mfe={pos.mfe_r:.3f}R "
                 f"< {MFE_MIN_R}R exit all"))
+        # 7. v16 时间帽:k_cap_hours×TF 认知 bar;到期且 MFE < cap_mfe_min ⇒ 出,
+        #    MFE ≥ cap_mfe_min(恰界 inclusive)不放逐,到期后逐收盘 bar 复核
+        if self.time_cap_bars is not None and pos.symbol in self.positions \
+                and pos.bars_held >= self.time_cap_bars \
+                and pos.mfe_r < self.cap_mfe_min:
+            intents.append(self._exit(
+                pos, ts, c,
+                f"v16|time_cap|时间帽 bars_held={pos.bars_held} >= "
+                f"k_cap_hours={self.time_cap_bars} mfe={pos.mfe_r:.3f}R "
+                f"< {self.cap_mfe_min}R exit all(MFE ≥ "
+                f"{self.cap_mfe_min}R 不放逐)"))
         return intents
 
     # -- 单条规则 ----------------------------------------------------------------
