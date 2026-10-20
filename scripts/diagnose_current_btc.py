@@ -11,7 +11,37 @@ from market_operator.structure import MarketStructure, Params
 from market_operator.events import EventDetector
 
 SYM = "BTCUSDT"
-P = Params.from_json("config/defaults.json")
+P = Params.from_json("config/canonical.json")   # 含 merge_max_atr=2.0 修复(log#15)
+
+
+def context_block():
+    """跨层语境(只读,不影响闸门):12h regime/结构位置 + 资金费。"""
+    import json, urllib.request
+    c = json.load(open("config/canonical.json", encoding="utf-8"))
+    p2 = Params.from_json("config/defaults.json")
+    for tf in ["4h", "12h", "1d"]:
+        df = pd.concat([pd.read_csv(f"data/raw/BTCUSDT_{tf}.csv"),
+                        data.fetch_klines(SYM, granularity="4H", years=0.01)]) \
+            .drop_duplicates("ts").sort_values("ts").reset_index(drop=True) \
+            if tf == "4h" else pd.read_csv(f"data/raw/BTCUSDT_{tf}.csv")
+        det = EventDetector(p2)
+        for b in df.itertuples():
+            det.update(dict(ts=int(b.ts), open=b.open, high=b.high, low=b.low,
+                            close=b.close, volume=b.volume))
+        ms = det.structure
+        hs = [x for x in ms.pivots if x.kind.value == "high"]
+        ls = [x for x in ms.pivots if x.kind.value == "low"]
+        hi, lo = hs[-1].price, ls[-1].price
+        pos = (df.close.iloc[-1] - lo) / (hi - lo)
+        print(f"  [{tf}] regime={ms.regime().value:11s} 带[{lo:.0f},{hi:.0f}] pos={pos:.2f}"
+              f"(数据截至 {pd.Timestamp(df.ts.iloc[-1], unit='ms', tz='UTC')})")
+    try:
+        r = json.load(urllib.request.urlopen(
+            "https://api.bitget.com/api/v2/mix/market/current-fund-rate"
+            "?symbol=BTCUSDT&productType=USDT-FUTURES", timeout=10))
+        print(f"  [funding] {float(r['data'][0]['fundingRate']) * 100:.3f}%/8h")
+    except Exception as e:
+        print(f"  [funding] 拉取失败:{e}")
 
 
 def latest_frame():
@@ -59,6 +89,9 @@ def main():
         mark = " <<==" if e.known_index >= t - 30 else ""
         print(f"  {e.id} dir={e.direction:+d} ts={pd.Timestamp(e.ts, unit='ms', tz='UTC')} "
               f"known={e.known_index}{mark}")
+
+    print("\n== 跨层语境(只读,不决策) ==")
+    context_block()
 
     print("\n== 当前行动(canonical 语义重放) ==")
     print("模拟最近事件→假设→F1/room/风险闸,详见下块计划扳机。")
