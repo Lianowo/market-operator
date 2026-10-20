@@ -41,3 +41,8 @@
 - v5 破位质量路由（STRONG=市价/WEAK=E7限价）+ E1 优先 + F1 全入口 + short-only:
   test −22.5/22 笔/CI 含 0(INSUFFICIENT)；胜率随成熟度单调升(28%→41% 桶)，总亏单调降。
   五轮干预全部落定：低频、低亏、不赚。Research Only 定版，协议级优化关闭。218 tests。
+
+## [v1.4.0] - 2026-10-21 — Live runtime
+
+- Bitget live runner + Telegram 通知 + 118品种宇宙(>3M)+ paper 冒烟 PASS;580 tests。
+- v17-v20:首个 dev 翻正(v18 +156/PF1.51) 与 test 首正(v19 +10.46);S1/S4 小幅正贡献。
