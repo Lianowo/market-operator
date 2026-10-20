@@ -238,3 +238,8 @@
       取各自 attrs);config `gates_model=semantics_routing`;F1/room/风险/容量几何闸保留。
     - 诚实注记:E2/E4/E5/E8 均为历史测量为负的机制(其检测与盈亏逐年归因),
       路由启用不含"它们已被修好"的任何主张;逐事件归因账本决定其寿命。
+
+22. **2026-10-20 v11 预注册(先于任何 v11 运行)**
+    - `docs/v11-protocol.md`:跨 episode 区域发育归因测量(dwell/pen/out_rj/out_br,
+      Spearman 主判别+分桶存活次判别);数据单元=zone-touch,test 第 14 次曝光;
+      签名若立,仅入假设层元数据用例(k_*∈{2,3}),属语义修复而非过滤名单。
