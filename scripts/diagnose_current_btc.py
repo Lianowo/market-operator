@@ -93,6 +93,22 @@ def main():
     print("\n== 跨层语境(只读,不决策) ==")
     context_block()
 
+    print("\n== tape 注解(只读,无判定;n<60 接触前不引为证据) ==")
+    try:
+        from market_operator import tape_features as tf
+        import time as _t
+        day = _t.strftime("%Y%m%d", _t.gmtime())
+        now = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
+        for hrs in (24, 4, 1):
+            s = tf.window_stats("BTCUSDT", now - hrs * 3600_000, now, day=day)
+            if s.get("n", 0) > 0:
+                print(f"  [近{hrs}h] n={s['n']} delta_share={s['delta_share']:+.2f} "
+                      f"big_share={s['big_share']:.2f} eff={s['eff_per_million']:.1f}")
+            else:
+                print(f"  [近{hrs}h] 无tape记录(record 未运行)")
+    except Exception as e:
+        print(f"  tape 注解失败:{e}")
+
     print("\n== 当前行动(canonical 语义重放) ==")
     print("模拟最近事件→假设→F1/room/风险闸,详见下块计划扳机。")
 
