@@ -44,6 +44,21 @@ v16 增量(docs/v16-protocol.md,收割婚配;加性开关,默认参数行为逐�
   choch / trail / invalid / time_cap;trail = 防线已被 §8.3 收紧后的破位
   出场,invalid = 防线未动的原始结构失效);标签只在前置开关开启时出现,
   canonical(reason 逐位旧文本)不受影响。
+
+v18 增量(docs/v18-protocol.md §R4,冻结 2026-10-20;加性开关,默认参数
+行为逐位不变):
+- harvest_ladder3(缺省 False ⇒ 关):fade 收割模式(harvest)持仓的收割
+  改为**三段**:缘前 25%/50% 各落袋半仓的 1/3(=全仓 1/6,REDUCE 市价
+  意图,次一执行细 bar 开盘成交,摊薄均价入账由 broker/reconstruct 同
+  既有口径),到缘 EXIT 收净剩余(**收割目标缘的口径不变**);不理睬任何
+  中间 trail 与保本(invalid 不动 —— 收割模式本来就禁 §8.3 trail;R4 的
+  减仓也不触发 §8.2 保本移动)。段序:25% 先于 50% 先于缘(错峰语义);
+  同一 bar 同时触及多段 ⇒ 段序内同批成组(REDUCE×N → EXIT);
+  bar 极值口径(h/l 恰触 inclusive,与 v16 收割 hit 口径一致);收割序
+  的落袋段带机器可读桶标签 "v16|target_partial|",缘收标签
+  "v16|target|R4|"(出场桶沿用 v16 target)。
+- 目标方向不齐(d·(target−entry) ≤ 0,退化)⇒ 退回 v16 单段收割(如实
+  声明);无收割目标(target_1=None)照旧无收割结构行(与 v16 相同)。
 """
 
 from __future__ import annotations
@@ -58,6 +73,10 @@ from .structure import Params, Pivot, PivotKind, _bar_parts
 
 MFE_MIN_R = 0.5          # §7 expiry 先验:N_time 根内 MFE < 0.5R
 ADD_MIN_R = 1.0          # §8.4 先验:浮盈 ≥ 1R 才允许加仓
+# v18 R4 三段收割(协议 §R4 写死;恰界 inclusive,config/v18.json 硬对账)
+R4_LEVEL_1 = 0.25        # 缘前 25%(entry→target 行程)
+R4_LEVEL_2 = 0.50        # 缘前 50%
+R4_PARTIAL_FRAC = 1.0 / 6.0   # 各段落袋半仓的 1/3 = 全仓 1/6(以 OPEN 为 1.0)
 
 
 @dataclass
@@ -85,6 +104,7 @@ class Position:
     log: list = field(default_factory=list)   # 无订单的决策记录(§8.3 防线等)
     harvest: bool = False          # v16:收割模式(fade 家族;target 全平+禁 trail)
     invalid0: Optional[float] = None  # v16:开仓时原始结构失效位(trail/invalid 分桶)
+    r4_stage: int = 0              # v18 R4:已完成落袋段数(0/1/2;错峰段序)
 
     @property
     def mfe_r(self) -> float:
@@ -110,7 +130,8 @@ class PositionManager:
                  time_stop: bool = True,
                  harvest_family: Optional[tuple] = None,
                  time_cap_bars: Optional[int] = None,
-                 cap_mfe_min: float = MFE_MIN_R) -> None:
+                 cap_mfe_min: float = MFE_MIN_R,
+                 harvest_ladder3: bool = False) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
@@ -119,6 +140,8 @@ class PositionManager:
         self.harvest_family = harvest_family            # fade 家族(E2/E3/E8)
         self.time_cap_bars = time_cap_bars              # k_cap_hours(48)
         self.cap_mfe_min = float(cap_mfe_min)           # MFE 恰界 inclusive 持有
+        # v18 R4 三段收割开关(False ⇒ 逐位 v16 收割行为,回归钉死)
+        self.harvest_ladder3 = bool(harvest_ladder3)
         self.positions: dict[str, Position] = {}
         self.last: list[str] = []            # 最近 on_bar 判定记录(解释性)
 
@@ -189,17 +212,26 @@ class PositionManager:
 
         # 2.5 v16 收割婚配:fade 家族达对面结构缘 ⇒ 全部落袋(结构目标收割,
         #    EXIT 全平,不走 §8.2 50% 减仓;协议持仓第 2 条;不加仓)
+        #    v18 R4(harvest_ladder3):改三段收割(缘前 25%/50% 各 1/6 仓,
+        #    缘收净;目标方向不齐 ⇒ 退回 v16 单段收割)
+        ladder_intents: list[OrderIntent] = []
         if pos.harvest and pos.target_1 is not None:
-            hit = (l <= pos.target_1) if pos.direction < 0 \
-                else (h >= pos.target_1)
-            if hit:
-                extreme = l if pos.direction < 0 else h
-                return [self._exit(
-                    pos, ts, c,
-                    f"v16|target|对面结构缘收割 target={pos.target_1:.8g} "
-                    f"extreme={extreme:.8g} exit all(结构目标全平,禁 trail)")]
+            delta = float(pos.target_1) - float(pos.entry)
+            if self.harvest_ladder3 and pos.direction * delta > 0.0:
+                ladder_intents = self._r4_ladder(pos, ts, c, h, l)
+                if ladder_intents and ladder_intents[-1].kind is OrderKind.EXIT:
+                    return ladder_intents
+            else:
+                hit = (l <= pos.target_1) if pos.direction < 0 \
+                    else (h >= pos.target_1)
+                if hit:
+                    extreme = l if pos.direction < 0 else h
+                    return [self._exit(
+                        pos, ts, c,
+                        f"v16|target|对面结构缘收割 target={pos.target_1:.8g} "
+                        f"extreme={extreme:.8g} exit all(结构目标全平,禁 trail)")]
 
-        intents: list[OrderIntent] = []
+        intents: list[OrderIntent] = list(ladder_intents)
 
         # 3. §8.2 target_1 触及:减仓 50%(仅一次),余仓 invalid 移至 entry
         if pos.target_1 is not None and not pos.reduced and not pos.pending_reduce:
@@ -344,6 +376,47 @@ class PositionManager:
         return OrderIntent(kind=OrderKind.REDUCE, symbol=pos.symbol,
                            qty_frac=qty, reason=reason,
                            ref_price=float(ref), ts=ts)
+
+    def _r4_ladder(self, pos: Position, ts: object, c: float, h: float,
+                   l: float) -> list[OrderIntent]:
+        """v18 R4 三段收割(协议 §R4;调用前提:harvest ∧ target 方向一致)。
+
+        缘前 25%/50% 各落袋 1/6 仓(以 OPEN 为 1.0;错段只判未做段,同一
+        根 bar 两段同触 ⇒ 段序内同批 REDUCE×2),到缘 EXIT 收净剩余;不睬
+        中间 trail/保本(invalid 不动,不调 _reduce/§8.2 路径)。返回意图
+        列表(可能空);若末位为 EXIT ⇒ 持仓已清(调用方直接 return)。
+        """
+        d = pos.direction
+        delta = float(pos.target_1) - float(pos.entry)
+        out: list[OrderIntent] = []
+        for stage, frac_lvl in ((1, R4_LEVEL_1), (2, R4_LEVEL_2)):
+            if pos.r4_stage >= stage:
+                continue
+            lvl = float(pos.entry) + frac_lvl * delta
+            touched = (l <= lvl) if d < 0 else (h >= lvl)
+            if not touched:
+                continue
+            pos.r4_stage = stage
+            qty = min(R4_PARTIAL_FRAC, pos.size_frac)
+            pos.size_frac -= qty
+            reason = (f"v16|target_partial|R4|段{stage}(缘前 "
+                      f"{int(round(frac_lvl * 100))}%)落袋 1/6 仓 "
+                      f"level={lvl:.8g} target={pos.target_1:.8g} "
+                      f"size_frac→{pos.size_frac:.8f}(错峰段序,无 trail "
+                      f"无保本)")
+            self.last.append(reason)
+            out.append(OrderIntent(kind=OrderKind.REDUCE, symbol=pos.symbol,
+                                   qty_frac=qty, reason=reason,
+                                   ref_price=float(c), ts=ts))
+        hit = (l <= pos.target_1) if d < 0 else (h >= pos.target_1)
+        if hit:
+            extreme = l if d < 0 else h
+            out.append(self._exit(
+                pos, ts, c,
+                f"v16|target|R4|缘起收净 target={pos.target_1:.8g} "
+                f"extreme={extreme:.8g} exit 剩余全部(三段收割:缘口径不"
+                f"变,已落袋至段 {pos.r4_stage})"))
+        return out
 
     def _trail(self, pos: Position, new_pivots: Sequence[Pivot],
                atr: float) -> None:
