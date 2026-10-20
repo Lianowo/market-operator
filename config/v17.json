@@ -1,0 +1,176 @@
+{
+  "version": "v17-2026-10-20",
+  "note": "v17 指令变体配置(docs/v17-directive.md,2026-10-20 所有者三条指令;research-log #32 预注册,先于运行):①资金 300→1000 USDT(risk_frac/容量比例等一切数值先验不动)②1h 交易下线(tf_list=[2h,4h,12h,1d];1h 仅作执行路径细帧与 4h 战役的 trigger 帧,不再作为独立认知战役)③级联触发(obs→obs/4)抢跑运行,双臂:arm-M=mic 全族(用户指令语义),arm-C=仅续涨族 mic/fade 归 bar(历史证据侧)。parent=config/v16.json:三闸/顺风档/收割婚配/家族执行差分/费用/容量比例逐键照抄(v16 剩余语义全沿),硬对账测试钉死。这是测量变体不是协议重开:若 mic 仍无增,指令维持但如实存证。",
+  "meta": {
+    "parent": "config/v16.json",
+    "directive": "docs/v17-directive.md",
+    "test_exposure": "第 20 次(research-log #32 预注册,一次性,双臂同一格同次落座)",
+    "equity0": 1000.0,
+    "tf_note": "1h 下线:tf_list=[2h,4h,12h,1d];1h 保留为执行路径(TF≥2h 引擎执行细帧)与 4h 战役 trigger 帧(级联映射内),不产生 1h 认知战役/1h 事件路由",
+    "cascade_note": "trigger_tf_map 冻结映射(trigger.TRIGGER_TF_MAP == config/v13.json,12h→2h、1d→4h 为协议 §1『obs/4 无现帧取最近可用』声明档)"
+  },
+  "equity": 1000.0,
+  "enable_mic": true,
+  "trigger_tf_map": {"3600": 900, "7200": 1800, "14400": 3600, "43200": 7200, "86400": 14400},
+  "atr_n": 14,
+  "k_rev": 1.0,
+  "k_zw": 0.5,
+  "k_bm": 0.1,
+  "k_rj": 0.3,
+  "k_span": 3.0,
+  "k_room": 2.0,
+  "tol_atr": 0.1,
+  "N_a": 3,
+  "N_f": 3,
+  "N_time": 24,
+  "e4_depth_atr": [
+    0.5,
+    2.5
+  ],
+  "e4_recovery": 0.5,
+  "range_max_pivots": 8,
+  "e5_edge_atr": 0.75,
+  "risk_frac": 0.0075,
+  "leverage_cap": 5.0,
+  "taker_fee": 0.0006,
+  "slippage_per_side": 0.0002,
+  "funding_per_8h_per_side": 0.0001,
+  "dev_frac": 0.7,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "obs_tf_seconds": 3600,
+  "tf_list": [
+    "2h",
+    "4h",
+    "12h",
+    "1d"
+  ],
+  "k_is": 0.8,
+  "entry_mode": "quality_routed",
+  "k_dq": 0.5,
+  "k_imp": 1.5,
+  "turtle_stop_atr": 2.0,
+  "portfolio_cap_frac": 0.03,
+  "whitelist": [
+    [
+      "E1",
+      -1
+    ],
+    [
+      "E1",
+      1
+    ],
+    [
+      "E2",
+      -1
+    ],
+    [
+      "E2",
+      1
+    ],
+    [
+      "E3",
+      -1
+    ],
+    [
+      "E3",
+      1
+    ],
+    [
+      "E4",
+      -1
+    ],
+    [
+      "E4",
+      1
+    ],
+    [
+      "E5",
+      -1
+    ],
+    [
+      "E5",
+      1
+    ],
+    [
+      "E6",
+      -1
+    ],
+    [
+      "E6",
+      1
+    ],
+    [
+      "E7",
+      -1
+    ],
+    [
+      "E7",
+      1
+    ],
+    [
+      "E8",
+      -1
+    ],
+    [
+      "E8",
+      1
+    ]
+  ],
+  "n_fill": 12,
+  "exec_tf_seconds": 900,
+  "maker_fee": 0.0002,
+  "merge_max_atr": 2.0,
+  "merge_note": "区域合并封顶 2.0*ATR(沿用 canonical/v16 冻结,不动)",
+  "gates_model": "semantics_routing",
+  "arm": "v17",
+  "arms": {
+    "arm-M": {
+      "v16": true,
+      "fill_model": "exchange_maker",
+      "c3_stop_entry": true,
+      "mic_family": "all",
+      "equity": 1000.0,
+      "note": "mic 全族触发(用户指令语义):三闸+顺风档+收割婚配全沿 v16;事件知时细化到级联 trigger 帧,mic 决策过同一 C2 maker / C3 stop-entry 语义"
+    },
+    "arm-C": {
+      "v16": true,
+      "fill_model": "exchange_maker",
+      "c3_stop_entry": true,
+      "mic_family": [
+        "E1",
+        "E6",
+        "E7"
+      ],
+      "equity": 1000.0,
+      "note": "仅续涨族(E1/E6/E7)激 mic,fade(E2/E3/E8)与 E4/E5 归 bar 触发(历史证据侧);其余语义与 arm-M 逐项一致(同一 V16 路由/闸/收割/提交差分)"
+    }
+  },
+  "v16_params": {
+    "pos_short_min": 0.35,
+    "pos_long_max": 0.65,
+    "k_room_R": 1.5,
+    "k_is": 0.8,
+    "k_star": 2,
+    "tier_a_mult": 1.0,
+    "tier_b_mult": 0.75,
+    "k_cap_hours": 48,
+    "cap_mfe_min": 0.5,
+    "stop_wait_tf": 12,
+    "k_bm": 0.1,
+    "fade_family": [
+      "E2",
+      "E3",
+      "E8"
+    ],
+    "stop_family": [
+      "E1",
+      "E6",
+      "E7"
+    ],
+    "note": "沿 v16 协议写死,不碰(三闸/顺风档/收割婚配/结构锚/家族表与 stop_wait_tf 逐值照抄 config/v16.json)"
+  }
+}
