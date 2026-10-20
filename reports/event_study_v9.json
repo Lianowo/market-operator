@@ -1,0 +1,2868 @@
+{
+  "generated_at_utc": "2026-10-20T02:39:00+00:00",
+  "protocol": {
+    "parent": "docs/v9-protocol.md(评估 = methodology §9 原样,机制 = E9/E10 过程式接受/拒绝,region/成本零改动)",
+    "meta": {
+      "parent": "config/canonical.json",
+      "protocol": "docs/v9-protocol.md",
+      "test_exposure": "第 12 次(research-log #18 预注册,一次性,此后只许前向)",
+      "priors_source": "v9-protocol §2 先验一次写死(min_age/occ/centroid/k_rj)",
+      "whitelist_note": "whitelist 逐项照抄 canonical(研究层不开生产白名单,E9/E10 不入生产路径)"
+    },
+    "enable_e9e10": true,
+    "e9e10_min_age": 3,
+    "e9_occ_min": 0.6666666666666666,
+    "e9_centroid_min": 0.3,
+    "k_rj": 0.3,
+    "timeframe": "1h(认知帧;入场 = 次 1h 开盘市价,protocol §3 注)",
+    "horizons": [
+      6,
+      12,
+      24,
+      48
+    ],
+    "primary_horizon": 24,
+    "cost_mults": [
+      1.0,
+      1.5,
+      2.0
+    ],
+    "dev_frac": 0.7,
+    "n_seeds": 42,
+    "boot_reps": 2000,
+    "event_excl_bars": 24,
+    "min_events_go": 60,
+    "increment_convention": "net = event net - mean(control net); GO/NO-GO criteria 2/3/4 use this increment",
+    "cost_model": {
+      "taker_fee": 0.0006,
+      "slippage_per_side": 0.0002,
+      "funding_per_8h_per_side": 0.0001
+    },
+    "buckets": "事件 × 方向(双向对称判定,不做方向挑选;v9-protocol §4)",
+    "sensitivity_declaration": "敏感性 {min_age 2/4, occ 0.6/0.75,centroid 0.2/0.5} 协议仅许 dev;本管线交付范围 = 主判定网格一次,不含敏感性",
+    "test_eval_declaration": "test 段第 12 次曝光(v9 唯一一次;此后只许前向;research-log #18)",
+    "family_declaration": "预注册主格 4 个(E9/E10 × 双向);全部格子数字完整公布,不挑格子报喜;E1/E3 同池对照为上下文,不属 v9 判定家族"
+  },
+  "symbols": {
+    "BTCUSDT": {
+      "bars": 17600,
+      "n_e9_fired": 0,
+      "n_e10_fired": 0,
+      "n_e1_fired": 2521,
+      "n_e3_fired": 18842,
+      "dev_end_index": 12320,
+      "dev_end_ts": 1773374400000,
+      "dev_end_iso": "2026-03-13T04:00:00+00:00",
+      "elapsed_s": 110.0,
+      "gate_stats": {
+        "episode_bars": 17074,
+        "aged_bars": 15,
+        "aged_episodes_distinct": 8,
+        "e10_occ0": 15,
+        "e10_wf2": 0,
+        "e10_close_retreat": 2,
+        "e10_centroid_le0": 15,
+        "e10_occ0_and_wf2": 0,
+        "e9_occ_ge_thr": 0,
+        "e9_centroid_ge_thr": 0,
+        "e9_close_beyond": 0
+      }
+    },
+    "ETHUSDT": {
+      "bars": 17600,
+      "n_e9_fired": 0,
+      "n_e10_fired": 0,
+      "n_e1_fired": 2606,
+      "n_e3_fired": 19515,
+      "dev_end_index": 12320,
+      "dev_end_ts": 1773374400000,
+      "dev_end_iso": "2026-03-13T04:00:00+00:00",
+      "elapsed_s": 124.1,
+      "gate_stats": {
+        "episode_bars": 17475,
+        "aged_bars": 3,
+        "aged_episodes_distinct": 3,
+        "e10_occ0": 3,
+        "e10_wf2": 0,
+        "e10_close_retreat": 1,
+        "e10_centroid_le0": 3,
+        "e10_occ0_and_wf2": 0,
+        "e9_occ_ge_thr": 0,
+        "e9_centroid_ge_thr": 0,
+        "e9_close_beyond": 0
+      }
+    },
+    "SOLUSDT": {
+      "bars": 17600,
+      "n_e9_fired": 0,
+      "n_e10_fired": 0,
+      "n_e1_fired": 2538,
+      "n_e3_fired": 19444,
+      "dev_end_index": 12320,
+      "dev_end_ts": 1773374400000,
+      "dev_end_iso": "2026-03-13T04:00:00+00:00",
+      "elapsed_s": 157.8,
+      "gate_stats": {
+        "episode_bars": 17423,
+        "aged_bars": 5,
+        "aged_episodes_distinct": 4,
+        "e10_occ0": 5,
+        "e10_wf2": 0,
+        "e10_close_retreat": 2,
+        "e10_centroid_le0": 5,
+        "e10_occ0_and_wf2": 0,
+        "e9_occ_ge_thr": 0,
+        "e9_centroid_ge_thr": 0,
+        "e9_close_beyond": 0
+      }
+    }
+  },
+  "f1_reference": {
+    "BTCUSDT": {
+      "dev": {
+        "fired": 0,
+        "would_pass_f1": 0
+      },
+      "test": {
+        "fired": 0,
+        "would_pass_f1": 0
+      }
+    },
+    "ETHUSDT": {
+      "dev": {
+        "fired": 0,
+        "would_pass_f1": 0
+      },
+      "test": {
+        "fired": 0,
+        "would_pass_f1": 0
+      }
+    },
+    "SOLUSDT": {
+      "dev": {
+        "fired": 0,
+        "would_pass_f1": 0
+      },
+      "test": {
+        "fired": 0,
+        "would_pass_f1": 0
+      }
+    }
+  },
+  "mechanisms": {
+    "E9|long": {
+      "dev": {
+        "n_events": 0,
+        "horizons": {}
+      },
+      "test": {
+        "n_events": 0,
+        "horizons": {},
+        "go_no_go": {
+          "verdict": "INSUFFICIENT_DATA",
+          "reason": "no events"
+        }
+      }
+    },
+    "E9|short": {
+      "dev": {
+        "n_events": 0,
+        "horizons": {}
+      },
+      "test": {
+        "n_events": 0,
+        "horizons": {},
+        "go_no_go": {
+          "verdict": "INSUFFICIENT_DATA",
+          "reason": "no events"
+        }
+      }
+    },
+    "E10|long": {
+      "dev": {
+        "n_events": 0,
+        "horizons": {}
+      },
+      "test": {
+        "n_events": 0,
+        "horizons": {},
+        "go_no_go": {
+          "verdict": "INSUFFICIENT_DATA",
+          "reason": "no events"
+        }
+      }
+    },
+    "E10|short": {
+      "dev": {
+        "n_events": 0,
+        "horizons": {}
+      },
+      "test": {
+        "n_events": 0,
+        "horizons": {},
+        "go_no_go": {
+          "verdict": "INSUFFICIENT_DATA",
+          "reason": "no events"
+        }
+      }
+    }
+  },
+  "compare_pool": {
+    "E1|long": {
+      "dev": {
+        "n_events": 2663,
+        "horizons": {
+          "6": {
+            "n": 2663,
+            "mfe_atr_mean": 1.3877229315131328,
+            "mae_atr_mean": 1.3553484115820709,
+            "gross_atr_mean": -0.020645226088305657,
+            "has_target_frac": 0.9759669545625235,
+            "hit": {
+              "target": 0.8828389034923019,
+              "invalid": 0.05294780322944048
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.2316332495986555,
+                "event_net_pct_mean": -0.0017835264132675126,
+                "event_net_atr_ci95": [
+                  -0.4257226922066755,
+                  -0.05249041471008727
+                ],
+                "ctrl_net_atr_mean": -0.3539978545390558,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.1223646049404003,
+                "incr_pct_mean": 0.0009210101741963461,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.07288018012391213,
+                  0.3039066899185154
+                ],
+                "ctrl_gross_atr_mean": -0.12129701883661684
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.3371272613538304,
+                "event_net_pct_mean": -0.0026585264132675123,
+                "event_net_atr_ci95": [
+                  -0.5321000736483069,
+                  -0.15602889689189348
+                ],
+                "ctrl_net_atr_mean": -0.4703482723902753,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.1332210110364449,
+                "incr_pct_mean": 0.0009210101741963464,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.06187630749141766,
+                  0.3154405142483468
+                ],
+                "ctrl_gross_atr_mean": -0.12129701883661684
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.4426212731090054,
+                "event_net_pct_mean": -0.0035335264132675113,
+                "event_net_atr_ci95": [
+                  -0.6399735443313196,
+                  -0.2619760664709
+                ],
+                "ctrl_net_atr_mean": -0.5866986902414948,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.14407741713248942,
+                "incr_pct_mean": 0.0009210101741963455,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.04885342495238256,
+                  0.32728991608800906
+                ],
+                "ctrl_gross_atr_mean": -0.12129701883661684
+              }
+            }
+          },
+          "12": {
+            "n": 2663,
+            "mfe_atr_mean": 2.0010853747492265,
+            "mae_atr_mean": 1.920910168063957,
+            "gross_atr_mean": 0.03988291893341018,
+            "has_target_frac": 0.9759669545625235,
+            "hit": {
+              "target": 0.8959819752159219,
+              "invalid": 0.06571535861809989
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.1891897923063982,
+                "event_net_pct_mean": -0.0016840573674483693,
+                "event_net_atr_ci95": [
+                  -0.4881690843604952,
+                  0.13218387788307875
+                ],
+                "ctrl_net_atr_mean": -0.18525871048793868,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": -0.00393108181845955,
+                "incr_pct_mean": -0.001211839666498127,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.3036233749913553,
+                  0.3161413916292686
+                ],
+                "ctrl_gross_atr_mean": 0.06738791113185222
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.3037261479263025,
+                "event_net_pct_mean": -0.0026340573674483695,
+                "event_net_atr_ci95": [
+                  -0.6041061281335118,
+                  0.0188415033900459
+                ],
+                "ctrl_net_atr_mean": -0.31158202129783413,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.007855873371531708,
+                "incr_pct_mean": -0.0012118396664981279,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.2917386105187747,
+                  0.32862195995355864
+                ],
+                "ctrl_gross_atr_mean": 0.06738791113185222
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.4182625035462067,
+                "event_net_pct_mean": -0.0035840573674483693,
+                "event_net_atr_ci95": [
+                  -0.7186086888361832,
+                  -0.09525877149648383
+                ],
+                "ctrl_net_atr_mean": -0.4379053321077295,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.019642828561522916,
+                "incr_pct_mean": -0.0012118396664981277,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.28073378932789067,
+                  0.3425099231483469
+                ],
+                "ctrl_gross_atr_mean": 0.06738791113185222
+              }
+            }
+          },
+          "24": {
+            "n": 2663,
+            "mfe_atr_mean": 2.89316595391151,
+            "mae_atr_mean": 2.6704338618366146,
+            "gross_atr_mean": 0.14599619162728897,
+            "has_target_frac": 0.9759669545625235,
+            "hit": {
+              "target": 0.9057453999248968,
+              "invalid": 0.07435223432219301
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.1192458950714365,
+                "event_net_pct_mean": -0.0016344314571207956,
+                "event_net_atr_ci95": [
+                  -0.5487323143527038,
+                  0.35667917274709965
+                ],
+                "ctrl_net_atr_mean": -0.49525409665102127,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.3760082015795848,
+                "incr_pct_mean": 0.0006207930917773236,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.05867470079812996,
+                  0.8450309125193248
+                ],
+                "ctrl_gross_atr_mean": -0.20271590319652658
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.25186693842079927,
+                "event_net_pct_mean": -0.0027344314571207955,
+                "event_net_atr_ci95": [
+                  -0.6818257217904338,
+                  0.22783486691899538
+                ],
+                "ctrl_net_atr_mean": -0.6415231933782687,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.3896562549574693,
+                "incr_pct_mean": 0.0006207930917773236,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.04522191414651776,
+                  0.8600871011344042
+                ],
+                "ctrl_gross_atr_mean": -0.20271590319652658
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.3844879817701621,
+                "event_net_pct_mean": -0.0038344314571207958,
+                "event_net_atr_ci95": [
+                  -0.8161892030143499,
+                  0.0956926817209241
+                ],
+                "ctrl_net_atr_mean": -0.7877922901055159,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.40330430833535386,
+                "incr_pct_mean": 0.000620793091777324,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  -0.029172831683283974,
+                  0.8772097732683285
+                ],
+                "ctrl_gross_atr_mean": -0.20271590319652658
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": 0.5848729786615618,
+              "second_half_incr_atr": 0.1669865012991991,
+              "split_ts": 1751486400000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 167,
+                "mean": 1.1894559907791367
+              },
+              "TRANSITION": {
+                "n": 905,
+                "mean": -0.0873600466816122
+              },
+              "TREND_DOWN": {
+                "n": 54,
+                "mean": 1.3629132179978394
+              },
+              "TREND_UP": {
+                "n": 1537,
+                "mean": 0.5257867396364958
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 867,
+                "mean": 0.1606057450156511
+              },
+              "ETHUSDT": {
+                "n": 929,
+                "mean": 0.5953863448472271
+              },
+              "SOLUSDT": {
+                "n": 867,
+                "mean": 0.3563445738348222
+              }
+            }
+          },
+          "48": {
+            "n": 2663,
+            "mfe_atr_mean": 4.2615111200867615,
+            "mae_atr_mean": 3.7001167958839876,
+            "gross_atr_mean": 0.4211578079670252,
+            "has_target_frac": 0.9759669545625235,
+            "hit": {
+              "target": 0.9076229815996996,
+              "invalid": 0.07960946301164101
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": 0.08357697035046548,
+                "event_net_pct_mean": 0.0001515076403046185,
+                "event_net_atr_ci95": [
+                  -0.6176214962440062,
+                  0.761923818642131
+                ],
+                "ctrl_net_atr_mean": -0.7925027103978687,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.8760796807483341,
+                "incr_pct_mean": 0.006277983048976177,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  0.18617011379711054,
+                  1.5632786625476758
+                ],
+                "ctrl_gross_atr_mean": -0.4201813732739663
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.08521344845781433,
+                "event_net_pct_mean": -0.0012484923596953821,
+                "event_net_atr_ci95": [
+                  -0.7852348822224904,
+                  0.595096040273615
+                ],
+                "ctrl_net_atr_mean": -0.9786633789598199,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.8934499305020055,
+                "incr_pct_mean": 0.006277983048976177,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  0.2036611112431632,
+                  1.5775722402821195
+                ],
+                "ctrl_gross_atr_mean": -0.4201813732739663
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.2540038672660943,
+                "event_net_pct_mean": -0.0026484923596953817,
+                "event_net_atr_ci95": [
+                  -0.956069649991961,
+                  0.42668459943952913
+                ],
+                "ctrl_net_atr_mean": -1.164824047521771,
+                "ctrl_n_mean": 41.66015771686068,
+                "incr_atr_mean": 0.9108201802556768,
+                "incr_pct_mean": 0.0062779830489761755,
+                "incr_n_valid": 2663,
+                "incr_atr_ci95": [
+                  0.22107670757609732,
+                  1.5937805745266107
+                ],
+                "ctrl_gross_atr_mean": -0.4201813732739663
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 867,
+          "ETHUSDT": 929,
+          "SOLUSDT": 867
+        }
+      },
+      "test": {
+        "n_events": 1262,
+        "horizons": {
+          "6": {
+            "n": 1262,
+            "mfe_atr_mean": 1.6228008746415898,
+            "mae_atr_mean": 1.3438272643653852,
+            "gross_atr_mean": 0.17995158202847242,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.9381933438985737,
+              "invalid": 0.03328050713153724
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.0816885983617941,
+                "event_net_pct_mean": -0.00018352640224314202,
+                "event_net_atr_ci95": [
+                  -0.5801352821877845,
+                  0.4941673320950143
+                ],
+                "ctrl_net_atr_mean": -0.21550251133329862,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.13381391297150452,
+                "incr_pct_mean": 0.0010337303471198048,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.3775916081261449,
+                  0.7093172753017176
+                ],
+                "ctrl_gross_atr_mean": 0.09099069669291679
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.21250868855692742,
+                "event_net_pct_mean": -0.0010585264022431415,
+                "event_net_atr_ci95": [
+                  -0.7202522752756948,
+                  0.3616895220370469
+                ],
+                "ctrl_net_atr_mean": -0.3687491153464063,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.15624042678947897,
+                "incr_pct_mean": 0.0010337303471198045,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.3581843961788668,
+                  0.7374607156663593
+                ],
+                "ctrl_gross_atr_mean": 0.09099069669291679
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.3433287787520607,
+                "event_net_pct_mean": -0.0019335264022431423,
+                "event_net_atr_ci95": [
+                  -0.8521516042915882,
+                  0.23805110253308512
+                ],
+                "ctrl_net_atr_mean": -0.5219957193595139,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.17866694060745325,
+                "incr_pct_mean": 0.0010337303471198048,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.34201463860044123,
+                  0.7649117151569612
+                ],
+                "ctrl_gross_atr_mean": 0.09099069669291679
+              }
+            }
+          },
+          "12": {
+            "n": 1262,
+            "mfe_atr_mean": 2.2927762817279143,
+            "mae_atr_mean": 1.7680539814689087,
+            "gross_atr_mean": 0.38746842825270766,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.9540412044374009,
+              "invalid": 0.03486529318541997
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": 0.10340194668613255,
+                "event_net_pct_mean": 0.0014005342901606114,
+                "event_net_atr_ci95": [
+                  -0.6251926048618289,
+                  0.8978112073009903
+                ],
+                "ctrl_net_atr_mean": -0.24853523302672378,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.3519371797128563,
+                "incr_pct_mean": 0.0024008824322045135,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.3818046772909894,
+                  1.155820194258512
+                ],
+                "ctrl_gross_atr_mean": 0.08422882140173862
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.03863129409715491,
+                "event_net_pct_mean": 0.0004505342901606107,
+                "event_net_atr_ci95": [
+                  -0.7765221360805483,
+                  0.7610339749305938
+                ],
+                "ctrl_net_atr_mean": -0.414917260240955,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.37628596614379994,
+                "incr_pct_mean": 0.002400882432204513,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.3680115002051981,
+                  1.1874494090627152
+                ],
+                "ctrl_gross_atr_mean": 0.08422882140173862
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.18066453488044254,
+                "event_net_pct_mean": -0.0004994657098393887,
+                "event_net_atr_ci95": [
+                  -0.9252754309700386,
+                  0.6227720022750088
+                ],
+                "ctrl_net_atr_mean": -0.5812992874551861,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.40063475257474357,
+                "incr_pct_mean": 0.002400882432204513,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.3521347657280564,
+                  1.2135784200201
+                ],
+                "ctrl_gross_atr_mean": 0.08422882140173862
+              }
+            }
+          },
+          "24": {
+            "n": 1262,
+            "mfe_atr_mean": 3.4123871134029184,
+            "mae_atr_mean": 2.5697545400527306,
+            "gross_atr_mean": 0.6206017533698694,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.9595879556259905,
+              "invalid": 0.03724247226624406
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": 0.2916826694506773,
+                "event_net_pct_mean": 0.0030828370621037255,
+                "event_net_atr_ci95": [
+                  -0.8413182089167073,
+                  1.553645990837187
+                ],
+                "ctrl_net_atr_mean": -0.2957248643031459,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.5874075337538232,
+                "incr_pct_mean": 0.004266446816356532,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.5624208964534755,
+                  1.8812728351915988
+                ],
+                "ctrl_gross_atr_mean": 0.08958088292981062
+              },
+              "1_5": {
+                "event_net_atr_mean": 0.12722312749108117,
+                "event_net_pct_mean": 0.0019828370621037257,
+                "event_net_atr_ci95": [
+                  -1.0138456815646262,
+                  1.3977543441663633
+                ],
+                "ctrl_net_atr_mean": -0.4883777379196241,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.6156008654107052,
+                "incr_pct_mean": 0.004266446816356533,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.5423171858325097,
+                  1.9100352397118854
+                ],
+                "ctrl_gross_atr_mean": 0.08958088292981062
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.037236414468514965,
+                "event_net_pct_mean": 0.0008828370621037265,
+                "event_net_atr_ci95": [
+                  -1.182376350869372,
+                  1.2416573185457607
+                ],
+                "ctrl_net_atr_mean": -0.6810306115361022,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.6437941970675874,
+                "incr_pct_mean": 0.004266446816356532,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -0.5190157503834686,
+                  1.9390070021698254
+                ],
+                "ctrl_gross_atr_mean": 0.08958088292981062
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": -0.38297125646463215,
+              "second_half_incr_atr": 1.5577863239722785,
+              "split_ts": 1783992600000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 54,
+                "mean": 1.0500231256868675
+              },
+              "TRANSITION": {
+                "n": 343,
+                "mean": 0.4379875206468078
+              },
+              "TREND_DOWN": {
+                "n": 35,
+                "mean": 0.24170909589861875
+              },
+              "TREND_UP": {
+                "n": 830,
+                "mean": 0.633635567315575
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 438,
+                "mean": 0.41260219844662993
+              },
+              "ETHUSDT": {
+                "n": 426,
+                "mean": 0.6092260472198894
+              },
+              "SOLUSDT": {
+                "n": 398,
+                "mean": 0.7564277602061006
+              }
+            }
+          },
+          "48": {
+            "n": 1262,
+            "mfe_atr_mean": 5.02894373659733,
+            "mae_atr_mean": 3.595294937889173,
+            "gross_atr_mean": 1.1765930461114804,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.9603803486529319,
+              "invalid": 0.03803486529318542
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": 0.7579687574870537,
+                "event_net_pct_mean": 0.007272194203329201,
+                "event_net_atr_ci95": [
+                  -1.0080651140175823,
+                  2.9075084832445577
+                ],
+                "ctrl_net_atr_mean": 0.45541979131583216,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.30254896617122146,
+                "incr_pct_mean": 0.0041394624407736745,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -1.466356298167982,
+                  2.46598285801694
+                ],
+                "ctrl_gross_atr_mean": 0.9458089241577767
+              },
+              "1_5": {
+                "event_net_atr_mean": 0.5486566131748405,
+                "event_net_pct_mean": 0.005872194203329202,
+                "event_net_atr_ci95": [
+                  -1.2199866478019035,
+                  2.7081866000986543
+                ],
+                "ctrl_net_atr_mean": 0.21022522489486006,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.3384313882799805,
+                "incr_pct_mean": 0.004139462440773676,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -1.4423889908518717,
+                  2.5080112883871926
+                ],
+                "ctrl_gross_atr_mean": 0.9458089241577767
+              },
+              "2_0": {
+                "event_net_atr_mean": 0.33934446886262726,
+                "event_net_pct_mean": 0.004472194203329202,
+                "event_net_atr_ci95": [
+                  -1.4349462066677119,
+                  2.5065055401248837
+                ],
+                "ctrl_net_atr_mean": -0.03496934152611238,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.3743138103887394,
+                "incr_pct_mean": 0.0041394624407736745,
+                "incr_n_valid": 1262,
+                "incr_atr_ci95": [
+                  -1.4168814135531704,
+                  2.5480687692240327
+                ],
+                "ctrl_gross_atr_mean": 0.9458089241577767
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 438,
+          "ETHUSDT": 426,
+          "SOLUSDT": 398
+        },
+        "go_no_go": {
+          "verdict": "NO-GO",
+          "primary_horizon": 24,
+          "criterion1_events_ge_60": {
+            "pass": true,
+            "n_events_total": 1262,
+            "per_symbol": {
+              "BTCUSDT": 438,
+              "ETHUSDT": 426,
+              "SOLUSDT": 398
+            }
+          },
+          "criterion2_incr_positive_at_1_5x": {
+            "pass": true,
+            "incr_atr": 0.6156008654107052,
+            "incr_pct": 0.004266446816356533
+          },
+          "criterion3_ci_lower_gt_0_at_1x": {
+            "pass": false,
+            "ci95_lower": -0.5624208964534755
+          },
+          "criterion4_two_symbols_positive": {
+            "pass": true,
+            "n_positive": 3,
+            "per_symbol_incr": {
+              "BTCUSDT": 0.41260219844662993,
+              "ETHUSDT": 0.6092260472198894,
+              "SOLUSDT": 0.7564277602061006
+            }
+          }
+        }
+      }
+    },
+    "E1|short": {
+      "dev": {
+        "n_events": 2532,
+        "horizons": {
+          "6": {
+            "n": 2532,
+            "mfe_atr_mean": 1.6196022108937422,
+            "mae_atr_mean": 1.1997907122694358,
+            "gross_atr_mean": 0.06237093873706512,
+            "has_target_frac": 0.9940758293838863,
+            "hit": {
+              "target": 0.9024486571879937,
+              "invalid": 0.044233807266982623
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.12950893266221222,
+                "event_net_pct_mean": -0.001262105197356411,
+                "event_net_atr_ci95": [
+                  -0.30555722247901596,
+                  0.052239005175136154
+                ],
+                "ctrl_net_atr_mean": -0.1366659436267335,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": 0.0071570109645212755,
+                "incr_pct_mean": -0.00011446369335704423,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.16904640234679555,
+                  0.19195814899509195
+                ],
+                "ctrl_gross_atr_mean": 0.1065629538962719
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.22544886836185088,
+                "event_net_pct_mean": -0.002137105197356411,
+                "event_net_atr_ci95": [
+                  -0.40246377950346995,
+                  -0.0430664703182878
+                ],
+                "ctrl_net_atr_mean": -0.2582803923882362,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": 0.032831524026385304,
+                "incr_pct_mean": -0.00011446369335704427,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.1429233774770816,
+                  0.2179280652895738
+                ],
+                "ctrl_gross_atr_mean": 0.1065629538962719
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.32138880406148956,
+                "event_net_pct_mean": -0.0030121051973564105,
+                "event_net_atr_ci95": [
+                  -0.4999129059676185,
+                  -0.13794582453481397
+                ],
+                "ctrl_net_atr_mean": -0.37989484114973887,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": 0.05850603708824936,
+                "incr_pct_mean": -0.00011446369335704451,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.11756993564013661,
+                  0.24311843565212957
+                ],
+                "ctrl_gross_atr_mean": 0.1065629538962719
+              }
+            }
+          },
+          "12": {
+            "n": 2532,
+            "mfe_atr_mean": 2.243912448226487,
+            "mae_atr_mean": 1.6753036725283512,
+            "gross_atr_mean": 0.13490636109934426,
+            "has_target_frac": 0.9940758293838863,
+            "hit": {
+              "target": 0.9123222748815166,
+              "invalid": 0.054502369668246446
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.07342035641987114,
+                "event_net_pct_mean": -0.0010465622227655844,
+                "event_net_atr_ci95": [
+                  -0.35036765230422257,
+                  0.20091865333370207
+                ],
+                "ctrl_net_atr_mean": 0.2546649136982253,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.32808527011809646,
+                "incr_pct_mean": -0.0029969678678913765,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.6021550612291013,
+                  -0.056817795454706416
+                ],
+                "ctrl_gross_atr_mean": 0.5187420024374884
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.17758371517947882,
+                "event_net_pct_mean": -0.0019965622227655845,
+                "event_net_atr_ci95": [
+                  -0.45419067175331307,
+                  0.09748926782434256
+                ],
+                "ctrl_net_atr_mean": 0.12262636932859372,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.3002100845080725,
+                "incr_pct_mean": -0.002996967867891377,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.5753138175282094,
+                  -0.028560180467169707
+                ],
+                "ctrl_gross_atr_mean": 0.5187420024374884
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.2817470739390865,
+                "event_net_pct_mean": -0.002946562222765585,
+                "event_net_atr_ci95": [
+                  -0.5596223087740648,
+                  -0.004761617035685748
+                ],
+                "ctrl_net_atr_mean": -0.009412175041037696,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.2723348988980488,
+                "incr_pct_mean": -0.002996967867891376,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.5489222994840888,
+                  0.0032090338365329983
+                ],
+                "ctrl_gross_atr_mean": 0.5187420024374884
+              }
+            }
+          },
+          "24": {
+            "n": 2532,
+            "mfe_atr_mean": 3.0673546581510904,
+            "mae_atr_mean": 2.45987469128992,
+            "gross_atr_mean": 0.20433078842632954,
+            "has_target_frac": 0.9940758293838863,
+            "hit": {
+              "target": 0.9233807266982622,
+              "invalid": 0.06279620853080568
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.036889621332761906,
+                "event_net_pct_mean": -0.0010062933052572874,
+                "event_net_atr_ci95": [
+                  -0.4363410717282554,
+                  0.3433067068033421
+                ],
+                "ctrl_net_atr_mean": 0.2731227179751321,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.310012339307894,
+                "incr_pct_mean": -0.0022229056902148825,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.7026441934668245,
+                  0.06717640293727094
+                ],
+                "ctrl_gross_atr_mean": 0.5788961891469103
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.15749982621230768,
+                "event_net_pct_mean": -0.0021062933052572873,
+                "event_net_atr_ci95": [
+                  -0.5597006273986459,
+                  0.2257749479173481
+                ],
+                "ctrl_net_atr_mean": 0.12023598238924293,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.27773580860155067,
+                "incr_pct_mean": -0.002222905690214882,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.6714510310199668,
+                  0.10099268427023342
+                ],
+                "ctrl_gross_atr_mean": 0.5788961891469103
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.27811003109185334,
+                "event_net_pct_mean": -0.003206293305257288,
+                "event_net_atr_ci95": [
+                  -0.679412869056531,
+                  0.10124854799765913
+                ],
+                "ctrl_net_atr_mean": -0.03265075319664605,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.2454592778952073,
+                "incr_pct_mean": -0.0022229056902148825,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -0.6392601392221299,
+                  0.1331752988410071
+                ],
+                "ctrl_gross_atr_mean": 0.5788961891469103
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": -0.497617933864599,
+              "second_half_incr_atr": -0.12181305616081975,
+              "split_ts": 1753995600000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 101,
+                "mean": -0.28098330791437504
+              },
+              "TRANSITION": {
+                "n": 836,
+                "mean": -0.1921265482689928
+              },
+              "TREND_DOWN": {
+                "n": 1547,
+                "mean": -0.3669361805716915
+              },
+              "TREND_UP": {
+                "n": 48,
+                "mean": -0.5896638193948175
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 833,
+                "mean": -0.8424925929520783
+              },
+              "ETHUSDT": {
+                "n": 843,
+                "mean": 0.2913337065525957
+              },
+              "SOLUSDT": {
+                "n": 856,
+                "mean": -0.38405283624105685
+              }
+            }
+          },
+          "48": {
+            "n": 2532,
+            "mfe_atr_mean": 4.479030621490997,
+            "mae_atr_mean": 3.4799301163978242,
+            "gross_atr_mean": 0.16758941243029887,
+            "has_target_frac": 0.9940758293838863,
+            "hit": {
+              "target": 0.9293048973143759,
+              "invalid": 0.06516587677725119
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.13941838180854485,
+                "event_net_pct_mean": -0.0028294153598677186,
+                "event_net_atr_ci95": [
+                  -0.7744159546089194,
+                  0.5139840253330301
+                ],
+                "ctrl_net_atr_mean": 0.5475198819531427,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.6869382637616874,
+                "incr_pct_mean": -0.006377509470181951,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -1.3447230771489915,
+                  -0.032696448806480545
+                ],
+                "ctrl_gross_atr_mean": 0.9366861179899515
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.29292227892796663,
+                "event_net_pct_mean": -0.004229415359867719,
+                "event_net_atr_ci95": [
+                  -0.9293691807797692,
+                  0.3602202616290803
+                ],
+                "ctrl_net_atr_mean": 0.35293676393473855,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.6458590428627053,
+                "incr_pct_mean": -0.006377509470181949,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -1.301723147883446,
+                  0.010712469929156167
+                ],
+                "ctrl_gross_atr_mean": 0.9366861179899515
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.44642617604738855,
+                "event_net_pct_mean": -0.005629415359867719,
+                "event_net_atr_ci95": [
+                  -1.0848544906974724,
+                  0.20573129798768816
+                ],
+                "ctrl_net_atr_mean": 0.1583536459163341,
+                "ctrl_n_mean": 41.669826224328595,
+                "incr_atr_mean": -0.6047798219637228,
+                "incr_pct_mean": -0.006377509470181949,
+                "incr_n_valid": 2532,
+                "incr_atr_ci95": [
+                  -1.2612044019182904,
+                  0.05013311269782275
+                ],
+                "ctrl_gross_atr_mean": 0.9366861179899515
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 833,
+          "ETHUSDT": 843,
+          "SOLUSDT": 856
+        }
+      },
+      "test": {
+        "n_events": 1175,
+        "horizons": {
+          "6": {
+            "n": 1175,
+            "mfe_atr_mean": 1.25465794933596,
+            "mae_atr_mean": 1.273464198629205,
+            "gross_atr_mean": -0.11521364879632326,
+            "has_target_frac": 0.9974468085106383,
+            "hit": {
+              "target": 0.916595744680851,
+              "invalid": 0.0374468085106383
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.36239200290173784,
+                "event_net_pct_mean": -0.0025208682717618074,
+                "event_net_atr_ci95": [
+                  -0.6473397097558578,
+                  -0.09651299116794734
+                ],
+                "ctrl_net_atr_mean": -0.6507163811053027,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.2883243782035649,
+                "incr_pct_mean": 0.0006149945493017702,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  -0.0074426567973024695,
+                  0.5725221338251487
+                ],
+                "ctrl_gross_atr_mean": -0.3350690842286256
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.48598117995444506,
+                "event_net_pct_mean": -0.003395868271761807,
+                "event_net_atr_ci95": [
+                  -0.77221552077561,
+                  -0.21783660812688319
+                ],
+                "ctrl_net_atr_mean": -0.8085400295436412,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.3225588495891962,
+                "incr_pct_mean": 0.0006149945493017701,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.023620596979622852,
+                  0.6119065708628513
+                ],
+                "ctrl_gross_atr_mean": -0.3350690842286256
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.6095703570071525,
+                "event_net_pct_mean": -0.004270868271761807,
+                "event_net_atr_ci95": [
+                  -0.9012580383360739,
+                  -0.3410386793871941
+                ],
+                "ctrl_net_atr_mean": -0.96636367798198,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.35679332097482747,
+                "incr_pct_mean": 0.0006149945493017699,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.05469955081828298,
+                  0.6494020840577298
+                ],
+                "ctrl_gross_atr_mean": -0.3350690842286256
+              }
+            }
+          },
+          "12": {
+            "n": 1175,
+            "mfe_atr_mean": 1.8178367980012127,
+            "mae_atr_mean": 1.7911067397618265,
+            "gross_atr_mean": -0.15917760240271986,
+            "has_target_frac": 0.9974468085106383,
+            "hit": {
+              "target": 0.9319148936170213,
+              "invalid": 0.04765957446808511
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.4275426725743128,
+                "event_net_pct_mean": -0.003023725938574331,
+                "event_net_atr_ci95": [
+                  -0.8800291476646802,
+                  -0.04749555668430809
+                ],
+                "ctrl_net_atr_mean": -0.9407592744743991,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.5132166019000863,
+                "incr_pct_mean": 0.0005499361418028805,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.04615798302298535,
+                  0.9183270732943393
+                ],
+                "ctrl_gross_atr_mean": -0.5980564950082926
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.5617252076601092,
+                "event_net_pct_mean": -0.003973725938574332,
+                "event_net_atr_ci95": [
+                  -1.0135679057897944,
+                  -0.1801848260213693
+                ],
+                "ctrl_net_atr_mean": -1.1121106642074525,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.5503854565473433,
+                "incr_pct_mean": 0.0005499361418028798,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.08255179553045584,
+                  0.9577833407901161
+                ],
+                "ctrl_gross_atr_mean": -0.5980564950082926
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.6959077427459058,
+                "event_net_pct_mean": -0.004923725938574331,
+                "event_net_atr_ci95": [
+                  -1.1517895947225998,
+                  -0.310531801688931
+                ],
+                "ctrl_net_atr_mean": -1.283462053940506,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 0.5875543111946001,
+                "incr_pct_mean": 0.00054993614180288,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.11792784097866897,
+                  0.9970998254820533
+                ],
+                "ctrl_gross_atr_mean": -0.5980564950082926
+              }
+            }
+          },
+          "24": {
+            "n": 1175,
+            "mfe_atr_mean": 2.483846310442572,
+            "mae_atr_mean": 2.5487716809702468,
+            "gross_atr_mean": -0.20711602628672762,
+            "has_target_frac": 0.9974468085106383,
+            "hit": {
+              "target": 0.9404255319148936,
+              "invalid": 0.05021276595744681
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.5178545285906773,
+                "event_net_pct_mean": -0.0030580942589554494,
+                "event_net_atr_ci95": [
+                  -1.1080354179179377,
+                  0.03894510149150016
+                ],
+                "ctrl_net_atr_mean": -1.5568828370662555,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 1.0390283084755783,
+                "incr_pct_mean": 0.003273277331986897,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.4285177688756676,
+                  1.6139759326941598
+                ],
+                "ctrl_gross_atr_mean": -1.1600690924212902
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.6732237797426522,
+                "event_net_pct_mean": -0.004158094258955449,
+                "event_net_atr_ci95": [
+                  -1.2693615590664722,
+                  -0.11199328108902794
+                ],
+                "ctrl_net_atr_mean": -1.7552897093887379,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 1.082065929646086,
+                "incr_pct_mean": 0.0032732773319868974,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.47087395080346334,
+                  1.6575893489694202
+                ],
+                "ctrl_gross_atr_mean": -1.1600690924212902
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.8285930308946271,
+                "event_net_pct_mean": -0.00525809425895545,
+                "event_net_atr_ci95": [
+                  -1.4309726349744585,
+                  -0.2652537007397923
+                ],
+                "ctrl_net_atr_mean": -1.9536965817112208,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 1.125103550816594,
+                "incr_pct_mean": 0.003273277331986897,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.5086035310843842,
+                  1.7001820168955113
+                ],
+                "ctrl_gross_atr_mean": -1.1600690924212902
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": 1.2816867659083122,
+              "second_half_incr_atr": 0.7959564635514765,
+              "split_ts": 1781625600000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 78,
+                "mean": 1.4265815010841976
+              },
+              "TRANSITION": {
+                "n": 355,
+                "mean": 0.7577627517532373
+              },
+              "TREND_DOWN": {
+                "n": 723,
+                "mean": 1.1427995702080085
+              },
+              "TREND_UP": {
+                "n": 19,
+                "mean": 0.7544757495498743
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 375,
+                "mean": 2.266924414992704
+              },
+              "ETHUSDT": {
+                "n": 394,
+                "mean": 0.5685284870474048
+              },
+              "SOLUSDT": {
+                "n": 406,
+                "mean": 0.3614812387681346
+              }
+            }
+          },
+          "48": {
+            "n": 1175,
+            "mfe_atr_mean": 3.695202039012627,
+            "mae_atr_mean": 3.765172592923,
+            "gross_atr_mean": -0.1436095777701537,
+            "has_target_frac": 0.9974468085106383,
+            "hit": {
+              "target": 0.9438297872340425,
+              "invalid": 0.05617021276595745
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.5390949443388171,
+                "event_net_pct_mean": -0.0037055720031946115,
+                "event_net_atr_ci95": [
+                  -1.4040777492326229,
+                  0.3586419261621716
+                ],
+                "ctrl_net_atr_mean": -2.353305113588136,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 1.8142101692493184,
+                "incr_pct_mean": 0.0050071224865897036,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.9070851469851392,
+                  2.73555124464613
+                ],
+                "ctrl_gross_atr_mean": -1.8482694385854523
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.7368376276231486,
+                "event_net_pct_mean": -0.005105572003194611,
+                "event_net_atr_ci95": [
+                  -1.6049024116733914,
+                  0.16318527582094253
+                ],
+                "ctrl_net_atr_mean": -2.6058229510894777,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 1.8689853234663287,
+                "incr_pct_mean": 0.005007122486589704,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  0.9575015188886065,
+                  2.793135115660809
+                ],
+                "ctrl_gross_atr_mean": -1.8482694385854523
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.9345803109074805,
+                "event_net_pct_mean": -0.006505572003194612,
+                "event_net_atr_ci95": [
+                  -1.805269868347753,
+                  -0.03139583765614996
+                ],
+                "ctrl_net_atr_mean": -2.8583407885908194,
+                "ctrl_n_mean": 42.0,
+                "incr_atr_mean": 1.9237604776833386,
+                "incr_pct_mean": 0.005007122486589705,
+                "incr_n_valid": 1175,
+                "incr_atr_ci95": [
+                  1.002525959019492,
+                  2.8537831760761025
+                ],
+                "ctrl_gross_atr_mean": -1.8482694385854523
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 375,
+          "ETHUSDT": 394,
+          "SOLUSDT": 406
+        },
+        "go_no_go": {
+          "verdict": "GO",
+          "primary_horizon": 24,
+          "criterion1_events_ge_60": {
+            "pass": true,
+            "n_events_total": 1175,
+            "per_symbol": {
+              "BTCUSDT": 375,
+              "ETHUSDT": 394,
+              "SOLUSDT": 406
+            }
+          },
+          "criterion2_incr_positive_at_1_5x": {
+            "pass": true,
+            "incr_atr": 1.082065929646086,
+            "incr_pct": 0.0032732773319868974
+          },
+          "criterion3_ci_lower_gt_0_at_1x": {
+            "pass": true,
+            "ci95_lower": 0.4285177688756676
+          },
+          "criterion4_two_symbols_positive": {
+            "pass": true,
+            "n_positive": 3,
+            "per_symbol_incr": {
+              "BTCUSDT": 2.266924414992704,
+              "ETHUSDT": 0.5685284870474048,
+              "SOLUSDT": 0.3614812387681346
+            }
+          }
+        }
+      }
+    },
+    "E3|long": {
+      "dev": {
+        "n_events": 18619,
+        "horizons": {
+          "6": {
+            "n": 18619,
+            "mfe_atr_mean": 1.3176134404169828,
+            "mae_atr_mean": 1.3940654892243498,
+            "gross_atr_mean": 0.005324048656020495,
+            "has_target_frac": 0.9976905311778291,
+            "hit": {
+              "target": 0.853536709812557,
+              "invalid": 0.08716902089263655
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.21639654060113267,
+                "event_net_pct_mean": -0.0017612744476929747,
+                "event_net_atr_ci95": [
+                  -0.3036819275736686,
+                  -0.13169940032727898
+                ],
+                "ctrl_net_atr_mean": 0.37512568741645985,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -0.596278078620909,
+                "incr_pct_mean": -0.008005727348241306,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -0.6955822572016477,
+                  -0.49990557765552024
+                ],
+                "ctrl_gross_atr_mean": 0.6082370668059688
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.3272568352297092,
+                "event_net_pct_mean": -0.0026362744476929744,
+                "event_net_atr_ci95": [
+                  -0.4133928712794373,
+                  -0.24291370268779588
+                ],
+                "ctrl_net_atr_mean": 0.25856999772170536,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -0.5879105336841245,
+                "incr_pct_mean": -0.008005727348241306,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -0.6870655190750329,
+                  -0.49024334837601485
+                ],
+                "ctrl_gross_atr_mean": 0.6082370668059688
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.4381171298582857,
+                "event_net_pct_mean": -0.0035112744476929743,
+                "event_net_atr_ci95": [
+                  -0.5259397967976144,
+                  -0.3540005699430668
+                ],
+                "ctrl_net_atr_mean": 0.142014308026951,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -0.57954298874734,
+                "incr_pct_mean": -0.008005727348241306,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -0.6783785679802523,
+                  -0.4809795465640745
+                ],
+                "ctrl_gross_atr_mean": 0.6082370668059688
+              }
+            }
+          },
+          "12": {
+            "n": 18619,
+            "mfe_atr_mean": 1.9018726252515537,
+            "mae_atr_mean": 2.0155477493929284,
+            "gross_atr_mean": 0.009026169246316103,
+            "has_target_frac": 0.9976905311778291,
+            "hit": {
+              "target": 0.8673398141683227,
+              "invalid": 0.09909232504430958
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.23169904194716442,
+                "event_net_pct_mean": -0.001815256884692287,
+                "event_net_atr_ci95": [
+                  -0.39524561617175974,
+                  -0.0687391319487449
+                ],
+                "ctrl_net_atr_mean": 0.8559621852177743,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -1.0526794411003921,
+                "incr_pct_mean": -0.013780930609050213,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -1.2233697067184126,
+                  -0.8845553554401492
+                ],
+                "ctrl_gross_atr_mean": 1.1090545399835268
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.35206164754390473,
+                "event_net_pct_mean": -0.002765256884692287,
+                "event_net_atr_ci95": [
+                  -0.5157325540245064,
+                  -0.19003508072606407
+                ],
+                "ctrl_net_atr_mean": 0.7294160078348981,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -1.0435946780261687,
+                "incr_pct_mean": -0.013780930609050213,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -1.214724091015025,
+                  -0.8748276399948105
+                ],
+                "ctrl_gross_atr_mean": 1.1090545399835268
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.472424253140645,
+                "event_net_pct_mean": -0.0037152568846922866,
+                "event_net_atr_ci95": [
+                  -0.6352683246186467,
+                  -0.3092185737050741
+                ],
+                "ctrl_net_atr_mean": 0.6028698304520218,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -1.0345099149519457,
+                "incr_pct_mean": -0.013780930609050212,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -1.2044784632980714,
+                  -0.8661516680866634
+                ],
+                "ctrl_gross_atr_mean": 1.1090545399835268
+              }
+            }
+          },
+          "24": {
+            "n": 18619,
+            "mfe_atr_mean": 2.8135547556167997,
+            "mae_atr_mean": 2.9253354494927137,
+            "gross_atr_mean": 0.03554622322612733,
+            "has_target_frac": 0.9976905311778291,
+            "hit": {
+              "target": 0.8780278210430206,
+              "invalid": 0.10666523443793974
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.24318823184000804,
+                "event_net_pct_mean": -0.001835862095698731,
+                "event_net_atr_ci95": [
+                  -0.525328607975715,
+                  0.055150827570622694
+                ],
+                "ctrl_net_atr_mean": 0.7662646146494944,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -0.960315256540851,
+                "incr_pct_mean": -0.00773912069227981,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -1.2475097183558392,
+                  -0.6649613341945234
+                ],
+                "ctrl_gross_atr_mean": 1.059318920167734
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.3825554593730757,
+                "event_net_pct_mean": -0.0029358620956987306,
+                "event_net_atr_ci95": [
+                  -0.6646547482392371,
+                  -0.08351656145094585
+                ],
+                "ctrl_net_atr_mean": 0.6197374618903746,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -0.9497960571917505,
+                "incr_pct_mean": -0.007739120692279808,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -1.2378714899636547,
+                  -0.6531384779855326
+                ],
+                "ctrl_gross_atr_mean": 1.059318920167734
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.5219226869061434,
+                "event_net_pct_mean": -0.004035862095698731,
+                "event_net_atr_ci95": [
+                  -0.8020282735182876,
+                  -0.22518329516115698
+                ],
+                "ctrl_net_atr_mean": 0.47321030913125467,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -0.9392768578426499,
+                "incr_pct_mean": -0.00773912069227981,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -1.2280330554411645,
+                  -0.6403826058586752
+                ],
+                "ctrl_gross_atr_mean": 1.059318920167734
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": -0.7142613313534542,
+              "second_half_incr_atr": -1.2091170609423907,
+              "split_ts": 1753398000000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 1120,
+                "mean": -0.7973901544151383
+              },
+              "TRANSITION": {
+                "n": 7810,
+                "mean": -0.4507007078345194
+              },
+              "TREND_DOWN": {
+                "n": 4972,
+                "mean": -2.263380261657779
+              },
+              "TREND_UP": {
+                "n": 4717,
+                "mean": -1.3416191195130378
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 6104,
+                "mean": -1.5101679481448027
+              },
+              "ETHUSDT": {
+                "n": 6047,
+                "mean": -1.1562678611121862
+              },
+              "SOLUSDT": {
+                "n": 6468,
+                "mean": -0.4420395755783648
+              }
+            }
+          },
+          "48": {
+            "n": 18619,
+            "mfe_atr_mean": 4.120164186296152,
+            "mae_atr_mean": 4.258323412606952,
+            "gross_atr_mean": 0.05597400724721141,
+            "has_target_frac": 0.9976905311778291,
+            "hit": {
+              "target": 0.8839357645415973,
+              "invalid": 0.11117675492776197
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.2987789355642337,
+                "event_net_pct_mean": -0.002395676453385512,
+                "event_net_atr_ci95": [
+                  -0.7759540052618781,
+                  0.17589775938812327
+                ],
+                "ctrl_net_atr_mean": 4.2788158183505525,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -4.517517387976902,
+                "incr_pct_mean": -0.025183441409824803,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -4.9996155424624895,
+                  -4.0467905200950085
+                ],
+                "ctrl_gross_atr_mean": 4.651794025373766
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.47615540696995606,
+                "event_net_pct_mean": -0.003795676453385513,
+                "event_net_atr_ci95": [
+                  -0.952442628039577,
+                  -9.574775233769169e-05
+                ],
+                "ctrl_net_atr_mean": 4.092326714838944,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -4.504129316078046,
+                "incr_pct_mean": -0.025183441409824803,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -4.987566539530894,
+                  -4.031937067249358
+                ],
+                "ctrl_gross_atr_mean": 4.651794025373766
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.6535318783756786,
+                "event_net_pct_mean": -0.005195676453385512,
+                "event_net_atr_ci95": [
+                  -1.1299334625316506,
+                  -0.17896495125193332
+                ],
+                "ctrl_net_atr_mean": 3.905837611327338,
+                "ctrl_n_mean": 23.846339760459745,
+                "incr_atr_mean": -4.4907412441791905,
+                "incr_pct_mean": -0.025183441409824803,
+                "incr_n_valid": 14587,
+                "incr_atr_ci95": [
+                  -4.975438842971779,
+                  -4.018164543844518
+                ],
+                "ctrl_gross_atr_mean": 4.651794025373766
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 6104,
+          "ETHUSDT": 6047,
+          "SOLUSDT": 6468
+        }
+      },
+      "test": {
+        "n_events": 10151,
+        "horizons": {
+          "6": {
+            "n": 10151,
+            "mfe_atr_mean": 1.3912793851996494,
+            "mae_atr_mean": 1.3387993855389126,
+            "gross_atr_mean": 0.07663459057358202,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.8828686828883854,
+              "invalid": 0.0646241749581322
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.2012117833656721,
+                "event_net_pct_mean": -0.0012787210588097065,
+                "event_net_atr_ci95": [
+                  -0.3231476511819046,
+                  -0.07142463932836979
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.34013497033529916,
+                "event_net_pct_mean": -0.002153721058809706,
+                "event_net_atr_ci95": [
+                  -0.4625169047872181,
+                  -0.21150136558370392
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.4790581573049263,
+                "event_net_pct_mean": -0.0030287210588097065,
+                "event_net_atr_ci95": [
+                  -0.6010029545819419,
+                  -0.34795924475399753
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            }
+          },
+          "12": {
+            "n": 10151,
+            "mfe_atr_mean": 2.044133341012394,
+            "mae_atr_mean": 1.9131692862845493,
+            "gross_atr_mean": 0.14424254243684922,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.8955767904639937,
+              "invalid": 0.07496798344990642
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.15741923498291238,
+                "event_net_pct_mean": -0.0010564423085884368,
+                "event_net_atr_ci95": [
+                  -0.406944202591586,
+                  0.115473397605653
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.3082501236927932,
+                "event_net_pct_mean": -0.0020064423085884367,
+                "event_net_atr_ci95": [
+                  -0.5544887392663881,
+                  -0.036136564529914116
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.45908101240267407,
+                "event_net_pct_mean": -0.0029564423085884366,
+                "event_net_atr_ci95": [
+                  -0.7054377008599225,
+                  -0.186567325259852
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            }
+          },
+          "24": {
+            "n": 10151,
+            "mfe_atr_mean": 3.0535314348858966,
+            "mae_atr_mean": 2.7378633370235144,
+            "gross_atr_mean": 0.2991961381040611,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.9046399369520244,
+              "invalid": 0.08078021869766526
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.05009644627671552,
+                "event_net_pct_mean": -0.0005721774798925029,
+                "event_net_atr_ci95": [
+                  -0.5037959260313336,
+                  0.4267496155111575
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.22474273846710388,
+                "event_net_pct_mean": -0.0016721774798925026,
+                "event_net_atr_ci95": [
+                  -0.6789279546644735,
+                  0.2514710949366165
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.3993890306574922,
+                "event_net_pct_mean": -0.0027721774798925023,
+                "event_net_atr_ci95": [
+                  -0.8552813282473117,
+                  0.07737620453137
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": NaN,
+              "second_half_incr_atr": NaN,
+              "split_ts": 1782648000000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 807,
+                "mean": NaN
+              },
+              "TRANSITION": {
+                "n": 4065,
+                "mean": NaN
+              },
+              "TREND_DOWN": {
+                "n": 2904,
+                "mean": NaN
+              },
+              "TREND_UP": {
+                "n": 2375,
+                "mean": NaN
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 3272,
+                "mean": NaN
+              },
+              "ETHUSDT": {
+                "n": 3643,
+                "mean": NaN
+              },
+              "SOLUSDT": {
+                "n": 3236,
+                "mean": NaN
+              }
+            }
+          },
+          "48": {
+            "n": 10151,
+            "mfe_atr_mean": 4.5263894193002985,
+            "mae_atr_mean": 3.9178062428124942,
+            "gross_atr_mean": 0.4474431388677077,
+            "has_target_frac": 1.0,
+            "hit": {
+              "target": 0.9124224214363117,
+              "invalid": 0.08294749285784651
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": 0.0028889405649009255,
+                "event_net_pct_mean": -0.00024405694729744807,
+                "event_net_atr_ci95": [
+                  -0.7799021746084975,
+                  0.8711408208382314
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.21938815858650243,
+                "event_net_pct_mean": -0.0016440569472974485,
+                "event_net_atr_ci95": [
+                  -1.000493864223673,
+                  0.6479593502269368
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.44166525773790577,
+                "event_net_pct_mean": -0.0030440569472974487,
+                "event_net_atr_ci95": [
+                  -1.2289010098186057,
+                  0.4246718290070805
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 3272,
+          "ETHUSDT": 3643,
+          "SOLUSDT": 3236
+        },
+        "go_no_go": {
+          "verdict": "NO-GO",
+          "primary_horizon": 24,
+          "criterion1_events_ge_60": {
+            "pass": true,
+            "n_events_total": 10151,
+            "per_symbol": {
+              "BTCUSDT": 3272,
+              "ETHUSDT": 3643,
+              "SOLUSDT": 3236
+            }
+          },
+          "criterion2_incr_positive_at_1_5x": {
+            "pass": false,
+            "incr_atr": NaN,
+            "incr_pct": NaN
+          },
+          "criterion3_ci_lower_gt_0_at_1x": {
+            "pass": false,
+            "ci95_lower": NaN
+          },
+          "criterion4_two_symbols_positive": {
+            "pass": false,
+            "n_positive": 0,
+            "per_symbol_incr": {
+              "BTCUSDT": NaN,
+              "ETHUSDT": NaN,
+              "SOLUSDT": NaN
+            }
+          }
+        }
+      }
+    },
+    "E3|short": {
+      "dev": {
+        "n_events": 18847,
+        "horizons": {
+          "6": {
+            "n": 18847,
+            "mfe_atr_mean": 1.3763015663091152,
+            "mae_atr_mean": 1.330188278873184,
+            "gross_atr_mean": -0.015448148070099548,
+            "has_target_frac": 0.9990979996816469,
+            "hit": {
+              "target": 0.8436886507136414,
+              "invalid": 0.09226932668329177
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.23588938089235537,
+                "event_net_pct_mean": -0.0019194929778680585,
+                "event_net_atr_ci95": [
+                  -0.3213134960706449,
+                  -0.1477791665384147
+                ],
+                "ctrl_net_atr_mean": -0.41927696855575963,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.19402934414352663,
+                "incr_pct_mean": 0.015406850074291685,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  0.08893065304110284,
+                  0.303591806149487
+                ],
+                "ctrl_gross_atr_mean": -0.22809330746847298
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.34610999730348335,
+                "event_net_pct_mean": -0.002794492977868058,
+                "event_net_atr_ci95": [
+                  -0.4316607100986165,
+                  -0.25722041596699746
+                ],
+                "ctrl_net_atr_mean": -0.5148687990994031,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.1851823804915545,
+                "incr_pct_mean": 0.015406850074291685,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  0.08070202970359809,
+                  0.29551606242287953
+                ],
+                "ctrl_gross_atr_mean": -0.22809330746847298
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.4563306137146113,
+                "event_net_pct_mean": -0.0036694929778680577,
+                "event_net_atr_ci95": [
+                  -0.5423572373542592,
+                  -0.366909563500271
+                ],
+                "ctrl_net_atr_mean": -0.6104606296430463,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.17633541683958237,
+                "incr_pct_mean": 0.015406850074291685,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  0.07269374330287258,
+                  0.287091676665619
+                ],
+                "ctrl_gross_atr_mean": -0.22809330746847298
+              }
+            }
+          },
+          "12": {
+            "n": 18847,
+            "mfe_atr_mean": 1.9908837478920454,
+            "mae_atr_mean": 1.9240950413398101,
+            "gross_atr_mean": -0.03568938716026317,
+            "has_target_frac": 0.9990979996816469,
+            "hit": {
+              "target": 0.8624184220300313,
+              "invalid": 0.10643603756566032
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.2750255827958552,
+                "event_net_pct_mean": -0.002266942002075023,
+                "event_net_atr_ci95": [
+                  -0.4337162031108603,
+                  -0.11796459266415518
+                ],
+                "ctrl_net_atr_mean": -0.27127789566798843,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.012644925952401872,
+                "incr_pct_mean": 0.008896087441932364,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -0.16151492911499613,
+                  0.18582703134813847
+                ],
+                "ctrl_gross_atr_mean": -0.06370706363036294
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.3946936806136513,
+                "event_net_pct_mean": -0.003216942002075023,
+                "event_net_atr_ci95": [
+                  -0.5536345601939544,
+                  -0.23742753211082016
+                ],
+                "ctrl_net_atr_mean": -0.3750633116868013,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.003039651130260799,
+                "incr_pct_mean": 0.008896087441932364,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -0.17025536802796037,
+                  0.17768793181990503
+                ],
+                "ctrl_gross_atr_mean": -0.06370706363036294
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.5143617784314474,
+                "event_net_pct_mean": -0.004166942002075022,
+                "event_net_atr_ci95": [
+                  -0.6735358673482749,
+                  -0.35768409147401575
+                ],
+                "ctrl_net_atr_mean": -0.47884872770561393,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": -0.0065656236918804406,
+                "incr_pct_mean": 0.008896087441932364,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -0.17986537616098439,
+                  0.16787478386219282
+                ],
+                "ctrl_gross_atr_mean": -0.06370706363036294
+              }
+            }
+          },
+          "24": {
+            "n": 18847,
+            "mfe_atr_mean": 2.910298978027885,
+            "mae_atr_mean": 2.800160949201598,
+            "gross_atr_mean": 0.0015872717929524415,
+            "has_target_frac": 0.9990979996816469,
+            "hit": {
+              "target": 0.8712792486867936,
+              "invalid": 0.11545604074919086
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.27553884946931206,
+                "event_net_pct_mean": -0.002282826071977985,
+                "event_net_atr_ci95": [
+                  -0.5645517916287683,
+                  -0.008030670856173218
+                ],
+                "ctrl_net_atr_mean": 0.8347695391674166,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": -1.0571820036715578,
+                "incr_pct_mean": -0.0101259568203572,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -1.3485897438913124,
+                  -0.782359981486482
+                ],
+                "ctrl_gross_atr_mean": 1.07511471310572
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.4141019101004444,
+                "event_net_pct_mean": -0.0033828260719779846,
+                "event_net_atr_ci95": [
+                  -0.7014809875463535,
+                  -0.14550072944934725
+                ],
+                "ctrl_net_atr_mean": 0.714596952198265,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": -1.068303900834037,
+                "incr_pct_mean": -0.010125956820357199,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -1.3579642639393694,
+                  -0.7941984903941505
+                ],
+                "ctrl_gross_atr_mean": 1.07511471310572
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.5526649707315766,
+                "event_net_pct_mean": -0.004482826071977985,
+                "event_net_atr_ci95": [
+                  -0.8401378904983582,
+                  -0.28461264523565766
+                ],
+                "ctrl_net_atr_mean": 0.5944243652291133,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": -1.0794257979965163,
+                "incr_pct_mean": -0.0101259568203572,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -1.3693965524132081,
+                  -0.8060369993018194
+                ],
+                "ctrl_gross_atr_mean": 1.07511471310572
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": -1.194630108658017,
+              "second_half_incr_atr": -0.9204030715428708,
+              "split_ts": 1753002000000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 1111,
+                "mean": -1.214124904513028
+              },
+              "TRANSITION": {
+                "n": 7904,
+                "mean": -1.250617888471529
+              },
+              "TREND_DOWN": {
+                "n": 4510,
+                "mean": 0.003807378292915653
+              },
+              "TREND_UP": {
+                "n": 5322,
+                "mean": NaN
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 6209,
+                "mean": -1.3863790681974584
+              },
+              "ETHUSDT": {
+                "n": 6245,
+                "mean": -0.36847594689650387
+              },
+              "SOLUSDT": {
+                "n": 6393,
+                "mean": -1.320242147189412
+              }
+            }
+          },
+          "48": {
+            "n": 18847,
+            "mfe_atr_mean": 4.195868532884799,
+            "mae_atr_mean": 4.11443740135593,
+            "gross_atr_mean": -0.05990849900688712,
+            "has_target_frac": 0.9990979996816469,
+            "hit": {
+              "target": 0.8739321907995967,
+              "invalid": 0.12092110150156524
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.4126144715224966,
+                "event_net_pct_mean": -0.0034403163089741086,
+                "event_net_atr_ci95": [
+                  -0.8706342988280268,
+                  0.051073209268130616
+                ],
+                "ctrl_net_atr_mean": -0.4683698020564611,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.1453720316782188,
+                "incr_pct_mean": 0.00820144862970004,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -0.3280976284013608,
+                  0.6216994723058165
+                ],
+                "ctrl_gross_atr_mean": -0.16247594431680237
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.5889674577803014,
+                "event_net_pct_mean": -0.004840316308974109,
+                "event_net_atr_ci95": [
+                  -1.044981370282739,
+                  -0.12544873224922196
+                ],
+                "ctrl_net_atr_mean": -0.6213167309262905,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.13121688983506336,
+                "incr_pct_mean": 0.008201448629700039,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -0.3417023796306117,
+                  0.6059663064483007
+                ],
+                "ctrl_gross_atr_mean": -0.16247594431680237
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.7653204440381061,
+                "event_net_pct_mean": -0.006240316308974109,
+                "event_net_atr_ci95": [
+                  -1.223951336451762,
+                  -0.30060878703345784
+                ],
+                "ctrl_net_atr_mean": -0.7742636597961198,
+                "ctrl_n_mean": 12.202950071629438,
+                "incr_atr_mean": 0.11706174799190797,
+                "incr_pct_mean": 0.00820144862970004,
+                "incr_n_valid": 10245,
+                "incr_atr_ci95": [
+                  -0.3537563573558558,
+                  0.5918952075429521
+                ],
+                "ctrl_gross_atr_mean": -0.16247594431680237
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 6209,
+          "ETHUSDT": 6245,
+          "SOLUSDT": 6393
+        }
+      },
+      "test": {
+        "n_events": 10028,
+        "horizons": {
+          "6": {
+            "n": 10028,
+            "mfe_atr_mean": 1.3384417412702823,
+            "mae_atr_mean": 1.3992844775703426,
+            "gross_atr_mean": -0.0597470898439106,
+            "has_target_frac": 0.9996011168727563,
+            "hit": {
+              "target": 0.8846230554447547,
+              "invalid": 0.06790985241324292
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.3427786769711878,
+                "event_net_pct_mean": -0.002011614061114755,
+                "event_net_atr_ci95": [
+                  -0.4925499071431249,
+                  -0.20396545095395416
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.4842944705348264,
+                "event_net_pct_mean": -0.0028866140611147543,
+                "event_net_atr_ci95": [
+                  -0.6354867325845379,
+                  -0.3425858359342742
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.625810264098465,
+                "event_net_pct_mean": -0.0037616140611147547,
+                "event_net_atr_ci95": [
+                  -0.777433362019979,
+                  -0.4794477536035992
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            }
+          },
+          "12": {
+            "n": 10028,
+            "mfe_atr_mean": 1.9148216687215451,
+            "mae_atr_mean": 2.050292894379997,
+            "gross_atr_mean": -0.12878115852490807,
+            "has_target_frac": 0.9996011168727563,
+            "hit": {
+              "target": 0.898284802552852,
+              "invalid": 0.07658556043079377
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.4360725959773804,
+                "event_net_pct_mean": -0.002464139811629709,
+                "event_net_atr_ci95": [
+                  -0.7482043728102847,
+                  -0.16014837369545973
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.5897183147036166,
+                "event_net_pct_mean": -0.003414139811629709,
+                "event_net_atr_ci95": [
+                  -0.9025610150793484,
+                  -0.3134862060340156
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.7433640334298529,
+                "event_net_pct_mean": -0.004364139811629709,
+                "event_net_atr_ci95": [
+                  -1.0578245361543583,
+                  -0.46535838715668626
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            }
+          },
+          "24": {
+            "n": 10028,
+            "mfe_atr_mean": 2.7568004924530993,
+            "mae_atr_mean": 3.0506568396068037,
+            "gross_atr_mean": -0.22225140253334827,
+            "has_target_frac": 0.9996011168727563,
+            "hit": {
+              "target": 0.9048663741523734,
+              "invalid": 0.08456322297566812
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.578062540636211,
+                "event_net_pct_mean": -0.003160230561703407,
+                "event_net_atr_ci95": [
+                  -1.0867720344887233,
+                  -0.08871590048275863
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -0.7559681096876425,
+                "event_net_pct_mean": -0.004260230561703405,
+                "event_net_atr_ci95": [
+                  -1.2707472379218108,
+                  -0.2678723902521072
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -0.9338736787390737,
+                "event_net_pct_mean": -0.005360230561703406,
+                "event_net_atr_ci95": [
+                  -1.4491539491313719,
+                  -0.44396265318978795
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            },
+            "stability": {
+              "first_half_incr_atr": NaN,
+              "second_half_incr_atr": NaN,
+              "split_ts": 1783364400000.0
+            },
+            "by_regime": {
+              "RANGE": {
+                "n": 681,
+                "mean": NaN
+              },
+              "TRANSITION": {
+                "n": 4058,
+                "mean": NaN
+              },
+              "TREND_DOWN": {
+                "n": 2452,
+                "mean": NaN
+              },
+              "TREND_UP": {
+                "n": 2837,
+                "mean": NaN
+              }
+            },
+            "by_symbol": {
+              "BTCUSDT": {
+                "n": 3216,
+                "mean": NaN
+              },
+              "ETHUSDT": {
+                "n": 3512,
+                "mean": NaN
+              },
+              "SOLUSDT": {
+                "n": 3300,
+                "mean": NaN
+              }
+            }
+          },
+          "48": {
+            "n": 10028,
+            "mfe_atr_mean": 4.014429483908352,
+            "mae_atr_mean": 4.467059620664702,
+            "gross_atr_mean": -0.34490177674953604,
+            "has_target_frac": 0.9996011168727563,
+            "hit": {
+              "target": 0.9093538093338652,
+              "invalid": 0.08595931392102114
+            },
+            "cost": {
+              "1_0": {
+                "event_net_atr_mean": -0.7977523161531798,
+                "event_net_pct_mean": -0.004262446455539153,
+                "event_net_atr_ci95": [
+                  -1.753171458227981,
+                  0.05214566294889654
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "1_5": {
+                "event_net_atr_mean": -1.0241775858550015,
+                "event_net_pct_mean": -0.005662446455539153,
+                "event_net_atr_ci95": [
+                  -1.9878010929282819,
+                  -0.17632408444846215
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              },
+              "2_0": {
+                "event_net_atr_mean": -1.2506028555568232,
+                "event_net_pct_mean": -0.007062446455539152,
+                "event_net_atr_ci95": [
+                  -2.2200212048780528,
+                  -0.4039766508491303
+                ],
+                "ctrl_net_atr_mean": NaN,
+                "ctrl_n_mean": 0.0,
+                "incr_atr_mean": NaN,
+                "incr_pct_mean": NaN,
+                "incr_n_valid": 0,
+                "incr_atr_ci95": [
+                  NaN,
+                  NaN
+                ],
+                "ctrl_gross_atr_mean": NaN
+              }
+            }
+          }
+        },
+        "per_symbol_n": {
+          "BTCUSDT": 3216,
+          "ETHUSDT": 3512,
+          "SOLUSDT": 3300
+        },
+        "go_no_go": {
+          "verdict": "NO-GO",
+          "primary_horizon": 24,
+          "criterion1_events_ge_60": {
+            "pass": true,
+            "n_events_total": 10028,
+            "per_symbol": {
+              "BTCUSDT": 3216,
+              "ETHUSDT": 3512,
+              "SOLUSDT": 3300
+            }
+          },
+          "criterion2_incr_positive_at_1_5x": {
+            "pass": false,
+            "incr_atr": NaN,
+            "incr_pct": NaN
+          },
+          "criterion3_ci_lower_gt_0_at_1x": {
+            "pass": false,
+            "ci95_lower": NaN
+          },
+          "criterion4_two_symbols_positive": {
+            "pass": false,
+            "n_positive": 0,
+            "per_symbol_incr": {
+              "BTCUSDT": NaN,
+              "ETHUSDT": NaN,
+              "SOLUSDT": NaN
+            }
+          }
+        }
+      }
+    }
+  },
+  "detail_paths": {
+    "dev": "reports\\event_study_events_v9_dev.csv",
+    "test": "reports\\event_study_events_v9_test.csv"
+  }
+}

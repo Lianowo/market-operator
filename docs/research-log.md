@@ -208,3 +208,22 @@
     - 测试:tests/test_canonical_baseline.py 5 项(capped 模式切换/逐项对账/
       merge_max_atr 漂移拒绝/legacy 不读基准/基准文件与 canonical 形状一致);
       全仓 347 + 5 全过。
+
+17. **2026-10-20 merge cap 后基准重冻结**
+    - 现象:canonical 硬对账拒绝通过(E7 计数分叉);legacy(mma=0)重放与 v1-v8 冻结计数
+      逐项逐位一致 ⇒ 分叉纯来自 merge_max_atr=2.0 语义,非 bug。
+    - 处置:新基准 `config/canonical_baseline_counts.json`(capped-v1,含 manifest sha256);
+      run_backtest_v6 按 merge_max_atr 是否 >0 切换对账源;历史回放行为不变。
+
+18. **2026-10-20 v9 预注册(先于任何 v9 运行;最后一轮协议级研究)**
+    - `docs/v9-protocol.md`:E9 PROCESS_ACCEPTED / E10 PROCESS_REJECTED(停留率/重心位移/
+      试探失败密度的 episode 相对过程语义,先验一次写死);test 第 12 次曝光,此后只许前向;
+      E9+E10 若都败,过程式世界观终结,项目进入纯前向时代。
+
+19. **2026-10-20 v9 结局(过程式再证伪,结构性死因)**
+    - E9/E10 于 3 品种×17,600 根 1h(约6万 bar)零发射:51,972 个 episode-bar 中存活至 a≥3 的
+      仅 23 根(0.044%),且这些样本的过程量全部不达标。死因链:episode 于收盘越缘+k_bm(0.1ATR)
+      即 BROKEN 收场(1-3根内),过程式语义需要"存活多根"的 episode;
+      改变这一前提=动 A3/k_bm 冻结先验,超出本轮授权 ⇒ 按 v9-protocol §4 终结。
+    - 副产物(如实):E1|short 在 capped 语义池四判据全过(信息口径,非入场判定);
+      E3 高密对照池耗竭(增量 NaN 未定义,§9 协议边界首次显形)。

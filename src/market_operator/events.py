@@ -70,6 +70,46 @@ v8 增量(docs/v8-protocol.md §1,冻结;默认关闭,`enable_e8=True` 开启,
   ref = 收复边缘(多 zone.lo / 空 zone.hi,与 E2 的 ref 口径一致)。
 - attrs:zone(收复边缘所在区,克隆)/ref/invalid/pos/band (L*, H*)/atr(收复
   bar 的 ATR)/puncture_index(A5 刺穿 bar)/ex(上述刺穿极值,用于 invalid)。
+
+v9 增量(docs/v9-protocol.md §1-§3,冻结;默认关闭,`enable_e9e10=True` 开启,
+发射与否不改变 E1-E8 任何输出):E9 PROCESS_ACCEPTED(过程式接受,顺延续)
+与 E10 PROCESS_REJECTED(过程式拒绝,反向)。过程量随 episode 每根 bar 收
+盘累计(证据单位从"点"换为"段")。解释性决定(协议文字未完全展开处,取最
+符合因果语义的读法,标注条款):
+- [§1 年龄] a = t − opened(首次触碰 bar 的 a=0);"含当根"落在全部过程量的
+  累计与归一分母 = a+1 = episode 内 bar 数(自触碰 bar 起,含本 bar)——occ
+  的分子分母同一集合,协议 "occ = 根数/(a+1)" 只有在此读法下内部一致。
+- [§1 过程量] occ = episode 内收盘越出远缘(阻力 close>hi / 支撑镜像
+  close<lo)的根数 / (a+1);centroid = (episode 收盘均值 − 远缘)/atr(t) 按
+  面子取符号(阻力 mean−hi;支撑 lo−mean,只用 episode 内收盘价);wickfail
+  = 影线越过远缘而收盘未能越出的根数(阻力 high>hi 且 close≤hi;支撑镜像);
+  ex = episode 内纯极值(max high / min low,含当根)——注意独立于 A6 的
+  ex(ep.ex):后者带 §8.4 路径启发式、为 E2/E3 回退次序专用;协议 §1 的
+  ex(t) 定义为简单累计过程极值,不附次序假设(E10 判据是"距极值回退多少"
+  的静态比较,非"极值之后发生"的时序断言)。全部量只用 [opened, t] 收盘
+  已知数据累计(A10;严禁 episode 之后数据,测试断言)。
+- [§1 episode 生命周期] 沿用 A2/A3 既有语义,不许扩张:episode = 自 zone
+  正面(A2)首次触碰起,直至 zone 离开 ACTIVE(BROKEN/翻转/消亡,或合并
+  续绑失败)或事件成交(E1/E2/E3 发射即终结);E9/E10 为研究目录事件(不
+  入任何生产白名单 ⇒ 不成交),其发射不终结 episode,去重由"各 episode
+  至多各一次"承担;A3 合并续绑沿用不变(过程量随 episode 走,语义 = 同
+  一接近过程的延续)。与破位竞争的残余:E9 的"收穿远缘"只在未破位残余
+  区间(阻力 close ∈ (hi, hi+k_bm·atr])可发——A4 破位收盘先行终结
+  episode 走 E1 候选路径(既有语义,不绕过)。
+- [§2 判定与同 bar 竞争] 同 bar 内既有事件(E1/E2/E3,伴随 E8)优先:
+  老轨道发射即 episode 终结,该 bar 不再判 E9/E10。E10 先于 E9 判:同
+  episode E10 已发 ⇒ E9 永不再发(协议"无效化"条款,含同 bar/时序竞争);
+  E9 先发不阻止 E10(事实上 occ=0 与 occ≥2/3 互斥,自然不可达)。
+- [§2 E9] a ≥ min_age(3) 且 occ ≥ 2/3 且 centroid ≥ 0.3 且当前收穿远缘,
+  方向=延续(阻力 +1 多 / 支撑 −1 空);invalid = 正缘整深外侧(协议§3:
+  阻力 zone.lo − k_bm·atr / 支撑 zone.hi + k_bm·atr,整区深度+buf)。
+- [§2 E10] a ≥ min_age(3) 且 occ = 0 且 wickfail ≥ 2 且 close ≤ ex −
+  k_rj·atr(支撑镜像 close ≥ ex + k_rj·atr) 且 centroid ≤ 0,方向=反转
+  (阻力 −1 空 / 支撑 +1 多);invalid = ex ± k_bm·atr(刺穿极值+buf,协
+  议§3)。k_rj 沿用 config 先验(params.k_rj,非新参数)。
+- [attrs] zone(触发区克隆)/edge(远缘)/ref(=edge,供 hypothesis §7
+  目标搜索锚)/occ/centroid/wickfail/ex/age/invalid/atr(发射 bar ATR,
+  供 F1 闸复用)。
 """
 
 from __future__ import annotations
@@ -97,6 +137,10 @@ E6 = "E6"  # STRUCTURE_BREAK 结构破坏
 E7 = "E7"  # FLIP_RETEST 破位→回踩拒绝→角色互换
 # v8(docs/v8-protocol.md §1,机制定义冻结;伴随 E2 发射,E1-E7 语义不变)
 E8 = "E8"  # EDGE_RECLAIM 边缘收复(摆动带边缘 + 收复确认 + pos 门)
+# v9(docs/v9-protocol.md §1-§3,机制定义冻结;过程量随 episode 累计,
+# E1-E8 语义不变)
+E9 = "E9"    # PROCESS_ACCEPTED 过程式接受(停留率/重心确认的顺延续)
+E10 = "E10"  # PROCESS_REJECTED 过程式拒绝(试探失败密度确认的反转)
 
 
 @dataclass(frozen=True)
@@ -117,13 +161,26 @@ class MarketEvent:
 
 @dataclass
 class _Episode:
-    """A3 approach episode:zone 自第一次(A2)触碰起被接近;至多产出一个事件。"""
+    """A3 approach episode:zone 自第一次(A2)触碰起被接近;至多产出一个事件。
+
+    v9 过程量字段(enable_e9e10=False 时恒为默认值、不参与任何读写 ⇒ E1-E8
+    行为零变化;开启后仅 E9/E10 判定读写,E1-E8 轨道同样不读):occ_count/
+    close_sum/wickfail/ex_proc 自触碰 bar 收盘起逐 bar 累计(协议 §1);
+    e9_fired/e10_fired 为各 episode 至多各一次的去重标记(协议 §2)。
+    """
 
     zone: Zone                # 活引用(与 ZoneBook 中的对象同一)
     opened: int
     ex: float                 # episode 内进入极值(A6);阻力=最高 high,支撑=最低 low
     ex_index: int
     puncture_index: Optional[int] = None  # A5 刺穿 bar
+    # --- v9 过程量(docs/v9-protocol.md §1,默认关;非 v9 字段以上不读) ---
+    occ_count: int = 0        # episode 内收盘越出远缘的根数(occ 的分子)
+    close_sum: float = 0.0    # episode 内收盘价累计(centroid 的均值分子)
+    wickfail: int = 0         # 影线越缘而收盘未越缘的根数(试探失败密度)
+    ex_proc: float = 0.0      # episode 内纯过程极值(含当根;独立于 A6 ex)
+    e9_fired: bool = False
+    e10_fired: bool = False
 
 
 @dataclass
@@ -174,7 +231,10 @@ class EventDetector:
     """
 
     def __init__(self, params: Params, *, enable_e7: bool = False,
-                 enable_e8: bool = False, e8_pos_edge: float = 0.20) -> None:
+                 enable_e8: bool = False, e8_pos_edge: float = 0.20,
+                 enable_e9e10: bool = False, e9e10_min_age: int = 3,
+                 e9_occ_min: float = 2.0 / 3.0,
+                 e9_centroid_min: float = 0.3) -> None:
         self.params = params
         # enable_e7 = False ⇒ 只发 v1 目录(E1-E6,行为与 v1 完全一致);
         # True ⇒ 追加 v2 E7(docs/v2-protocol.md §1),E1-E6 不受影响。
@@ -184,6 +244,15 @@ class EventDetector:
         # (冻结先验 0.20;敏感性 {0.15, 0.25} 仅 dev,见协议§1)。
         self.enable_e8 = enable_e8
         self.e8_pos_edge = float(e8_pos_edge)
+        # enable_e9e10 = False ⇒ 不发 v9 目录(E1-E8 逐位不变);True ⇒ 追加
+        # E9/E10(docs/v9-protocol.md §1-§3 过程式接受/拒绝)。三个数值先验全
+        # 来自 config(min_age=3、occ 阈 2/3、centroid 阈 0.3;k_rj 直接沿用
+        # params.k_rj 非新参数)。敏感性 {min_age 2/4, occ 0.6/0.75, centroid
+        # 0.2/0.5} 仅 dev,由调用方显式传入,本层不做任何择优。
+        self.enable_e9e10 = enable_e9e10
+        self.e9e10_min_age = int(e9e10_min_age)
+        self.e9_occ_min = float(e9_occ_min)
+        self.e9_centroid_min = float(e9_centroid_min)
         self.structure = MarketStructure(params)
         self.events: list[MarketEvent] = []
         self._episodes: list[_Episode] = []
@@ -253,6 +322,14 @@ class EventDetector:
                 # 触碰 bar 本身即刺穿(A5)
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = t
+                if self.enable_e9e10:
+                    # v9 §1:过程量自触碰 bar 收盘起累计(含当根)
+                    ep.close_sum = c
+                    ep.ex_proc = ex
+                    if (c > z.hi) if res else (c < z.lo):
+                        ep.occ_count = 1
+                    if (h > z.hi and c <= z.hi) if res else (l < z.lo and c >= z.lo):
+                        ep.wickfail = 1
                 self._episodes.append(ep)
 
         # A4 破位候选登记:本 bar 收盘破位(结构已把 zone 置为 BROKEN)。
@@ -338,12 +415,78 @@ class EventDetector:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, t
+                # v9 E9/E10:老轨道未发射的 episode 才进入过程判定(模块
+                # docstring v9[§2 判定与同 bar 竞争]条款;本 bar 老轨道已发
+                # ⇒ episode 终结,不再判)
+                if self.enable_e9e10:
+                    proc = self._process_verdict(ep, z, res, t, ts, h, l, c, atr)
+                    if proc is not None:
+                        events.append(proc)
                 survivors.append(ep)
         self._episodes = survivors
 
         events.extend(self._range_rotation(
             t, ts, c, atr, [e for e in events if e.id == E3]))
         return events
+
+    # -- E9/E10:过程式接受/拒绝(docs/v9-protocol.md §1-§3,v9 增量) -------------
+
+    def _process_verdict(self, ep: _Episode, z: Zone, res: bool, t: int,
+                         ts: object, h: float, l: float, c: float, atr: float
+                         ) -> Optional[MarketEvent]:
+        """episode 存活 bar 上的过程量累计与 E10/E9 判定(一个 bar 至多产出一枚)。
+
+        触碰 bar(t == ep.opened)的量已在 A2 开 episode 时累计;此处只累计
+        (opened, t] 的 bar,判定只用 [opened, t] 收盘已知量(A10,严禁 episode
+        之后数据)。E10 先于 E9 判(协议§2:同 episode 已发 E10 ⇒ 不再发 E9,
+        含同 bar 时序竞争);E9 先发不终结 episode,E10 后发亦各至多一次。
+        """
+        if t > ep.opened:
+            ep.close_sum += c
+            if (c > z.hi) if res else (c < z.lo):
+                ep.occ_count += 1
+            if (h > z.hi and c <= z.hi) if res else (l < z.lo and c >= z.lo):
+                ep.wickfail += 1
+            ep.ex_proc = max(ep.ex_proc, h) if res else min(ep.ex_proc, l)
+        a = t - ep.opened
+        if a < self.e9e10_min_age:
+            return None
+        n_bars = a + 1                             # 含当根的 episode 根数(§1)
+        p = self.params
+        occ = ep.occ_count / n_bars
+        mean_c = ep.close_sum / n_bars
+        centroid = ((mean_c - z.hi) if res else (z.lo - mean_c)) / atr
+        edge = z.hi if res else z.lo
+        bm, rj = p.k_bm * atr, p.k_rj * atr
+        ex = ep.ex_proc
+        # E10 过程式拒绝(反向):停留率零 + 试探失败已成习 + 收远距极值
+        if not ep.e10_fired and ep.occ_count == 0 and ep.wickfail >= 2 \
+                and ((c <= ex - rj) if res else (c >= ex + rj)) \
+                and centroid <= 0.0:
+            ep.e10_fired = True
+            direction = -1 if res else +1
+            return MarketEvent(
+                id=E10, direction=direction, ts=ts, known_index=t,
+                attrs={"zone": z.clone(), "edge": edge, "ref": edge,
+                       "occ": occ, "centroid": centroid,
+                       "wickfail": ep.wickfail, "ex": ex, "age": a,
+                       "invalid": (ex + bm) if res else (ex - bm),
+                       "atr": atr})
+        # E9 过程式接受(顺延续):停留率 + 重心已搬去远侧 + 当前收穿远缘
+        if not ep.e9_fired and not ep.e10_fired \
+                and occ >= self.e9_occ_min \
+                and centroid >= self.e9_centroid_min \
+                and ((c > z.hi) if res else (c < z.lo)):
+            ep.e9_fired = True
+            direction = +1 if res else -1
+            return MarketEvent(
+                id=E9, direction=direction, ts=ts, known_index=t,
+                attrs={"zone": z.clone(), "edge": edge, "ref": edge,
+                       "occ": occ, "centroid": centroid,
+                       "wickfail": ep.wickfail, "ex": ex, "age": a,
+                       "invalid": (z.lo - bm) if res else (z.hi + bm),
+                       "atr": atr})
+        return None
 
     # -- E8:EDGE_RECLAIM(docs/v8-protocol.md §1,v8 增量) ------------------------
 
