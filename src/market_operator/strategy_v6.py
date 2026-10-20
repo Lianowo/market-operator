@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from .broker import OrderIntent, OrderKind
-from .events import E1, E3, E6, E7, MarketEvent
+from .events import E1, E2, E3, E4, E5, E6, E7, E8, MarketEvent
 from .hypothesis import Hypothesis, StructureView
 from .structure import _bar_parts
 
@@ -46,6 +46,10 @@ _REF_REL_TOL = 1e-9
 
 ROUTE_E1 = "e1_market"               # E1 市价次开盘
 ROUTE_E3 = "e3_market"               # E3 拒绝获因后市价次开盘(2026-10-20 放开决议,log#16)
+ROUTE_E2 = "e2_market"
+ROUTE_E4 = "e4_market"
+ROUTE_E5 = "e5_market"
+ROUTE_E8 = "e8_market"
 ROUTE_STRONG_E6 = "strong_e6"        # STRONG E6 市价次开盘
 ROUTE_WEAK_E7 = "weak_e7_limit"      # WEAK E6 → 同 episode E7 前缘限价
 
@@ -166,8 +170,17 @@ class V6Router:
                 decision = self._route_market(
                     symbol, ev, view, c, atr, ROUTE_E3, "拒绝确认,市价次开盘")
                 self._bump("e3_signals")
-            else:  # E7
+            elif ev.id == E7:
                 decision = self._route_e7(symbol, ev, view, c, atr, bar_index)
+            elif ev.id in (E2, E4, E5, E8):
+                # 语义路由表(2026-10-20, log#21):无黑白名单,机制按各自
+                # 修正语义上市价路由;失效/target 取 attrs,F1/room 几何闸不变。
+                tag = {E2: "失败突破确认", E4: "趋势恢复", E5: "区间回归", E8: "边缘收复"}[ev.id]
+                decision = self._route_market(symbol, ev, view, c, atr,
+                                              "e%s_market" % ev.id[1], tag + ",市价次开盘")
+                self._bump("e%s_signals" % ev.id[1].lower())
+            else:
+                self._notes.append(f"unknown_event|{symbol} {ev.id}")
             if decision is not None:
                 decisions.append(decision)
                 armed = True
@@ -306,4 +319,5 @@ class V6Router:
 __all__ = [
     "V6Params", "V6Router", "RouteDecision", "WHITELIST_V6",
     "ROUTE_E1", "ROUTE_E3", "ROUTE_STRONG_E6", "ROUTE_WEAK_E7",
+    "ROUTE_E2", "ROUTE_E4", "ROUTE_E5", "ROUTE_E8",
 ]
