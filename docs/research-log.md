@@ -332,3 +332,8 @@
       §3/§2a);v16 在册(300,15 战役,无 mic)仅作跨宇宙背景。
     - 产物:reports/v17_arm-{M,C}.{json,md}、reports/trades_v17_*.csv;
       结局按指令存证:测量变体非协议重开,mic 维持指令但不视为改进证据。
+
+34. **2026-10-20 v18 预注册(先于任何 v18 运行)**
+    - `docs/v18-protocol.md`:R1 大炮走法(续涨只走 mic/ fade 禁 rngq>0.8)、
+      R2 逆三拍禁、R3 TRANSITION fade 候选、R4 fade 三段兑现;
+      arm 矩阵基线 arm-C,test 第 21 次曝光。

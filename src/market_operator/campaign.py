@@ -69,6 +69,7 @@ from .backtest_v6 import (
 )
 from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, _floor_step
 from .position import PositionManager
+from .repairs import prior_moves_delta, range_quantile
 from .research import split_boundary
 from .strategy_v6 import V6Params, V6Router
 from .structure import Params
@@ -101,6 +102,12 @@ class ArmConfig:
     (= k_cap_hours,48×TF 小时认知 bar 根数)非 None 开时间帽:到期且
     MFE < cap_mfe_min(恰界 inclusive 持有)⇒ 出;新开关注入见
     run_campaigns 的 PositionManager 接线,阈值来源 config/v16.json。
+
+    v18 加性扩展(docs/v18-protocol.md §R4;False ⇒ 逐位 v16 收割行为):
+    harvest_ladder3=True 时收割模式持仓改三段收割(缘前 25%/50% 各落袋
+    1/6 仓,到缘收净;无 trail 无保本;阈值协议写死,config/v18.json 同名
+    照抄)。注:R4 三段收割(持仓侧兑现拆段)与 v14 C4 ladder_fade(入场
+    限价拆层,沿用 v14 ladder 语义未动)是不同语义词,勿混。
     """
 
     fill_model: str = "canonical"
@@ -113,6 +120,7 @@ class ArmConfig:
     harvest_family: Optional[tuple] = None
     time_cap_bars: Optional[int] = None
     cap_mfe_min: float = 0.5
+    harvest_ladder3: bool = False
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -328,6 +336,14 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     与认知收盘决策过同一 _arm_route 分流(C2 maker / C3 stop-entry,
     阈值=frozen 语境 ATR;arm=None 时与 v13 行为逐位一致:mic 决策走
     canonical 提交)。
+
+    v18 加性钩(docs/v18-protocol.md;全默认 ⇒ 逐位旧行为):路由实现
+    set_ctx18 时(repairs.V18Router),每次决策前注入 causal 决策语境
+    (rngq/pmd,窗口取路由冻结口径;bar 路径取认知帧,mic 路径 rngq 取
+    trigger 帧、pmd 取最近已收认知三根);arm.harvest_ladder3=True 时
+    持仓侧三段收割,其 REDUCE 段落市量价提交(不转 _arm_reduce_limit
+    的 target_1 maker),段落/缘收计数 v18_r4_partial_banked /
+    v18_r4_edge_collect(仅该路径新增计数键)。
     """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -364,7 +380,10 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                                 else None),
                 time_cap_bars=(arm.time_cap_bars if arm is not None
                                else None),
-                cap_mfe_min=(arm.cap_mfe_min if arm is not None else 0.5)),
+                cap_mfe_min=(arm.cap_mfe_min if arm is not None else 0.5),
+                # v18 R4 三段收割接线(arm=None ⇒ False,逐位 v16 收割)
+                harvest_ladder3=(arm.harvest_ladder3 if arm is not None
+                                 else False)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -598,6 +617,8 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
         1 for e in new_events if (e.id, e.direction) in go_set)
     counters["mic_go_events"] += sum(
         1 for e in new_events if (e.id, e.direction) in go_set)
+    _inject_ctx18(st, cog_bars=f.cog.bars, i=i,
+                  rngq_bars=mic.bars, rngq_i=a)
     decisions = st.router.on_bar(
         sym, mic.bars[a], a, mic.views.get(a), mic.atrs[a], new_events,
         position_open=broker.position_of(key) is not None,
@@ -630,6 +651,25 @@ def _rekey(intent: OrderIntent, key: str) -> OrderIntent:
                        ref_price=intent.ref_price, ts=intent.ts)
 
 
+def _inject_ctx18(st: _CampaignState, *, cog_bars, i: int,
+                  rngq_bars=None, rngq_i: Optional[int] = None) -> None:
+    """v18 决策语境注入(docs/v18-protocol.md;路由无 set_ctx18 ⇒ no-op,
+    canonical/v16/v17 逐位不变)。
+
+    rngq = 事件 bar 波幅在前 rngq_window 根波幅中的分位;bar 路径取认知
+    帧自身,mic 路径取 trigger 帧(事件 bar = 发射 trigger bar;pmd 恒取
+    最近已收三根认知 bar,窗口冻结口径)。读后即清的责任在路由侧。
+    """
+    setter = getattr(st.router, "set_ctx18", None)
+    if setter is None:
+        return
+    wq, wp = st.router.ctx18_windows()
+    rb_ = cog_bars if rngq_bars is None else rngq_bars
+    ri = i if rngq_i is None else rngq_i
+    setter({"rngq": range_quantile(rb_, ri, wq),
+            "pmd": prior_moves_delta(cog_bars, i, wp)})
+
+
 def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                     counters: dict, cap_skips: list, bounds: dict,
                     go_set: frozenset, n_fill: int,
@@ -654,7 +694,16 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
         broker.update_protective_invalid(key, st.pos_mgr.positions[sym].invalid)
     for intent in mgmt:
         intent = _rekey(intent, key)
-        armed_r = (intent.kind is OrderKind.REDUCE
+        # v18 R4:三段收割段落 = REDUCE 市价(次一执行细 bar 开盘,不转
+        # maker 限价;机器可读桶标签前缀只在 harvest_ladder3 开启时出现)
+        r4p = intent.kind is OrderKind.REDUCE and \
+            intent.reason.startswith("v16|target_partial|")
+        if r4p:
+            _lc(counters, "v18_r4_partial_banked")
+        if intent.kind is OrderKind.EXIT and \
+                intent.reason.startswith("v16|target|R4|"):
+            _lc(counters, "v18_r4_edge_collect")
+        armed_r = (intent.kind is OrderKind.REDUCE and not r4p
                    and _arm_reduce_limit(broker, st, intent, t, n_fill))
         if armed_r:
             counters["reduce_limits_armed"] += 1
@@ -667,6 +716,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
         return
     counters["go_events"] += sum(
         1 for e in new_events if (e.id, e.direction) in go_set)
+    _inject_ctx18(st, cog_bars=cog.bars, i=i)
     decisions = st.router.on_bar(
         sym, bar, i, cog.views.get(i), atr, new_events,
         position_open=broker.position_of(key) is not None,
