@@ -44,6 +44,22 @@ from .structure import _bar_parts
 # 拷贝),容差只覆盖二进制表示差;非调参先验。
 _REF_REL_TOL = 1e-9
 
+
+def _event_provenance(ev: MarketEvent) -> dict:
+    """v14 加性溯源(docs/v14-protocol.md 施工挂钩;纯记录,零行为改变)。
+
+    事件结构事实(attrs ref / zone 边界与 touches)随路由决策 meta 携带,供
+    quality 五问(C1)、stop-entry 参考价(C3)与分层纵深(C4)在不重查事件
+    表的前提下精确取数。meta 不上账本数值路径,canonical 数值逐位不变。
+    """
+    prov: dict = {"ev_ref": (float(ev.attrs["ref"])
+                             if ev.attrs.get("ref") is not None else None)}
+    zone = ev.attrs.get("zone")
+    if zone is not None:
+        prov.update({"zone_lo": float(zone.lo), "zone_hi": float(zone.hi),
+                     "zone_touches": int(zone.touches)})
+    return prov
+
 ROUTE_E1 = "e1_market"               # E1 市价次开盘
 ROUTE_E3 = "e3_market"               # E3 拒绝获因后市价次开盘(2026-10-20 放开决议,log#16)
 ROUTE_E2 = "e2_market"
@@ -233,7 +249,7 @@ class V6Router:
             kind="market", route=route,
             intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
                                reason=reason, ref_price=float(close), ts=ev.ts),
-            hyp=hyp)
+            hyp=hyp, meta=_event_provenance(ev))
 
     # -- WEAK-E6 → E7(同 episode 前缘限价,v4 G3 / v5 §1 语义,双向) -------------
 
@@ -279,7 +295,8 @@ class V6Router:
                                reason=reason, ref_price=float(close), ts=ev.ts),
             hyp=hyp, limit_price=limit,
             meta={"l_star": pend.l_star, "weak_bars": weak_bars,
-                  "e6_margin": pend.margin, "e6_impulse": pend.impulse})
+                  "e6_margin": pend.margin, "e6_impulse": pend.impulse,
+                  **_event_provenance(ev)})
 
     # -- 闸门(turtle 唯一语义:F1 + 2·atr 防线;无目标,不做 room/r_min) ---------
 

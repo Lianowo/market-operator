@@ -269,3 +269,21 @@
     - `docs/v14-protocol.md`:施工包 C1-C5(优质五问含"优质才进"强制条款、maker 双模式、
       stop-entry 预埋、分层入场、质量配注);预注册 arm0-arm6 矩阵,dev 先评,
       test 一次只跑两个最强 dev arm;test 第 17 次曝光;排除牌10与多品种扩维。
+
+28. **2026-10-20 v14 结局:施工包 arm 矩阵判毕 —— dev 上 C2-ex/C3/C4 单组件
+    effective、C1/C2-vi 打回;最强两臂(arm5/arm6)test@1x 均净亏(第 17 次曝光)**
+    - `scripts/run_v14_arms.py` 统一回测(arm0-arm6 × dev 全战役 × 成本 1/1.5/2x;
+      arm0 双锚硬对账:冻结时代名单探针 == backtest_v6_turtle 逐格全等、arm0 ==
+      v13 在册 bar 臂逐格全等;事件计数 == capped-v1 基准)。
+    - dev@1.5x 主锚(协议 §判定,单组件 Δ净期望):C1(arm1−arm0)= −0.0348 ⇒
+      **打回(无改善)**;C2-ex(arm2−arm1)= +0.0397 ⇒ effective;C2-vi(arm3−arm1)
+      = −0.0352 ⇒ **打回**;C3(arm4−arm1)= +0.0079 ⇒ effective;C4(arm5−arm1)
+      = +0.3961 ⇒ effective(dev 净 +63.78 vs arm1 −53.68;全组 arm6 = +0.3949)。
+    - test 一次(第 17 次曝光;对 dev@1.5x 净期望最强两臂各跑一次):arm5 test@1x
+      净 −52.56(PF 0.325,n=93≥60,CI95 −1.068~−0.058);arm6 净 −52.65(PF 0.324,
+      n=93)——**dev 增量未在 test 维持;如实填报,不产生转正叙述**。
+    - 条款生效:dev 全战役质量评估 ≈4.3 万,Q1 拒 ≈1.6 万、Q2 拒 ≈4.2 万(Q2
+      1.5R 对面缘为主闸)、Q5 拒 0;档 A 67 / 档 B 336;stopex 成交率 0.91-0.96、
+      漏单(expired)1-2 笔;两模式差价与分层均价差见 reports/v14_arms.json §4。
+    - 产物:`reports/v14_arms.{json,md}` + `reports/trades_v14_arm{i}__{dev,test}*.csv`;
+      组件裁决 = 上述逐格如实,不整包报喜;v14 之后 test 段只许前向。
