@@ -337,3 +337,7 @@
     - `docs/v18-protocol.md`:R1 大炮走法(续涨只走 mic/ fade 禁 rngq>0.8)、
       R2 逆三拍禁、R3 TRANSITION fade 候选、R4 fade 三段兑现;
       arm 矩阵基线 arm-C,test 第 21 次曝光。
+
+35. **2026-10-20 v19 预注册(先于任何 v19 运行)**
+    - `docs/v19-protocol.md`:组合 8%、三闸阶梯配注化、夭折处置组件、市价默认、
+      家族×TF 期望矩阵验收;test 第 22 次曝光;死亡名单+R4与打包五问。
