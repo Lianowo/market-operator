@@ -59,6 +59,21 @@ v18 增量(docs/v18-protocol.md §R4,冻结 2026-10-20;加性开关,默认参数
   "v16|target|R4|"(出场桶沿用 v16 target)。
 - 目标方向不齐(d·(target−entry) ≤ 0,退化)⇒ 退回 v16 单段收割(如实
   声明);无收割目标(target_1=None)照旧无收割结构行(与 v16 相同)。
+
+v19 增量(docs/v19-protocol.md §3 夭折处置,冻结 2026-10-20;加性开关
+early_exit=False ⇒ 逐位旧行为,parity 钉死):
+- **夭折处置(独立组件)**:持仓期间两条离场规则,与 §8 六条共存、先触发
+  先算(结构性出场 §8.1/§8.5/收割目标/§8.2/§8.3 先行裁决,其后评估;
+  两条规则内半窗先于逆根):
+  ① 半窗:bars_held ≥ k_cap/2(=time_cap_bars//2,24 根认知 bar)且
+  MFE < early_half_mfe_r(0.3R)⇒ 出全仓(MFE 恰 0.3R inclusive 持有;
+  过窗后逐收盘 bar 复核,同时间帽 idiom);桶标签 "v16|early_half_mfe|";
+  ② 连续 ≥early_consec_n(3)根收盘全逆 ⇒ 出全仓:逆根 = d·(c−o) < 0
+  (收盘认认知帧 —— 协议"(认微帧)"按 §8 裁决粒度落在认知帧解读,微帧
+  粒度离场不在 §8 既有机制,如实声明),恰 0 不计逆(=0 收平复位);
+  桶标签 "v16|early_consec|"。
+- 全家族持仓同受(含 fade 收割模式);early_exit 要求 time_cap_bars(k_cap)
+  在场(半窗基数),缺场 raise。
 """
 
 from __future__ import annotations
@@ -77,6 +92,9 @@ ADD_MIN_R = 1.0          # §8.4 先验:浮盈 ≥ 1R 才允许加仓
 R4_LEVEL_1 = 0.25        # 缘前 25%(entry→target 行程)
 R4_LEVEL_2 = 0.50        # 缘前 50%
 R4_PARTIAL_FRAC = 1.0 / 6.0   # 各段落袋半仓的 1/3 = 全仓 1/6(以 OPEN 为 1.0)
+# v19 夭折处置(协议 §3 写死;恰界 inclusive 持有,config/v19.json 硬对账)
+EARLY_HALF_MFE_R = 0.3   # 半窗(k_cap/2 后)MFE < 0.3R ⇒ 出
+EARLY_CONSEC_N = 3       # 连续 ≥3 根收盘全逆(认知帧,d·(c−o)<0)⇒ 出
 
 
 @dataclass
@@ -105,6 +123,7 @@ class Position:
     harvest: bool = False          # v16:收割模式(fade 家族;target 全平+禁 trail)
     invalid0: Optional[float] = None  # v16:开仓时原始结构失效位(trail/invalid 分桶)
     r4_stage: int = 0              # v18 R4:已完成落袋段数(0/1/2;错峰段序)
+    consec_adverse: int = 0        # v19:连续逆根计数(d·(c−o)<0;恰 0 复位)
 
     @property
     def mfe_r(self) -> float:
@@ -131,7 +150,10 @@ class PositionManager:
                  harvest_family: Optional[tuple] = None,
                  time_cap_bars: Optional[int] = None,
                  cap_mfe_min: float = MFE_MIN_R,
-                 harvest_ladder3: bool = False) -> None:
+                 harvest_ladder3: bool = False,
+                 early_exit: bool = False,
+                 early_half_mfe_r: float = EARLY_HALF_MFE_R,
+                 early_consec_n: int = EARLY_CONSEC_N) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
@@ -142,6 +164,15 @@ class PositionManager:
         self.cap_mfe_min = float(cap_mfe_min)           # MFE 恰界 inclusive 持有
         # v18 R4 三段收割开关(False ⇒ 逐位 v16 收割行为,回归钉死)
         self.harvest_ladder3 = bool(harvest_ladder3)
+        # v19 夭折处置开关(False ⇒ 逐位旧行为,回归钉死;要求 k_cap 在场)
+        self.early_exit = bool(early_exit)
+        self.early_half_mfe_r = float(early_half_mfe_r)
+        self.early_consec_n = int(early_consec_n)
+        if self.early_exit and time_cap_bars is None:
+            raise ValueError("v19 夭折处置要求 time_cap_bars(k_cap)在场"
+                             "(半窗基数;协议 §3)")
+        self._early_half_bars = (int(time_cap_bars) // 2
+                                 if time_cap_bars is not None else None)
         self.positions: dict[str, Position] = {}
         self.last: list[str] = []            # 最近 on_bar 判定记录(解释性)
 
@@ -190,6 +221,12 @@ class PositionManager:
         ts, o, h, l, c, _v = _bar_parts(bar)
         pos.bars_held += 1
         pos._best = min(pos._best, l) if pos.direction < 0 else max(pos._best, h)
+        if self.early_exit:
+            # v19 逆根计数:收盘全逆(d·(c−o)<0)+1,否则复位(恰 0 收平非逆)
+            if pos.direction * (float(c) - float(o)) < 0.0:
+                pos.consec_adverse += 1
+            else:
+                pos.consec_adverse = 0
 
         # 1. §8.1 破位退出(结构失效,收盘口径;v16:防线已收紧 ⇒ trail 桶,
         #    防线未动 ⇒ invalid 原始结构失效桶)
@@ -257,8 +294,30 @@ class PositionManager:
                     if intent is not None:
                         intents.append(intent)
 
+        # 6.5 v19 夭折处置(docs/v19-protocol.md §3;与 §8 共存、先触发先算 ——
+        #     结构性出场(§8.1/§8.5/收割目标/§8.2)与 trail 已先行裁决,其后
+        #     半窗先于逆根;early_exit 关 ⇒ 本块整段不生效,逐位旧行为)
+        if self.early_exit and pos.symbol in self.positions:
+            if pos.bars_held >= self._early_half_bars \
+                    and pos.mfe_r < self.early_half_mfe_r:
+                intents.append(self._exit(
+                    pos, ts, c,
+                    f"v16|early_half_mfe|夭折处置 半窗 bars_held="
+                    f"{pos.bars_held} >= {self.time_cap_bars}/2 "
+                    f"(={self._early_half_bars}) mfe={pos.mfe_r:.3f}R "
+                    f"< {self.early_half_mfe_r}R exit all(恰 "
+                    f"{self.early_half_mfe_r}R inclusive 持有,过窗逐 bar 复核)"))
+            elif pos.consec_adverse >= self.early_consec_n:
+                intents.append(self._exit(
+                    pos, ts, c,
+                    f"v16|early_consec|夭折处置 连续 {pos.consec_adverse} 根"
+                    f"收盘全逆 >= {self.early_consec_n}(d·(c−o)<0 计根,"
+                    f"恰 0 复位)exit all(先触发先算:半窗先于逆根)"))
         # 6. §8.6 时间止损:N_time 根内 MFE < 0.5R(v6 臂 B 整条关闭)
-        if self.time_stop and pos.bars_held >= self.p.n_time \
+        #     (v19:夭折处置先行出场后本仓已弹簿,加在簿护栏;早期块不触发时
+        #     与旧谓词恒等,canonical 逐位不变)
+        if self.time_stop and pos.symbol in self.positions \
+                and pos.bars_held >= self.p.n_time \
                 and pos.mfe_r < MFE_MIN_R:
             intents.append(self._exit(
                 pos, ts, c,

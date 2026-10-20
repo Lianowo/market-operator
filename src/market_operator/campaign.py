@@ -108,6 +108,11 @@ class ArmConfig:
     1/6 仓,到缘收净;无 trail 无保本;阈值协议写死,config/v18.json 同名
     照抄)。注:R4 三段收割(持仓侧兑现拆段)与 v14 C4 ladder_fade(入场
     限价拆层,沿用 v14 ladder 语义未动)是不同语义词,勿混。
+
+    v19 加性扩展(docs/v19-protocol.md §3;False ⇒ 逐位旧行为):early_exit
+    =True 时持仓侧启用夭折处置(半窗 MFE<0.3R / 连续≥3 根收盘全逆出仓,
+    阈值协议写死 config/v19.json,数源 position.EARLY_HALF_MFE_R /
+    EARLY_CONSEC_N;半窗基数 = time_cap_bars)。
     """
 
     fill_model: str = "canonical"
@@ -121,6 +126,7 @@ class ArmConfig:
     time_cap_bars: Optional[int] = None
     cap_mfe_min: float = 0.5
     harvest_ladder3: bool = False
+    early_exit: bool = False
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -344,6 +350,14 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     持仓侧三段收割,其 REDUCE 段落市量价提交(不转 _arm_reduce_limit
     的 target_1 maker),段落/缘收计数 v18_r4_partial_banked /
     v18_r4_edge_collect(仅该路径新增计数键)。
+
+    v19 加性钩(docs/v19-protocol.md;全默认 ⇒ 逐位旧行为):注入语境增
+    "mic" 标志(tiered.V19Router 的"不 mic-only 处"判定;V18Router 只读
+    rngq/pmd 不受影响);arm.early_exit=True 时持仓侧启用夭折处置(半窗
+    MFE<0.3R / 连续≥3 逆根,position.py,计数 position 持仓侧 intent
+    reason 桶标签 early_half_mfe/early_consec 路径)。v19 默认执行
+    (fill_model="canonical" + stop_entry=False 的 arm)不退 _arm_route:
+    决策全落 canonical 主路(market 提交),与 arm=None 数值逐位一致。
     """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -383,7 +397,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 cap_mfe_min=(arm.cap_mfe_min if arm is not None else 0.5),
                 # v18 R4 三段收割接线(arm=None ⇒ False,逐位 v16 收割)
                 harvest_ladder3=(arm.harvest_ladder3 if arm is not None
-                                 else False)),
+                                 else False),
+                # v19 夭折处置接线(arm=None ⇒ False,逐位旧行为)
+                early_exit=(arm.early_exit if arm is not None else False)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -659,6 +675,10 @@ def _inject_ctx18(st: _CampaignState, *, cog_bars, i: int,
     rngq = 事件 bar 波幅在前 rngq_window 根波幅中的分位;bar 路径取认知
     帧自身,mic 路径取 trigger 帧(事件 bar = 发射 trigger bar;pmd 恒取
     最近已收三根认知 bar,窗口冻结口径)。读后即清的责任在路由侧。
+
+    v19 加性(docs/v19-protocol.md §2):ctx 增 "mic" 标志(trigger 收盘决
+    策 ⇒ True = "mic-only 处",bar 认知收盘 ⇒ False),供 v19 大蛋糕条款
+    "不 mic-only 处"判定;V18Router 只读 rngq/pmd,旧路由语义零改动。
     """
     setter = getattr(st.router, "set_ctx18", None)
     if setter is None:
@@ -667,7 +687,8 @@ def _inject_ctx18(st: _CampaignState, *, cog_bars, i: int,
     rb_ = cog_bars if rngq_bars is None else rngq_bars
     ri = i if rngq_i is None else rngq_i
     setter({"rngq": range_quantile(rb_, ri, wq),
-            "pmd": prior_moves_delta(cog_bars, i, wp)})
+            "pmd": prior_moves_delta(cog_bars, i, wp),
+            "mic": rngq_bars is not None})
 
 
 def _cognition_step(st: _CampaignState, broker: Broker, i: int,
