@@ -51,9 +51,18 @@ def _event_provenance(ev: MarketEvent) -> dict:
     事件结构事实(attrs ref / zone 边界与 touches)随路由决策 meta 携带,供
     quality 五问(C1)、stop-entry 参考价(C3)与分层纵深(C4)在不重查事件
     表的前提下精确取数。meta 不上账本数值路径,canonical 数值逐位不变。
+
+    v16 加性扩展(docs/v16-protocol.md;ev_invalid = attrs["invalid"] 原值拷
+    贝 = §7 结构失效建议价:E1 正缘外侧 / E2/E3 外缘外侧 / E8 刺穿极值外侧
+    / E6 结构 pivot±buf / E7 远端边缘,全部 = 结构∓k_bm·ATR 口径):供 v16
+    收割婚配路由以结构锚替换 turtle 2·ATR 失效;纯 meta 记录,canonical
+    路由/账本数值路径逐位不变(canonical parity 对账钉死)。
     """
     prov: dict = {"ev_ref": (float(ev.attrs["ref"])
-                             if ev.attrs.get("ref") is not None else None)}
+                             if ev.attrs.get("ref") is not None else None),
+                  "ev_invalid": (float(ev.attrs["invalid"])
+                                 if ev.attrs.get("invalid") is not None
+                                 else None)}
     zone = ev.attrs.get("zone")
     if zone is not None:
         prov.update({"zone_lo": float(zone.lo), "zone_hi": float(zone.hi),

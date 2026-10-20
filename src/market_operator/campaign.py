@@ -89,6 +89,18 @@ class ArmConfig:
     (fade 家族限价拆 ladder_slices 份于 zone 前缘/中/内缘,各 1/slices 风险
     份额,maker 成交,未成交过期/作废);k_bm 为破位参考余量(= Params.k_bm
     冻结先验,config/v14.json 同值照抄,非新先验)。全部默认关(canonical)。
+
+    v15 加性扩展(docs/v15-protocol.md;c2_family=None ⇒ 逐位 v14 行为):
+    c2_family 非 None 时 C2 maker 双模式只接管该家族事件(v15 合成件 =
+    fade 家族 E2/E3/E8),其余事件(E4/E5 与未匹配 C3 的续涨族)不走 C2,
+    落回 canonical 提交路径;阈值协议写死,阈值来源 config/v15.json。
+
+    v16 加性扩展(docs/v16-protocol.md,收割婚配;全 None ⇒ 逐位旧行为):
+    harvest_family 非 None 时持仓侧 PositionManager 进入收割婚配 —— 家族
+    (fade E2/E3/E8)持仓达对面结构缘全部落袋、禁用 trail;time_cap_bars
+    (= k_cap_hours,48×TF 小时认知 bar 根数)非 None 开时间帽:到期且
+    MFE < cap_mfe_min(恰界 inclusive 持有)⇒ 出;新开关注入见
+    run_campaigns 的 PositionManager 接线,阈值来源 config/v16.json。
     """
 
     fill_model: str = "canonical"
@@ -97,6 +109,10 @@ class ArmConfig:
     ladder_fade: bool = False
     ladder_slices: int = 3
     k_bm: float = 0.1
+    c2_family: Optional[tuple] = None
+    harvest_family: Optional[tuple] = None
+    time_cap_bars: Optional[int] = None
+    cap_mfe_min: float = 0.5
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -296,6 +312,13 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     canonical 产物数值一致由对照测试钉死):arm 非 None 时,_submit_decisions
     对过闸决策按 _arm_route 分流(C3 stop/C4 分层/C2 maker 双模式);质量层
     (C1 五问/C5 配注)在路由侧(quality.V14Router,经 router_factory 注入)。
+
+    v16 施工钩(docs/v16-protocol.md;arm=None ⇒ 逐位旧行为):arm.harvest_
+    family/time_cap_bars 非 None 时持仓侧 PositionManager 进入收割婚配
+    (fade 对面结构缘收割全平+禁 trail,时间帽 MFE 恰界 inclusive);三闸/
+    定档/fade 前缘改单/结构锚重建在路由侧(harvest.V16Router,经
+    router_factory/router_params 注入);提交差分(fade maker / 续涨
+    stop-entry)沿用 ArmConfig 的 C2/C3 通道。
     """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -326,7 +349,13 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
             pos_mgr=PositionManager(
                 params, allow_add=False,
                 breakeven_on_reduce=True,    # turtle 固化(原臂 B 接线)
-                time_stop=False),            # §8.6 关闭(原臂 B 接线)
+                time_stop=False,             # §8.6 关闭(原臂 B 接线)
+                # v16 收割婚配接线(arm=None ⇒ 全 None,逐位 canonical)
+                harvest_family=(arm.harvest_family if arm is not None
+                                else None),
+                time_cap_bars=(arm.time_cap_bars if arm is not None
+                               else None),
+                cap_mfe_min=(arm.cap_mfe_min if arm is not None else 0.5)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -770,7 +799,9 @@ def _arm_route(st: _CampaignState, broker: Broker, d, arm: ArmConfig,
         _lc(counters, "ladder_signals")
         return True
     # C2 maker 双模式(市价决策 → 决策收盘参考价挂单;弱 E7 前缘限价 → 同模式)
-    if arm.fill_model in ("exchange_maker", "virtual_limit"):
+    # v15:c2_family 非 None 时仅接管该家族事件,其余落回 canonical 主路。
+    if arm.fill_model in ("exchange_maker", "virtual_limit") \
+            and (arm.c2_family is None or ev in arm.c2_family):
         fm = "virtual" if arm.fill_model == "virtual_limit" else "exchange"
         ot = "virtual_entry" if fm == "virtual" else "maker_entry"
         px = float(d.limit_price) if d.kind == "limit" \
