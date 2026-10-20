@@ -337,18 +337,25 @@ class Broker:
         return any(o.role == "entry" for o in self.resting.get(symbol, ()))
 
     def on_15m_bar(self, symbol: str, ts: int, o: float, h: float, l: float,
-                   c: float) -> list[dict]:
+                   c: float, *, mic_only: bool = False) -> list[dict]:
         """15m bar 上的挂单处理:先判超时,再判严格穿过成交(FIFO)。
 
         可成交窗口 = 本 15m bar 所属 1h bar 标签 ∈ (fill_after_ts(缺省 =
         armed_at_ts), expiry_ts];决策 bar 自身(及其全部细 bar)不参与(因果:
         决策须早于成交)。v6:认知 TF ≥ 2h 的战役在执行帧(1h)上调用本方法,
         fill_after_ts 把决策 TF bar 的全部执行细 bar 排除出成交窗口。
+
+        v10 增量(docs/v10-protocol.md §A,加性,默认逐位不变):mic_only=True
+        只处理 meta["mic"] 为真的挂单(mic 武装 ⇒ 自次一 trigger bar 可成交),
+        非 mic 挂单原样保留、不消耗 wait_bars(canonical 窗口/超时口径不变)。
         """
         hour_label = int(ts) - (int(ts) % MS_1H)
         rows: list[dict] = []
         kept: list[RestingLimitOrder] = []
         for od in self.resting.pop(symbol, []):
+            if mic_only and not od.meta.get("mic"):
+                kept.append(od)
+                continue
             if hour_label > od.expiry_ts:
                 rows.append(self._timeout(od, int(ts)))
                 continue
@@ -582,10 +589,21 @@ class Broker:
 
     # -- 撮合(成交 bar 开盘) --------------------------------------------------
 
-    def on_bar_open(self, symbol: str, ts: int, open_price: float) -> list[dict]:
-        """撮合该 symbol 全部待成交订单(按提交先后),返回本 bar 账本行。"""
+    def on_bar_open(self, symbol: str, ts: int, open_price: float, *,
+                    mic_only: bool = False) -> list[dict]:
+        """撮合该 symbol 全部待成交订单(按提交先后),返回本 bar 账本行。
+
+        v10 增量(docs/v10-protocol.md §A,加性,默认逐位不变):mic_only=True
+        只撮合 meta["mic"] 为真的延迟单(mic 决策 ⇒ 下一 trigger bar 开盘),
+        非 mic 单原样保留待本战役执行帧撮合(canonical 时序不受影响)。
+        """
         orders = self.pending.pop(symbol, [])
         rows: list[dict] = []
+        if mic_only:
+            kept = [po for po in orders if not po.meta.get("mic")]
+            orders = [po for po in orders if po.meta.get("mic")]
+            if kept:
+                self.pending[symbol] = kept + self.pending.get(symbol, [])
         for po in orders:
             if ts <= po.decision_ts:
                 raise AssertionError(
