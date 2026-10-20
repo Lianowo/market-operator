@@ -165,3 +165,13 @@
       使系统近价区"没有锚"。修复:`Params.merge_max_atr`(默认 0=历史无界,freeze parity
       不动;canonical 启用 2.0)。历史 v1-v8 判定不受影响(其回放默认无界);修复后的
       canonical 回放与历史数字不可比,如实声明。测试:test_zone_merge_cap 3 项。
+
+16. **2026-10-20 所有者决议:E3 双向放开入场(覆盖式决策,非研究判 GO)**
+    - 指令:所有者明确指出"放开",之前白名单 {E1,E6,E7} 不含 E3 属过度执行;本条登记。
+    - 证据账本(如实):解剖台 scripts/autopsy_e234.py — E3|short 顺 regime 格 n=1106,
+      增量 +0.744 ATR、成本后净 −0.041 ATR(dev+test 池,H24,1x);全体平均 −0.172。
+      **增量显著但绝对期望未转正,不构成 GO 判据**;放行属所有者风险自担范围,
+      记账/风控/强平/容量约束全部不变,前向数据为唯一裁判。
+    - 实现:config/canonical.json whitelist += E3±1(带 note);strategy_v6 新增
+      ROUTE_E3=e3_market(拒绝获因后市价次开盘,同一 F1/room/turtle 收割);
+      默认 V6Params 白名单不变(E3 仅由配置开启);tests/test_e3_route.py 3 项。
