@@ -12,10 +12,10 @@
     ]
   },
   "risk": {
-    "risk_frac": 0.0075,
+    "risk_frac": 0.02,
     "leverage_cap": 20,
     "portfolio_cap_frac": 0.5,
-    "max_daily_loss_frac": 0.10,
+    "max_daily_loss_frac": 0.1,
     "orders_per_hour": 30,
     "taker_fee": 0.0006,
     "maker_fee": 0.0002,
@@ -48,5 +48,10 @@
     "equity0": 1000.0,
     "symbols_mode": "core_only"
   },
-  "symbols_core": ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+  "symbols_core": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "note_size": "2026-10-21 所有者\"大胆可控\"档:risk 2%/max20x/组合0.5/日损-10%熔断;104USDT起步约$2.08/单风险"
 }
