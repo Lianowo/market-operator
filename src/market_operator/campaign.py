@@ -293,6 +293,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   router_factory: Optional[type] = None,
                   enable_mic: bool = False,
                   arm: Optional[ArmConfig] = None,
+                  mic_families: Optional[tuple] = None,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
     docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。
@@ -319,6 +320,14 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     定档/fade 前缘改单/结构锚重建在路由侧(harvest.V16Router,经
     router_factory/router_params 注入);提交差分(fade maker / 续涨
     stop-entry)沿用 ArmConfig 的 C2/C3 通道。
+
+    v17 加性钩(docs/v17-directive.md;mic_families=None ⇒ 逐位旧行为):
+    mic_families 非 None 时 trigger 帧 mic 事件流按事件族过滤后才入路由
+    (arm-C = 仅续涨族触发,fade 归 bar;被过滤事件的频次如实记
+    mic_family_filtered,仅该路径新增计数键);arm 非 None 时 mic 决策
+    与认知收盘决策过同一 _arm_route 分流(C2 maker / C3 stop-entry,
+    阈值=frozen 语境 ATR;arm=None 时与 v13 行为逐位一致:mic 决策走
+    canonical 提交)。
     """
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
@@ -415,7 +424,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 a = mic_index[key].get(ts)
                 if a is not None:
                     _mic_trigger_step(st, broker, a, ts, counters, cap_skips,
-                                      seg_bounds[key], go_set, n_fill)
+                                      seg_bounds[key], go_set, n_fill,
+                                      arm=arm, mic_families=mic_families)
         if ts in exec_set:
             equity_rows.append((ts, broker.equity_mtm(), broker.cash,
                                 broker.unrealized(), broker.funding_accrued(),
@@ -543,11 +553,18 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
                       counters: dict, cap_skips: list, bounds: dict,
-                      go_set: frozenset, n_fill: int) -> None:
+                      go_set: frozenset, n_fill: int,
+                      arm: Optional[ArmConfig] = None,
+                      mic_families: Optional[tuple] = None) -> None:
     """v10 §A trigger bar 收盘推进:①' mic 市价撮合 → ②' mic 挂单 → mic 路由。
 
     §8 收割/mark/费用计提不在此处(canonical 粒度不变);决策只在已收盘
     trigger bar 上做出,成交严格在后(broker 行内断言)。
+
+    v17 加性(docs/v17-directive.md):mic_families 非 None ⇒ mic 事件流先
+    按事件族过滤再入路由(arm-C 仅续涨族,fade 归 bar);arm 非 None ⇒
+    mic 决策过同一 _arm_route(C2 maker / C3 stop-entry,阈值 mic 冻结
+    语境 ATR)。两参默认 None ⇒ 与 v13 行为逐位一致(canonical 提交)。
     """
     f = st.frame
     key, sym = f.key, f.symbol
@@ -569,6 +586,14 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     new_events = mic.events_by.get(a)
     if not new_events:
         return
+    if mic_families is not None:                     # v17 家族过滤(arm-C)
+        kept = [e for e in new_events if e.id in mic_families]
+        n_sup = len(new_events) - len(kept)
+        if n_sup:
+            _lc(counters, "mic_family_filtered", n_sup)
+        new_events = kept
+        if not new_events:
+            return
     counters["go_events"] += sum(
         1 for e in new_events if (e.id, e.direction) in go_set)
     counters["mic_go_events"] += sum(
@@ -584,7 +609,8 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     _submit_decisions(st, broker, decisions, ts, fill_after, ts,
                       {"mic": True, "cog_index": i}, counters, cap_skips,
                       n_fill,
-                      cancel_moment=ts + mic.trigger_tf_seconds * 1000)
+                      cancel_moment=ts + mic.trigger_tf_seconds * 1000,
+                      arm=arm, atr=mic.atrs[a])
 
 
 def _cog_index_of(frame: CampaignFrame, exec_ts: int) -> int:
