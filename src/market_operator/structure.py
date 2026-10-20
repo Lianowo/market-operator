@@ -69,6 +69,7 @@ class Params:
     e4_recovery: float = 0.5             # §6A-A7 E4 回收比例
     range_max_pivots: int = 8            # §6A-A8 结构判定的最多 pivot 数
     e5_edge_atr: float = 0.75            # §6A-A8 带边缘容差(ATR 倍数)
+    merge_max_atr: float = 0.0           # 区域并集宽度上限(ATR 倍数;0=无界,历史默认)
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "Params":
@@ -298,20 +299,28 @@ class ZoneBook:
         else:
             zone = Zone(lo=pivot.price, hi=pivot.price + w, role=ZoneRole.SUPPORT,
                         touches=1, origin_known=known, last_change_known=known)
-        self._insert_merged(zone, known)
+        self._insert_merged(zone, known, atr_val)
 
-    def _insert_merged(self, new: Zone, known: int) -> None:
+    def _insert_merged(self, new: Zone, known: int, atr_val: float = 0.0) -> None:
         """与现存同向区域重叠则合并:并集边界、touches 相加、origin 取最早(§4.1)。
 
         并集可能搭接到下一个同向区域,以不动点方式收敛(保持前缀不变性)。
+
+        合并封顶(2026-10-20 账面缺陷修复,research-log #15):p.merge_max_atr>0 时,
+        候选并集宽度若超过 merge_max_atr*atr 则跳过该候选(不并),保持细结构。
+        默认 0 = 历史无界行为(冻结v1-v8回放 parity 不受影响)。
         """
+        cap = self.p.merge_max_atr * atr_val if (self.p.merge_max_atr > 0 and atr_val > 0) else 0.0
         changed = True
         while changed:
             changed = False
             for i, z in enumerate(self.zones):
                 if z.role == new.role and z.lo <= new.hi and new.lo <= z.hi:
+                    union_lo, union_hi = min(z.lo, new.lo), max(z.hi, new.hi)
+                    if cap > 0 and (union_hi - union_lo) > cap:
+                        continue  # 并集会超上限:留下原区,不吞并细结构
                     new = Zone(
-                        lo=min(z.lo, new.lo), hi=max(z.hi, new.hi), role=new.role,
+                        lo=union_lo, hi=union_hi, role=new.role,
                         state=ZoneState.ACTIVE,
                         touches=z.touches + new.touches,
                         rejects=z.rejects + new.rejects,
@@ -394,7 +403,7 @@ class ZoneBook:
             z.last_change_known = index
             self.flips.append(ZoneFlip(index=index, from_role=z.role,
                                        zone=flipped.clone()))
-            self._insert_merged(flipped, index)
+            self._insert_merged(flipped, index, atr_val)
             return
         # 回踩后反向重新 acceptance 穿回(§4.2)→ DEAD(不生成新区)
         if (c < z.lo - bm) if up else (c > z.hi + bm):
