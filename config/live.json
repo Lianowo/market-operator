@@ -1,0 +1,52 @@
+{
+  "version": "live-2026-10-21",
+  "note": "实盘接入件配置(任务书 2026-10-21):risk_frac=0.0075、leverage_cap=20、portfolio_cap_frac=0.5、min_notional 按合约(交易所 minTradeUSDT,启动时拉取)、max_daily_loss_frac=0.10、orders_per_hour<=30。MODE 不存在于此文件 —— 必须经 --mode live|paper 显式给出(fail-closed)。风险档与回测口径分离声明:risk_frac 数值沿用语义链冻结先验(仅数值,不影响回测语义);portfolio_cap/leverage 为实盘档,与 v20 回测口径不同轨,如实分离。",
+  "meta": {
+    "semantics": "canonical 认知+路由 arm-full(v20,四件全开):config/v20.json v19_params/v16_params/v18_params/v20_params 数值面照链,仅读不改",
+    "cognition_frame": "每品种认知帧 = 12h 主(obs_tf_seconds 43200)+ 下级触发 trigger_tf_seconds 7200(2H;TRIGGER_TF_MAP 43200->7200 精确命中,无声明)",
+    "execution_approximation": [
+      "市价决策:canonical 于次一执行细 bar(1h)开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
+      "限价单(S4 E3 前缘):GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
+      "持仓管理意图(破位/收割/时间帽):canonical 同样以次一执行 bar 开盘成交;实盘立即市价执行",
+      "paper 冒烟:真实 30 根 2H bar 复放,市价意图填于次一 2h bar 开盘、限价意图严格穿过成交(maker 口径),不发任何真单"
+    ]
+  },
+  "risk": {
+    "risk_frac": 0.0075,
+    "leverage_cap": 20,
+    "portfolio_cap_frac": 0.5,
+    "max_daily_loss_frac": 0.10,
+    "orders_per_hour": 30,
+    "taker_fee": 0.0006,
+    "maker_fee": 0.0002,
+    "slippage_per_side": 0.0002,
+    "min_notional_source": "contracts_minTradeUSDT"
+  },
+  "loop": {
+    "poll_seconds": 15,
+    "reconcile_seconds": 120,
+    "universe_refresh_seconds": 7200,
+    "api_error_max": 5,
+    "state_path": "runtime/live/state.json",
+    "journal_dir": "logs",
+    "journal_prefix": "live_"
+  },
+  "universe": {
+    "enabled": true,
+    "min_usdt_volume_24h": 3000000.0,
+    "product_type": "USDT-FUTURES"
+  },
+  "cognition": {
+    "main_tf_label": "12h",
+    "obs_tf_seconds": 43200,
+    "trigger_tf_seconds": 7200,
+    "granularity": "2H",
+    "warmup_cog_bars": 300,
+    "warmup_trigger_bars": 3600
+  },
+  "paper": {
+    "equity0": 1000.0,
+    "symbols_mode": "core_only"
+  },
+  "symbols_core": ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+}
