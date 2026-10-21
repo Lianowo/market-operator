@@ -39,10 +39,12 @@ import hashlib
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -262,12 +264,17 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
     """warmup 回放 → (detector, tracker);与 prepare_mic_cognition 同一因果序
     (逐认知 bar:先 trigger 段推进,再 bar 收盘 update + sync),实例留存供
     增量接续;bar 事件流 == prepare_cognition 由测试钉死。
+    优化:同周期触发(trigger_tf_seconds >= obs_tf_seconds)无需构建/步进 MicTracker。
     """
+    detector = EventDetector(params, enable_e7=True)
+    if trigger_tf_seconds >= obs_tf_seconds:
+        for bar in cog_bars:
+            detector.update(bar)
+        return detector, None
     obs_ms = obs_tf_seconds * 1000
     trig_ms = trigger_tf_seconds * 1000
     t_series = aggregate_tf(trig_bars, trigger_tf_seconds) if trigger_tf_seconds > 7200 else trig_bars
     scale = max(1, obs_ms // trig_ms)
-    detector = EventDetector(params, enable_e7=True)
     tracker = MicTracker(params, scale=scale,
                          trigger_tf_seconds=trigger_tf_seconds,
                          obs_tf_seconds=obs_tf_seconds, enable_e7=True)
@@ -286,6 +293,8 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
         if sp is None:
             raise RuntimeError(f"{symbol} 认知 bar {i} 无 trigger 覆盖")
         lo, hi = sp
+        if k < lo:
+            k = lo
         while k <= hi:
             tb = t_series[k]
             tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4])
@@ -295,6 +304,7 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
                      lambda p, _sp=spans: _sp[p][0],
                      lambda p, _sp=spans, _n=n: _sp[min(p, _n - 1)][1])
     return detector, tracker
+
 
 
 def reconcile_positions(ours: dict, exchange: list) -> list:
@@ -371,8 +381,10 @@ class LiveRunner:
             float(equity0) if equity0 is not None else None
         self.state_path = Path(state_path) if state_path else \
             ROOT / self.loop_cfg["state_path"]
+        self.candle_cache_dir = self.state_path.parent / "candles"
         self.journal_dir = Path(journal_dir) if journal_dir else \
             ROOT / self.loop_cfg["journal_dir"]
+
         self.breaker = DailyLossBreaker(self.risk["max_daily_loss_frac"])
         self.rate = RateLimiter(self.risk["orders_per_hour"])
         self.universe_enabled = bool(universe_enabled)
@@ -430,31 +442,40 @@ class LiveRunner:
         self.breaker.tripped = bool(b.get("tripped"))
         if st.get("equity") and self.equity is None:
             self.equity = float(st["equity"])
-        for sym, saved in st.get("campaigns", {}).items():
-            try:
-                cs = self._build_all_tf_campaigns(sym)
-            except (BitgetError, RuntimeError) as e:
-                self.tg.send_alert(f"{sym} 断点恢复失败:{type(e).__name__};"
-                                   f"待宇宙重新发现")
-                if sym not in self.symbols_pending:
-                    self.symbols_pending.append(sym)
-                continue
-            if cs is None:
-                if sym not in self.symbols_pending:
-                    self.symbols_pending.append(sym)
-                continue
-            for s, pd in saved.get("pm_positions", {}).items():
-                fields = {f: pd[f] for f in Position.__dataclass_fields__
-                          if f in pd and not f.startswith("_")}
-                pos = Position(**fields)
-                pos._best = pd.get("_best")
-                pos._entry0 = pd.get("_entry0", pos.entry)
-                pos_tf = self.positions.get(s, {}).get("tf_label")
-                target_cs = self._get_cs_for(sym, pos_tf) or cs
-                target_cs.pm.positions[s] = pos
-            self.campaigns[sym] = cs
-            if sym in self.symbols_pending:
-                self.symbols_pending.remove(sym)
+        saved_camps = st.get("campaigns", {})
+        if saved_camps:
+            want = int(self.cog_cfg["warmup_trigger_bars"])
+            prefetched = self._prefetch_bars_parallel(
+                list(saved_camps.keys()), want,
+                seed_by_sym={sym: saved.get("trig_bars")
+                             for sym, saved in saved_camps.items()})
+            for sym, saved in saved_camps.items():
+                try:
+                    bars2h = prefetched.get(sym)
+                    cs = self._build_all_tf_campaigns(sym, bars2h=bars2h)
+                except (BitgetError, RuntimeError) as e:
+                    self.tg.send_alert(f"{sym} 断点恢复失败:{type(e).__name__};"
+                                       f"待宇宙重新发现")
+                    if sym not in self.symbols_pending:
+                        self.symbols_pending.append(sym)
+                    continue
+                if cs is None:
+                    if sym not in self.symbols_pending:
+                        self.symbols_pending.append(sym)
+                    continue
+                for s, pd in saved.get("pm_positions", {}).items():
+                    fields = {f: pd[f] for f in Position.__dataclass_fields__
+                              if f in pd and not f.startswith("_")}
+                    pos = Position(**fields)
+                    pos._best = pd.get("_best")
+                    pos._entry0 = pd.get("_entry0", pos.entry)
+                    pos_tf = self.positions.get(s, {}).get("tf_label")
+                    target_cs = self._get_cs_for(sym, pos_tf) or cs
+                    target_cs.pm.positions[s] = pos
+                self.campaigns[sym] = cs
+                if sym in self.symbols_pending:
+                    self.symbols_pending.remove(sym)
+
 
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -482,13 +503,68 @@ class LiveRunner:
             "campaigns": camps}, ensure_ascii=False), encoding="utf-8")
 
     # ------------------------------------------------------------------
-    # 战役装配(warmup 整段回放;回放段绝不产生任何意图)
+    # 战役装配(本地磁盘 K 线缓存 + 增量回补 + 并发拉取 + 按周期裁剪认知重放)
     # ------------------------------------------------------------------
 
-    def _fetch_trigger_bars(self, symbol: str, want: int) -> list:
-        """2H 帧回补:倒序分页(endTime 排他锚)合并去重;截 `want` 窗口。"""
+    def _candle_cache_path(self, symbol: str) -> Path:
+        gran = str(self.cog_cfg.get("granularity") or "2H").upper()
+        return self.candle_cache_dir / f"{symbol}_{gran}.json"
+
+    def _load_cached_bars(self, symbol: str) -> list[tuple]:
+        p = self._candle_cache_path(symbol)
+        if not p.exists():
+            return []
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            return [(int(r[0]), float(r[1]), float(r[2]),
+                     float(r[3]), float(r[4]), float(r[5])) for r in raw]
+        except Exception:
+            return []
+
+    def _save_cached_bars(self, symbol: str, bars: list) -> None:
+        if not bars:
+            return
+        try:
+            self.candle_cache_dir.mkdir(parents=True, exist_ok=True)
+            want = int(self.cog_cfg.get("warmup_trigger_bars", 3600))
+            self._candle_cache_path(symbol).write_text(
+                json.dumps(bars[-want:]), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _fetch_trigger_bars(self, symbol: str, want: int,
+                            seed_bars: Optional[list] = None) -> list:
+        """2H 帧回补:优先复用本地缓存 + 增量补齐;不足时倒序分页补齐并落盘缓存。"""
+        base_ms = 7200 * 1000
         have: dict = {}
-        end_ms, guard = None, 0
+        for src in (self._load_cached_bars(symbol), seed_bars or []):
+            for b in src:
+                have[int(b[0])] = (int(b[0]), float(b[1]), float(b[2]),
+                                   float(b[3]), float(b[4]), float(b[5]))
+        if have and hasattr(self.client, "history_candles"):
+            now_ms = int(time.time() * 1000)
+            last_ts = max(have)
+            if now_ms >= last_ts + 2 * base_ms:
+                guard_fwd = 0
+                while guard_fwd < 20:
+                    fresh = self.client.history_candles(
+                        symbol, self.cog_cfg["granularity"],
+                        start_ms=last_ts + 1, limit=200)
+                    new_items = [b for b in fresh if b[0] not in have]
+                    if not new_items:
+                        break
+                    for b in new_items:
+                        have[int(b[0])] = b
+                    last_ts = max(have)
+                    guard_fwd += 1
+                    if len(fresh) < 200 or now_ms < last_ts + 2 * base_ms:
+                        break
+        bars_cached = [have[t] for t in sorted(have)]
+        if len(bars_cached) >= 2:
+            if any(b[0] - a[0] != base_ms for a, b in zip(bars_cached, bars_cached[1:])):
+                have.clear()
+        end_ms = min(have) if have else None
+        guard = 0
         while len(have) < want and guard < max(1, (want // 200) + 2):
             page = self.client.history_candles(
                 symbol, self.cog_cfg["granularity"], end_ms=end_ms, limit=200)
@@ -496,11 +572,37 @@ class LiveRunner:
             if not fresh:
                 break
             for b in fresh:
-                have[b[0]] = b
+                have[int(b[0])] = b
             end_ms = fresh[0][0]
             guard += 1
-        bars = [have[t] for t in sorted(have)]
-        return bars[-want:]
+        bars = [have[t] for t in sorted(have)][-want:]
+        self._save_cached_bars(symbol, bars)
+        return bars
+
+    def _prefetch_bars_parallel(self, symbols: list[str], want: int,
+                                seed_by_sym: Optional[dict] = None) -> dict[str, list]:
+        """多线程并发预取各品种 2H K 线(冷启动/宇宙批量加入时提速 6~8 倍)。"""
+        if not symbols:
+            return {}
+        seed_by_sym = seed_by_sym or {}
+        if len(symbols) == 1:
+            sym = symbols[0]
+            return {sym: self._fetch_trigger_bars(sym, want, seed_by_sym.get(sym))}
+        out: dict[str, list] = {}
+        max_workers = min(8, len(symbols))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {
+                ex.submit(self._fetch_trigger_bars, sym, want, seed_by_sym.get(sym)): sym
+                for sym in symbols
+            }
+            for fut in as_completed(futs):
+                sym = futs[fut]
+                try:
+                    out[sym] = fut.result()
+                except Exception:
+                    out[sym] = []
+        return out
+
 
     def _build_campaign(self, symbol: str, tf_label: Optional[str] = None,
                         bars2h: Optional[list] = None) -> Optional[CampaignState]:
@@ -528,14 +630,24 @@ class LiveRunner:
                 self.tg.send_alert(f"{symbol} 2H 序列缺口 {a[0]}→{b[0]},"
                                    f"暂不交易")
                 return None
-        cog_bars = aggregate_tf(bars2h, obs_s)
+        # 优化:按周期裁剪所需 2H 窗口(每个周期仅需 warmup_cog_bars 根自身认知 bar,
+        # 2h/4h 无需重放全部 3600 根 2H bar;BalanceDetector 最大窗口 144 << 300)
+        warmup_cog = max(300, int(self.cog_cfg.get("warmup_cog_bars", 300)))
+        scale_2h = max(1, obs_s // 7200)
+        need_2h = min(len(bars2h), (warmup_cog + 2) * scale_2h)
+        slice_2h = bars2h[-need_2h:]
+        cog_bars = aggregate_tf(slice_2h, obs_s)
+        if len(cog_bars) > warmup_cog:
+            cog_bars = cog_bars[-warmup_cog:]
         min_cog_bars = max(30, int(int(self.cog_cfg["warmup_cog_bars"]) * 0.5 * 43200 // max(7200, obs_s)))
         if len(cog_bars) < min_cog_bars:
             self.tg.send_alert(f"{symbol} {tf_label} 认知帧过短({len(cog_bars)}"
                                f" 根),暂不交易")
             return None
+        first_cog_ts = cog_bars[0][0]
+        replay_trig = [b for b in slice_2h if b[0] >= first_cog_ts]
         detector, tracker = replay_cognition(
-            self.params, symbol, cog_bars, bars2h,
+            self.params, symbol, cog_bars, replay_trig,
             obs_tf_seconds=obs_s, trigger_tf_seconds=trig_s)
         if self.engine_version == "v21":
             rp_tf = self.rp_by_tf.get(tf_label, self.rp)
@@ -552,10 +664,11 @@ class LiveRunner:
                              obs_tf_seconds=obs_s,
                              trigger_tf_seconds=trig_s)
 
-    def _build_all_tf_campaigns(self, symbol: str) -> Optional[CampaignState]:
+    def _build_all_tf_campaigns(self, symbol: str,
+                                bars2h: Optional[list] = None) -> Optional[CampaignState]:
         """构建主周期 CampaignState 并返回,同时装配 v21 的其余周期(2h/4h/1d)至 extra_campaigns。"""
         main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
-        cs_main = self._build_campaign(symbol, main_tf)
+        cs_main = self._build_campaign(symbol, main_tf, bars2h=bars2h)
         if cs_main is None:
             return None
         if self.engine_version == "v21":
@@ -567,6 +680,7 @@ class LiveRunner:
                 if cs_sub is not None:
                     self.extra_campaigns[(symbol, tf)] = cs_sub
         return cs_main
+
 
     def _get_cs_for(self, symbol: str, tf_label: Optional[str] = None) -> Optional[CampaignState]:
         if tf_label and (symbol, tf_label) in self.extra_campaigns:
@@ -586,33 +700,51 @@ class LiveRunner:
                                "equity0)")
         self.breaker.update(now_ms, self.equity)
         self._universe_tick()
-        for sym in list(self.symbols_pending):
-            try:
-                cs = self._build_all_tf_campaigns(sym)
-            except (BitgetError, RuntimeError) as e:
-                self._api_note(e)
-                self.tg.send_alert(f"{sym} 认知帧装配失败:{type(e).__name__} "
-                                   f"{str(e)[:120]}(暂不交易)")
-                self.symbols_pending.remove(sym)
-                continue
-            if cs is not None:
-                self.campaigns[sym] = cs
-            self.symbols_pending.remove(sym)
+        if self.symbols_pending:
+            pending_batch = list(self.symbols_pending)
+            want = int(self.cog_cfg["warmup_trigger_bars"])
+            prefetched = self._prefetch_bars_parallel(pending_batch, want)
+            for sym in pending_batch:
+                try:
+                    bars2h = prefetched.get(sym)
+                    if not bars2h:
+                        bars2h = self._fetch_trigger_bars(sym, want)
+                    cs = self._build_all_tf_campaigns(sym, bars2h=bars2h)
+                except (BitgetError, RuntimeError) as e:
+                    self._api_note(e)
+                    self.tg.send_alert(f"{sym} 认知帧装配失败:{type(e).__name__} "
+                                       f"{str(e)[:120]}(暂不交易)")
+                    if sym in self.symbols_pending:
+                        self.symbols_pending.remove(sym)
+                    continue
+                if cs is not None:
+                    self.campaigns[sym] = cs
+                if sym in self.symbols_pending:
+                    self.symbols_pending.remove(sym)
         if self.mode == "live":
             self._sync_live_fills(now_ms)
+        base_ms = 7200 * 1000
         for sym, cs in sorted(self.campaigns.items()):
             try:
                 last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
+                # 优化:2H K 线每 7200s 收盘一次;下一根 2H bar 收盘时刻为 last_ts + 2 * base_ms。
+                # 未到新 bar 收盘时刻前跳过冗余 HTTP 请求,避免每 15s 空轮询全宇宙品种。
+                if last_ts > 0 and now_ms < last_ts + 2 * base_ms:
+                    continue
                 new_bars = self.client.history_candles(
                     sym, self.cog_cfg["granularity"], start_ms=last_ts + 1,
                     limit=100)
+                if not new_bars:
+                    continue
                 self._advance(cs, now_ms, new_bars=new_bars, run_paper_fills=True)
                 for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items()):
                     if s2 == sym:
                         self._advance(sub_cs, now_ms, new_bars=new_bars, run_paper_fills=False)
+                self._save_cached_bars(sym, cs.trig_bars)
             except BitgetError as e:
                 self._api_note(e)
                 self.tg.send_alert(f"{sym} bar 推进异常:{str(e)[:120]}")
+
         self._expiry_sweep(now_ms)
         if self.mode == "live":
             self._manage_stops(now_ms)
