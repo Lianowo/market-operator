@@ -346,3 +346,8 @@
     - `docs/v19-protocol-orderflow.md`:Binance aggTrades 90d×3 品种接触点检验;
       判别 H1(分位增量 CI)与 H2(吸收签名),双过才算"增量存在";60d/30d dev-test;
       否则订单流路线终结转纸面/L2。
+
+37. **2026-10-21 aggTrades 结局:接触点 tape 特征无可持增量,流路线终结**
+    - 10,039 接触点(90d×3 品种);H1 49/50 单元增量 CI 全含 0,唯一 dev 眉角
+      E3|long×eff_15m(+2.31ATR,CI[0.32,4.31])test 结构性不可判;H2 吸收签名
+      dev 反号、test INSUFFICIENT。**按协议:订单流路线至此终结,转纸面/L2 候选。**
