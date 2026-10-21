@@ -39,7 +39,7 @@ import hashlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -59,6 +59,7 @@ from market_operator.position import Position, PositionManager  # noqa: E402
 from market_operator.repairs import (                           # noqa: E402
     prior_moves_delta, range_quantile)
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
+from market_operator.strategy_v6 import V6Params, V6Router      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
 from market_operator.tg import TelegramNotifier                 # noqa: E402
 from market_operator.tiered import TieredParams                 # noqa: E402
@@ -67,14 +68,39 @@ from market_operator.trigger import (                           # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "live.json"
 CONFIG_V20 = ROOT / "config" / "v20.json"
+CONFIG_V21 = ROOT / "config" / "v21.json"
 
 MS_1H = 3_600_000
 N_FILL_H = 12                                    # canonical N_fill(墙钟小时)
+TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400}
 
 
 # ---------------------------------------------------------------------------
-# canonical 参数组(arm-full;config/v20.json 照链)
+# canonical 参数组(v20 / v21 双模支持)
 # ---------------------------------------------------------------------------
+
+
+def load_v21_params(cfg_path: Path = CONFIG_V21) -> tuple:
+    """加载 v21 极简平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由参数。"""
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    params = Params.from_json(cfg_path)
+    whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
+    base_kw = dict(
+        k_dq=float(raw["k_dq"]),
+        k_imp=float(raw["k_imp"]),
+        k_is=float(raw["k_is"]),
+        turtle_stop_atr=float(raw["turtle_stop_atr"]),
+        k_bm=float(raw["k_bm"]),
+        whitelist=whitelist,
+    )
+    rp_extra = raw.get("router_params") or {}
+    base_rp = dc_replace(V6Params(**base_kw), **rp_extra)
+    rp_by_tf = {}
+    for tf, tf_ov in (raw.get("router_params_by_tf") or {}).items():
+        clean_ov = {("zone_cooldown_bars" if k == "min_zone_cooldown_bars" else k): v
+                    for k, v in tf_ov.items()}
+        rp_by_tf[tf] = dc_replace(base_rp, **clean_ov)
+    return raw, params, base_rp, rp_by_tf
 
 
 def load_v20_params() -> tuple:
@@ -102,7 +128,16 @@ def load_v20_params() -> tuple:
 
 
 def new_position_manager(params: Params, raw: dict) -> PositionManager:
-    """arm-full 持仓侧接线(同 run_campaigns:S1/S2 开,early_exit/R4 关)。"""
+    """持仓侧接线:兼容 v21(对侧突破锁利 + Turtle)与 v20(arm-full)。"""
+    if raw.get("use_balance_detector"):
+        arm_cfg = raw.get("arm_config") or {}
+        return PositionManager(
+            params,
+            allow_add=False,
+            breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
+            time_stop=False,
+            reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
+        )
     p16 = raw["v16_params"]
     return PositionManager(
         params, allow_add=False, breakeven_on_reduce=True, time_stop=False,
@@ -191,10 +226,13 @@ def aggregate_bucket(bars, label: int) -> tuple:
             float(bars[-1][4]), float(sum(b[5] for b in bars)))
 
 
-def aggregate_12h(bars2h: list) -> list:
-    """2H 序列 → 12h 帧:网格对齐;末桶不齐(未完整)丢弃,内部缺口 raise
-    (不可静默);首桶不齐如实保留(canonical 首/末不完整桶口径)。"""
-    MS, STEP = 7_200_000, 43_200_000
+def aggregate_tf(bars2h: list, step_seconds: int = 43200) -> list:
+    """2H 序列 → 任意整数倍周期(2h/4h/12h/1d)帧:网格对齐;末桶不齐(未完整)丢弃,
+    内部缺口 raise(不可静默);首桶不齐如实保留(canonical 首/末不完整桶口径)。"""
+    MS = 7_200_000
+    STEP = int(step_seconds) * 1000
+    if STEP <= MS:
+        return list(bars2h)
     buckets: dict = {}
     for b in bars2h:
         buckets.setdefault(b[0] - (b[0] % STEP), []).append(b)
@@ -208,9 +246,14 @@ def aggregate_12h(bars2h: list) -> list:
             if label == labels[0]:
                 out.append(aggregate_bucket(got, label))
                 continue                          # 首桶不完整:保留
-            raise RuntimeError(f"12h 桶 {label} 内部缺口({len(got)} 根)")
+            raise RuntimeError(f"{step_seconds}s 桶 {label} 内部缺口({len(got)} 根)")
         out.append(aggregate_bucket(got, label))
     return out
+
+
+def aggregate_12h(bars2h: list) -> list:
+    """2H 序列 → 12h 帧(兼容旧接口)。"""
+    return aggregate_tf(bars2h, 43200)
 
 
 def replay_cognition(params: Params, symbol: str, cog_bars: list,
@@ -222,14 +265,15 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
     """
     obs_ms = obs_tf_seconds * 1000
     trig_ms = trigger_tf_seconds * 1000
-    scale = obs_ms // trig_ms
+    t_series = aggregate_tf(trig_bars, trigger_tf_seconds) if trigger_tf_seconds > 7200 else trig_bars
+    scale = max(1, obs_ms // trig_ms)
     detector = EventDetector(params, enable_e7=True)
     tracker = MicTracker(params, scale=scale,
                          trigger_tf_seconds=trigger_tf_seconds,
                          obs_tf_seconds=obs_tf_seconds, enable_e7=True)
     labels = {b[0]: i for i, b in enumerate(cog_bars)}
     spans: dict = {}
-    for k, b in enumerate(trig_bars):
+    for k, b in enumerate(t_series):
         i = labels.get(b[0] - (b[0] % obs_ms))
         if i is None:                             # 认知帧外的头尾 trigger:跳过
             continue
@@ -243,7 +287,7 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
             raise RuntimeError(f"{symbol} 认知 bar {i} 无 trigger 覆盖")
         lo, hi = sp
         while k <= hi:
-            tb = trig_bars[k]
+            tb = t_series[k]
             tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4])
             k += 1
         detector.update(bar)
@@ -280,11 +324,14 @@ def reconcile_positions(ours: dict, exchange: list) -> list:
 class CampaignState:
     symbol: str
     detector: EventDetector
-    tracker: MicTracker
-    router: V20Router
+    tracker: Optional[MicTracker]
+    router: object
     pm: PositionManager
     cog_bars: list = field(default_factory=list)
     trig_bars: list = field(default_factory=list)
+    tf_label: str = "12h"
+    obs_tf_seconds: int = 43200
+    trigger_tf_seconds: int = 7200
     active: bool = True
 
 
@@ -296,7 +343,7 @@ class CampaignState:
 class LiveRunner:
     """主循环接线;client/tg 注入(paper 冒烟零真单;测试注入假件)。"""
 
-    OID_PREFIX = "mo20"
+    OID_PREFIX = "mo21"
 
     def __init__(self, mode: str, cfg: dict, client, tg: TelegramNotifier, *,
                  equity0: Optional[float] = None,
@@ -311,7 +358,14 @@ class LiveRunner:
         self.risk = cfg["risk"]
         self.loop_cfg = cfg["loop"]
         self.cog_cfg = cfg["cognition"]
-        self.raw20, self.params, self.rp = load_v20_params()
+        self.engine_version = str(self.cog_cfg.get("engine") or "v20")
+        if self.engine_version == "v21":
+            self.raw_strat, self.params, self.rp, self.rp_by_tf = load_v21_params()
+            self.raw20 = self.raw_strat
+        else:
+            self.raw20, self.params, self.rp = load_v20_params()
+            self.raw_strat = self.raw20
+            self.rp_by_tf = {}
         self.contracts = contracts or {}
         self.equity: Optional[float] = \
             float(equity0) if equity0 is not None else None
@@ -323,20 +377,30 @@ class LiveRunner:
         self.rate = RateLimiter(self.risk["orders_per_hour"])
         self.universe_enabled = bool(universe_enabled)
         self.campaigns: dict[str, CampaignState] = {}
+        self.extra_campaigns: dict[tuple[str, str], CampaignState] = {}
         self.symbols_pending: list = sorted(symbols)
         self.positions: dict[str, dict] = {}
         self.open_intents: dict[str, dict] = {}
         self.stops: dict[str, dict] = {}
         self.counters = {"signals": 0, "orders_placed": 0, "cap_skips": 0,
-                         "min_notional_skips": 0, "rate_skips": 0,
-                         "breaker_blocks": 0, "fills": 0, "mgmt_execs": 0,
-                         "expired_intents": 0, "reconcile_alerts": 0,
-                         "reduce_fills": 0, "exits": 0}
+                         "tf_cap_skips": 0, "min_notional_skips": 0,
+                         "rate_skips": 0, "breaker_blocks": 0, "fills": 0,
+                         "mgmt_execs": 0, "expired_intents": 0,
+                         "reconcile_alerts": 0, "reduce_fills": 0, "exits": 0}
         self._universe_at = 0.0
         self._reconcile_at = 0.0
         self._daily_date: Optional[str] = None
         self._api_error_streak = 0
         self._load_state()
+
+    def current_risk_frac(self, equity: Optional[float] = None) -> float:
+        """阶梯动态复利:根据当前已实现净值自动匹配风险档位。"""
+        eq = float(self.equity if equity is None else equity)
+        tiers = self.risk.get("dynamic_risk_tiers") or []
+        for max_eq, rf in tiers:
+            if eq <= float(max_eq):
+                return float(rf)
+        return float(self.risk["risk_frac"])
 
     # ------------------------------------------------------------------
     # 账本 / 状态(只记账不忘秘:绝无凭证字段)
@@ -368,7 +432,7 @@ class LiveRunner:
             self.equity = float(st["equity"])
         for sym, saved in st.get("campaigns", {}).items():
             try:
-                cs = self._build_campaign(sym)
+                cs = self._build_all_tf_campaigns(sym)
             except (BitgetError, RuntimeError) as e:
                 self.tg.send_alert(f"{sym} 断点恢复失败:{type(e).__name__};"
                                    f"待宇宙重新发现")
@@ -385,7 +449,9 @@ class LiveRunner:
                 pos = Position(**fields)
                 pos._best = pd.get("_best")
                 pos._entry0 = pd.get("_entry0", pos.entry)
-                cs.pm.positions[s] = pos
+                pos_tf = self.positions.get(s, {}).get("tf_label")
+                target_cs = self._get_cs_for(sym, pos_tf) or cs
+                target_cs.pm.positions[s] = pos
             self.campaigns[sym] = cs
             if sym in self.symbols_pending:
                 self.symbols_pending.remove(sym)
@@ -395,11 +461,13 @@ class LiveRunner:
         camps = {}
         for sym, cs in self.campaigns.items():
             pm_pos = {}
-            for s, p in cs.pm.positions.items():
-                rec = {f: getattr(p, f) for f in Position.__dataclass_fields__
-                       if not f.startswith("_")}
-                rec["_best"], rec["_entry0"] = p._best, p._entry0
-                pm_pos[s] = rec
+            all_cs = [cs] + [sub for (s2, _), sub in self.extra_campaigns.items() if s2 == sym]
+            for c_item in all_cs:
+                for s, p in c_item.pm.positions.items():
+                    rec = {f: getattr(p, f) for f in Position.__dataclass_fields__
+                           if not f.startswith("_")}
+                    rec["_best"], rec["_entry0"] = p._best, p._entry0
+                    pm_pos[s] = rec
             camps[sym] = {"trig_bars": cs.trig_bars[-720:],
                           "pm_positions": pm_pos}
         self.state_path.write_text(json.dumps({
@@ -434,36 +502,76 @@ class LiveRunner:
         bars = [have[t] for t in sorted(have)]
         return bars[-want:]
 
-    def _build_campaign(self, symbol: str) -> Optional[CampaignState]:
-        obs_s = int(self.cog_cfg["obs_tf_seconds"])
-        trig_s = int(self.cog_cfg["trigger_tf_seconds"])
-        ttf, decl = resolve_trigger_tf(obs_s)
-        if ttf != trig_s or decl is not None:      # 12h→7200 精确命中硬断言
-            raise RuntimeError(f"trigger 解析漂移: {decl}")
+    def _build_campaign(self, symbol: str, tf_label: Optional[str] = None,
+                        bars2h: Optional[list] = None) -> Optional[CampaignState]:
+        tf_label = tf_label or str(self.cog_cfg.get("main_tf_label") or "12h")
+        obs_s = TF_SECONDS_MAP.get(tf_label, int(self.cog_cfg["obs_tf_seconds"]))
+        trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
+        if tf_label in trig_map and trig_map[tf_label] is not None:
+            trig_s = int(trig_map[tf_label])
+        elif tf_label in trig_map and trig_map[tf_label] is None:
+            trig_s = obs_s
+        else:
+            trig_s = int(self.cog_cfg["trigger_tf_seconds"])
+            ttf, decl = resolve_trigger_tf(obs_s)
+            if ttf != trig_s or decl is not None:      # 12h→7200 精确命中硬断言
+                raise RuntimeError(f"trigger 解析漂移: {decl}")
         want = int(self.cog_cfg["warmup_trigger_bars"])
-        bars2h = self._fetch_trigger_bars(symbol, want)
+        if bars2h is None:
+            bars2h = self._fetch_trigger_bars(symbol, want)
         if len(bars2h) < want * 0.9:
             self.tg.send_alert(f"{symbol} 2H 历史不足({len(bars2h)}/{want}"
                                f" 根),暂不交易;如实不计入执行名单")
             return None
         for a, b in zip(bars2h, bars2h[1:]):       # 网格完整性(不可静默)
-            if b[0] - a[0] != trig_s * 1000:
+            if b[0] - a[0] != 7200 * 1000:
                 self.tg.send_alert(f"{symbol} 2H 序列缺口 {a[0]}→{b[0]},"
                                    f"暂不交易")
                 return None
-        cog_bars = aggregate_12h(bars2h)
-        if len(cog_bars) < int(self.cog_cfg["warmup_cog_bars"]) * 0.5:
-            self.tg.send_alert(f"{symbol} 12h 认知帧过短({len(cog_bars)}"
+        cog_bars = aggregate_tf(bars2h, obs_s)
+        min_cog_bars = max(30, int(int(self.cog_cfg["warmup_cog_bars"]) * 0.5 * 43200 // max(7200, obs_s)))
+        if len(cog_bars) < min_cog_bars:
+            self.tg.send_alert(f"{symbol} {tf_label} 认知帧过短({len(cog_bars)}"
                                f" 根),暂不交易")
             return None
         detector, tracker = replay_cognition(
             self.params, symbol, cog_bars, bars2h,
             obs_tf_seconds=obs_s, trigger_tf_seconds=trig_s)
+        if self.engine_version == "v21":
+            rp_tf = self.rp_by_tf.get(tf_label, self.rp)
+            router = V6Router(rp_tf)
+            pm = new_position_manager(self.params, self.raw_strat)
+        else:
+            router = V20Router(self.rp)
+            pm = new_position_manager(self.params, self.raw20)
         return CampaignState(symbol=symbol, detector=detector, tracker=tracker,
-                             router=V20Router(self.rp),
-                             pm=new_position_manager(self.params, self.raw20),
+                             router=router, pm=pm,
                              cog_bars=list(cog_bars),
-                             trig_bars=list(bars2h))
+                             trig_bars=list(bars2h),
+                             tf_label=tf_label,
+                             obs_tf_seconds=obs_s,
+                             trigger_tf_seconds=trig_s)
+
+    def _build_all_tf_campaigns(self, symbol: str) -> Optional[CampaignState]:
+        """构建主周期 CampaignState 并返回,同时装配 v21 的其余周期(2h/4h/1d)至 extra_campaigns。"""
+        main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
+        cs_main = self._build_campaign(symbol, main_tf)
+        if cs_main is None:
+            return None
+        if self.engine_version == "v21":
+            tf_list = self.cog_cfg.get("tf_list") or [main_tf]
+            for tf in tf_list:
+                if tf == main_tf:
+                    continue
+                cs_sub = self._build_campaign(symbol, tf, bars2h=cs_main.trig_bars)
+                if cs_sub is not None:
+                    self.extra_campaigns[(symbol, tf)] = cs_sub
+        return cs_main
+
+    def _get_cs_for(self, symbol: str, tf_label: Optional[str] = None) -> Optional[CampaignState]:
+        if tf_label and (symbol, tf_label) in self.extra_campaigns:
+            return self.extra_campaigns[(symbol, tf_label)]
+        return self.campaigns.get(symbol)
 
     # ------------------------------------------------------------------
     # 主循环一步
@@ -480,7 +588,7 @@ class LiveRunner:
         self._universe_tick()
         for sym in list(self.symbols_pending):
             try:
-                cs = self._build_campaign(sym)
+                cs = self._build_all_tf_campaigns(sym)
             except (BitgetError, RuntimeError) as e:
                 self._api_note(e)
                 self.tg.send_alert(f"{sym} 认知帧装配失败:{type(e).__name__} "
@@ -494,7 +602,14 @@ class LiveRunner:
             self._sync_live_fills(now_ms)
         for sym, cs in sorted(self.campaigns.items()):
             try:
-                self._advance(cs, now_ms)
+                last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
+                new_bars = self.client.history_candles(
+                    sym, self.cog_cfg["granularity"], start_ms=last_ts + 1,
+                    limit=100)
+                self._advance(cs, now_ms, new_bars=new_bars, run_paper_fills=True)
+                for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items()):
+                    if s2 == sym:
+                        self._advance(sub_cs, now_ms, new_bars=new_bars, run_paper_fills=False)
             except BitgetError as e:
                 self._api_note(e)
                 self.tg.send_alert(f"{sym} bar 推进异常:{str(e)[:120]}")
@@ -538,46 +653,61 @@ class LiveRunner:
     # —— 因果序同回放:开盘撮合① 先于 mic 步⑤' 先于认知收盘⑤
     # ------------------------------------------------------------------
 
-    def _advance(self, cs: CampaignState, now_ms: int) -> None:
+    def _advance(self, cs: CampaignState, now_ms: int,
+                 new_bars: Optional[list] = None,
+                 run_paper_fills: bool = True) -> None:
         last = cs.trig_bars[-1][0] if cs.trig_bars else 0
-        new_bars = self.client.history_candles(
-            cs.symbol, self.cog_cfg["granularity"], start_ms=last + 1,
-            limit=100)
-        trig_ms = int(self.cog_cfg["trigger_tf_seconds"]) * 1000
-        obs_ms = int(self.cog_cfg["obs_tf_seconds"]) * 1000
-        scale = obs_ms // trig_ms
+        if new_bars is None:
+            new_bars = self.client.history_candles(
+                cs.symbol, self.cog_cfg["granularity"], start_ms=last + 1,
+                limit=100)
+        base_ms = 7200 * 1000
+        trig_ms = max(base_ms, int(cs.trigger_tf_seconds) * 1000)
+        obs_ms = max(base_ms, int(cs.obs_tf_seconds) * 1000)
+        trig_scale = max(1, trig_ms // base_ms)
+        scale = max(1, obs_ms // base_ms)
         for bar in new_bars:
             if bar[0] <= last:
                 continue
             last = bar[0]
-            if cs.trig_bars and bar[0] - cs.trig_bars[-1][0] != trig_ms:
+            if cs.trig_bars and bar[0] - cs.trig_bars[-1][0] != base_ms:
                 self.tg.send_alert(
-                    f"{cs.symbol} 2H 序列缺口 {cs.trig_bars[-1][0]} → "
+                    f"{cs.symbol}({cs.tf_label}) 2H 序列缺口 {cs.trig_bars[-1][0]} → "
                     f"{bar[0]};认知帧重装配(持仓事实保留)")
-                fresh = self._build_campaign(cs.symbol)
+                fresh = self._build_campaign(cs.symbol, cs.tf_label)
                 if fresh is not None:
                     fresh.pm.positions = cs.pm.positions
-                    self.campaigns[cs.symbol] = fresh
+                    if (cs.symbol, cs.tf_label) in self.extra_campaigns:
+                        self.extra_campaigns[(cs.symbol, cs.tf_label)] = fresh
+                    else:
+                        self.campaigns[cs.symbol] = fresh
                 return
-            if self.mode == "paper":
+            if self.mode == "paper" and run_paper_fills:
                 self._paper_fill_pass(cs.symbol, bar)
             cs.trig_bars.append(bar)
             for pos in self.positions.values():    # worst-case mark 就近更新
                 if pos["symbol"] == cs.symbol:
                     pos["mark"] = float(bar[4])
-            k = len(cs.trig_bars) - 1
-            ts, o, h, l, c, _v = bar
-            emitted = cs.tracker.on_trigger_bar(k, ts, o, h, l, c)
-            if emitted:
-                ctx = cs.tracker._ctx
-                view = StructureView(
-                    regime=ctx.regime,
-                    zones=tuple(z.clone() for z in ctx.zones), atr=ctx.atr,
-                    pivots=ctx.pivots[-self.params.range_max_pivots:])
-                self._route_step(cs, ctx.atr, emitted, view, mic=True)
-            if (bar[0] + trig_ms) % obs_ms == 0:   # 12h 桶最末 2H ⇒ 认知收盘
-                cog_bar = aggregate_bucket(cs.trig_bars[-scale:],
-                                           bar[0] + trig_ms - obs_ms)
+            # 降档触发步(当 trigger 细于认知周期,即 trig_ms < obs_ms 时生效)
+            if cs.tracker is not None and trig_ms < obs_ms:
+                if (bar[0] + base_ms) % trig_ms == 0 and len(cs.trig_bars) >= trig_scale:
+                    t_bar = (bar if trig_scale == 1
+                             else aggregate_bucket(cs.trig_bars[-trig_scale:],
+                                                   bar[0] + base_ms - trig_ms))
+                    k = len(cs.trig_bars) // trig_scale - 1
+                    ts, o, h, l, c, _v = t_bar
+                    emitted = cs.tracker.on_trigger_bar(k, ts, o, h, l, c)
+                    if emitted:
+                        ctx = cs.tracker._ctx
+                        view = StructureView(
+                            regime=ctx.regime,
+                            zones=tuple(z.clone() for z in ctx.zones), atr=ctx.atr,
+                            pivots=ctx.pivots[-self.params.range_max_pivots:])
+                        self._route_step(cs, ctx.atr, emitted, view, mic=True)
+            if (bar[0] + base_ms) % obs_ms == 0 and len(cs.trig_bars) >= scale:
+                cog_bar = (bar if scale == 1
+                           else aggregate_bucket(cs.trig_bars[-scale:],
+                                                 bar[0] + base_ms - obs_ms))
                 self._close_cognition(cs, cog_bar)
 
     def _close_cognition(self, cs: CampaignState, cog_bar) -> None:
@@ -586,19 +716,40 @@ class LiveRunner:
         emitted = cs.detector.update(cog_bar)
         new_pivots = list(s.pivots[n_pivots_before:])
         i = len(cs.cog_bars)
-        scale = int(self.cog_cfg["obs_tf_seconds"]) // \
-            int(self.cog_cfg["trigger_tf_seconds"])
-        hi = len(cs.trig_bars) - 1
-        cs.tracker.sync(i, cs.detector,
-                        lambda p: max(0, hi - scale + 1),
-                        lambda p, _h=hi: _h)
+        trig_s = max(7200, int(cs.trigger_tf_seconds))
+        obs_s = max(7200, int(cs.obs_tf_seconds))
+        scale = max(1, obs_s // trig_s)
+        hi = max(0, len(cs.trig_bars) // max(1, trig_s // 7200) - 1)
+        if cs.tracker is not None:
+            cs.tracker.sync(i, cs.detector,
+                            lambda p: max(0, hi - scale + 1),
+                            lambda p, _h=hi: _h)
         cs.cog_bars.append(cog_bar)
         atr = s.atr()
         sym = cs.symbol
         # §8 持仓管理(入场成交的认知 bar 不做裁决,canonical 同口径)
         pos_pm = cs.pm.positions.get(sym)
         if pos_pm is not None and not (pos_pm.opened_ts > cog_bar[0]):
+            old_inv = float(pos_pm.invalid)
             mgmt = cs.pm.on_bar(sym, cog_bar, atr, new_pivots, emitted or [])
+            if abs(float(pos_pm.invalid) - old_inv) > 1e-12:
+                pos_dict = self.positions.get(sym)
+                if pos_dict is not None:
+                    pos_dict["invalid"] = float(pos_pm.invalid)
+                last_log = pos_pm.log[-1] if pos_pm.log else "防线收紧"
+                self.tg.send_fill(
+                    sym, f"止损推进({self.mode})",
+                    pos_dict["qty"] if pos_dict else 0.0,
+                    float(cog_bar[4]),
+                    note=f"{old_inv:.6g} -> {pos_pm.invalid:.6g} ({last_log[:48]})",
+                    tf_label=cs.tf_label,
+                    direction=pos_pm.direction,
+                    stop_price=float(pos_pm.invalid),
+                    target_price=pos_pm.target_1,
+                    box_lo=pos_dict.get("box_lo") if pos_dict else None,
+                    box_hi=pos_dict.get("box_hi") if pos_dict else None,
+                    bars=cs.cog_bars[-45:] if cs.cog_bars else cs.trig_bars[-45:],
+                )
             for intent in mgmt:
                 self._exec_mgmt(cs, intent, cog_bar)
         if emitted:
@@ -609,19 +760,20 @@ class LiveRunner:
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
                     *, mic: bool) -> None:
-        """canonical 决策:ctx18 注入(rngq/pmd 同回放口径)→ 路由 → 意图。"""
+        """canonical 决策:支持 v20(ctx18)与 v21(V6Router) → 路由 → 意图。"""
         sym = cs.symbol
-        wq, wp = cs.router.ctx18_windows()
         if mic:
             rngq_bars, ri = cs.trig_bars, len(cs.trig_bars) - 1
             bar = cs.trig_bars[-1]
         else:
             rngq_bars, ri = cs.cog_bars, len(cs.cog_bars) - 1
             bar = cs.cog_bars[-1]
-        cs.router.set_ctx18({
-            "rngq": range_quantile(rngq_bars, ri, wq),
-            "pmd": prior_moves_delta(cs.cog_bars, len(cs.cog_bars) - 1, wp),
-            "mic": mic})
+        if hasattr(cs.router, "ctx18_windows") and hasattr(cs.router, "set_ctx18"):
+            wq, wp = cs.router.ctx18_windows()
+            cs.router.set_ctx18({
+                "rngq": range_quantile(rngq_bars, ri, wq),
+                "pmd": prior_moves_delta(cs.cog_bars, len(cs.cog_bars) - 1, wp),
+                "mic": mic})
         decisions = cs.router.on_bar(
             sym, bar, ri, view, atr, events,
             position_open=sym in self.positions,
@@ -665,10 +817,11 @@ class LiveRunner:
         spec = self._spec(sym)
         size_mult = float(d.meta.get("size_mult") or 1.0)
         equity = float(self.equity)
-        qty = self.risk["risk_frac"] * size_mult * equity / risk_per_unit
+        eff_rf = self.current_risk_frac(equity)
+        qty = eff_rf * size_mult * equity / risk_per_unit
         qty = min(qty, self.risk["leverage_cap"] * equity / entry_ref)
         qty = _floor_step(qty, spec.size_step, spec.size_place)
-        # 组合容量(canonical worst-case FIFO:整笔跳过)
+        # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
         outstanding = sum(
             worst_case_of_position(p["direction"], p["qty"],
                                    p.get("mark") or p["entry"], p["invalid"],
@@ -676,6 +829,21 @@ class LiveRunner:
             for p in self.positions.values())
         candidate = qty * risk_per_unit + qty * entry_ref * 2.0 * \
             (self.risk["taker_fee"] + self.risk["slippage_per_side"])
+        tf_caps = self.risk.get("tf_cap_by_tf") or {}
+        tf_cap = tf_caps.get(cs.tf_label)
+        if tf_cap is not None:
+            tf_out = sum(
+                worst_case_of_position(p["direction"], p["qty"],
+                                       p.get("mark") or p["entry"], p["invalid"],
+                                       self.risk["taker_fee"])
+                for p in self.positions.values()
+                if p.get("tf_label", "12h") == cs.tf_label)
+            if tf_out + candidate > float(tf_cap) * equity:
+                self.counters["tf_cap_skips"] = self.counters.get("tf_cap_skips", 0) + 1
+                self.counters["cap_skips"] += 1
+                self._journal("skip", {"symbol": sym, "tf": cs.tf_label,
+                                       "why": "TF_CAP", "event": hyp.event_id})
+                return
         if outstanding + candidate > self.risk["portfolio_cap_frac"] * equity:
             self.counters["cap_skips"] += 1
             self._journal("skip", {"symbol": sym, "why": "PORTFOLIO_CAP",
@@ -703,12 +871,25 @@ class LiveRunner:
             return                               # 断点幂等:同键不重发
         self.counters["signals"] += 1
         regime = hyp.regime.value if hyp.regime is not None else ""
-        intent = {"oid": oid, "symbol": sym, "role": "entry",
-                  "kind": d.kind, "direction": hyp.direction, "qty": qty,
+        z_lo = d.meta.get("zone_lo")
+        z_hi = d.meta.get("zone_hi")
+        b_opp = d.meta.get("box_opposite")
+        if z_lo is not None and z_hi is not None and b_opp is not None:
+            box_lo = float(min(z_lo, z_hi, b_opp))
+            box_hi = float(max(z_lo, z_hi, b_opp))
+        elif z_lo is not None and z_hi is not None:
+            box_lo, box_hi = float(z_lo), float(z_hi)
+        else:
+            box_lo, box_hi = None, None
+        chart_bars = cs.trig_bars[-45:] if mic and cs.trig_bars else (cs.cog_bars[-45:] or cs.trig_bars[-45:])
+        intent = {"oid": oid, "symbol": sym, "tf_label": cs.tf_label,
+                  "role": "entry", "kind": d.kind, "direction": hyp.direction,
+                  "qty": qty,
                   "limit_price": entry_ref if d.kind == "limit" else None,
                   "invalid": float(hyp.invalid),
                   "target_1": hyp.target_1, "event_id": hyp.event_id,
                   "route": d.route, "size_mult": size_mult,
+                  "box_lo": box_lo, "box_hi": box_hi,
                   "decision_ts": t, "mic": mic,
                   "expiry_ts": t + N_FILL_H * MS_1H, "status": "armed",
                   "exchange_order_id": None}
@@ -716,8 +897,11 @@ class LiveRunner:
         self.tg.send_signal(sym, hyp.event_id,
                             "多" if hyp.direction > 0 else "空", d.route,
                             entry_ref, float(hyp.invalid),
-                            f" 规模 {qty}(×{size_mult:g})"
-                            f"{' [mic]' if mic else ''}", regime=regime)
+                            f"规模 {qty}(风险档 {eff_rf:.2%}, ×{size_mult:g})"
+                            f"{' [降档触发]' if mic else ''}",
+                            regime=regime, tf_label=cs.tf_label,
+                            bars=chart_bars, box_lo=box_lo, box_hi=box_hi,
+                            target_1=hyp.target_1)
         if self.mode == "live":
             if d.kind == "limit":
                 resp = self.client.place_limit_order(
@@ -752,11 +936,15 @@ class LiveRunner:
 
     def _register_position(self, sym: str, it: dict, price: float,
                            ts: int) -> None:
-        cs = self.campaigns.get(sym)
+        tf_lbl = it.get("tf_label") or str(self.cog_cfg.get("main_tf_label") or "12h")
+        cs = self._get_cs_for(sym, tf_lbl) or self.campaigns.get(sym)
+        if cs is not None and not it.get("tf_label"):
+            tf_lbl = cs.tf_label
         self.positions[sym] = {
-            "symbol": sym, "direction": it["direction"], "qty": it["qty"],
-            "entry": price, "invalid": it["invalid"],
+            "symbol": sym, "tf_label": tf_lbl, "direction": it["direction"],
+            "qty": it["qty"], "entry": price, "invalid": it["invalid"],
             "target_1": it["target_1"], "event_id": it["event_id"],
+            "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "opened_ts": ts, "mark": price}
         if cs is not None:
             risk = it["direction"] * (price - it["invalid"])
@@ -768,8 +956,15 @@ class LiveRunner:
                 except ValueError as e:
                     self.tg.send_alert(f"{sym} pm 建仓拒绝:{e}")
         self.counters["fills"] += 1
-        self.tg.send_fill(sym, f"开仓({self.mode})", it["qty"], price,
-                          note=f"{it['event_id']} {it['route']}")
+        chart_bars = (cs.trig_bars[-45:] if (cs and it.get("mic") and cs.trig_bars)
+                      else (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None)))
+        self.tg.send_fill(
+            sym, f"开仓({self.mode})", it["qty"], price,
+            note=f"{it['event_id']} {it['route']}",
+            tf_label=tf_lbl, direction=it["direction"],
+            stop_price=float(it["invalid"]), target_price=it.get("target_1"),
+            box_lo=it.get("box_lo"), box_hi=it.get("box_hi"),
+            bars=chart_bars)
         self._journal("fill", {"oid": it["oid"], "symbol": sym,
                                "qty": it["qty"], "price": price,
                                "role": "entry", "mode": self.mode})
@@ -852,12 +1047,23 @@ class LiveRunner:
         if pos is None:
             return
         qty = min(it["qty"], pos["qty"])
+        gross = qty * pos["direction"] * (float(ref_price) - float(pos["entry"]))
+        fee = qty * float(ref_price) * self.risk["taker_fee"]
         pos["qty"] = round(pos["qty"] - qty, 10)
         it["status"] = "filled"
         self.counters["reduce_fills" if it["role"] == "reduce" else "exits"] += 1
-        self.tg.send_fill(it["symbol"], f"平仓({self.mode},{it['role']})",
-                          qty, float(ref_price),
-                          note=str(it["route"])[:60])
+        cs = self._get_cs_for(it["symbol"], pos.get("tf_label")) or self.campaigns.get(it["symbol"])
+        chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
+        self.tg.send_fill(
+            it["symbol"], f"平仓({self.mode},{it['role']})",
+            qty, float(ref_price), pnl=gross - fee,
+            note=str(it["route"])[:60],
+            tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
+            direction=-pos["direction"],
+            stop_price=pos.get("invalid"),
+            target_price=pos.get("target_1"),
+            box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
+            bars=chart_bars)
         self._journal("close_fill", {"oid": it["oid"], "symbol": it["symbol"],
                                      "qty": qty, "role": it["role"]})
         if it["role"] == "exit" or pos["qty"] <= 1e-9:
@@ -1070,8 +1276,17 @@ class LiveRunner:
         it["status"] = "filled"
         self.counters["reduce_fills" if it["role"] == "reduce"
                       else "exits"] += 1
-        self.tg.send_fill(sym, f"平仓(paper,{it['role']})", qty, price,
-                          pnl=gross - fee, note=str(it["route"])[:60])
+        cs = self._get_cs_for(sym, pos.get("tf_label")) or self.campaigns.get(sym)
+        chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
+        self.tg.send_fill(
+            sym, f"平仓(paper,{it['role']})", qty, price,
+            pnl=gross - fee, note=str(it["route"])[:60],
+            tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
+            direction=-pos["direction"],
+            stop_price=pos.get("invalid"),
+            target_price=pos.get("target_1"),
+            box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
+            bars=chart_bars)
         self._journal("close_fill", {"oid": it["oid"], "symbol": sym,
                                      "qty": qty, "price": price,
                                      "pnl": gross - fee})
@@ -1111,10 +1326,13 @@ def main(argv=None) -> None:
             pass
     args = parse_args(argv)
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
-    secrets = load_secrets()
+    cred_src = cfg.get("credentials_source")
+    cred_path = (ROOT / cred_src) if cred_src and (ROOT / cred_src).exists() else None
+    secrets = load_secrets(cred_path, config_overrides=cfg.get("credentials"))
     client = BitgetLiveClient(secrets)
     tg = TelegramNotifier(
-        secrets, dropped_log=ROOT / "runtime" / "live" / "tg_missed.jsonl")
+        secrets, dropped_log=ROOT / "runtime" / "live" / "tg_missed.jsonl",
+        async_mode=True)
     contracts = load_contracts_live(client, list(cfg["symbols_core"]))
     runner = LiveRunner(args.mode, cfg, client, tg,
                         contracts=contracts,

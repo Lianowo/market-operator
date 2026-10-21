@@ -138,6 +138,8 @@ class ArmConfig:
     early_exit: bool = False
     trail_arm_gate: bool = False
     harvest_fade_2leg: bool = False
+    breakeven_on_reduce: bool = True
+    reject_opp_lock_frac: float = 0.0
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -264,10 +266,13 @@ def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
 # ---------------------------------------------------------------------------
 
 
-def _outstanding_worst_case(broker: Broker) -> float:
+def _outstanding_worst_case(broker: Broker, tf_filter: Optional[str] = None) -> float:
     """open 最坏情景 Σ(|mark→invalid| 止损亏损 + 平仓侧 taker+滑点预算)。"""
     total = 0.0
+    suffix = f"@{tf_filter}" if tf_filter else None
     for sym, pos in broker.positions.items():
+        if suffix and not sym.endswith(suffix):
+            continue
         mark = broker.last_mark.get(sym, pos.entry)
         stop_loss = pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
         close_fee = pos.qty * mark * (broker.taker_fee + broker.slippage)
@@ -283,7 +288,8 @@ def _candidate_worst_case(broker: Broker, entry_ref: float,
     risk_per_unit = abs(entry_ref - invalid)
     if risk_per_unit <= 0.0 or equity <= 0.0:
         return float("inf")
-    qty = min(broker.risk_frac * equity / risk_per_unit,
+    eff_rf = broker.current_risk_frac()
+    qty = min(eff_rf * equity / risk_per_unit,
               broker._available_entry_notional(equity) / entry_ref)
     if qty <= 0.0:
         return float("inf")
@@ -319,6 +325,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   enable_mic: bool = False,
                   arm: Optional[ArmConfig] = None,
                   mic_families: Optional[tuple] = None,
+                  router_params_by_tf: Optional[dict] = None,
+                  tf_cap_by_tf: Optional[dict] = None,
+                  dynamic_risk_tiers: Optional[list] = None,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
     docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。
@@ -381,11 +390,6 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
         raise ValueError(f"unknown segment {segment}")
     if not (0.0 < portfolio_cap_frac <= 1.0):
         raise ValueError("portfolio_cap_frac must be in (0, 1]")
-    if enable_mic:
-        for k, f in frames.items():
-            if f.mic is None:
-                raise RuntimeError(f"enable_mic 要求全部战役挂载 MicCognition;"
-                                   f"{k} 缺失 mic 帧")
 
     keys = sorted(frames)
     base_rp = router_params or V6Params()
@@ -401,11 +405,14 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
         seg_bounds[key] = {"lo": lo, "hi": hi, "n": n,
                            "ts_lo": f.cog.bars[lo][0] if lo < n else None,
                            "ts_hi": f.cog.bars[hi - 1][0] if hi > 0 else None}
+        rp_for_key = (router_params_by_tf.get(f.tf_label, base_rp)
+                      if router_params_by_tf is not None else base_rp)
         states[key] = _CampaignState(
-            frame=f, router=router_cls(base_rp),
+            frame=f, router=router_cls(rp_for_key),
             pos_mgr=PositionManager(
                 params, allow_add=False,
-                breakeven_on_reduce=True,    # turtle 固化(原臂 B 接线)
+                breakeven_on_reduce=(arm.breakeven_on_reduce if arm is not None
+                                     else True),
                 time_stop=False,             # §8.6 关闭(原臂 B 接线)
                 # v16 收割婚配接线(arm=None ⇒ 全 None,逐位 canonical)
                 harvest_family=(arm.harvest_family if arm is not None
@@ -422,7 +429,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 trail_arm_gate=(arm.trail_arm_gate if arm is not None
                                 else False),
                 harvest_fade_2leg=(arm.harvest_fade_2leg if arm is not None
-                                   else False)),
+                                   else False),
+                reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
+                                      else 0.0)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -431,7 +440,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     funding_per_8h=funding_per_8h,
                     contracts={k: contracts[frames[k].symbol] for k in keys},
                     maker_fee=maker_fee, cost_multiplier=cost_multiplier,
-                    portfolio_stop_risk_frac=portfolio_cap_frac)
+                    portfolio_stop_risk_frac=portfolio_cap_frac,
+                    tf_stop_risk_frac_by_tf=tf_cap_by_tf,
+                    dynamic_risk_tiers=dynamic_risk_tiers)
     equity_rows: list = []
     cap_skips: list = []
     counters = {"go_events": 0, "open_intents": 0, "opens_filled": 0,
@@ -441,6 +452,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 "reduce_limits_armed": 0, "reduce_limit_fills": 0,
                 "reduce_timeout_taker": 0, "resting_canceled": 0,
                 "e1_priority_cancels": 0, "portfolio_cap_skips": 0,
+                "protective_stop_fills": 0,
                 "mic_go_events": 0}
 
     fine_ts = sorted({t for k in keys for t in frames[k].exec_labels})
@@ -448,10 +460,14 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     if enable_mic:
         # v10:trigger 帧时间轴并入(exec 网格 ⊂ trigger 网格;成交/决策全部
         # 以"已收盘 bar"推进,无前馈 —— 测试钉死)
+        # v21.5:支持部分战役挂载 MicCognition(如 4h→1h、12h→2h,而 2h 保持同周期)
         mic_index: dict = {}
         for key in keys:
             mic = frames[key].mic
-            mic_index[key] = {int(b[0]): a for a, b in enumerate(mic.bars)}
+            if mic is not None:
+                mic_index[key] = {int(b[0]): a for a, b in enumerate(mic.bars)}
+            else:
+                mic_index[key] = {}
         full_ts = sorted(exec_set | {t for key in keys for t in mic_index[key]})
     else:
         full_ts = fine_ts
@@ -467,6 +483,13 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 # ① 开盘撮合(认知决策 ⇒ 下一执行细 bar 开盘成交)
                 rows = broker.on_bar_open(key, ts, _o)
                 _apply_open_rows(st, broker, key, ts, rows, counters)
+                # ①.5 保护性止损:结构失效价 stop-market,逐执行细 bar 检查
+                #     (触发即成交于失效价/缺口开盘价;兑现止损位,消除 §8.1
+                #     收盘越界→次开盘口径导致的平均亏损 ≈2R 超调)
+                stop_row = broker.execute_protective_stop(key, ts, _o, _h, _l)
+                if stop_row is not None:
+                    _apply_open_rows(st, broker, key, ts, [stop_row], counters)
+                    counters["protective_stop_fills"] += 1
                 # ② 挂单处理(严格穿过成交;超时撤单/转市价)
                 rows = broker.on_15m_bar(key, ts, _o, _h, _l, c)
                 _apply_resting_rows(st, broker, key, ts, rows, counters)
@@ -503,8 +526,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
         attr_bounds = {}
         for key in keys:
             b = dict(seg_bounds[key])
-            if b["ts_hi"] is not None:
-                mic = frames[key].mic
+            mic = frames[key].mic
+            if b["ts_hi"] is not None and mic is not None:
                 b = {**b, "ts_hi": b["ts_hi"] + frames[key].tf_hours * MS_1H
                      - mic.trigger_tf_seconds * 1000}
             attr_bounds[key] = b
@@ -817,21 +840,34 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
-        # 组合容量(3% 最坏情景,FIFO:决策时刻整笔跳过,记 reason)
+        # 组合容量 / 各时间尺度(TF)独立容量池(FIFO:决策时刻整笔跳过,记 reason)
         equity = broker.equity_mtm()
-        cap_frac = float(broker.portfolio_stop_risk_frac)
-        worst = (_outstanding_worst_case(broker)
-                 + _candidate_worst_case(broker, d.intent.ref_price,
-                                         d.hyp.invalid, equity))
-        if worst > cap_frac * equity:
-            counters["portfolio_cap_skips"] += 1
-            cap_skips.append({
-                "ts": t, "campaign": key, "event_id": d.hyp.event_id,
-                "direction": d.hyp.direction, "route": d.route,
-                "reason_code": "PORTFOLIO_CAP",
-                "worst_case": worst, "budget_frac": cap_frac,
-                "equity": equity})
-            continue
+        cand_wc = _candidate_worst_case(broker, d.intent.ref_price,
+                                        d.hyp.invalid, equity)
+        if broker.tf_stop_risk_frac_by_tf and st.frame.tf_label in broker.tf_stop_risk_frac_by_tf:
+            tf_cap = float(broker.tf_stop_risk_frac_by_tf[st.frame.tf_label])
+            worst_tf = _outstanding_worst_case(broker, st.frame.tf_label) + cand_wc
+            if worst_tf > tf_cap * equity:
+                counters["portfolio_cap_skips"] += 1
+                cap_skips.append({
+                    "ts": t, "campaign": key, "event_id": d.hyp.event_id,
+                    "direction": d.hyp.direction, "route": d.route,
+                    "reason_code": "TF_CAP",
+                    "worst_case": worst_tf, "budget_frac": tf_cap,
+                    "equity": equity})
+                continue
+        if broker.portfolio_stop_risk_frac is not None and not broker.tf_stop_risk_frac_by_tf:
+            cap_frac = float(broker.portfolio_stop_risk_frac)
+            worst = _outstanding_worst_case(broker) + cand_wc
+            if worst > cap_frac * equity:
+                counters["portfolio_cap_skips"] += 1
+                cap_skips.append({
+                    "ts": t, "campaign": key, "event_id": d.hyp.event_id,
+                    "direction": d.hyp.direction, "route": d.route,
+                    "reason_code": "PORTFOLIO_CAP",
+                    "worst_case": worst, "budget_frac": cap_frac,
+                    "equity": equity})
+                continue
         counters["open_intents"] += 1
         if arm is not None and _arm_route(st, broker, d, arm, t, fill_after,
                                           n_fill, atr, extra_meta, counters):

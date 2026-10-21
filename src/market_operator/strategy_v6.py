@@ -36,8 +36,11 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from .broker import OrderIntent, OrderKind
-from .events import E1, E2, E3, E4, E5, E6, E7, E8, MarketEvent
-from .hypothesis import Hypothesis, StructureView
+from .events import (
+    ACCEPT, E1, E2, E3, E4, E5, E6, E7, E8, REJECT, MarketEvent,
+    canonical_event_id,
+)
+from .hypothesis import Hypothesis, StructureView, _structural_target
 from .structure import _bar_parts
 
 # 同 episode 匹配容差:两侧价格同源(破位 pivot 价 / zone 前缘价,浮点原值
@@ -67,10 +70,14 @@ def _event_provenance(ev: MarketEvent) -> dict:
     if zone is not None:
         prov.update({"zone_lo": float(zone.lo), "zone_hi": float(zone.hi),
                      "zone_touches": int(zone.touches)})
+        if getattr(zone, "box_opposite", None) is not None:
+            prov["box_opposite"] = float(zone.box_opposite)
     return prov
 
-ROUTE_E1 = "e1_market"               # E1 市价次开盘
-ROUTE_E3 = "e3_market"               # E3 拒绝获因后市价次开盘(2026-10-20 放开决议,log#16)
+ROUTE_E1 = "e1_market"               # E1 (ACCEPT) 市价次开盘
+ROUTE_E3 = "e3_market"               # E3 (REJECT) 拒绝获因后市价次开盘(2026-10-20 放开决议,log#16)
+ROUTE_ACCEPT = ROUTE_E1
+ROUTE_REJECT = ROUTE_E3
 ROUTE_E2 = "e2_market"
 ROUTE_E4 = "e4_market"
 ROUTE_E5 = "e5_market"
@@ -80,6 +87,9 @@ ROUTE_WEAK_E7 = "weak_e7_limit"      # WEAK E6 → 同 episode E7 前缘限价
 
 WHITELIST_V6 = frozenset(
     {(E1, -1), (E1, +1), (E6, -1), (E6, +1), (E7, -1), (E7, +1)})
+WHITELIST_BALANCE = frozenset(
+    {(E1, -1), (E1, +1), (E3, -1), (E3, +1),
+     (ACCEPT, -1), (ACCEPT, +1), (REJECT, -1), (REJECT, +1)})
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,19 @@ class V6Params:
     turtle_stop_atr: float = 2.0     # 初始防线(ATR 倍数,S2 臂 B 冻结,固化)
     k_bm: float = 0.1                # 区缘外余量(= Params.k_bm,冻结先验)
     whitelist: frozenset = WHITELIST_V6
+    # v21.5:按周期差异化的谨慎克制过滤(用于 2h/30m 降噪:要求更高箱体质量分、
+    # 旋转次数、触发 bar 冲动振幅或冷却期)
+    min_box_touches: int = 0         # >0 时要求 zone.touches >= min_box_touches
+    min_box_quality: float = 0.0     # >0 时要求 zone.box_quality >= min_box_quality
+    min_box_rotations: int = 0       # >0 时要求 zone.box_rotations >= min_box_rotations
+    min_box_width_atr: float = 0.0   # >0 时要求 zone.box_width_atr >= min_box_width_atr
+    min_box_rr: float = 0.0          # >0 时要求 |box_opposite - close| / stop_dist >= min_box_rr
+    min_bar_impulse_atr: float = 0.0 # >0 时要求触发 bar 振幅 (h-l)/atr >= min_bar_impulse_atr
+    zone_cooldown_bars: int = 0      # >0 时同一条箱沿触发后冷却 N 根 bar 禁止重复刷单
+    # v21.6:区分 ACCEPT(突破趋势 Turtle) 与 REJECT(箱体折返 结构收割/止损)
+    reject_target_mode: str = "none" # "none" | "opposite" | "mid" (REJECT 的 target_1 锚点)
+    reject_use_struct_stop: bool = False  # True 时 REJECT 使用箱体外缘结构止损(替代 2.0*ATR)
+    accept_use_struct_stop: bool = False  # True 时 ACCEPT 使用箱体正缘结构止损(替代 2.0*ATR)
 
 
 @dataclass(frozen=True)
@@ -130,6 +153,9 @@ class V6Router:
         self._pending: dict[str, _WeakEpisode] = {}
         self._notes: list[str] = []
         self.counters: dict[str, int] = {}
+        self._zone_last_bar: dict[tuple, int] = {}
+        self._cur_bar_range: float = 0.0
+        self._cur_bar_index: int = 0
 
     # -- 主入口 ---------------------------------------------------------------
 
@@ -139,11 +165,13 @@ class V6Router:
         """返回本 bar 的路由决策序列(无动作为空列表;explain() 读理由)。"""
         ts, _o, h, l, c, _v = _bar_parts(bar)
         self._notes = []
+        self._cur_bar_range = float(h - l)
+        self._cur_bar_index = int(bar_index)
         decisions: list[RouteDecision] = []
         atr = float(atr)
 
-        wl = self.params.whitelist
-        e1_fires = any(e.id == E1 and (e.id, e.direction) in wl
+        wl = frozenset((canonical_event_id(eid), int(d)) for eid, d in self.params.whitelist)
+        e1_fires = any(canonical_event_id(e.id) == E1 and (canonical_event_id(e.id), e.direction) in wl
                        for e in new_events)
         slot_freed = False
         if e1_fires:
@@ -167,15 +195,16 @@ class V6Router:
         armed = False
         for ev in new_events:
             side = "long" if ev.direction > 0 else "short"
-            if (ev.id, ev.direction) not in wl:
+            cid = canonical_event_id(ev.id)
+            if (cid, ev.direction) not in wl:
                 self._notes.append(
                     f"nogo|{symbol} {ev.id}|{side} not in v6 whitelist")
                 continue
-            if ev.id == E6:
+            if cid == E6:
                 self._bump("e6_signals")
-            elif ev.id == E1:
+            elif cid == E1:
                 self._bump("e1_signals")
-            elif ev.id == E7:
+            elif cid == E7:
                 self._bump("e7_signals")
             if holding or armed:
                 self._notes.append(
@@ -183,27 +212,27 @@ class V6Router:
                     "resting entry; one position/one order per campaign)")
                 self._bump("dup")
                 continue
-            if ev.id == E6:
+            if cid == E6:
                 decision = self._route_e6(symbol, ev, view, h, l, c, atr,
                                           bar_index)
-            elif ev.id == E1:
+            elif cid == E1:
                 decision = self._route_market(
                     symbol, ev, view, c, atr, ROUTE_E1, "突破接受,永远市价次开盘")
-            elif ev.id == E3:
-                # E3 入场于 2026-10-20 所有者放开决议开放(research-log #16):
+            elif cid == E3:
+                # E3 (REJECT) 入场于 2026-10-20 所有者放开决议开放(research-log #16):
                 # 拒绝获因明确(区域刺穿/回退都已确认),市价次开盘;同一 F1/room 闸。
                 decision = self._route_market(
                     symbol, ev, view, c, atr, ROUTE_E3, "拒绝确认,市价次开盘")
                 self._bump("e3_signals")
-            elif ev.id == E7:
+            elif cid == E7:
                 decision = self._route_e7(symbol, ev, view, c, atr, bar_index)
-            elif ev.id in (E2, E4, E5, E8):
+            elif cid in (E2, E4, E5, E8):
                 # 语义路由表(2026-10-20, log#21):无黑白名单,机制按各自
                 # 修正语义上市价路由;失效/target 取 attrs,F1/room 几何闸不变。
-                tag = {E2: "失败突破确认", E4: "趋势恢复", E5: "区间回归", E8: "边缘收复"}[ev.id]
+                tag = {E2: "失败突破确认", E4: "趋势恢复", E5: "区间回归", E8: "边缘收复"}[cid]
                 decision = self._route_market(symbol, ev, view, c, atr,
-                                              "e%s_market" % ev.id[1], tag + ",市价次开盘")
-                self._bump("e%s_signals" % ev.id[1].lower())
+                                              "e%s_market" % cid[1], tag + ",市价次开盘")
+                self._bump("e%s_signals" % cid[1].lower())
             else:
                 self._notes.append(f"unknown_event|{symbol} {ev.id}")
             if decision is not None:
@@ -313,7 +342,13 @@ class V6Router:
                close: float, atr: float, route: str) -> Optional[Hypothesis]:
         side = "long" if ev.direction > 0 else "short"
         p = self.params
+        cid = canonical_event_id(ev.id)
         invalid = close - ev.direction * p.turtle_stop_atr * atr
+        ev_inv = ev.attrs.get("invalid")
+        if cid in (E2, E3, E8) and p.reject_use_struct_stop and ev_inv is not None:
+            invalid = float(ev_inv)
+        elif cid == E1 and p.accept_use_struct_stop and ev_inv is not None:
+            invalid = float(ev_inv)
         # F1(全入口,闸):天然距离不足即笔不存在
         dist = ev.direction * (close - invalid)
         if dist < p.k_is * atr:
@@ -322,10 +357,65 @@ class V6Router:
                 f"f1|{symbol} {ev.id}|{side} dist={dist:.4g} < k_is·atr="
                 f"{p.k_is * atr:.4g} ⇒ 无交易(F1 全入口下限)")
             return None
+        zone = ev.attrs.get("zone")
+        if p.min_box_touches > 0 and zone is not None:
+            if int(zone.touches) < p.min_box_touches:
+                self._bump("restraint_touches_reject")
+                return None
+        if p.min_box_quality > 0.0 and zone is not None:
+            if float(getattr(zone, "box_quality", 0.0)) < p.min_box_quality:
+                self._bump("restraint_quality_reject")
+                return None
+        if p.min_box_rotations > 0 and zone is not None:
+            if int(getattr(zone, "box_rotations", 0)) < p.min_box_rotations:
+                self._bump("restraint_rotations_reject")
+                return None
+        if p.min_box_width_atr > 0.0 and zone is not None:
+            if float(getattr(zone, "box_width_atr", 0.0)) < p.min_box_width_atr:
+                self._bump("restraint_width_reject")
+                return None
+        if p.min_bar_impulse_atr > 0.0 and atr > 0.0:
+            if (self._cur_bar_range / atr) < p.min_bar_impulse_atr:
+                self._bump("restraint_impulse_reject")
+                return None
+        if p.min_box_rr > 0.0 and zone is not None:
+            opp = getattr(zone, "box_opposite", None)
+            if opp is not None and dist > 0.0:
+                if cid in (E2, E3, E8):
+                    room = ev.direction * (float(opp) - close)
+                else:
+                    box_span = abs(float(opp) - (zone.hi if ev.direction > 0 else zone.lo))
+                    room = box_span
+                if (room / dist) < p.min_box_rr:
+                    self._bump("restraint_rr_reject")
+                    return None
+        if p.zone_cooldown_bars > 0 and zone is not None:
+            zkey = (symbol, round(float(zone.lo), 6), round(float(zone.hi), 6), ev.direction)
+            last_b = self._zone_last_bar.get(zkey)
+            if last_b is not None and (self._cur_bar_index - last_b) < p.zone_cooldown_bars:
+                self._bump("restraint_cooldown_reject")
+                return None
+            self._zone_last_bar[zkey] = self._cur_bar_index
+        target_1: Optional[float] = None
+        r_mult: Optional[float] = None
+        if cid in (E2, E3, E8) and p.reject_target_mode != "none" and zone is not None:
+            opp = getattr(zone, "box_opposite", None)
+            if opp is not None:
+                opp_f = float(opp)
+                if p.reject_target_mode == "opposite":
+                    cand_t = opp_f
+                elif p.reject_target_mode == "mid":
+                    near_edge = float(zone.hi if ev.direction > 0 else zone.lo)
+                    cand_t = 0.5 * (near_edge + opp_f)
+                else:
+                    cand_t = opp_f
+                if ev.direction * (cand_t - close) > 0.0:
+                    target_1 = cand_t
+                    r_mult = ev.direction * (cand_t - close) / dist if dist > 0 else None
         hyp = Hypothesis(event_id=ev.id, direction=ev.direction, ts=ev.ts,
                          known_index=ev.known_index, entry=float(close),
-                         invalid=float(invalid), target_1=None,
-                         r_mult=None, regime=view.regime)
+                         invalid=float(invalid), target_1=target_1,
+                         r_mult=r_mult, regime=view.regime)
         return hyp
 
     # -- 内部 ------------------------------------------------------------------
@@ -343,7 +433,8 @@ class V6Router:
 
 
 __all__ = [
-    "V6Params", "V6Router", "RouteDecision", "WHITELIST_V6",
-    "ROUTE_E1", "ROUTE_E3", "ROUTE_STRONG_E6", "ROUTE_WEAK_E7",
+    "V6Params", "V6Router", "RouteDecision", "WHITELIST_V6", "WHITELIST_BALANCE",
+    "ROUTE_E1", "ROUTE_E3", "ROUTE_ACCEPT", "ROUTE_REJECT",
+    "ROUTE_STRONG_E6", "ROUTE_WEAK_E7",
     "ROUTE_E2", "ROUTE_E4", "ROUTE_E5", "ROUTE_E8",
 ]

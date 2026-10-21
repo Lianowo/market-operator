@@ -140,16 +140,16 @@ def main(argv=None) -> None:
     contracts = lr.load_contracts_live(real, cfg["symbols_core"])
     tg2 = CollectTg()
     runner = build_runner(tmp, client, tg2, cfg, contracts)
-    cs = runner._build_campaign(sym)               # 装配(不推进;决不动 future)
+    cs = runner._build_all_tf_campaigns(sym)       # 装配(不推进;决不动 future)
     runner.campaigns[sym] = cs
     runner.symbols_pending.remove(sym)
     assert cs.trig_bars[-1][0] == warmup_end, "warmup 窗越界(防前视破)"
     n_cog, n_trig = len(cs.cog_bars), len(cs.trig_bars)
     print(f"   12h 认知 bar {n_cog} 根;2H trigger {n_trig} 根;"
-          f"末 trigger 标签 {warmup_end}")
+          f"末 trigger 标签 {warmup_end} (多周期并发实例: {len(runner.extra_campaigns) + 1} 个)")
 
     # canonical 硬断言:replay 认知 == prepare_cognition 逐 bar 事件流
-    raw20, params, _rp = lr.load_v20_params()
+    params = runner.params
     import pandas as pd
     df_cog = pd.DataFrame(cs.cog_bars,
                           columns=["ts", "open", "high", "low", "close",

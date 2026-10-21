@@ -7,3 +7,6 @@ data/aggtrades/
 reports/flow_study_events_*.csv
 runtime/
 logs/
+config/secrets.env
+secrets.env
+

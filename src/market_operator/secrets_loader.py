@@ -32,6 +32,8 @@ _KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "BITGET_PASSPHRASE": ("BITGET_PASSPHRASE", "BITGET_API_PASSWORD"),
     "TELEGRAM_BOT_TOKEN": ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN"),
     "TELEGRAM_CHAT_ID": ("TELEGRAM_CHAT_ID", "TG_CHAT_ID"),
+    "TELEGRAM_TRADE_BOT_TOKEN": ("TELEGRAM_TRADE_BOT_TOKEN", "TG_TRADE_BOT_TOKEN"),
+    "TELEGRAM_TRADE_CHAT_ID": ("TELEGRAM_TRADE_CHAT_ID", "TG_TRADE_CHAT_ID"),
     "TELEGRAM_PROXY": ("TELEGRAM_PROXY",),          # 可选
 }
 
@@ -76,19 +78,23 @@ class SecretsError(RuntimeError):
 
 def load_secrets(path: Optional[os.PathLike | str] = None,
                  required: tuple[str, ...] = REQUIRED_BITGET + REQUIRED_TELEGRAM,
-                 environ: Optional[Mapping[str, str]] = None) -> dict:
+                 environ: Optional[Mapping[str, str]] = None,
+                 config_overrides: Optional[Mapping[str, str]] = None) -> dict:
     """装载并校验凭证;返回"规格化键" → 值的映射(值原样,调用方不入日志)。
 
-    - required 中的规格化键(BITGET_* / TELEGRAM_*):文件或环境二者其一提供
-      即可(文件优先?否 —— env 进程变量优先,便于 CI 注入;均不存在的键名
-      标为 missing,异常消息只列键名);
-    - file/env 均已找到的别名的值以**环境变量优先**,其次文件;
-    - 可选键(如 TELEGRAM_PROXY)缺失不报错。
+    优先级:
+    1. 进程环境变量 (environ)
+    2. 显式传入的 path 或 config/secrets.env 或 DEFAULT_SECRETS_PATH
+    3. 配置文件内的 credentials 字典 (config_overrides)
     """
     p = secrets_path(path)
     file_kv: dict[str, str] = {}
+    local_env = Path(__file__).resolve().parents[2] / "config" / "secrets.env"
+    if path is None and not os.environ.get(ENV_OVERRIDE) and local_env.exists():
+        file_kv.update(_load_env(local_env))
     if p.exists():
-        file_kv = _load_env(p)
+        file_kv = {**_load_env(p), **file_kv} if path is None else _load_env(p)
+    cfg_kv = dict(config_overrides or {})
     env = dict(os.environ if environ is None else environ)
 
     resolved: dict[str, str] = {}
@@ -102,10 +108,19 @@ def load_secrets(path: Optional[os.PathLike | str] = None,
             if file_kv.get(name):
                 val = file_kv[name]
                 break
+            if cfg_kv.get(name):
+                val = cfg_kv[name]
+                break
         if val is not None:
             resolved[canon] = val
         elif canon in required:
             missing.append(f"{canon}({ '/'.join(aliases) })")
+
+    # 交易通知机器人若未单独配置,自动回退复用信号通知机器人
+    if "TELEGRAM_TRADE_BOT_TOKEN" not in resolved and "TELEGRAM_BOT_TOKEN" in resolved:
+        resolved["TELEGRAM_TRADE_BOT_TOKEN"] = resolved["TELEGRAM_BOT_TOKEN"]
+    if "TELEGRAM_TRADE_CHAT_ID" not in resolved and "TELEGRAM_CHAT_ID" in resolved:
+        resolved["TELEGRAM_TRADE_CHAT_ID"] = resolved["TELEGRAM_CHAT_ID"]
 
     if missing:
         raise SecretsError(

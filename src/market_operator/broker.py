@@ -279,6 +279,7 @@ class _AcctPosition:
     last_funding_ts: int = 0   # 上次计提时刻
     invalid: Optional[float] = None  # 当前结构失效位置;组合风险预算的真实输入
     ladder_group: Optional[str] = None  # v14 C4 分层组号(见 RestingLimitOrder)
+    decision_ts: int = 0       # OPEN 决策 bar 标签(保护性止损的因果锚,< fill ts)
 
 
 class Broker:
@@ -289,7 +290,9 @@ class Broker:
                  funding_per_8h: float, contracts: dict,
                  maker_fee: Optional[float] = None,
                  cost_multiplier: float = 1.0, liq_frac: float = 0.9,
-                 portfolio_stop_risk_frac: Optional[float] = None) -> None:
+                 portfolio_stop_risk_frac: Optional[float] = None,
+                 tf_stop_risk_frac_by_tf: Optional[dict] = None,
+                 dynamic_risk_tiers: Optional[list] = None) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
         self.initial_equity = float(equity)
@@ -308,6 +311,14 @@ class Broker:
         if portfolio_stop_risk_frac is not None and not (0 < portfolio_stop_risk_frac <= 1):
             raise ValueError("portfolio_stop_risk_frac must be in (0,1]")
         self.portfolio_stop_risk_frac = portfolio_stop_risk_frac
+        self.tf_stop_risk_frac_by_tf = (
+            {str(k): float(v) for k, v in tf_stop_risk_frac_by_tf.items()}
+            if tf_stop_risk_frac_by_tf else None
+        )
+        self.dynamic_risk_tiers = (
+            [(float(t[0]), float(t[1])) for t in dynamic_risk_tiers]
+            if dynamic_risk_tiers else None
+        )
 
         self.positions: dict[str, _AcctPosition] = {}
         self.pending: dict[str, list[_Pending]] = {}
@@ -526,8 +537,43 @@ class Broker:
             raise ValueError("stop may not be loosened")
         pos.invalid = float(invalid)
 
-    def _available_stop_risk(self, equity: float) -> float:
-        """从当前盯市价到结构止损的总账户风险;未启用时保持 v4 原始口径。"""
+    def current_risk_frac(self) -> float:
+        """基于已落袋本金(self.cash)的阶梯动态单笔风险率;未配置时返回静态 self.risk_frac。"""
+        if not self.dynamic_risk_tiers:
+            return self.risk_frac
+        realized = self.cash
+        for max_cash, r_frac in self.dynamic_risk_tiers:
+            if realized <= max_cash:
+                return r_frac
+        return self.dynamic_risk_tiers[-1][1]
+
+    def _available_stop_risk(self, equity: float, symbol: Optional[str] = None) -> float:
+        """从当前盯市价到结构止损的账户/周期风险;支持按时间尺度(TF)独立容量池。"""
+        if self.tf_stop_risk_frac_by_tf and symbol and "@" in symbol:
+            tf_lbl = symbol.rsplit("@", 1)[1]
+            tf_cap = self.tf_stop_risk_frac_by_tf.get(tf_lbl)
+            if tf_cap is not None:
+                outstanding_tf = 0.0
+                suffix = f"@{tf_lbl}"
+                for sym, pos in self.positions.items():
+                    if not sym.endswith(suffix):
+                        continue
+                    if pos.invalid is None:
+                        return 0.0
+                    mark = self.last_mark.get(sym, pos.entry)
+                    outstanding_tf += pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
+                avail_tf = max(0.0, equity * tf_cap - outstanding_tf)
+                if self.portfolio_stop_risk_frac is None:
+                    return avail_tf
+                # 若同时设了全局安全上限,取二者较小值
+                outstanding_all = 0.0
+                for sym, pos in self.positions.items():
+                    if pos.invalid is None:
+                        return 0.0
+                    mark = self.last_mark.get(sym, pos.entry)
+                    outstanding_all += pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
+                avail_all = max(0.0, equity * self.portfolio_stop_risk_frac - outstanding_all)
+                return min(avail_tf, avail_all)
         if self.portfolio_stop_risk_frac is None:
             return float("inf")
         outstanding = 0.0
@@ -562,9 +608,10 @@ class Broker:
         risk_per_unit = abs(price - od.invalid)
         # v14 C5/C4:size_mult(quality tier × 1/切份数;缺省 1.0 ⇒ 逐位旧口径)
         size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
-        qty_risk = self.risk_frac * size_mult * equity / risk_per_unit
+        eff_risk_frac = self.current_risk_frac()
+        qty_risk = eff_risk_frac * size_mult * equity / risk_per_unit
         qty_cap = self._available_entry_notional(equity) / price
-        qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
+        qty_portfolio_stop = self._available_stop_risk(equity, sym) / risk_per_unit
         qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
                           spec.size_step, spec.size_place)
         notional = qty * price
@@ -580,7 +627,8 @@ class Broker:
         pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
                             entry=price, trade_id=trade_id, opened_ts=ts,
                             last_funding_ts=ts, invalid=float(od.invalid),
-                            ladder_group=od.ladder_group)
+                            ladder_group=od.ladder_group,
+                            decision_ts=int(od.armed_at_ts))
         self.positions[sym] = pos
         self.last_mark[sym] = price
         meta = dict(od.meta)
@@ -623,9 +671,10 @@ class Broker:
         equity = self.equity_mtm()
         risk_per_unit = abs(price - pos.invalid)
         size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
-        qty_risk = self.risk_frac * size_mult * equity / risk_per_unit
+        eff_risk_frac = self.current_risk_frac()
+        qty_risk = eff_risk_frac * size_mult * equity / risk_per_unit
         qty_cap = self._available_entry_notional(equity) / price
-        qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
+        qty_portfolio_stop = self._available_stop_risk(equity, sym) / risk_per_unit
         qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
                           spec.size_step, spec.size_place)
         if qty < spec.size_min or qty * price < spec.min_trade_usdt:
@@ -782,9 +831,10 @@ class Broker:
         risk_per_unit = abs(price - po.invalid)
         # v14 C5:size_mult(quality tier;缺省 1.0 ⇒ 逐位旧口径)
         size_mult = float(po.meta.get("size_mult", 1.0) or 1.0)
-        qty_risk = self.risk_frac * size_mult * equity / risk_per_unit
+        eff_risk_frac = self.current_risk_frac()
+        qty_risk = eff_risk_frac * size_mult * equity / risk_per_unit
         qty_cap = self._available_entry_notional(equity) / price
-        qty_portfolio_stop = self._available_stop_risk(equity) / risk_per_unit
+        qty_portfolio_stop = self._available_stop_risk(equity, sym) / risk_per_unit
         qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
                           spec.size_step, spec.size_place)
         notional = qty * price
@@ -802,7 +852,8 @@ class Broker:
         pos = _AcctPosition(symbol=sym, direction=d, qty=qty, open_qty=qty,
                             entry=price, trade_id=trade_id, opened_ts=ts,
                             last_funding_ts=ts, invalid=float(po.invalid),
-                            ladder_group=po.meta.get("ladder_group"))
+                            ladder_group=po.meta.get("ladder_group"),
+                            decision_ts=po.decision_ts)
         self.positions[sym] = pos
         self.last_mark[sym] = price
         meta = dict(po.meta)
@@ -936,7 +987,7 @@ class Broker:
             reason=(f"PROTECTIVE_STOP|15m trigger stop={stop:.8g} "
                     f"ref={reference:.8g} gap={'yes' if reference != stop else 'no'}"),
             ref_price=reference, ts=ts)
-        pending = _Pending(intent=order, decision_ts=int(pos.opened_ts), meta={
+        pending = _Pending(intent=order, decision_ts=int(pos.decision_ts), meta={
             "role": "protective_stop", "stop_level": stop,
             "stop_install_ts": int(pos.opened_ts),
             "gap_at_open": reference != stop})

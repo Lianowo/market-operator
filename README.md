@@ -1,8 +1,9 @@
 # market-operator
 
-模拟专业交易者决策过程的加密货币研究与交易系统：因果市场认知 → 事件目录 → 可证伪交易假设 → 事件驱动持仓管理 → 全成本真实回测。研究标的：Bitget USDT 永续（BTC/ETH/SOL），多尺度（1h/2h/4h/12h/1d），初始权益 300 USDT。
+模拟专业交易者决策过程的加密货币研究与实盘交易系统：因果市场认知（平衡箱体与波段结构） → 事件原语（ACCEPT / REJECT 及 E1–E10） → 可证伪交易假设 → 事件驱动持仓管理 → 全成本真实回测与 Bitget 多周期实盘引擎。研究与实盘标的：Bitget USDT 永续（核心 BTC/ETH/SOL/DOGE + 全市场 >3M USDT 活跃宇宙），多尺度（2h/4h/12h/1d 混合触发）。
 
-**当前状态：Research Only（研究结论 NO-GO，无实盘路径）。** 见 `docs/acceptance.md`。
+**当前状态：v21 平衡箱统一架构与实盘引擎已就绪（`config/v21.json` / `config/live.json`，全仓 605 测试通过）。** 见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
+
 
 ## 设计原则
 
@@ -41,8 +42,20 @@ aggregate(多 TF 聚合) ◄─────────────────�
   二臂判选已终局（臂 B 判选；记录见 `docs/v6-protocol.md` 原文与
   `reports/backtest_v6.json/.md` 冻结产物）,**臂切换与臂 A clamp2R 实现
   已移除**,双臂实现冻结于 `research/rounds/v6/`。
-- **规范模块**:`data`、`aggregate`、`structure`、`events`、`hypothesis`、
-  `position`、`broker`、`campaign`、`strategy_v6`、`backtest_v6`、`research`。
+- **规范模块**:`data`、`aggregate`、`structure`、`balance_detect`、`balance`、`events`、`hypothesis`、
+  `position`、`broker`、`campaign`、`strategy_v6`、`backtest_v6`、`trigger`、`bitget_live`、`tg`、`secrets_loader`、`research`。
+
+## v21 极简平衡箱与实盘统一架构（当前活跃架构）
+
+详见 **`docs/v21-protocol.md`**、**`config/v21.json`** 与 **`config/live.json`**：
+
+- **六维平衡箱识别（`balance_detect.py`）**：基于拍卖市场理论，在多尺度窗口阶梯 `(8..144)` 上以 12%/88% 稳健分位边界、方向效率、驻留率、重叠度、遍历比、上下沿轮动次数与重心稳定性识别高置信度震荡箱体（`use_balance_detector=True, balance_quality_min=0.35`），自动派生箱体上下沿支撑/阻力与对侧目标 `box_opposite`。
+- **双原语与高阶降档混合触发（M3c）**：
+  - `ACCEPT`（突破接受，顺趋势迁移）与 `REJECT`（刺穿拒绝，箱内回归）；
+  - `2h` / `4h` 同周期收盘确认触发（配强克制过滤：`min_box_rotations=3`、`min_bar_impulse_atr=1.2`、同箱沿冷却）；
+  - `12h -> 2h`、`1d -> 4h` 降一档细周期触发，兼顾大箱体高胜率与早入场高盈亏比。
+- **分类止损与对侧突破锁利 50%**：`REJECT` 采用箱体外缘结构止损，触及或突破对侧缘 `box_opposite` 时**不平半仓**，直接将防线推进至锁住 50% 箱体跨度利润的位置（`reject_opp_lock_frac=-0.50`），剩余仓位交由 §8.3 确认 pivot 移动防线收割；`ACCEPT` 采用 2.0·ATR 初始防线与无上限移动防线。
+- **各周期独立风险容量池与阶梯动态复利**：`tf_cap_by_tf` 为 `2h`/`4h`/`12h`/`1d` 分配独立风险预算，防止短周期仓位挤占大周期高胜率机会；实盘支持 104 USDT 起步 × 20x 杠杆 × 四档净值阶梯动态风险（`<=250U:4%`, `<=600U:3%`, `<=1500U:2%`, `>1500U:1%`）与 Telegram 信号/交易双机器人高清黑白 K 线+箱体结构图推送。
 
 ## 历史轮次归档（research/)
 
@@ -51,13 +64,21 @@ v1-v5 各轮与 v6 双臂 A/B 快照、PR#9/#10 前向设施已按轮次归档�
 仅 import 路径修正，逻辑零改动）；对应关系（轮次 ↔ 协议 ↔ 冻结报告 ↔
 复现命令）见 **`research/README.md`**。
 
-## 复现
+## 复现与运行
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest -q                       # 313 passed(规范 tests/ + 历史 research/rounds/)
+python -m pytest -q                       # 605 passed(全量规范回归 + v1..v21 测试)
 
-# 规范链(当前唯一语言;产物 reports/backtest_v6_turtle.*)
+# v21 平衡箱与多周期混合触发回测诊断
+python scripts/_diag_v21_backtest.py
+
+# v21 实盘引擎 paper 冒烟校验与实盘启动
+python scripts/live_paper_check.py
+python scripts/live_runner.py --mode paper
+python scripts/live_runner.py --mode live
+
+# 规范基线回放(产物 reports/backtest_v6_turtle.*)
 python scripts/run_backtest_v6.py
 
 # 历史轮次(覆盖各自同名历史报告,详见 research/README.md)
@@ -69,14 +90,13 @@ python research/rounds/v5/run_backtest_v5.py
 python research/rounds/v6/run_backtest_v6.py   # v6 A/B 双臂(复现判选)
 ```
 
-数据固定证据：`data/manifest.json`（每批原始数据 sha256, 2024-10-15 → 2026-10-19, 3×17600 bars, 0 缺口）；合约规格离线缓存强制（`data/contracts.json` 逐条 sha256)。
+数据固定证据：`data/manifest.json`（每批原始数据 sha256, 2024-10-15 → 2026-10-19, 0 缺口）；合约规格离线缓存强制（`data/contracts.json` 逐条 sha256)。
 
-## 研究结论快照（详见 `docs/acceptance.md`)
+## 研究演进与结论快照（详见 `docs/acceptance.md` 与 `docs/v21-protocol.md`)
 
-- 事件与交易各层证据（v1-v6）均未通过真实成本后的正期望检验；v6 战役
-  引擎修复了出口几何（回吐中位达标）但 P&L 仍为负（见
-  `reports/backtest_v6.md`)。判定：**Research Only**。失败分解与方向见
-  `docs/acceptance.md` 与 `docs/research-log.md`。
+- **v1–v20（单带区域家族与订单流证伪）**：单带 S/R 区域模型下历经二十轮归因与改造（v18 首获 dev 正期望、v19 首获 test 微正，v12 K线 delta 与 v19.5 Binance 2.195 亿笔逐笔 aggTrades 均证伪公开订单流增量），详见 `docs/acceptance.md` 与 `docs/research-log.md`。
+- **v21（平衡箱统一架构）**：将认知底座切换为 `BalanceDetector` 高置信度平衡箱，配合 `ACCEPT`/`REJECT` 双原语、M3c 高阶降档混合触发、对侧突破锁利 50% 与各周期独立容量池，在 `2h`/`4h`/`12h`/`1d` 四周期及 `dev`/`test` 全成本压力下实现正期望（300U 固定基准 full@1.0x 净 +575.3 USDT；104U/20x 阶梯复利回测净值达 2,523.7 USDT，MaxDD 15.8%），已同步接入实盘引擎。
+
 
 ## 来源与许可证
 

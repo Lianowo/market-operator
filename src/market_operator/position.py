@@ -192,7 +192,8 @@ class PositionManager:
                  trail_arm_mfe_r: float = S1_TRAIL_ARM_MFE_R,
                  harvest_fade_2leg: bool = False,
                  s2_level: float = S2_LEVEL,
-                 s2_bank_frac: float = S2_BANK_FRAC) -> None:
+                 s2_bank_frac: float = S2_BANK_FRAC,
+                 reject_opp_lock_frac: float = 0.0) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
@@ -219,6 +220,7 @@ class PositionManager:
         self.harvest_fade_2leg = bool(harvest_fade_2leg)
         self.s2_level = float(s2_level)
         self.s2_bank_frac = float(s2_bank_frac)
+        self.reject_opp_lock_frac = float(reject_opp_lock_frac)
         if self.harvest_fade_2leg and self.harvest_ladder3:
             raise ValueError("v20 S2 双格收割与 v18 R4 三段收割互斥"
                              "(R4 死亡名单不接线;同栈即语义冲突)")
@@ -327,15 +329,47 @@ class PositionManager:
 
         intents: list[OrderIntent] = list(ladder_intents)
 
-        # 3. §8.2 target_1 触及:减仓 50%(仅一次),余仓 invalid 移至 entry
+        # 3. §8.2 target_1 触及:
+        #    - 若启用了 reject_opp_lock_frac < 0:仅当收盘真正突破对侧(c 越过 target_1)
+        #      才将防线收紧锁利(|reject_opp_lock_frac| * span);触及对侧但未突破前完全
+        #      保持原结构防线 + Turtle,绝不因对侧震荡提前扫保本;
+        #    - 若启用了 reject_opp_lock_frac > 0:触及对侧即锁利推进防线;
+        #    - 否则按传统 §8.2 减仓 50%(仅一次),余仓 invalid 移至 entry。
         if pos.target_1 is not None and not pos.reduced and not pos.pending_reduce:
-            hit = (l <= pos.target_1) if pos.direction < 0 \
-                else (h >= pos.target_1)
-            if hit:
-                if defer_reduce:
-                    intents.append(self._defer_reduce(pos, ts, c, l if pos.direction < 0 else h))
-                else:
-                    intents.append(self._reduce(pos, ts, c, l if pos.direction < 0 else h))
+            if self.reject_opp_lock_frac < 0.0:
+                broke = (c < pos.target_1) if pos.direction < 0 else (c > pos.target_1)
+                if broke:
+                    pos.reduced = True
+                    span = float(pos.target_1) - float(pos.entry)
+                    frac = abs(self.reject_opp_lock_frac)
+                    lock_px = float(pos.entry) + frac * span
+                    old = pos.invalid
+                    pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
+                                   else max(pos.invalid, lock_px))
+                    pos.log.append(
+                        f"v21|opp_break_lock|收盘突破对侧缘 target={pos.target_1:.8g} "
+                        f"锁利({frac:.0%}) invalid {old:.8g}->{pos.invalid:.8g}")
+            else:
+                hit = (l <= pos.target_1) if pos.direction < 0 \
+                    else (h >= pos.target_1)
+                if hit:
+                    if self.reject_opp_lock_frac > 0.0:
+                        pos.reduced = True
+                        span = float(pos.target_1) - float(pos.entry)
+                        broke_through = (c < pos.target_1) if pos.direction < 0 else (c > pos.target_1)
+                        frac = self.reject_opp_lock_frac if broke_through else min(0.10, self.reject_opp_lock_frac)
+                        lock_px = float(pos.entry) + frac * span
+                        old = pos.invalid
+                        pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
+                                       else max(pos.invalid, lock_px))
+                        pos.log.append(
+                            f"v21|opp_lock|触及对侧缘 target={pos.target_1:.8g} "
+                            f"不减仓锁利({frac:.0%}) "
+                            f"invalid {old:.8g}->{pos.invalid:.8g}")
+                    elif defer_reduce:
+                        intents.append(self._defer_reduce(pos, ts, c, l if pos.direction < 0 else h))
+                    else:
+                        intents.append(self._reduce(pos, ts, c, l if pos.direction < 0 else h))
 
         # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松);
         #    v16 fade 收割模式禁用 trail(协议持仓第 4 条:trail 只对续涨保留)
@@ -344,7 +378,9 @@ class PositionManager:
         #    脉冲向结构确认,与 §8.3 收紧消费的逆向 pivot 互补)之后上线;未
         #    上线 §8.3 整段不裁决(扶手不收紧,破位/CHoCH/到目标照先行);
         #    一经上线恢复只紧不松
-        if not pos.harvest:
+        # fade 收割模式禁用 trail;但无结构目标(target_1=None)时回退 trail,
+        # 避免收割与 trailing 双失、只剩静态 2·ATR 防线(①fade 收割的护栏)
+        if not pos.harvest or pos.target_1 is None:
             gated = self._s1_gated(pos)
             if gated and not pos.trail_armed:
                 arm_mfe = pos.mfe_r >= self.trail_arm_mfe_r     # 恰 1R 上线

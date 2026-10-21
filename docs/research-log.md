@@ -351,3 +351,10 @@
     - 10,039 接触点(90d×3 品种);H1 49/50 单元增量 CI 全含 0,唯一 dev 眉角
       E3|long×eff_15m(+2.31ATR,CI[0.32,4.31])test 结构性不可判;H2 吸收签名
       dev 反号、test INSUFFICIENT。**按协议:订单流路线至此终结,转纸面/L2 候选。**
+
+38. **2026-10-21 v21 极简平衡箱(BalanceDetector) + 双原语(ACCEPT/REJECT) + 高阶降档混合触发(M3c) + 实盘统一架构落地**
+    - **根因诊断与区域重写(`docs/v21-protocol.md`)**:历史单带 ZoneBook 在 1h BTC 上堆积 255 个陈旧重叠区(间距中位 −2.44 ATR,年龄中位 3908 bars)。通过 `balance_detect.py`(`BalanceDetector` 拍卖市场六维打分 + 12%/88% 稳健分位边界 + 去重抑制)识别高置信度平衡箱(`quality>=0.35`),并桥接至 `ZoneBook` 派生上下沿支撑/阻力及箱体元数据(`box_opposite`/`box_quality`/`box_rotations`/`box_width_atr`)。
+    - **极简语义与混合触发**:事件层与路由层收敛为 `ACCEPT`(映射 E1 突破接受)与 `REJECT`(映射 E3 刺穿拒绝)双原语;触发架构采用 M3c(`2h`/`4h` 同周期收盘触发配强克制过滤 `rot>=3`/`imp>=1.2`/`cooldown`,`12h->2h` 与 `1d->4h` 降一档细周期触发)。
+    - **出口修复与周期独立容量池**:①修复 `broker.py` 同向减仓挂单遮蔽保护性止损的边界缺陷;②`REJECT` 采用箱体外缘结构止损(`reject_use_struct_stop=True`),触及对侧缘(`box_opposite`)不平半仓而直接推进防线锁住 50% 箱体跨度利润(`reject_opp_lock_frac=-0.50`),后续交由 §8.3 确认 pivot 移动防线收割;③新增按周期独立风险容量池(`tf_cap_by_tf`),消除短周期持仓对 12h/1d 大级别信号的容量挤出。
+    - **回测与实盘全量对齐(`config/v21.json` / `config/live.json`)**:4 品种(BTC/ETH/SOL/DOGE) × 4 周期(2h/4h/12h/1d)在 dev/test 及 1.0x/1.5x/2.0x 成本压力下全周期正期望(300U 基准 full@1.0x 净 +575.3 USDT,gR +0.351,WR 52.8%;104U×20x 阶梯动态复利 4%→3%→2%→1% 净值达 2,523.7 USDT,MaxDD 15.8%)。`live_runner.py` 升级支持 v21 四周期并发战役、动态复利与双机器人高清黑白 K 线+平衡箱体配图通知(`tg.py`),全仓 605 测试通过。
+

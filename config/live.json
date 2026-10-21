@@ -1,20 +1,34 @@
 {
-  "version": "live-2026-10-21",
-  "note": "实盘接入件配置(任务书 2026-10-21):risk_frac=0.0075、leverage_cap=20、portfolio_cap_frac=0.5、min_notional 按合约(交易所 minTradeUSDT,启动时拉取)、max_daily_loss_frac=0.10、orders_per_hour<=30。MODE 不存在于此文件 —— 必须经 --mode live|paper 显式给出(fail-closed)。风险档与回测口径分离声明:risk_frac 数值沿用语义链冻结先验(仅数值,不影响回测语义);portfolio_cap/leverage 为实盘档,与 v20 回测口径不同轨,如实分离。",
+  "version": "live-v21-2026-10-21",
+  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=250U:4%, <=600U:3%, <=1500U:2%, >1500U:1%) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利50% + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
   "meta": {
-    "semantics": "canonical 认知+路由 arm-full(v20,四件全开):config/v20.json v19_params/v16_params/v18_params/v20_params 数值面照链,仅读不改",
-    "cognition_frame": "每品种认知帧 = 12h 主(obs_tf_seconds 43200)+ 下级触发 trigger_tf_seconds 7200(2H;TRIGGER_TF_MAP 43200->7200 精确命中,无声明)",
+    "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Dual-Bot Telegram K-Line Charts",
+    "strategy_config": "config/v21.json",
+    "cognition_frame": "支持 v21 多周期并发(2h/4h 同周期触发, 12h->2h 降档触发, 1d->4h 降档触发)及 12h->2h 单帧兼容模式",
     "execution_approximation": [
-      "市价决策:canonical 于次一执行细 bar(1h)开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
-      "限价单(S4 E3 前缘):GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
-      "持仓管理意图(破位/收割/时间帽):canonical 同样以次一执行 bar 开盘成交;实盘立即市价执行",
-      "paper 冒烟:真实 30 根 2H bar 复放,市价意图填于次一 2h bar 开盘、限价意图严格穿过成交(maker 口径),不发任何真单"
+      "市价决策:canonical 于次一执行细 bar 开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
+      "限价单:GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
+      "持仓管理意图(破位/防线收紧/对侧突破锁利):canonical 以认知 bar 收盘裁决;实盘同步更新交易所计划止损单或立即市价执行",
+      "Telegram 双机器人通知:信号 Bot 发信号/日结/告警,交易 Bot 发开仓/减仓/止损移动/平仓,均附带高清黑白 K 线与平衡箱体图"
     ]
   },
+  "credentials_source": "config/secrets.env",
   "risk": {
-    "risk_frac": 0.02,
+    "risk_frac": 0.04,
+    "dynamic_risk_tiers": [
+      [250.0, 0.04],
+      [600.0, 0.03],
+      [1500.0, 0.02],
+      [1000000000.0, 0.01]
+    ],
     "leverage_cap": 20,
     "portfolio_cap_frac": 0.5,
+    "tf_cap_by_tf": {
+      "2h": 0.12,
+      "4h": 0.12,
+      "12h": 0.12,
+      "1d": 0.12
+    },
     "max_daily_loss_frac": 0.1,
     "orders_per_hour": 30,
     "taker_fee": 0.0006,
@@ -37,6 +51,14 @@
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
+    "engine": "v21",
+    "tf_list": ["2h", "4h", "12h", "1d"],
+    "trigger_tf_by_htf": {
+      "2h": null,
+      "4h": null,
+      "12h": 7200,
+      "1d": 14400
+    },
     "main_tf_label": "12h",
     "obs_tf_seconds": 43200,
     "trigger_tf_seconds": 7200,
@@ -45,13 +67,14 @@
     "warmup_trigger_bars": 3600
   },
   "paper": {
-    "equity0": 1000.0,
+    "equity0": 104.0,
     "symbols_mode": "core_only"
   },
   "symbols_core": [
     "BTCUSDT",
     "ETHUSDT",
-    "SOLUSDT"
+    "SOLUSDT",
+    "DOGEUSDT"
   ],
-  "note_size": "2026-10-21 所有者\"大胆可控\"档:risk 2%/max20x/组合0.5/日损-10%熔断;104USDT起步约$2.08/单风险"
+  "note_size": "2026-10-21 v21 实盘配置:104USDT 起步 × 20x 杠杆 × 阶梯动态复利(4%->3%->2%->1%) × 各周期独立容量池(12%/TF, 总上限 50%) × 双机器人黑白K线推送"
 }

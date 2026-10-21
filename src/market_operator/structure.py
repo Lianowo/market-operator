@@ -70,6 +70,12 @@ class Params:
     range_max_pivots: int = 8            # §6A-A8 结构判定的最多 pivot 数
     e5_edge_atr: float = 0.75            # §6A-A8 带边缘容差(ATR 倍数)
     merge_max_atr: float = 0.0           # 区域并集宽度上限(ATR 倍数;0=无界,历史默认)
+    stale_after_bars: int = 0            # v21:区域年龄过期(距上次变化 bar 数;0=关,历史)
+    min_amplitude_atr: float = 0.0       # v21:仅腿位移幅度≥阈值的 pivot 造区(ATR;0=关)
+    use_same_balance: bool = False       # v21:合并用 same_balance 去重(替代 重叠+封顶)
+    use_balance_recognition: bool = False  # v21:仅"失败延伸"pivot 造区(替代 每个pivot)
+    use_balance_detector: bool = False   # v21.3:用 BalanceDetector 箱上下沿替换 pivot 造区
+    balance_quality_min: float = 0.25    # v21.3:BalanceDetector 质量门槛
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "Params":
@@ -102,6 +108,7 @@ class Pivot:
     forming_index: int
     known_index: int
     kind: PivotKind
+    close_extreme: float = 0.0   # v21:极值 bar 的收盘(失败延伸判据用)
 
 
 class ZoneRole(str, Enum):
@@ -131,6 +138,10 @@ class Zone:
     last_change_known: int = 0   # 最近一次状态/属性变化的知时
     merged: int = 1              # 合并来源数(§4.1)
     _retest_extreme: Optional[float] = None  # BROKEN→RETESTED 后向正面最深回踩极值(§4.2)
+    box_opposite: Optional[float] = None     # v21.4:平衡箱对侧边界(REJECT 均值回归目标锚)
+    box_quality: float = 0.0                 # v21.5:平衡箱质量分
+    box_width_atr: float = 0.0               # v21.5:平衡箱宽度(ATR 倍数)
+    box_rotations: int = 0                   # v21.5:平衡箱来回旋转次数
 
     def clone(self) -> "Zone":
         return Zone(
@@ -139,6 +150,10 @@ class Zone:
             origin_known=self.origin_known,
             last_change_known=self.last_change_known, merged=self.merged,
             _retest_extreme=self._retest_extreme,
+            box_opposite=self.box_opposite,
+            box_quality=self.box_quality,
+            box_width_atr=self.box_width_atr,
+            box_rotations=self.box_rotations,
         )
 
 
@@ -287,11 +302,70 @@ class ZoneBook:
         self.p = params
         self.zones: list[Zone] = []
         self.flips: list[ZoneFlip] = []   # 最近一根 bar 的 FLIPPED 事实(v2 只读记录)
+        self._last_high_price: Optional[float] = None   # v21 失败延伸判据(影线价)
+        self._last_low_price: Optional[float] = None
+        self._last_high_close: Optional[float] = None   # v21 边缘锚定(收盘 core)
+        self._last_low_close: Optional[float] = None
+        self._bal_det = None
+        if params.use_balance_detector:
+            from .balance_detect import BalanceDetector, BalanceParams
+            self._bal_det = BalanceDetector(
+                BalanceParams(quality_min=params.balance_quality_min))
 
     # -- §4.1 生成与合并 ----------------------------------------------------
 
-    def on_pivot(self, pivot: Pivot, known: int, atr_val: float) -> None:
-        """confirmed pivot 生成区域:阻力=[P-k_zw*atr, P],支撑=[P, P+k_zw*atr](知时 atr)。"""
+    def on_pivot(self, pivot: Pivot, known: int, atr_val: float,
+                 amplitude_atr: Optional[float] = None) -> None:
+        """confirmed pivot 生成区域:阻力=[P-k_zw*atr, P],支撑=[P, P+k_zw*atr](知时 atr)。
+
+        v21 显著性过滤:min_amplitude_atr>0 时,腿位移幅度不足的 pivot 不造区
+        (噪声摆动不产生结构;edge-engine sig_amplitude_atr 同构)。
+        """
+        if self.p.use_balance_detector:
+            return
+        if (self.p.min_amplitude_atr > 0 and amplitude_atr is not None
+                and amplitude_atr < self.p.min_amplitude_atr):
+            return
+        # v21 失败延伸识别(平衡箱 → 两个单带区):仅"未收盘突破前一个同类极值"的
+        # pivot 造箱,箱 = [下缘, 上缘] → 支撑区(下缘) + 阻力区(上缘),映射回单带
+        # 接口供 events/hypothesis 消费(角色翻转交由既有 ACTIVE→FLIPPED 生命周期)。
+        if self.p.use_balance_recognition:
+            tol = self.p.tol_atr * atr_val
+            w = self.p.k_zw * atr_val
+            if pivot.kind is PivotKind.HIGH:
+                failed = (self._last_high_price is not None
+                          and pivot.close_extreme <= self._last_high_price + tol)
+                if failed and self._last_low_close is not None:
+                    ce = pivot.close_extreme  # 边缘锚在收盘(core),影线不参与
+                    self._insert_merged(Zone(lo=ce - w, hi=ce,
+                                             role=ZoneRole.RESISTANCE, touches=1,
+                                             origin_known=known, last_change_known=known),
+                                        known, atr_val)
+                    self._insert_merged(Zone(lo=self._last_low_close,
+                                             hi=self._last_low_close + w,
+                                             role=ZoneRole.SUPPORT, touches=1,
+                                             origin_known=known, last_change_known=known),
+                                        known, atr_val)
+                self._last_high_price = pivot.price
+                self._last_high_close = pivot.close_extreme
+                return
+            else:
+                failed = (self._last_low_price is not None
+                          and pivot.close_extreme >= self._last_low_price - tol)
+                if failed and self._last_high_close is not None:
+                    ce = pivot.close_extreme
+                    self._insert_merged(Zone(lo=ce, hi=ce + w,
+                                             role=ZoneRole.SUPPORT, touches=1,
+                                             origin_known=known, last_change_known=known),
+                                        known, atr_val)
+                    self._insert_merged(Zone(lo=self._last_high_close - w,
+                                             hi=self._last_high_close,
+                                             role=ZoneRole.RESISTANCE, touches=1,
+                                             origin_known=known, last_change_known=known),
+                                        known, atr_val)
+                self._last_low_price = pivot.price
+                self._last_low_close = pivot.close_extreme
+                return
         w = self.p.k_zw * atr_val
         if pivot.kind is PivotKind.HIGH:
             zone = Zone(lo=pivot.price - w, hi=pivot.price, role=ZoneRole.RESISTANCE,
@@ -301,42 +375,133 @@ class ZoneBook:
                         touches=1, origin_known=known, last_change_known=known)
         self._insert_merged(zone, known, atr_val)
 
+    def _same_balance(self, a: Zone, b: Zone, tol: float) -> bool:
+        """edge-engine 去重判据(zones.py same_balance):共享覆盖 > 80% 合并跨度,
+        或高度相近且一方含另一方 —— "交易者只会画一次的箱",相邻/重叠的重复箱合并。
+        """
+        shared = min(a.hi, b.hi) - max(a.lo, b.lo)
+        span = max(a.hi, b.hi) - min(a.lo, b.lo)
+        if shared <= 0 or span <= 0:
+            return False
+        ha, hb = a.hi - a.lo, b.hi - b.lo
+        similar = min(ha, hb) > 0.8 * max(ha, hb)
+        inside = ((b.lo - tol <= a.lo and a.hi <= b.hi + tol)
+                  or (a.lo - tol <= b.lo and b.hi <= a.hi + tol))
+        return shared > 0.8 * span or (similar and inside)
+
     def _insert_merged(self, new: Zone, known: int, atr_val: float = 0.0) -> None:
-        """与现存同向区域重叠则合并:并集边界、touches 相加、origin 取最早(§4.1)。
+        """与现存同向区域合并:并集边界、touches 相加、origin 取最早(§4.1)。
 
         并集可能搭接到下一个同向区域,以不动点方式收敛(保持前缀不变性)。
 
-        合并封顶(2026-10-20 账面缺陷修复,research-log #15):p.merge_max_atr>0 时,
-        候选并集宽度若超过 merge_max_atr*atr 则跳过该候选(不并),保持细结构。
-        默认 0 = 历史无界行为(冻结v1-v8回放 parity 不受影响)。
+        合并判据(二选一):
+        - 历史(use_same_balance=False):几何重叠 + merge_max_atr 宽度封顶
+          (research-log #15,防巨区吞细结构);
+        - v21(use_same_balance=True):same_balance 去重(共享>80%跨度 或 高度相近
+          且包含),不设宽度封顶 —— 去重判据本身即防链式并集,相邻不同水平不并。
         """
         cap = self.p.merge_max_atr * atr_val if (self.p.merge_max_atr > 0 and atr_val > 0) else 0.0
+        tol = self.p.tol_atr * atr_val if atr_val > 0 else 0.0
         changed = True
         while changed:
             changed = False
             for i, z in enumerate(self.zones):
-                if z.role == new.role and z.lo <= new.hi and new.lo <= z.hi:
-                    union_lo, union_hi = min(z.lo, new.lo), max(z.hi, new.hi)
-                    if cap > 0 and (union_hi - union_lo) > cap:
-                        continue  # 并集会超上限:留下原区,不吞并细结构
-                    new = Zone(
-                        lo=union_lo, hi=union_hi, role=new.role,
-                        state=ZoneState.ACTIVE,
-                        touches=z.touches + new.touches,
-                        rejects=z.rejects + new.rejects,
-                        origin_known=min(z.origin_known, new.origin_known),
-                        last_change_known=known,
-                        merged=z.merged + new.merged,
-                    )
-                    self.zones.pop(i)
-                    changed = True
-                    break
+                if z.role != new.role:
+                    continue
+                if self.p.use_same_balance:
+                    if not self._same_balance(z, new, tol):
+                        continue
+                elif not (z.lo <= new.hi and new.lo <= z.hi):
+                    continue
+                union_lo, union_hi = min(z.lo, new.lo), max(z.hi, new.hi)
+                if (cap > 0 and (union_hi - union_lo) > cap
+                        and not self.p.use_same_balance):
+                    continue  # 并集会超上限:留下原区,不吞并细结构
+                new = Zone(
+                    lo=union_lo, hi=union_hi, role=new.role,
+                    state=ZoneState.ACTIVE,
+                    touches=z.touches + new.touches,
+                    rejects=z.rejects + new.rejects,
+                    origin_known=min(z.origin_known, new.origin_known),
+                    last_change_known=known,
+                    merged=z.merged + new.merged,
+                )
+                self.zones.pop(i)
+                changed = True
+                break
         self.zones.append(new)
 
     # -- §4.2 状态机 ---------------------------------------------------------
 
+    def _sync_balance_boxes(self, index: int, ts: object, o: float, h: float,
+                            l: float, c: float, v: float, atr_val: float) -> None:
+        """v21.3:将 BalanceDetector 识别出的平衡箱上下沿映射为 R/S 区域。
+
+        只有高质量平衡箱(rotations >= 2: 顶底至少经过两次来回验证,排除单次反转假箱)
+        的上下两条边作为场内 ACTIVE 支撑/阻力区:
+        - 上沿 [hi_ext - w, hi_ext] → RESISTANCE
+        - 下沿 [lo_ext, lo_ext + w] → SUPPORT
+        若与场内已有 ACTIVE 区匹配(距离 ≤ tol)则原位保留(不打断存活 episode);
+        已破位的边缘保留至多 60 bars 供 E1 破位接受确认与回踩,未破位的活跃边缘保留
+        至多 120 bars(当市场由平衡进入趋势迁移时,刚离开的平衡箱上下沿仍是最近的结构阶梯)。
+        """
+        self._bal_det.push((ts, o, h, l, c, v), atr_val)
+        if atr_val <= 0.0:
+            return
+        w = self.p.k_zw * atr_val
+        tol = max(self.p.tol_atr * atr_val, 0.5 * atr_val)
+        boxes = [b for b in self._bal_det.score() if b.rotations >= 1]
+        if boxes:
+            alive_ids: set[int] = set()
+            for box in boxes:
+                win = self._bal_det.bars[box.start_index:box.end_index + 1]
+                hi_ext = max(b[2] for b in win)
+                lo_ext = min(b[3] for b in win)
+                for role, zlo, zhi, opp in (
+                    (ZoneRole.RESISTANCE, hi_ext - w, hi_ext, lo_ext),
+                    (ZoneRole.SUPPORT, lo_ext, lo_ext + w, hi_ext),
+                ):
+                    matched = None
+                    for z in self.zones:
+                        ref_edge = z.hi if z.role is ZoneRole.RESISTANCE else z.lo
+                        new_edge = zhi if role is ZoneRole.RESISTANCE else zlo
+                        if abs(ref_edge - new_edge) <= tol:
+                            matched = z
+                            break
+                    if matched is not None:
+                        if matched.role is role and matched.state is ZoneState.ACTIVE:
+                            matched.last_change_known = index
+                            matched.box_opposite = opp
+                            matched.box_quality = max(matched.box_quality, float(box.quality))
+                            matched.box_width_atr = float((hi_ext - lo_ext) / atr_val)
+                            matched.box_rotations = max(matched.box_rotations, int(box.rotations))
+                        alive_ids.add(id(matched))
+                    else:
+                        nz = Zone(lo=zlo, hi=zhi, role=role,
+                                  touches=max(1, box.rotations),
+                                  origin_known=index, last_change_known=index,
+                                  box_opposite=opp,
+                                  box_quality=float(box.quality),
+                                  box_width_atr=float((hi_ext - lo_ext) / atr_val),
+                                  box_rotations=int(box.rotations))
+                        self.zones.append(nz)
+                        alive_ids.add(id(nz))
+            self.zones = [
+                z for z in self.zones
+                if id(z) in alive_ids
+                or (z.state is not ZoneState.ACTIVE and index - z.last_change_known <= 12)
+                or (z.state is ZoneState.ACTIVE and index - z.last_change_known <= 24)
+            ]
+
+
+
+
+
     def on_bar(self, index: int, o: float, h: float, l: float, c: float,
-               prev_close: Optional[float], atr_val: float) -> None:
+               prev_close: Optional[float], atr_val: float,
+               ts: object = 0, v: float = 0.0) -> None:
+        if self._bal_det is not None:
+            self._sync_balance_boxes(index, ts, o, h, l, c, v, atr_val)
         if atr_val <= 0.0:
             return
         self.flips = []
@@ -344,6 +509,11 @@ class ZoneBook:
             self._advance(z, index, h, l, c, prev_close, atr_val)
         self.zones = [z for z in self.zones
                       if z.state not in (ZoneState.FLIPPED, ZoneState.DEAD)]
+        # v21 年龄过期:长时间未被触碰/变化的区域视为过期,移出视图(久远无价值;
+        # 0=关,历史 parity 逐位不变)
+        if self.p.stale_after_bars > 0:
+            self.zones = [z for z in self.zones
+                          if index - z.last_change_known < self.p.stale_after_bars]
 
     def _advance(self, z: Zone, index: int, h: float, l: float, c: float,
                  prev_close: Optional[float], atr_val: float) -> None:
@@ -476,9 +646,18 @@ class MarketStructure:
 
         pivot = self._swing.update(index, o, h, l, c, atr_val)
         if pivot is not None:
+            pivot = Pivot(price=pivot.price, forming_index=pivot.forming_index,
+                          known_index=pivot.known_index, kind=pivot.kind,
+                          close_extreme=float(self._bars[pivot.forming_index][4]))
             self._pivots.append(pivot)
-            self._zones.on_pivot(pivot, pivot.known_index, atr_val)
-        self._zones.on_bar(index, o, h, l, c, prev_close, atr_val)
+            amplitude = None
+            if len(self._pivots) >= 2:
+                prev = self._pivots[-2]
+                amplitude = (abs(pivot.price - prev.price) / atr_val
+                             if atr_val > 0 else None)
+            self._zones.on_pivot(pivot, pivot.known_index, atr_val,
+                                 amplitude_atr=amplitude)
+        self._zones.on_bar(index, o, h, l, c, prev_close, atr_val, ts=ts, v=v)
         self._regime = _regime_from(self._pivots, atr_val, self.params, c)
 
     # -- 只读视图 ------------------------------------------------------------

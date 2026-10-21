@@ -142,6 +142,22 @@ E8 = "E8"  # EDGE_RECLAIM 边缘收复(摆动带边缘 + 收复确认 + pos 门)
 E9 = "E9"    # PROCESS_ACCEPTED 过程式接受(停留率/重心确认的顺延续)
 E10 = "E10"  # PROCESS_REJECTED 过程式拒绝(试探失败密度确认的反转)
 
+# v21.5 极简语义原语别名:
+# ACCEPT = 箱体边缘突破接受(顺趋势迁移); REJECT = 箱体边缘试探拒绝(箱内回归)
+ACCEPT = "ACCEPT"
+REJECT = "REJECT"
+EVENT_ALIASES = {
+    ACCEPT: E1,
+    REJECT: E3,
+    "E1": E1, "E2": E2, "E3": E3, "E4": E4, "E5": E5,
+    "E6": E6, "E7": E7, "E8": E8, "E9": E9, "E10": E10,
+}
+
+
+def canonical_event_id(eid: str) -> str:
+    """将 ACCEPT/REJECT 或 E1..E10 归一化为内部事件码。"""
+    return EVENT_ALIASES.get(str(eid), str(eid))
+
 
 @dataclass(frozen=True)
 class MarketEvent:

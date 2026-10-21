@@ -1,0 +1,163 @@
+{
+  "version": "v15-2026-10-20",
+  "note": "v15 四件套合成配置(docs/v15-protocol.md 冻结,2026-10-20;v14 arm 矩阵裁决 log#28 存活件):①位置带沿条款(band_side=true,空 pos≥0.35、多 pos≤0.65,错半边不交易,同 v14 Q1 语义,只拒不配档);②fade 家族(E2/E3/E8)exchange_maker 真挂单(前缘限价,N_fill=12,maker_fee=0.02%,排队乐观如实声明);③续涨家族(E1/E6/E7)stop-entry 预埋(C3 语义,超时 12×TF 作废);④收割/费用/容量/组合 3% 沿 canonical 不变。数值字段与 canonical.json 逐项一致(对账测试钉死)。",
+  "meta": {
+    "parent": "config/canonical.json",
+    "protocol": "docs/v15-protocol.md",
+    "note": "数值字段逐项照抄 config/canonical.json(结构/费用/路由/容量先验不动;merge_max_atr=2.0 继承;16 档语义路由继承);新增字段仅为 v15 合成开关与冻结先验:arms(arm0=canonical 对照 / v15=四件套)+ band_side_params / c2_params / c3_params / off_note(协议写死,不许调)。research-log #29 预注册:dev 主评 + test 一次(test 第 18 次曝光)。"
+  },
+  "atr_n": 14,
+  "k_rev": 1.0,
+  "k_zw": 0.5,
+  "k_bm": 0.1,
+  "k_rj": 0.3,
+  "k_span": 3.0,
+  "k_room": 2.0,
+  "tol_atr": 0.1,
+  "N_a": 3,
+  "N_f": 3,
+  "N_time": 24,
+  "e4_depth_atr": [
+    0.5,
+    2.5
+  ],
+  "e4_recovery": 0.5,
+  "range_max_pivots": 8,
+  "e5_edge_atr": 0.75,
+  "risk_frac": 0.0075,
+  "leverage_cap": 5.0,
+  "taker_fee": 0.0006,
+  "slippage_per_side": 0.0002,
+  "funding_per_8h_per_side": 0.0001,
+  "dev_frac": 0.7,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "obs_tf_seconds": 3600,
+  "tf_list": [
+    "1h",
+    "2h",
+    "4h",
+    "12h",
+    "1d"
+  ],
+  "k_is": 0.8,
+  "entry_mode": "quality_routed",
+  "k_dq": 0.5,
+  "k_imp": 1.5,
+  "turtle_stop_atr": 2.0,
+  "portfolio_cap_frac": 0.03,
+  "whitelist": [
+    [
+      "E1",
+      -1
+    ],
+    [
+      "E1",
+      1
+    ],
+    [
+      "E2",
+      -1
+    ],
+    [
+      "E2",
+      1
+    ],
+    [
+      "E3",
+      -1
+    ],
+    [
+      "E3",
+      1
+    ],
+    [
+      "E4",
+      -1
+    ],
+    [
+      "E4",
+      1
+    ],
+    [
+      "E5",
+      -1
+    ],
+    [
+      "E5",
+      1
+    ],
+    [
+      "E6",
+      -1
+    ],
+    [
+      "E6",
+      1
+    ],
+    [
+      "E7",
+      -1
+    ],
+    [
+      "E7",
+      1
+    ],
+    [
+      "E8",
+      -1
+    ],
+    [
+      "E8",
+      1
+    ]
+  ],
+  "n_fill": 12,
+  "exec_tf_seconds": 900,
+  "maker_fee": 0.0002,
+  "merge_max_atr": 2.0,
+  "merge_note": "区域合并封顶 2.0*ATR(2026-10-20 账面缺陷修复, research-log #15):无界链式并集滚出覆盖全价格带巨区吞细结构;仅影响 canonical 之后运行,历史 v1-v8 默认无界(0)保持 parity",
+  "whitelist_note": "2026-10-20 所有者决议:废弃黑白名单机制,全部事件按路由表修正语义入场(log#21);F1/room/风险几何闸保留;逐机制盈亏归因账本保留,弱语义在账上现形",
+  "gates_model": "semantics_routing",
+  "arm": "v15",
+  "arms": {
+    "arm0": {
+      "band_side": false,
+      "fill_model": "canonical",
+      "c3_stop_entry": false,
+      "c4_laddering": false,
+      "tiersize": false,
+      "note": "现 canonical(turtle 唯一语义;对照锚,与 v13 在册 bar 臂逐格全等硬断言)"
+    },
+    "v15": {
+      "band_side": true,
+      "fill_model": "exchange_maker",
+      "c3_stop_entry": true,
+      "c4_laddering": false,
+      "tiersize": false,
+      "note": "四件套合成:带沿条款 + fade 家族 maker 真挂单 + 续涨家族 stop-entry + canonical 其余不变"
+    }
+  },
+  "band_side_params": {
+    "pos_short_min": 0.35,
+    "pos_long_max": 0.65,
+    "note": "协议 ①冻结先验(= v14 Q1 同值):摆动带 = 最近 confirmed LOW/HIGH pivot(E8/quality.swing_band_pos 同口径),pos=(entry_ref−L*)/(H*−L*),边界 inclusive;缺侧 pivot 或带退化 ⇒ fail-closed 拒;只拒不配档(tiersize=false,size_mult/leverage/cap 不动);entry_ref:市价路由=决策 bar 收盘,限价路由=计划限价(quality.py Q1 口径)。"
+  },
+  "c2_params": {
+    "family": [
+      "E2",
+      "E3",
+      "E8"
+    ],
+    "note": "协议 ②:exchange_maker 真挂单仅 fade 家族(campaign.ArmConfig.c2_family);市价决策 → 决策收盘参考价限价挂单,N_fill=12、maker_fee=0.0002 照抄 canonical 键;严格穿过成交,穿透缺口按限价成交不给价格改善,排队乐观性如实声明;E4/E5 与未配 C3 的续涨族不在此列,走 canonical 兜底。virtual_limit 弃置(log#28 C2-vi 打回)。"
+  },
+  "c3_params": {
+    "stop_wait_tf": 12,
+    "k_bm": 0.1,
+    "note": "协议 ③(C3 语义,仅续涨家族 E1/E6/E7):预埋 stop-entry=破位参考价(attrs.ref)±k_bm·ATR;严格穿过触发(持平不触发),次一执行细 bar 开盘 taker+滑点成交;超时 stop_wait_tf×TF 作废(漏单单独统计);fade 家族与 E4/E5 不在此列。"
+  },
+  "off_note": "协议明确丢开(v14 arm 矩阵裁决 log#28,打了回的全弃):Q2 空间闸(误杀版,dev 拒 4.2 万的 1.5R 对面缘主闸)、Q3 区域履历 / Q4 regime 配档与 C5 tiersize(档 A/B size_mult)、virtual_limit 虚拟挂单、C4 分层入场;级联触发件不装(与基线对齐用 bar 认知语义,级联仍作为可选后续件)。"
+}
