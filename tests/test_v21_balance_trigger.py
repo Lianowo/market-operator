@@ -247,3 +247,64 @@ def test_live_runner_v21_multi_tf_campaigns(tmp_path):
     assert runner.current_risk_frac(2000.0) == 0.01
 
 
+def test_live_runner_v21_adaptive_warmup_for_new_listings(tmp_path):
+    """验证新上市币种无需 3600 根 2H:满 60 根(5天)开启 2h,满 125 根开启 4h,不足 60 根只告警一次不重复刷屏。"""
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "scripts"))
+    import live_runner as lr
+
+    cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    step2 = 7_200_000
+    t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
+    # NEW1: 130 根 2H (~10.8 天) -> 足够开启 2h(>=60) 和 4h(>=120),暂不足 12h(需360) 与 1d(需720)
+    bars_new1 = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(130)]
+    # NEW2: 20 根 2H (~1.6 天) -> 连 2h 最低门槛(60根)都不够,应仅告警一次
+    bars_new2 = [(t0 + k * step2, 50.0, 52.0, 49.0, 51.0, 10.0) for k in range(20)]
+    by_sym = {"NEW1USDT": bars_new1, "NEW2USDT": bars_new2}
+
+    class DummyClient:
+        def history_candles(self, symbol, granularity="2H", *, start_ms=None, end_ms=None, limit=200):
+            seq = by_sym.get(symbol, [])
+            if start_ms is not None:
+                return [b for b in seq if b[0] >= start_ms][:limit]
+            out = [b for b in seq if end_ms is None or b[0] < end_ms]
+            return out[-limit:]
+
+        def universe(self, min_vol):
+            return ["NEW1USDT", "NEW2USDT"]
+
+    alerts = []
+
+    class DummyTg:
+        def send_alert(self, msg):
+            alerts.append(msg)
+            return True
+
+        def __getattr__(self, name):
+            return lambda *a, **k: True
+
+    runner = lr.LiveRunner("paper", cfg, DummyClient(), DummyTg(),
+                           equity0=104.0,
+                           state_path=tmp_path / "state.json",
+                           journal_dir=tmp_path / "logs",
+                           symbols=("NEW1USDT", "NEW2USDT"),
+                           universe_enabled=False)
+    runner.step(bars_new1[-1][0] + 1)
+
+    # NEW1USDT 成功准入:主实例自动降级为 2h,extra_campaigns 挂载 4h,不挂载 12h/1d
+    assert "NEW1USDT" in runner.campaigns
+    assert runner.campaigns["NEW1USDT"].tf_label == "2h"
+    assert ("NEW1USDT", "4h") in runner.extra_campaigns
+    assert ("NEW1USDT", "12h") not in runner.extra_campaigns
+    assert ("NEW1USDT", "1d") not in runner.extra_campaigns
+
+    # NEW2USDT 不足 60 根暂不入场,且重复加入 pending 再次 step 不会重复推送告警
+    assert "NEW2USDT" not in runner.campaigns
+    assert len([a for a in alerts if "NEW2USDT" in a]) == 1
+    runner.symbols_pending.append("NEW2USDT")
+    runner.step(bars_new1[-1][0] + 2)
+    assert len([a for a in alerts if "NEW2USDT" in a]) == 1
+
+
+

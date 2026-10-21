@@ -391,6 +391,7 @@ class LiveRunner:
         self.campaigns: dict[str, CampaignState] = {}
         self.extra_campaigns: dict[tuple[str, str], CampaignState] = {}
         self.symbols_pending: list = sorted(symbols)
+        self._short_history_alerted: set[str] = set()
         self.positions: dict[str, dict] = {}
         self.open_intents: dict[str, dict] = {}
         self.stops: dict[str, dict] = {}
@@ -604,8 +605,12 @@ class LiveRunner:
         return out
 
 
+    def _min_cog_bars_for_tf(self) -> int:
+        return max(30, int(self.cog_cfg.get("min_warmup_cog_bars", 60)))
+
     def _build_campaign(self, symbol: str, tf_label: Optional[str] = None,
-                        bars2h: Optional[list] = None) -> Optional[CampaignState]:
+                        bars2h: Optional[list] = None,
+                        *, quiet_if_short: bool = False) -> Optional[CampaignState]:
         tf_label = tf_label or str(self.cog_cfg.get("main_tf_label") or "12h")
         obs_s = TF_SECONDS_MAP.get(tf_label, int(self.cog_cfg["obs_tf_seconds"]))
         trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
@@ -621,9 +626,14 @@ class LiveRunner:
         want = int(self.cog_cfg["warmup_trigger_bars"])
         if bars2h is None:
             bars2h = self._fetch_trigger_bars(symbol, want)
-        if len(bars2h) < want * 0.9:
-            self.tg.send_alert(f"{symbol} 2H 历史不足({len(bars2h)}/{want}"
-                               f" 根),暂不交易;如实不计入执行名单")
+        min_cog_bars = self._min_cog_bars_for_tf()
+        scale_2h = max(1, obs_s // 7200)
+        min_2h_needed = min_cog_bars * scale_2h
+        if len(bars2h) < min_2h_needed:
+            if not quiet_if_short and symbol not in self._short_history_alerted:
+                self._short_history_alerted.add(symbol)
+                self.tg.send_alert(f"{symbol}({tf_label}) 2H 历史不足({len(bars2h)}/{min_2h_needed}"
+                                   f" 根),暂不开启该周期")
             return None
         for a, b in zip(bars2h, bars2h[1:]):       # 网格完整性(不可静默)
             if b[0] - a[0] != 7200 * 1000:
@@ -631,18 +641,18 @@ class LiveRunner:
                                    f"暂不交易")
                 return None
         # 优化:按周期裁剪所需 2H 窗口(每个周期仅需 warmup_cog_bars 根自身认知 bar,
-        # 2h/4h 无需重放全部 3600 根 2H bar;BalanceDetector 最大窗口 144 << 300)
-        warmup_cog = max(300, int(self.cog_cfg.get("warmup_cog_bars", 300)))
-        scale_2h = max(1, obs_s // 7200)
+        # BalanceDetector 最大窗口 144 <= 160;新币满 min_cog_bars(60根)即可自适应准入)
+        warmup_cog = max(min_cog_bars, int(self.cog_cfg.get("warmup_cog_bars", 160)))
         need_2h = min(len(bars2h), (warmup_cog + 2) * scale_2h)
         slice_2h = bars2h[-need_2h:]
         cog_bars = aggregate_tf(slice_2h, obs_s)
         if len(cog_bars) > warmup_cog:
             cog_bars = cog_bars[-warmup_cog:]
-        min_cog_bars = max(30, int(int(self.cog_cfg["warmup_cog_bars"]) * 0.5 * 43200 // max(7200, obs_s)))
         if len(cog_bars) < min_cog_bars:
-            self.tg.send_alert(f"{symbol} {tf_label} 认知帧过短({len(cog_bars)}"
-                               f" 根),暂不交易")
+            if not quiet_if_short and symbol not in self._short_history_alerted:
+                self._short_history_alerted.add(symbol)
+                self.tg.send_alert(f"{symbol} {tf_label} 认知帧过短({len(cog_bars)}/{min_cog_bars}"
+                                   f" 根),暂不开启该周期")
             return None
         first_cog_ts = cog_bars[0][0]
         replay_trig = [b for b in slice_2h if b[0] >= first_cog_ts]
@@ -666,20 +676,56 @@ class LiveRunner:
 
     def _build_all_tf_campaigns(self, symbol: str,
                                 bars2h: Optional[list] = None) -> Optional[CampaignState]:
-        """构建主周期 CampaignState 并返回,同时装配 v21 的其余周期(2h/4h/1d)至 extra_campaigns。"""
+        """构建主周期 CampaignState 并返回,同时装配 v21 的其余周期(2h/4h/1d)至 extra_campaigns。
+        支持按周期自适应准入:新币若不足 12h/1d 预热长度但满足 2h/4h(>=60根认知bar),
+        自动以已就绪的周期作为主实例先行交易,后续高周期随 K 线增长自动解锁。"""
+        want = int(self.cog_cfg["warmup_trigger_bars"])
+        if bars2h is None:
+            bars2h = self._fetch_trigger_bars(symbol, want)
         main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
-        cs_main = self._build_campaign(symbol, main_tf, bars2h=bars2h)
-        if cs_main is None:
+        if self.engine_version != "v21":
+            return self._build_campaign(symbol, main_tf, bars2h=bars2h)
+
+        tf_list = list(self.cog_cfg.get("tf_list") or [main_tf])
+        built: dict[str, CampaignState] = {}
+        for tf in tf_list:
+            cs_tf = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
+            if cs_tf is not None:
+                built[tf] = cs_tf
+        if not built:
+            min_cog = self._min_cog_bars_for_tf()
+            if symbol not in self._short_history_alerted:
+                self._short_history_alerted.add(symbol)
+                self.tg.send_alert(
+                    f"{symbol} 新币 2H 历史不足({len(bars2h)}/{min_cog} 根),"
+                    f"满 {min_cog} 根(约 {min_cog * 2 // 24} 天)后将自动开启交易")
             return None
-        if self.engine_version == "v21":
-            tf_list = self.cog_cfg.get("tf_list") or [main_tf]
-            for tf in tf_list:
-                if tf == main_tf:
-                    continue
-                cs_sub = self._build_campaign(symbol, tf, bars2h=cs_main.trig_bars)
-                if cs_sub is not None:
-                    self.extra_campaigns[(symbol, tf)] = cs_sub
+        self._short_history_alerted.discard(symbol)
+        primary_tf = main_tf if main_tf in built else next(iter(built))
+        cs_main = built[primary_tf]
+        for tf, cs_sub in built.items():
+            if tf != primary_tf:
+                self.extra_campaigns[(symbol, tf)] = cs_sub
         return cs_main
+
+    def _try_unlock_higher_tfs(self, symbol: str, bars2h: list) -> None:
+        """新币随 K 线积累达到高周期准入门槛时,自动解锁并挂载对应周期战役。"""
+        if self.engine_version != "v21" or symbol not in self.campaigns:
+            return
+        tf_list = list(self.cog_cfg.get("tf_list") or [])
+        active_tfs = {self.campaigns[symbol].tf_label} | {
+            tf for (s2, tf) in self.extra_campaigns if s2 == symbol
+        }
+        min_cog = self._min_cog_bars_for_tf()
+        for tf in tf_list:
+            if tf in active_tfs:
+                continue
+            obs_s = TF_SECONDS_MAP.get(tf, int(self.cog_cfg["obs_tf_seconds"]))
+            scale_2h = max(1, obs_s // 7200)
+            if len(bars2h) >= (min_cog + 1) * scale_2h:
+                cs_new = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
+                if cs_new is not None:
+                    self.extra_campaigns[(symbol, tf)] = cs_new
 
 
     def _get_cs_for(self, symbol: str, tf_label: Optional[str] = None) -> Optional[CampaignState]:
@@ -740,6 +786,7 @@ class LiveRunner:
                 for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items()):
                     if s2 == sym:
                         self._advance(sub_cs, now_ms, new_bars=new_bars, run_paper_fills=False)
+                self._try_unlock_higher_tfs(sym, cs.trig_bars)
                 self._save_cached_bars(sym, cs.trig_bars)
             except BitgetError as e:
                 self._api_note(e)

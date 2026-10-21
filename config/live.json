@@ -63,8 +63,9 @@
     "obs_tf_seconds": 43200,
     "trigger_tf_seconds": 7200,
     "granularity": "2H",
-    "warmup_cog_bars": 300,
-    "warmup_trigger_bars": 3600
+    "warmup_cog_bars": 160,
+    "min_warmup_cog_bars": 60,
+    "warmup_trigger_bars": 1800
   },
   "paper": {
     "equity0": 104.0,
