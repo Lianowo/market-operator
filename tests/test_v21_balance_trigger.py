@@ -153,6 +153,13 @@ def test_dual_bot_telegram_and_bw_kline_chart():
         target_price=98.0, direction=-1
     )
     assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
+    png_lin = render_bw_kline_png(
+        bars, symbol="BTCUSDT", tf_label="12h", title_tag="SIGNAL REJECT SHORT",
+        box_lo=98.0, box_hi=112.0, entry_price=111.5, stop_price=114.0,
+        target_price=98.0, direction=-1, log_scale=False
+    )
+    assert png_lin is not None and png_lin[:8] == b"\x89PNG\r\n\x1a\n"
+    assert png != png_lin
 
     calls = []
 
@@ -305,6 +312,94 @@ def test_live_runner_v21_adaptive_warmup_for_new_listings(tmp_path):
     runner.symbols_pending.append("NEW2USDT")
     runner.step(bars_new1[-1][0] + 2)
     assert len([a for a in alerts if "NEW2USDT" in a]) == 1
+
+
+def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
+    """验证 _on_sub_bar 在高周期(12h)收盘前:
+    1) 子周期(2h)突破 target_1 时立即推进防线锁利 50%,无需等待 12h 收盘;
+    2) 子周期(2h)触及 STOP(invalid)时立即平仓结算,消除大周期收盘延迟。
+    """
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "scripts"))
+    import live_runner as lr
+
+    cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    step2 = 7_200_000
+    t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
+    # 396 根 2H (刚好 66 根完整 12h 结束:396 % 6 == 0)
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+
+    class DummyClient:
+        def history_candles(self, symbol, granularity="2H", *, start_ms=None, end_ms=None, limit=200):
+            if start_ms is not None:
+                return [b for b in bars if b[0] >= start_ms][:limit]
+            out = [b for b in bars if end_ms is None or b[0] < end_ms]
+            return out[-limit:]
+
+        def universe(self, min_vol):
+            return ["BTCUSDT"]
+
+    fills = []
+
+    class DummyTg:
+        def send_fill(self, symbol, action, qty, price, **kw):
+            fills.append((symbol, action, qty, price, kw))
+            return True
+
+        def __getattr__(self, name):
+            return lambda *a, **k: True
+
+    runner = lr.LiveRunner("paper", cfg, DummyClient(), DummyTg(),
+                           equity0=1000.0,
+                           state_path=tmp_path / "state.json",
+                           journal_dir=tmp_path / "logs",
+                           symbols=("BTCUSDT",),
+                           universe_enabled=False)
+    runner.step(bars[-1][0] + 1)
+    cs_12h = runner.campaigns["BTCUSDT"]
+    assert cs_12h.tf_label == "12h"
+
+    # 注册一笔 12h 多头 REJECT 持仓:entry=100, invalid=95, target_1=110
+    open_ts = bars[-1][0]
+    it = {
+        "oid": "mo21testopen1",
+        "symbol": "BTCUSDT",
+        "tf_label": "12h",
+        "direction": 1,
+        "qty": 1.0,
+        "invalid": 95.0,
+        "target_1": 110.0,
+        "event_id": "E3",
+        "route": "reject_market",
+        "box_lo": 96.0,
+        "box_hi": 110.0,
+    }
+    runner._register_position("BTCUSDT", it, 100.0, open_ts)
+    assert runner.positions["BTCUSDT"]["invalid"] == 95.0
+
+    # 下一根 2H bar(k=396,非 12h 收盘时刻):收盘 111.0 突破 target_1(110.0)
+    # 应由 _on_sub_bar 立即将 invalid 推进至 100 + 0.5*(110-100) = 105.0
+    t_sub1 = t0 + 396 * step2
+    assert (t_sub1 + step2) % (43200 * 1000) != 0  # 确认非 12h 收盘点
+    runner._advance(cs_12h, t_sub1 + step2,
+                    new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
+                    run_paper_fills=True)
+    assert runner.positions["BTCUSDT"]["invalid"] == 105.0
+    assert cs_12h.pm.positions["BTCUSDT"].invalid == 105.0
+    assert any("止损推进" in f[1] for f in fills)
+
+    # 再下一根 2H bar(k=397,仍非 12h 收盘时刻):低点 104.0 跌破新止损 105.0
+    # 应由 _on_sub_bar 立即按 105.0 触发 STOP 平仓,无需等待 12h 收盘
+    t_sub2 = t0 + 397 * step2
+    assert (t_sub2 + step2) % (43200 * 1000) != 0
+    runner._advance(cs_12h, t_sub2 + step2,
+                    new_bars=[(t_sub2, 108.0, 108.5, 104.0, 104.5, 20.0)],
+                    run_paper_fills=True)
+    assert "BTCUSDT" not in runner.positions
+    assert "BTCUSDT" not in cs_12h.pm.positions
+    assert any("平仓(paper,exit)" in f[1] and abs(f[3] - 105.0) < 1e-9 for f in fills)
+
 
 
 

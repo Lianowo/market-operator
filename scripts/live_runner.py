@@ -358,6 +358,7 @@ class LiveRunner:
     def __init__(self, mode: str, cfg: dict, client, tg: TelegramNotifier, *,
                  equity0: Optional[float] = None,
                  contracts: Optional[dict] = None,
+                 contract_raw: Optional[dict] = None,
                  state_path: Optional[Path] = None,
                  journal_dir: Optional[Path] = None,
                  symbols: tuple = (),
@@ -377,6 +378,8 @@ class LiveRunner:
             self.raw_strat = self.raw20
             self.rp_by_tf = {}
         self.contracts = contracts or {}
+        self.contract_raw = contract_raw or {}     # 交易所原始合约条目(maxLever 等)
+        self.leverage_by_sym: dict[str, int] = {}  # 各品种实际生效杠杆
         self.equity: Optional[float] = \
             float(equity0) if equity0 is not None else None
         self.state_path = Path(state_path) if state_path else \
@@ -399,12 +402,70 @@ class LiveRunner:
                          "tf_cap_skips": 0, "min_notional_skips": 0,
                          "rate_skips": 0, "breaker_blocks": 0, "fills": 0,
                          "mgmt_execs": 0, "expired_intents": 0,
-                         "reconcile_alerts": 0, "reduce_fills": 0, "exits": 0}
+                         "reconcile_alerts": 0, "reduce_fills": 0, "exits": 0,
+                         "api_halt_skips": 0, "order_errors": 0}
         self._universe_at = 0.0
         self._reconcile_at = 0.0
         self._daily_date: Optional[str] = None
         self._api_error_streak = 0
+        # 执行口径(接入件):hedge_mode 下 side 表持仓方向且下单必带 tradeSide
+        self.hedge_mode = str((cfg.get("account") or {}).get("position_mode")
+                              or "one_way_mode") == "hedge_mode"
+        self.api_halted = False           # API 错熔断:暂停新增风险(平仓/止损照常)
+        self._api_halt_alerted = False
+        self._leverage_done: set[str] = set()
+        self._alert_last: dict[str, float] = {}
+        self._missing_streak: dict[str, int] = {}   # 对账缺失连续轮次(防误清)
         self._load_state()
+
+    def _alert_throttled(self, key: str, msg: str, gap_s: float = 1800.0) -> None:
+        """同类告警限频(默认 30 分钟一条)。
+
+        修前缺陷:每轮(15s)重试即发一条 ⇒ 一晚刷屏数百条,真正的新问题
+        反而被淹没(2026-10-22 事件)。
+        """
+        now = time.time()
+        if now - self._alert_last.get(key, 0.0) < gap_s:
+            return
+        self._alert_last[key] = now
+        self.tg.send_alert(msg)
+
+    # ------------------------------------------------------------------
+    # 执行口径:持仓模式 → side / tradeSide(纯函数级,不触策略语义)
+    # ------------------------------------------------------------------
+
+    def open_trade_side(self) -> Optional[str]:
+        """开仓 tradeSide(hedge_mode 必填 'open';one-way 省略)。"""
+        return "open" if self.hedge_mode else None
+
+    def close_side_of(self, position_direction: int) -> str:
+        """平仓单 side:hedge_mode 下与开仓同侧(靠 tradeSide='close' 区分开平),
+        one-way 下取反向买卖方向。position_direction = 被平仓位方向(+1 多)。"""
+        if self.hedge_mode:
+            return "buy" if position_direction > 0 else "sell"
+        return "sell" if position_direction > 0 else "buy"
+
+    def close_trade_side(self) -> Optional[str]:
+        """平仓 tradeSide(hedge_mode 必填 'close';one-way 省略)。"""
+        return "close" if self.hedge_mode else None
+
+    def fit_price(self, sym: str, price: float, direction: int) -> float:
+        """按合约价格精度拟合:交易所逐字段校验 scale,超限即 40808 拒单
+        (实测 trigger price checkScale 与 size checkScale 同样受检)。
+
+        方向保守:买/平空向下、卖/平多向上 —— 不越过原定前缘或触发价,
+        只会更早触发、不会放宽止损。
+        """
+        sp = self._spec(sym)
+        place = int(sp.price_place)
+        step = 10.0 ** (-place)
+        px = float(price)
+        lo = _floor_step(px, step, place)
+        if direction > 0:                      # 买/平空:向下(不越过前缘)
+            return lo
+        # 卖/平多:向上一个 step 至不小于原触发价(_floor_step 对负数返回 0,
+        # 不能用 -f(-x) 取反)
+        return round(lo + step, place) if lo < px - 1e-12 else lo
 
     def current_risk_frac(self, equity: Optional[float] = None) -> float:
         """阶梯动态复利:根据当前已实现净值自动匹配风险档位。"""
@@ -436,6 +497,8 @@ class LiveRunner:
         self.positions = st.get("positions", {})
         self.open_intents = st.get("open_intents", {})
         self.stops = st.get("stops", {})
+        self._leverage_done = set(st.get("leverage_done") or [])
+        self.leverage_by_sym = dict(st.get("leverage_by_sym") or {})
         self.counters.update(st.get("counters", {}))
         b = st.get("breaker", {})
         self.breaker.day = b.get("day")
@@ -474,6 +537,7 @@ class LiveRunner:
                     target_cs = self._get_cs_for(sym, pos_tf) or cs
                     target_cs.pm.positions[s] = pos
                 self.campaigns[sym] = cs
+                self._ensure_leverage(sym)
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
 
@@ -498,6 +562,8 @@ class LiveRunner:
             "mode": self.mode, "equity": self.equity,
             "positions": self.positions, "open_intents": self.open_intents,
             "stops": self.stops, "counters": self.counters,
+            "leverage_done": sorted(self._leverage_done),
+            "leverage_by_sym": self.leverage_by_sym,
             "breaker": {"day": self.breaker.day,
                         "start_equity": self.breaker.start_equity,
                         "tripped": self.breaker.tripped},
@@ -733,11 +799,62 @@ class LiveRunner:
             return self.extra_campaigns[(symbol, tf_label)]
         return self.campaigns.get(symbol)
 
+    def _ensure_leverage(self, symbol: str) -> None:
+        """杠杆初始化(每品种一次;hedge_mode 逐侧设置,one-way 省略 holdSide)。
+
+        只做一次(成功入 _leverage_done);失败仅告警不中断 —— 交易所侧杠杆
+        不足会在下单时如实暴露,不静默降级。
+        """
+        if symbol in self._leverage_done or self.mode != "live":
+            return
+        cap = int(self.risk.get("leverage_cap") or 20)
+        # 每个合约的杠杆上限不同(AKE/ARIA/BR/JCT=10、BTW=5、BTC=150),统一按
+        # 20x 设置会报 40797;低流动性期还会被动态限到更低(25159),故降档重试。
+        try:
+            max_lev = int(float((self.contract_raw.get(symbol) or {})
+                                .get("maxLever") or cap))
+        except (TypeError, ValueError):
+            max_lev = cap
+        want = max(1, min(cap, max_lev))
+        sides = ("long", "short") if self.hedge_mode else (None,)
+        ladder = [want] + [lv for lv in (10, 5, 3, 2, 1) if lv < want]
+        last_err: Optional[Exception] = None
+        for lev in ladder:
+            try:
+                for hs in sides:
+                    self.client.set_leverage(symbol, lev, hold_side=hs)
+                self._leverage_done.add(symbol)
+                self.leverage_by_sym[symbol] = lev
+                self._journal("leverage", {"symbol": symbol, "leverage": lev,
+                                           "max_lever": max_lev,
+                                           "sides": [s or "single" for s in sides]})
+                return
+            except BitgetError as e:
+                last_err = e
+        self._alert_throttled(
+            f"lev:{symbol}",
+            f"{symbol} 杠杆设置失败(已试 {ladder}):{str(last_err)[:120]}"
+            f"(按交易所上限降级后仍失败,该品种下单可能受保证金限制)")
+
     # ------------------------------------------------------------------
     # 主循环一步
     # ------------------------------------------------------------------
 
     def step(self, now_ms: int) -> None:
+        """主循环一步:异常照常上抛(main 处置),但断点状态必定落盘(finally)。
+
+        修前缺陷:step 中途抛错 ⇒ _save_state() 不执行 ⇒ state.json 停摆,
+        内存里的 armed 意图与持仓事实随之丢失(2026-10-22 40774 事件实证)。
+        """
+        try:
+            self._step_inner(now_ms)
+        finally:
+            try:
+                self._save_state()
+            except Exception:
+                pass
+
+    def _step_inner(self, now_ms: int) -> None:
         if self.mode == "live":
             bal = self.client.balance()
             self.equity = float(bal["equity"])
@@ -765,6 +882,7 @@ class LiveRunner:
                     continue
                 if cs is not None:
                     self.campaigns[sym] = cs
+                    self._ensure_leverage(sym)
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
         if self.mode == "live":
@@ -800,14 +918,25 @@ class LiveRunner:
                 self._reconcile_at = now_ms / 1000
                 self._reconcile()
         self._daily_tick(now_ms)
-        self._save_state()
+        self._api_error_streak = 0          # 本轮无异常:连续错计数复位
 
     def _api_note(self, e: Exception) -> None:
+        """API 错计数与熔断(fail-closed)。
+
+        修前缺陷:① 计数永不复位 ⇒ 每轮重复告警刷屏(实测 5→18 连发);
+        ② 熔断只中断本轮,下一轮照旧新开仓 ⇒ 告警声称"暂停"实则未停。
+        现:达阈值即置 api_halted(暂停新增风险,平仓/止损/对账照常),
+        告警只发一次,由 _daily_tick 跨 UTC 日复位(fail-closed 且不永久停摆)。
+        """
         self._api_error_streak += 1
         if self._api_error_streak >= int(self.loop_cfg["api_error_max"]):
-            self.tg.send_alert(
-                f"API 错熔断:连续 {self._api_error_streak} 次接口异常"
-                f"({type(e).__name__}),新增风险暂停并人工核查")
+            self.api_halted = True
+            if not self._api_halt_alerted:
+                self._api_halt_alerted = True
+                self.tg.send_alert(
+                    f"API 错熔断:连续 {self._api_error_streak} 次接口异常"
+                    f"({type(e).__name__}),新增风险已暂停(既有仓位照常管理)"
+                    f",人工核查后于跨 UTC 日自动复位")
             raise e
 
     def _universe_tick(self) -> None:
@@ -867,6 +996,9 @@ class LiveRunner:
             for pos in self.positions.values():    # worst-case mark 就近更新
                 if pos["symbol"] == cs.symbol:
                     pos["mark"] = float(bar[4])
+            # 盘中子周期触价结算:持仓期间在 2H/触发子周期上检查固定 STOP / TP1,
+            # 消除 12h/1d 等高周期收盘前数小时的实盘/paper 状态同步延迟
+            self._on_sub_bar(cs, bar)
             # 降档触发步(当 trigger 细于认知周期,即 trig_ms < obs_ms 时生效)
             if cs.tracker is not None and trig_ms < obs_ms:
                 if (bar[0] + base_ms) % trig_ms == 0 and len(cs.trig_bars) >= trig_scale:
@@ -888,6 +1020,118 @@ class LiveRunner:
                            else aggregate_bucket(cs.trig_bars[-scale:],
                                                  bar[0] + base_ms - obs_ms))
                 self._close_cognition(cs, cog_bar)
+
+    def _on_sub_bar(self, cs: CampaignState, bar) -> None:
+        """持仓期间子周期(2H)触价同步与结算:
+        1. 固定 STOP(pos_pm.invalid):与回测 broker.execute_protective_stop 同口径,
+           子周期极值触及(low<=stop / high>=stop)时:
+           - paper 模式立即按止损价(或缺口开盘价)平仓结算并清理 pm/positions;
+           - live 模式立即触发一次 _reconcile() 同步交易所保护单成交状态。
+        2. 固定 TP1(pos_pm.target_1):
+           - 更新 pos_pm._best 实时 MFE;
+           - 当启用对侧锁利(reject_opp_lock_frac != 0)且子周期突破/触及 target_1 时,
+             立即推进 invalid 并同步至 self.positions(下一拍 _manage_stops 即刻更新
+             交易所止损单),无需等待 12h/1d 高周期收盘。
+        """
+        sym = cs.symbol
+        pos_pm = cs.pm.positions.get(sym)
+        pos_dict = self.positions.get(sym)
+        if pos_pm is None or pos_dict is None:
+            return
+        if pos_dict.get("tf_label", cs.tf_label) != cs.tf_label:
+            return
+        ts, o, h, l, c = int(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4])
+        if int(pos_pm.opened_ts) > ts:
+            return
+
+        # 实时维护子周期极值 MFE
+        pos_pm._best = min(pos_pm._best, l) if pos_pm.direction < 0 else max(pos_pm._best, h)
+
+        # ① 固定 STOP 盘中触价结算
+        stop = float(pos_pm.invalid)
+        breached = (l <= stop) if pos_pm.direction > 0 else (h >= stop)
+        if breached:
+            ref_px = min(o, stop) if pos_pm.direction > 0 else max(o, stop)
+            if self.mode == "paper":
+                self._cancel_entry(sym, "sub_bar_protective_stop")
+                self._cancel_stop(sym, "sub_bar_protective_stop")
+                for oid, it in list(self.open_intents.items()):
+                    if it["symbol"] == sym and it["status"] == "armed":
+                        it["status"] = "canceled"
+                cs.pm.positions.pop(sym, None)
+                stop_oid = client_oid_of(
+                    self.OID_PREFIX, sym, str(pos_dict.get("event_id", "STOP")),
+                    "stop", ts, role="exit")[:36]
+                stop_it = {
+                    "oid": stop_oid,
+                    "symbol": sym,
+                    "role": "exit",
+                    "kind": "market",
+                    "direction": -int(pos_dict["direction"]),
+                    "qty": float(pos_dict["qty"]),
+                    "route": f"STOP|sub_bar trigger={stop:.8g}",
+                    "status": "armed",
+                }
+                self._paper_close_fill(sym, stop_it, float(ref_px), ts)
+            else:
+                # live 模式:交易所已有 loss_plan 计划单,触价即刻触发对账以消除状态延迟
+                self._reconcile()
+            return
+
+        # ② 固定 TP1(target_1)盘中触价/突破同步
+        if pos_pm.target_1 is not None and not pos_pm.reduced and not pos_pm.pending_reduce:
+            target = float(pos_pm.target_1)
+            lock_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
+            old_inv = float(pos_pm.invalid)
+            if lock_cfg < 0.0:
+                broke = (c < target) if pos_pm.direction < 0 else (c > target)
+                if broke:
+                    pos_pm.reduced = True
+                    span = target - float(pos_pm.entry)
+                    frac = abs(lock_cfg)
+                    lock_px = float(pos_pm.entry) + frac * span
+                    pos_pm.invalid = (min(pos_pm.invalid, lock_px) if pos_pm.direction < 0
+                                      else max(pos_pm.invalid, lock_px))
+                    pos_pm.log.append(
+                        f"v21|sub_bar_opp_break_lock|子周期收盘突破对侧缘 target={target:.8g} "
+                        f"锁利({frac:.0%}) invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
+            elif lock_cfg > 0.0:
+                hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
+                if hit:
+                    pos_pm.reduced = True
+                    span = target - float(pos_pm.entry)
+                    broke_through = (c < target) if pos_pm.direction < 0 else (c > target)
+                    frac = lock_cfg if broke_through else min(0.10, lock_cfg)
+                    lock_px = float(pos_pm.entry) + frac * span
+                    pos_pm.invalid = (min(pos_pm.invalid, lock_px) if pos_pm.direction < 0
+                                      else max(pos_pm.invalid, lock_px))
+                    pos_pm.log.append(
+                        f"v21|sub_bar_opp_lock|子周期触及对侧缘 target={target:.8g} "
+                        f"锁利({frac:.0%}) invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
+            else:
+                # 传统 §8.2 target_1 触及减仓 50%
+                hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
+                if hit:
+                    extreme = l if pos_pm.direction < 0 else h
+                    intent = cs.pm._reduce(pos_pm, ts, c, extreme)
+                    self._exec_mgmt(cs, intent, bar)
+
+            if abs(float(pos_pm.invalid) - old_inv) > 1e-12:
+                pos_dict["invalid"] = float(pos_pm.invalid)
+                last_log = pos_pm.log[-1] if pos_pm.log else "子周期防线锁利"
+                self.tg.send_fill(
+                    sym, f"止损推进({self.mode})",
+                    float(pos_dict["qty"]),
+                    c,
+                    note=f"{old_inv:.6g} -> {pos_pm.invalid:.6g} ({last_log[:48]})",
+                    tf_label=cs.tf_label,
+                    direction=pos_pm.direction,
+                    stop_price=float(pos_pm.invalid),
+                    target_price=pos_pm.target_1,
+                    box_lo=pos_dict.get("box_lo"),
+                    box_hi=pos_dict.get("box_hi"),
+                    bars=cs.trig_bars[-45:] if cs.trig_bars else cs.cog_bars[-45:],
+                )
 
     def _close_cognition(self, cs: CampaignState, cog_bar) -> None:
         s = cs.detector.structure
@@ -985,6 +1229,12 @@ class LiveRunner:
     def _submit_open(self, cs: CampaignState, d, t: int, *, mic: bool) -> None:
         sym = cs.symbol
         hyp = d.hyp
+        if self.mode == "live" and self.api_halted:
+            self.counters["api_halt_skips"] = self.counters.get("api_halt_skips", 0) + 1
+            self._journal("skip", {"symbol": sym, "why": "API_HALT",
+                                   "event": hyp.event_id})
+            return
+        # hedge_mode:side 表持仓方向(开多 buy / 开空 sell)+ tradeSide=open
         side = "buy" if hyp.direction > 0 else "sell"
         entry_ref = float(d.limit_price) if d.kind == "limit" \
             else float(d.intent.ref_price)
@@ -998,7 +1248,11 @@ class LiveRunner:
         equity = float(self.equity)
         eff_rf = self.current_risk_frac(equity)
         qty = eff_rf * size_mult * equity / risk_per_unit
-        qty = min(qty, self.risk["leverage_cap"] * equity / entry_ref)
+        # 用该品种实际生效杠杆(而非统一上限):低上限品种按 20x 算出的数量
+        # 会超出交易所可用保证金而被拒
+        eff_lev = float(self.leverage_by_sym.get(sym)
+                        or self.risk.get("leverage_cap") or 20)
+        qty = min(qty, eff_lev * equity / entry_ref)
         qty = _floor_step(qty, spec.size_step, spec.size_place)
         # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
         outstanding = sum(
@@ -1046,8 +1300,10 @@ class LiveRunner:
                                    "event": hyp.event_id})
             return
         oid = client_oid_of(self.OID_PREFIX, sym, hyp.event_id, side, t)
-        if self.open_intents.get(oid, {}).get("status") in ("armed", "filled"):
-            return                               # 断点幂等:同键不重发
+        # 断点幂等:同键不重发;已失败的意图亦不再重试(避免每轮重发同一坏单)
+        if self.open_intents.get(oid, {}).get("status") in (
+                "armed", "filled", "error"):
+            return
         self.counters["signals"] += 1
         regime = hyp.regime.value if hyp.regime is not None else ""
         z_lo = d.meta.get("zone_lo")
@@ -1082,18 +1338,34 @@ class LiveRunner:
                             bars=chart_bars, box_lo=box_lo, box_hi=box_hi,
                             target_1=hyp.target_1)
         if self.mode == "live":
-            if d.kind == "limit":
-                resp = self.client.place_limit_order(
-                    sym, side=side, size=qty, price=entry_ref, client_oid=oid)
-                intent["exchange_order_id"] = str(resp.get("orderId") or "")
-                self.counters["orders_placed"] += 1
-            else:
-                resp = self.client.place_market_order(
-                    sym, side=side, size=qty, client_oid=oid)
-                intent["exchange_order_id"] = str(resp.get("orderId") or "")
-                self.counters["orders_placed"] += 1
-                self._live_entry_filled(intent, side_fallback_price=entry_ref,
-                                        now_ms=t)
+            try:
+                if d.kind == "limit":
+                    resp = self.client.place_limit_order(
+                        sym, side=side, size=qty,
+                        price=self.fit_price(sym, entry_ref, hyp.direction),
+                        client_oid=oid, trade_side=self.open_trade_side())
+                    intent["exchange_order_id"] = str(resp.get("orderId") or "")
+                    self.counters["orders_placed"] += 1
+                else:
+                    resp = self.client.place_market_order(
+                        sym, side=side, size=qty, client_oid=oid,
+                        trade_side=self.open_trade_side())
+                    intent["exchange_order_id"] = str(resp.get("orderId") or "")
+                    self.counters["orders_placed"] += 1
+                    self._live_entry_filled(intent,
+                                            side_fallback_price=entry_ref,
+                                            now_ms=t)
+            except BitgetError as e:
+                # 下单失败:该意图作废且不重发;连续错达阈值由 _api_note 熔断
+                intent["status"] = "error"
+                self.counters["order_errors"] = \
+                    self.counters.get("order_errors", 0) + 1
+                self._journal("order_error", {"oid": oid, "symbol": sym,
+                                              "event": hyp.event_id,
+                                              "why": str(e)[:160]})
+                self.tg.send_alert(f"{sym} 开仓下单失败:{str(e)[:120]}"
+                                   f"(意图作废,不重试)")
+                self._api_note(e)
         self._journal("intent", {k: intent[k] for k in (
             "oid", "symbol", "role", "kind", "direction", "qty",
             "limit_price", "event_id", "route", "decision_ts", "mic")})
@@ -1165,8 +1437,11 @@ class LiveRunner:
         if kind == "EXIT":
             self._cancel_entry(sym, "position_exit")
             self._cancel_stop(sym, "position_exit")
-            self._arm_close_intent(sym, pos, pos["qty"], "market", None,
-                                   intent.reason, t, role="exit")
+            spec = self._spec(sym)         # 全平数量同样按合约精度取整
+            self._arm_close_intent(
+                sym, pos,
+                _floor_step(float(pos["qty"]), spec.size_step, spec.size_place),
+                "market", None, intent.reason, t, role="exit")
         elif kind == "REDUCE":
             qty = _floor_step(float(intent.qty_frac or 0.0) * pos["qty"],
                               self._spec(sym).size_step,
@@ -1186,10 +1461,12 @@ class LiveRunner:
     def _arm_close_intent(self, sym: str, pos: dict, qty: float, kind: str,
                           limit_price: Optional[float], reason: str, t: int,
                           *, role: str) -> None:
-        side = "sell" if pos["direction"] > 0 else "buy"
+        # hedge_mode:平仓 side 与开仓同侧(表持仓方向),靠 tradeSide=close 区分
+        side = self.close_side_of(pos["direction"])
         oid = client_oid_of(self.OID_PREFIX, sym, str(reason)[:16], side, t,
                             role=role)[:36]
-        if self.open_intents.get(oid, {}).get("status") == "armed":
+        if self.open_intents.get(oid, {}).get("status") in (
+                "armed", "filled", "error"):
             return
         if not self.rate.allow():
             self.counters["rate_skips"] += 1
@@ -1204,19 +1481,33 @@ class LiveRunner:
               "exchange_order_id": None}
         self.open_intents[oid] = it
         if self.mode == "live":
-            if kind == "limit":
-                resp = self.client.place_limit_order(
-                    sym, side=side, size=qty, price=limit_price,
-                    client_oid=oid)
-                it["exchange_order_id"] = str(resp.get("orderId") or "")
-            else:
-                resp = self.client.place_market_order(
-                    sym, side=side, size=qty, client_oid=oid)
-                it["exchange_order_id"] = str(resp.get("orderId") or "")
-            self.counters["orders_placed"] += 1
-            if kind == "market":                 # 市价即记账(限价待成交确认)
-                self._live_close_filled(it, ref_price=pos.get("mark") or
-                                        pos["entry"])
+            try:
+                if kind == "limit":
+                    resp = self.client.place_limit_order(
+                        sym, side=side, size=qty,
+                        price=self.fit_price(sym, float(limit_price),
+                                             it["direction"]),
+                        client_oid=oid, trade_side=self.close_trade_side())
+                    it["exchange_order_id"] = str(resp.get("orderId") or "")
+                else:
+                    resp = self.client.place_market_order(
+                        sym, side=side, size=qty, client_oid=oid,
+                        trade_side=self.close_trade_side())
+                    it["exchange_order_id"] = str(resp.get("orderId") or "")
+                self.counters["orders_placed"] += 1
+                if kind == "market":             # 市价即记账(限价待成交确认)
+                    self._live_close_filled(it, ref_price=pos.get("mark") or
+                                            pos["entry"])
+            except BitgetError as e:
+                it["status"] = "error"
+                self.counters["order_errors"] = \
+                    self.counters.get("order_errors", 0) + 1
+                self._journal("order_error", {"oid": oid, "symbol": sym,
+                                              "role": role,
+                                              "why": str(e)[:160]})
+                self.tg.send_alert(f"{sym} 平仓({role})下单失败:{str(e)[:120]}"
+                                   f"(仓位仍在,人工核查)")
+                self._api_note(e)
         self._journal("mgmt_intent", {"symbol": sym, "role": role,
                                       "kind": kind, "qty": qty,
                                       "reason": str(reason)[:80]})
@@ -1281,28 +1572,42 @@ class LiveRunner:
         """保护止损计划单(loss_plan @ 当前 invalid;invalid/数量变动撤旧换新)。
         只保护不主出:结构出场一律经 §8/canonical 路径。"""
         for sym, pos in self.positions.items():
-            want = float(pos["invalid"])
+            want = self.fit_price(sym, float(pos["invalid"]), pos["direction"])
             cur = self.stops.get(sym)
+            # 数量必须按合约精度取整:精度不符会被交易所直接拒单
+            # (实测 40808 size checkScale),导致保护永远挂不上
+            spec = self._spec(sym)
+            stop_qty = _floor_step(float(pos["qty"]), spec.size_step,
+                                   spec.size_place)
             if cur is not None and abs(cur["trigger"] - want) < 1e-12 \
-                    and abs(cur["qty"] - pos["qty"]) < 1e-12:
+                    and abs(cur["qty"] - stop_qty) < 1e-12:
                 continue
             try:
                 if cur is not None and cur.get("order_id"):
                     self.client.cancel_plan_order(sym, cur["order_id"])
                 resp = self.client.place_stop_market_plan(
-                    sym, trigger_price=want, size=pos["qty"],
+                    sym, trigger_price=want, size=stop_qty,
                     plan_type="loss_plan",
                     hold_side="long" if pos["direction"] > 0 else "short",
+                    side=self.close_side_of(pos["direction"]),
+                    trade_side=self.close_trade_side(),
                     client_oid=client_oid_of(
                         self.OID_PREFIX, sym, str(pos["event_id"]),
                         "stop", int(now_ms), role="stop"))
-                self.stops[sym] = {"trigger": want, "qty": pos["qty"],
+                self.stops[sym] = {"trigger": want, "qty": stop_qty,
                                    "order_id": str(resp.get("orderId") or "")}
                 self._journal("stop", {"symbol": sym, "trigger": want,
-                                       "qty": pos["qty"]})
+                                       "qty": stop_qty})
             except BitgetError as e:
-                self.tg.send_alert(f"{sym} 保护止损计划失败:{str(e)[:120]}"
-                                   f"(当前无触发保护,人工介入)")
+                self.counters["stop_errors"] = \
+                    self.counters.get("stop_errors", 0) + 1
+                self._journal("stop_error", {"symbol": sym, "trigger": want,
+                                             "qty": stop_qty,
+                                             "why": str(e)[:160]})
+                self._alert_throttled(
+                    f"stop:{sym}",
+                    f"{sym} 保护止损计划失败:{str(e)[:120]}"
+                    f"(当前无触发保护,人工介入;同类告警 30 分钟内不重复)")
 
     def _cancel_stop(self, sym: str, why: str) -> None:
         cur = self.stops.pop(sym, None)
@@ -1342,12 +1647,14 @@ class LiveRunner:
                                                  it["exchange_order_id"])
                     except BitgetError:
                         pass
-                    # 平仓单方向存的就是报单 side 符号(+1=buy/-1=sell)
-                    side = "buy" if it["direction"] > 0 else "sell"
+                    # 平仓单 direction 记的是报单方向(= -持仓方向);超时转市价
+                    # 同为平仓单,side 语义由持仓模式决定(hedge:与持仓同侧 + close)
+                    side = self.close_side_of(-it["direction"])
                     try:
                         self.client.place_market_order(
                             it["symbol"], side=side, size=it["qty"],
-                            client_oid=oid[:30] + "cv")
+                            client_oid=oid[:30] + "cv",
+                            trade_side=self.close_trade_side())
                         self._live_close_filled(
                             it, ref_price=(self.positions.get(it["symbol"], {})
                                            .get("mark") or 0.0))
@@ -1359,20 +1666,121 @@ class LiveRunner:
                 self._journal("timeout_to_taker", {"oid": oid,
                                                    "symbol": it["symbol"]})
 
+    def _last_fill_price(self, sym: str) -> Optional[float]:
+        """该品种最近一笔'平仓'成交价(离场价);取不到返回 None(如实不编)。
+
+        只认 tradeSide=close:fills 为倒序(新→旧)且含开仓成交,直接取末条会
+        拿成开仓价 ⇒ 算出 pnl≈0 的误导性回执(实测 AAVE 取成 157.67)。
+        """
+        try:
+            res = self.client.recent_fills(sym, limit=50)
+        except BitgetError:
+            return None
+        rows = res if isinstance(res, list) else (
+            (res or {}).get("fillList") or (res or {}).get("fills") or [])
+        px: Optional[float] = None
+        for r in rows:
+            if str(r.get("symbol")) != sym:
+                continue
+            if str(r.get("tradeSide") or "") != "close":
+                continue
+            try:
+                px = float(r.get("price"))
+            except (TypeError, ValueError):
+                continue
+        return px
+
+    def _reconcile_closed(self, sym: str, pos: dict) -> None:
+        """交易所已无此仓(保护止损触发 / 外部平仓):以交易所为准清理本地事实。
+
+        修前缺陷:只报 ours_only 且文案误写为"异己仓",本地持仓事实永不清理
+        ⇒ ① 该品种被 position_open 卡住不再开新仓;② 每轮重复误报告警。
+        """
+        cs = self._get_cs_for(sym, pos.get("tf_label")) or self.campaigns.get(sym)
+        if cs is not None:
+            cs.pm.positions.pop(sym, None)
+        self.stops.pop(sym, None)
+        self.positions.pop(sym, None)
+        self._missing_streak.pop(sym, None)
+        px = self._last_fill_price(sym)
+        pnl = None
+        if px is not None:
+            pnl = (float(pos["qty"]) * int(pos["direction"])
+                   * (px - float(pos["entry"]))
+                   - float(pos["qty"]) * px * self.risk["taker_fee"])
+        self.counters["reconcile_closed"] = \
+            self.counters.get("reconcile_closed", 0) + 1
+        self._journal("reconcile_closed", {"symbol": sym,
+                                           "direction": pos["direction"],
+                                           "qty": pos["qty"],
+                                           "exit_price": px})
+        self.tg.send_fill(
+            sym, "离场确认(交易所已无此仓)", float(pos["qty"]),
+            float(px if px is not None else pos.get("mark") or pos["entry"]),
+            pnl=pnl,
+            note="保护止损触发或外部平仓;本地持仓事实已按交易所为准清理",
+            tf_label=pos.get("tf_label"), direction=int(pos["direction"]),
+            stop_price=float(pos["invalid"]), target_price=pos.get("target_1"),
+            box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"))
+
     def _reconcile(self) -> None:
         try:
             ex_pos = self.client.positions()
         except BitgetError as e:
             self._api_note(e)
             return
+        ex_by = {(p["symbol"], p["direction"]): p for p in ex_pos}
+        # ① 交易所已无此仓:连续 2 轮确认(防接口偶发漏报)后清理本地事实
+        for sym in list(self.positions):
+            pos = self.positions[sym]
+            if (sym, int(pos["direction"])) in ex_by:
+                self._missing_streak.pop(sym, None)
+                continue
+            n = self._missing_streak.get(sym, 0) + 1
+            self._missing_streak[sym] = n
+            if n >= 2:
+                self._reconcile_closed(sym, pos)
         for p in ex_pos:
-            if p["symbol"] in self.positions:
-                self.positions[p["symbol"]]["mark"] = p["mark_price"]
+            sym = p["symbol"]
+            if sym not in self.positions:
+                continue
+            self.positions[sym]["mark"] = p["mark_price"]
+            ours = float(self.positions[sym]["qty"])
+            if abs(float(p["qty"]) - ours) > max(1e-9, float(p["qty"]) * 1e-6):
+                # 交易所即真相:本地数量因精度放大(下单被截断)会使平仓超仓,
+                # 故以实际持仓为准修正本地与 pm 侧数量,并如实入账。
+                self.positions[sym]["qty"] = float(p["qty"])
+                cs = self._get_cs_for(sym, self.positions[sym].get("tf_label"))
+                pos_pm = cs.pm.positions.get(sym) if cs is not None else None
+                if pos_pm is not None:
+                    try:
+                        pos_pm.qty = float(p["qty"])
+                    except Exception:
+                        pass
+                self.counters["reconcile_fixes"] = \
+                    self.counters.get("reconcile_fixes", 0) + 1
+                self._journal("reconcile_fix", {"symbol": sym, "ours": ours,
+                                                "exchange": float(p["qty"])})
+                self._alert_throttled(
+                    f"qty:{sym}",
+                    f"{sym} 持仓数量以交易所为准修正 {ours} -> {p['qty']}"
+                    f"(下单精度须取自合约规格)")
         mismatches = reconcile_positions(self.positions, ex_pos)
         for m in mismatches:
             self.counters["reconcile_alerts"] += 1
             self._journal("reconcile", {"mismatch": m})
-            self.tg.send_alert(f"持仓对账不一致:{m}(异己仓不动作,人工核查)")
+            # 文案按 mismatch 类型分述:修前三型一律写成"异己仓",与 ours_only
+            # (本地有仓、交易所已无)的语义正好相反,误导人工核查。
+            kind = str(m).split()[0]
+            if kind == "exchange_only":
+                tail = "交易所存在非本系统所开仓位 —— 本系统不触碰,人工核查"
+            elif kind == "qty_mismatch":
+                tail = "数量不一致 —— 已以交易所为准修正(下单精度须取自合约规格)"
+            else:                       # ours_only
+                tail = "本地有仓而交易所已无 —— 待下轮确认后按交易所为准清理"
+            self._alert_throttled(
+                f"reconcile:{' '.join(str(m).split()[:2])}",
+                f"持仓对账不一致:{m} —— {tail}")
         if not mismatches:
             self._journal("reconcile", {"ok": True,
                                         "ours": len(self.positions),
@@ -1385,6 +1793,8 @@ class LiveRunner:
             self._daily_date = day
             return
         if day != self._daily_date:
+            self.api_halted, self._api_halt_alerted = False, False
+            self._api_error_streak = 0       # 跨 UTC 日:熔断复位(fail-closed 且不永久停摆)
             anchor = self.breaker.start_equity or self.equity
             dd = (anchor - self.equity) / anchor if anchor else 0.0
             self.tg.send_daily(self._daily_date, float(self.equity),
@@ -1479,14 +1889,22 @@ class LiveRunner:
 # ---------------------------------------------------------------------------
 
 
-def load_contracts_live(client, symbols: list) -> dict:
-    """合约规格(实盘拉取 → ContractSpec);min_notional 按合约的唯一来源。"""
-    want = set(symbols)
-    out = {}
+def load_contracts_live(client, symbols: Optional[list] = None) -> dict:
+    """合约规格(实盘拉取 → ContractSpec);min_notional 与数量精度唯一来源。
+
+    symbols=None ⇒ 全量加载。修前缺陷:只为核心 4 品种加载 ⇒ 其余品种走
+    _spec() 兜底(1e-6 / 6 位) ⇒ 下单数量被交易所按真实精度截断,而本地按
+    未截断值记账 ⇒ 持仓对账 qty_mismatch(2026-10-22 PAXGUSDT
+    ours=0.139496 vs exchange=0.139),平仓时会超仓。
+    """
+    want = set(symbols) if symbols else None
+    out, raw = {}, {}
     for entry in client.contracts():
-        if entry.get("symbol") in want:
-            out[entry["symbol"]] = ContractSpec.from_entry(entry)
-    return out
+        sym = entry.get("symbol")
+        if want is None or sym in want:
+            out[sym] = ContractSpec.from_entry(entry)
+            raw[sym] = entry          # 保留原始条目:maxLever 等交易所口径字段
+    return out, raw
 
 
 def parse_args(argv=None):
@@ -1509,12 +1927,26 @@ def main(argv=None) -> None:
     cred_path = (ROOT / cred_src) if cred_src and (ROOT / cred_src).exists() else None
     secrets = load_secrets(cred_path, config_overrides=cfg.get("credentials"))
     client = BitgetLiveClient(secrets)
+    if args.mode == "live":
+        # 持仓模式执行口径校验(fail-closed):配置与交易所不一致即拒绝启动,
+        # 否则 side/tradeSide 语义错位会把平仓下成反向开仓。
+        want_mode = str((cfg.get("account") or {}).get("position_mode") or "")
+        got_mode = client.position_mode(str(cfg["symbols_core"][0]))
+        if want_mode and got_mode != want_mode:
+            raise RuntimeError("持仓模式不一致(fail-closed):"
+                               f"config={want_mode} exchange={got_mode};"
+                               "请修正 config/live.json account.position_mode")
+        print(f"[live_runner] 持仓模式={got_mode}"
+              f"(开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close)"
+              if got_mode == "hedge_mode" else
+              f"[live_runner] 持仓模式={got_mode}(单边:side 表买卖方向)",
+              flush=True)
     tg = TelegramNotifier(
         secrets, dropped_log=ROOT / "runtime" / "live" / "tg_missed.jsonl",
         async_mode=True)
-    contracts = load_contracts_live(client, list(cfg["symbols_core"]))
+    contracts, contract_raw = load_contracts_live(client)   # 全量:精度/min_notional/maxLever
     runner = LiveRunner(args.mode, cfg, client, tg,
-                        contracts=contracts,
+                        contracts=contracts, contract_raw=contract_raw,
                         symbols=tuple(cfg["symbols_core"]))
     poll = int(cfg["loop"]["poll_seconds"])
     r = cfg["risk"]

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import queue
 import threading
 import time
@@ -71,8 +72,9 @@ def render_bw_kline_png(
     mark_index: Optional[int] = None,
     direction: Optional[int] = None,
     max_bars: int = 48,
+    log_scale: bool = True,
 ) -> Optional[bytes]:
-    """用 Pillow 绘制高对比度黑白 K 线图(带平衡箱体、入场/止损/目标水平线),返回 PNG bytes。"""
+    """用 Pillow 绘制高对比度黑白 K 线图(默认对数坐标 log_scale=True,带平衡箱体、入场/止损/目标水平线),返回 PNG bytes。"""
     try:
         from PIL import Image, ImageDraw, ImageFont
     except Exception:
@@ -91,9 +93,18 @@ def render_bw_kline_png(
         if lvl is not None and lvl > 0:
             p_max = max(p_max, float(lvl))
             p_min = min(p_min, float(lvl))
-    span = max(p_max - p_min, p_max * 0.002, 1e-8)
-    pad = span * 0.08
-    y_hi, y_lo = p_max + pad, p_min - pad
+
+    use_log = bool(log_scale and p_min > 0 and p_max > 0)
+    if use_log:
+        log_max, log_min = math.log(p_max), math.log(p_min)
+        log_span = max(log_max - log_min, 0.002, 1e-8)
+        log_pad = log_span * 0.08
+        log_hi, log_lo = log_max + log_pad, log_min - log_pad
+        y_hi, y_lo = math.exp(log_hi), math.exp(log_lo)
+    else:
+        span = max(p_max - p_min, p_max * 0.002, 1e-8)
+        pad = span * 0.08
+        y_hi, y_lo = p_max + pad, p_min - pad
 
     W, H = 920, 520
     left_m, right_m, top_m, bot_m = 24, 110, 44, 36
@@ -104,7 +115,11 @@ def render_bw_kline_png(
     font = ImageFont.load_default()
 
     def price_to_y(p: float) -> int:
-        frac = (y_hi - float(p)) / (y_hi - y_lo)
+        pf = float(p)
+        if use_log and pf > 0:
+            frac = (log_hi - math.log(pf)) / (log_hi - log_lo)
+        else:
+            frac = (y_hi - pf) / (y_hi - y_lo)
         return int(round(top_m + max(0.0, min(1.0, frac)) * plot_h))
 
     if box_lo is not None and box_hi is not None and box_hi > box_lo:
@@ -118,7 +133,10 @@ def render_bw_kline_png(
         draw.text((left_m + plot_w + 6, y2 - 6), f"LO {box_lo:.5g}", fill=(30, 30, 30), font=font)
 
     for k in range(5):
-        p_val = y_lo + (y_hi - y_lo) * (k / 4.0)
+        if use_log:
+            p_val = math.exp(log_lo + (log_hi - log_lo) * (k / 4.0))
+        else:
+            p_val = y_lo + (y_hi - y_lo) * (k / 4.0)
         yk = price_to_y(p_val)
         for x in range(left_m, left_m + plot_w, 12):
             draw.point((x, yk), fill=(200, 200, 200))
@@ -165,7 +183,8 @@ def render_bw_kline_png(
     draw.rectangle([left_m, top_m, left_m + plot_w, top_m + plot_h], outline=(0, 0, 0), width=2)
     ts_first = datetime.fromtimestamp(int(sub[0][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
     ts_last = datetime.fromtimestamp(int(sub[-1][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
-    header = f"{symbol} [{tf_label}] {title_tag}  ({ts_first} -> {ts_last})"
+    scale_tag = "LOG" if use_log else "LIN"
+    header = f"{symbol} [{tf_label}] {title_tag} [{scale_tag}]  ({ts_first} -> {ts_last})"
     draw.text((left_m, 14), header.strip(), fill=(0, 0, 0), font=font)
 
     buf = io.BytesIO()

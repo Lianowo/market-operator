@@ -34,6 +34,7 @@ EP_TICKERS = "/api/v2/mix/market/tickers"
 EP_HISTORY_CANDLES = "/api/v2/mix/market/history-candles"
 EP_CONTRACTS = "/api/v2/mix/market/contracts"
 EP_ACCOUNTS = "/api/v2/mix/account/accounts"     # 复数端点(实测;单数端点按 symbol 校验失败)
+EP_ACCOUNT_ONE = "/api/v2/mix/account/account"   # 单数端点(实测:带 symbol+marginCoin 可用,返回 posMode)
 EP_ALL_POSITION = "/api/v2/mix/position/all-position"
 EP_SET_LEVERAGE = "/api/v2/mix/account/set-leverage"
 EP_PLACE_ORDER = "/api/v2/mix/order/place-order"
@@ -243,50 +244,101 @@ class BitgetLiveClient:
             })
         return out
 
-    def set_leverage(self, symbol: str, leverage: int,
-                     hold_side: str = "long") -> dict:
+    def position_mode(self, symbol: str) -> str:
+        """账户持仓模式('hedge_mode' / 'one_way_mode');只读,凭证不入账。
+
+        实测口径(2026-10-22):posMode 为该 productType 的账户级设置,任一
+        symbol 查询同值;hedge_mode 下所有 place-order 必须带 tradeSide。
+        """
         self.require_credentials()
+        data = self._request("GET", EP_ACCOUNT_ONE, signed=True,
+                             params={"symbol": symbol,
+                                     "marginCoin": "USDT",
+                                     "productType": self.product_type})
+        row = data[0] if isinstance(data, list) and data else (data or {})
+        return str(row.get("posMode") or "")
+
+    def set_leverage(self, symbol: str, leverage: int,
+                     hold_side: Optional[str] = None) -> dict:
+        """设置杠杆;hedge_mode 需逐侧设置(hold_side=long/short),one-way 不传。"""
+        self.require_credentials()
+        body = {"symbol": symbol,
+                "productType": self.product_type,
+                "marginCoin": "USDT",
+                "leverage": str(int(leverage))}
+        if hold_side:                       # 双向持仓:逐侧设置
+            body["holdSide"] = hold_side
         return self._request("POST", EP_SET_LEVERAGE, signed=True,
-                             body={"symbol": symbol,
-                                   "productType": self.product_type,
-                                   "marginCoin": "USDT",
-                                   "leverage": str(int(leverage)),
-                                   "holdSide": hold_side}) or {}
+                             body=body) or {}
 
     # -- 订单(place/cancel 只组装报文;是否真发由 runner 的 MODE 闸门决定) --
 
     def place_limit_order(self, symbol: str, *, side: str, size: float,
-                          price: float, client_oid: str) -> dict:
-        """限价 GTC 单；side ∈ {"buy","sell"}(单向持仓口径,reduce 另行)。"""
+                          price: float, client_oid: str,
+                          trade_side: Optional[str] = None) -> dict:
+        """限价 GTC 单。hedge_mode 下 side 表持仓方向、tradeSide 表开平:
+
+        开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close
+        (Bitget 官方口径);one-way-mode 下省略 tradeSide(传了会报 40774)。
+        """
         self.require_credentials()
-        return self._request("POST", EP_PLACE_ORDER, signed=True, body={
+        body = {
             "symbol": symbol, "productType": self.product_type,
             "marginMode": "crossed", "marginCoin": "USDT",
             "size": f"{size}", "price": f"{price}", "side": side,
             "orderType": "limit", "force": "gtc",
-            "clientOid": client_oid}) or {}
+            "clientOid": client_oid}
+        if trade_side:
+            body["tradeSide"] = trade_side
+        return self._request("POST", EP_PLACE_ORDER, signed=True,
+                             body=body) or {}
 
     def place_market_order(self, symbol: str, *, side: str, size: float,
-                           client_oid: str) -> dict:
+                           client_oid: str,
+                           trade_side: Optional[str] = None) -> dict:
+        """市价单;side / tradeSide 语义同 place_limit_order。"""
         self.require_credentials()
-        return self._request("POST", EP_PLACE_ORDER, signed=True, body={
+        body = {
             "symbol": symbol, "productType": self.product_type,
             "marginMode": "crossed", "marginCoin": "USDT",
             "size": f"{size}", "side": side, "orderType": "market",
-            "clientOid": client_oid}) or {}
+            "clientOid": client_oid}
+        if trade_side:
+            body["tradeSide"] = trade_side
+        return self._request("POST", EP_PLACE_ORDER, signed=True,
+                             body=body) or {}
 
     def place_stop_market_plan(self, symbol: str, *, trigger_price: float,
                                size: float, plan_type: str,
-                               hold_side: str, client_oid: str) -> dict:
-        """止损市价计划单(planType=loss_plan 平仓止损;hold_side=long/short)。"""
+                               hold_side: str, client_oid: str,
+                               side: Optional[str] = None,
+                               trade_side: Optional[str] = None) -> dict:
+        """止损市价计划单(planType=loss_plan 平仓止损;hold_side=long/short)。
+
+        hedge_mode 下 tradeSide 必填(Bitget 官方):平仓止损 = 'close'
+        (缺失即报 400172 "开仓方向不能为空");one-way 下省略。
+
+        planType 实测口径(2026-10-22):该端点只接受 normal_plan —— loss_plan
+        报 400172 "planType 类型不合法";止损语义由 triggerPrice +
+        orderType=market + tradeSide=close 表达,故 loss_plan 归一为 normal_plan。
+        """
         self.require_credentials()
-        return self._request("POST", EP_PLACE_PLAN, signed=True, body={
+        if plan_type == "loss_plan":
+            plan_type = "normal_plan"
+        body = {
             "symbol": symbol, "productType": self.product_type,
             "marginMode": "crossed", "marginCoin": "USDT",
             "planType": plan_type, "triggerPrice": f"{trigger_price}",
             "triggerType": "mark_price", "executePrice": "0",
+            "orderType": "market",          # 止损触发后市价执行(缺失 ⇒ 400172)
             "holdSide": hold_side, "size": f"{size}",
-            "clientOid": client_oid}) or {}
+            "clientOid": client_oid}
+        if trade_side:
+            body["tradeSide"] = trade_side
+        if side:
+            body["side"] = side            # hedge 下亦必填(持仓方向):缺失 ⇒ 400172
+        return self._request("POST", EP_PLACE_PLAN, signed=True,
+                             body=body) or {}
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
         self.require_credentials()

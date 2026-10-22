@@ -13,6 +13,10 @@
     ]
   },
   "credentials_source": "config/secrets.env",
+  "account": {
+    "position_mode": "hedge_mode",
+    "note": "账户持仓模式(Bitget posMode)。hedge_mode:下单须带 tradeSide,side 表持仓方向(开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close),杠杆逐侧设置;one_way_mode:省略 tradeSide,side 表买卖方向。启动时与交易所实测值比对,不一致即 fail-closed 拒绝启动。"
+  },
   "risk": {
     "risk_frac": 0.04,
     "dynamic_risk_tiers": [
