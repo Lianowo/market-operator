@@ -2,12 +2,12 @@
 
 规范地位:本模块是规范语义链中"假设 → 交易计划"的唯一策略实现。语义
 合并(refactor/semantics-unify)时,docs/v6-protocol.md §2-S2 的 A/B
-二臂判选已经终局(reports/backtest_v6.json/.md 冻结产物:两臂 dev@1.5x
+二臂判选已经终局(reports/replay.json/.md 冻结产物:两臂 dev@1.5x
 净期望均 ≤ 0,按冻结规则取 t 统计较好的臂 B,如实声明非转正证据),
 **臂 B(turtle)固化为唯一策略语义**;臂切换(arm 参数)与臂 A
 clamp2R(S1 区缘失效/room≥r_min 门/target 钳 2R)的实现自此移除。
 历史 A/B 记录与协议文字保留于 docs/v6-protocol.md(未改动);双臂实现
-与其测试冻结归档于 research/rounds/v6/(strategy_v6.py/campaign.py/
+与其测试冻结归档于 research/rounds/v6/(routing.py/campaign.py/
 run_backtest_v6.py 及 tests/,对归档实现运行,可复现 A/B 判定)。
 
 当前唯一语义(turtle,docs/v6-protocol.md §2-S2 臂 B 口径):
@@ -106,7 +106,7 @@ SIGNAL_COUNTERS = {
 }
 SIGNAL_COUNTERS.update({k: v[2] for k, v in MARKET_ROUTES.items()})
 
-WHITELIST_V6 = frozenset(
+ENTRY_WHITELIST = frozenset(
     {(BREAKOUT_ACCEPTED, -1), (BREAKOUT_ACCEPTED, +1), (STRUCTURE_BROKEN, -1), (STRUCTURE_BROKEN, +1), (FLIP_RETESTED, -1), (FLIP_RETESTED, +1)})
 #: 平衡箱双原语白名单(ACCEPT/REJECT 即突破接受/关键位拒绝,去重后恰 4 项)。
 WHITELIST_BALANCE = frozenset(
@@ -115,7 +115,7 @@ WHITELIST_BALANCE = frozenset(
 
 
 @dataclass(frozen=True)
-class V6Params:
+class RouterParams:
     """v6 路由参数(v6-protocol §2/§3;k_dq/k_imp/k_is 照抄 v5 冻结先验,
     不许上 test 择优;turtle_stop_atr = S2 臂 B 冻结口径,已固化为唯一语义)。"""
 
@@ -124,7 +124,7 @@ class V6Params:
     k_is: float = 0.8                # F1 失效距离下限(全入口,v2 冻结先验)
     turtle_stop_atr: float = 2.0     # 初始防线(ATR 倍数,S2 臂 B 冻结,固化)
     k_bm: float = 0.1                # 区缘外余量(= Params.k_bm,冻结先验)
-    whitelist: frozenset = WHITELIST_V6
+    whitelist: frozenset = ENTRY_WHITELIST
     # v21.5:按周期差异化的谨慎克制过滤(用于 2h/30m 降噪:要求更高箱体质量分、
     # 旋转次数、触发 bar 冲动振幅或冷却期)
     min_box_touches: int = 0         # >0 时要求 zone.touches >= min_box_touches
@@ -167,11 +167,11 @@ class _WeakEpisode:
     impulse: float
 
 
-class V6Router:
+class MarketRouter:
     """事件 → 路由决策;状态 = _pending(每战役至多一个未武装 weak episode)。"""
 
-    def __init__(self, params: Optional[V6Params] = None) -> None:
-        self.params = params or V6Params()
+    def __init__(self, params: Optional[RouterParams] = None) -> None:
+        self.params = params or RouterParams()
         self._pending: dict[str, _WeakEpisode] = {}
         self._notes: list[str] = []
         self.counters: dict[str, int] = {}
@@ -453,7 +453,7 @@ class V6Router:
 
 
 __all__ = [
-    "V6Params", "V6Router", "RouteDecision", "WHITELIST_V6", "WHITELIST_BALANCE",
+    "RouterParams", "MarketRouter", "RouteDecision", "ENTRY_WHITELIST", "WHITELIST_BALANCE",
     "ROUTE_BREAKOUT_ACCEPTED", "ROUTE_LEVEL_REJECTED", "ROUTE_BREAKOUT_ACCEPTED", "ROUTE_LEVEL_REJECTED",
     "ROUTE_STRUCTURE_BROKEN_STRONG", "ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT",
     "ROUTE_BREAKOUT_FAILED", "ROUTE_TREND_RESUMED", "ROUTE_RANGE_ROTATED", "ROUTE_EDGE_RECLAIMED",

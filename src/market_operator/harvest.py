@@ -2,7 +2,7 @@
 
 规范地位:本模块是 v16 协议"入场三闸 + 档 + 家族执行差分 + 一生一表收
 割"在路由侧的落点(V14Router/V15Router 同型构造;v16=None ⇒ 逐位
-V6Router,arm0 回归钉死)。持仓侧(收割模式/时间帽)在 position.py,提交
+MarketRouter,arm0 回归钉死)。持仓侧(收割模式/时间帽)在 position.py,提交
 侧(fade maker / 续涨 stop-entry)沿用 campaign ArmConfig 的 C2/C3 通道。
 
 协议条款 → 实现映射:
@@ -55,7 +55,7 @@ from typing import Optional, Sequence
 
 from .hypothesis import TARGET_STATES
 from .quality import swing_band_pos
-from .strategy_v6 import RouteDecision, V6Params, V6Router
+from .routing import RouteDecision, RouterParams, MarketRouter
 from .structure import Regime, ZoneRole
 
 
@@ -81,8 +81,8 @@ class HarvestParams:
 
 
 @dataclass(frozen=True)
-class V16Params(V6Params):
-    """v6 路由先验 + v16 收割婚配层(默认 None ⇒ 逐位 V6Router 行为)。"""
+class V16Params(RouterParams):
+    """v6 路由先验 + v16 收割婚配层(默认 None ⇒ 逐位 MarketRouter 行为)。"""
 
     v16: Optional[HarvestParams] = None
 
@@ -194,11 +194,11 @@ def evaluate_v16(p: HarvestParams, *, direction: int, entry_ref: float,
 
 
 # ---------------------------------------------------------------------------
-# 路由接线(V6Router 子类;v16=None ⇒ 逐位同父类)
+# 路由接线(MarketRouter 子类;v16=None ⇒ 逐位同父类)
 # ---------------------------------------------------------------------------
 
 
-class V16Router(V6Router):
+class V16Router(MarketRouter):
     """v16 收割婚配的路由落点:父类决策 ⇒ fade 前缘改单 ⇒ 三闸 ⇒ 定档 ⇒
     结构锚 hyp 重建(invalid=结构、fade target=对面缘)。
 
@@ -211,7 +211,7 @@ class V16Router(V6Router):
     - 过单:meta 附 v16_tier / size_mult / v16_pos / v16_room_R / q3/q4 档注 /
       struct_invalid /(fade)harvest_target;hyp 重建 entry=entry_ref、
       invalid=结构锚、target_1=对面缘(fade;续涨 None)、r_mult 重算;
-    - v16=None(arm0):短路返回父类决策,逐位 V6Router 行为。
+    - v16=None(arm0):短路返回父类决策,逐位 MarketRouter 行为。
     """
 
     def on_bar(self, symbol: str, bar, bar_index: int, view, atr: float,

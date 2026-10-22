@@ -3,11 +3,11 @@
 规范地位:多尺度战役引擎是规范语义链的执行/风险层(唯一,不重命名)。
 语义合并后 A/B 臂切换移除,持仓侧接线固化为原臂 B(turtle)口径:
 PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
-见 strategy_v6 docstring。A/B 判定历史与双臂归档见 research/rounds/v6/。
+见 routing docstring。A/B 判定历史与双臂归档见 research/rounds/v6/。
 
 基础设施(非策略变更):每 (symbol, TF ∈ {1h,2h,4h,12h,1d}) 为一个独立
 战役 —— 自有 EventDetector 认知缓存(SymbolCognition,TF 帧)、策略状态
-(V6Router 实例)、持仓(PositionManager 实例)、挂单;战役之间除账户权益
+(MarketRouter 实例)、持仓(PositionManager 实例)、挂单;战役之间除账户权益
 与组合风控(共享 Broker)外互不感知、互不触发对方的出场/防线。
 
 时间约定(v4/v5 同构推广;正确性硬约束的实现基础):
@@ -32,7 +32,7 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
   帧通用)→ ③ mark-to-market(资金费/权益/近似强平,预期 0)→ ④ 认知
   bar 收盘推进(仅本战役最末执行细 bar):§8 持仓管理(PositionManager,
   输入认知 TF bar,同 v4 声明:入场成交的认知 bar 不做裁决)→ v6 路由
-  决策(V6Router;段内才启用 OPEN)。
+  决策(MarketRouter;段内才启用 OPEN)。
 
 组合约束(v6-protocol §1 冻结先验,组合容量):
 - 全部战役合计 open 最坏情景 = Σ(各仓 |mark→invalid| 止损实现亏损) +
@@ -58,7 +58,7 @@ from typing import Optional
 import pandas as pd
 
 from .aggregate import TF_HOURS
-from .backtest_v6 import (
+from .replay import (
     MS_15M,
     MS_1H,
     BacktestResult,
@@ -71,7 +71,7 @@ from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, _floor_st
 from .position import PositionManager
 from .repairs import prior_moves_delta, range_quantile
 from .research import split_boundary
-from .strategy_v6 import V6Params, V6Router
+from .routing import RouterParams, MarketRouter
 from .structure import Params
 
 # v14 施工包(docs/v14-protocol.md;None ⇒ canonical 逐位):续涨/fade 家族表
@@ -304,10 +304,10 @@ def _candidate_worst_case(broker: Broker, entry_ref: float,
 
 @dataclass
 class _CampaignState:
-    """运行期战役状态(V6Router + PositionManager + 段界)。"""
+    """运行期战役状态(MarketRouter + PositionManager + 段界)。"""
 
     frame: CampaignFrame
-    router: V6Router
+    router: MarketRouter
     pos_mgr: PositionManager
     lo: int
     hi: int
@@ -320,7 +320,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   contracts: dict, params: Params, n_fill: int,
                   portfolio_cap_frac: float = 0.03,
                   maker_fee: Optional[float] = None,
-                  router_params: Optional[V6Params] = None,
+                  router_params: Optional[RouterParams] = None,
                   router_factory: Optional[type] = None,
                   enable_mic: bool = False,
                   arm: Optional[ArmConfig] = None,
@@ -330,10 +330,10 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   dynamic_risk_tiers: Optional[list] = None,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
-    docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 strategy_v6 docstring)。
+    docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 routing docstring)。
 
     v8 接插缝(非策略变更):`router_factory` = 可调用 (router_params) → 路由
-    实例,默认 None ⇒ V6Router(行为逐位不变);v8 轮传入 V8Router
+    实例,默认 None ⇒ MarketRouter(行为逐位不变);v8 轮传入 V8Router
     (docs/v8-protocol.md,strategy_v8.py),执行/持仓/容量/账目层不变。
 
     v10 接插缝(docs/v10-protocol.md §A;enable_mic=False ⇒ 逐位旧行为):
@@ -392,8 +392,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
         raise ValueError("portfolio_cap_frac must be in (0, 1]")
 
     keys = sorted(frames)
-    base_rp = router_params or V6Params()
-    router_cls = router_factory or V6Router
+    base_rp = router_params or RouterParams()
+    router_cls = router_factory or MarketRouter
     seg_bounds: dict = {}
     states: dict[str, _CampaignState] = {}
     for key in keys:
@@ -534,7 +534,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     res = BacktestResult(segment=segment, cost_multiplier=cost_multiplier,
                          equity0=equity0, ledger=list(broker.ledger),
                          equity_rows=equity_rows,
-                         trades=_reconstruct_trades_v6(broker.ledger,
+                         trades=_reconstruct_trades(broker.ledger,
                                                        attr_bounds),
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()},
@@ -782,7 +782,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
         else:
             broker.submit(intent, decision_ts=t)
 
-    # v6 路由(仅段内启用;白名单与闸门在 V6Router 内部)
+    # v6 路由(仅段内启用;白名单与闸门在 MarketRouter 内部)
     lo, hi = bounds["lo"], bounds["hi"]
     if not (lo <= i < hi):
         return
@@ -1013,7 +1013,7 @@ def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
 # ---------------------------------------------------------------------------
 
 
-def _reconstruct_trades_v6(ledger: list, seg_bounds: dict) -> list:
+def _reconstruct_trades(ledger: list, seg_bounds: dict) -> list:
     trades = reconstruct_trades_v5(ledger, seg_bounds)
     for t in trades:
         key = t["symbol"]                    # reconstruct 以复合键为 symbol

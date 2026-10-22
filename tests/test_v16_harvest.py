@@ -27,7 +27,7 @@ from market_operator.harvest import (
 )
 from market_operator.hypothesis import StructureView
 from market_operator.position import PositionManager
-from market_operator.strategy_v6 import V6Params, V6Router
+from market_operator.routing import RouterParams, MarketRouter
 from market_operator.structure import (
     Pivot,
     PivotKind,
@@ -321,7 +321,7 @@ def test_arm0_v16_none_passthrough_identical_to_v6():
                        known_index=10, attrs={"ref": 100.0, "invalid": 100.2})]
     zones = [_res(), _sup(94.2, 96.4)]
     kw = dict(position_open=False, entry_resting=False)
-    a = V6Router(V6Params(whitelist=_WL)).on_bar(
+    a = MarketRouter(RouterParams(whitelist=_WL)).on_bar(
         "T", _bar(101.0), 10, _view(Regime.RANGE, zones), ATR, evs, **kw)
     b = V16Router(V16Params(whitelist=_WL, v16=None)).on_bar(
         "T", _bar(101.0), 10, _view(Regime.RANGE, zones), ATR, evs, **kw)

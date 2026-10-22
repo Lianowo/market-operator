@@ -63,7 +63,7 @@ import run_v16 as rv16                                           # noqa: E402
 import run_v17 as rv17                                           # noqa: E402
 import run_v19 as rv19                                           # noqa: E402
 from market_operator import aggregate as agg                     # noqa: E402
-from market_operator.backtest_v6 import compute_metrics          # noqa: E402
+from market_operator.replay import compute_metrics          # noqa: E402
 from market_operator.broker import CONTRACTS_PATH                # noqa: E402
 from market_operator.campaign import (                           # noqa: E402
     ArmConfig,
@@ -85,14 +85,14 @@ from market_operator.position import (                          # noqa: E402
     S2_LEVEL,
 )
 from market_operator.research import block_bootstrap_ci         # noqa: E402
-from market_operator.strategy_v6 import V6Params                # noqa: E402
+from market_operator.routing import RouterParams                # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
 from market_operator.tiered import TieredParams, V19Params, V19Router  # noqa: E402
 from market_operator.trigger import TRIGGER_TF_MAP              # noqa: E402
 
 CONFIG_V20 = ROOT / "config" / "v20.json"
 CONFIG_V19 = ROOT / "config" / "v19.json"
-FROZEN_TURTLE = ROOT / "reports" / "backtest_v6_turtle.json"
+FROZEN_TURTLE = ROOT / "reports" / "replay_turtle.json"
 FROZEN_V13 = ROOT / "reports" / "backtest_v13_cascade.json"
 V17_REPORT_C = ROOT / "reports" / "v17_arm-C.json"
 V19_REPORT = ROOT / "reports" / "v19.json"
@@ -238,7 +238,7 @@ def build_arm(raw_cfg: dict, arm_id: str) -> tuple:
     spec = raw_cfg["arms"][arm_id]
     tp = _tiered_of(raw_cfg)
     arm = _arm_base(raw_cfg, arm_id)
-    kw = {f: getattr(V6Params(), f) for f in V6Params.__dataclass_fields__}
+    kw = {f: getattr(RouterParams(), f) for f in RouterParams.__dataclass_fields__}
     if arm_id == "arm-T":
         rp = V19Params(**kw, tiered=tp)
         # whitelist 由 main 的 rp_base 承担(此处返回元组,main 里提升)
@@ -251,9 +251,9 @@ def build_arm(raw_cfg: dict, arm_id: str) -> tuple:
     return rp, V20Router, arm, STOP_FAMILY
 
 
-def lift_rp(rp_base: V6Params, rp):
-    """canonical V6Params 逐项提升(whitelist/k_dq 等以 config 为准)。"""
-    kw = {f: getattr(rp_base, f) for f in V6Params.__dataclass_fields__}
+def lift_rp(rp_base: RouterParams, rp):
+    """canonical RouterParams 逐项提升(whitelist/k_dq 等以 config 为准)。"""
+    kw = {f: getattr(rp_base, f) for f in RouterParams.__dataclass_fields__}
     if isinstance(rp, V20Params):
         return V20Params(**kw, tiered=rp.tiered, v20=rp.v20)
     return V19Params(**kw, tiered=rp.tiered)
@@ -477,7 +477,7 @@ def main() -> None:
     dev_frac = float(raw_cfg["dev_frac"])
     symbols = list(raw_cfg["symbols"])
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
+    rp_base = RouterParams(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)
@@ -536,7 +536,7 @@ def main() -> None:
           flush=True)
     hp_c, factory_c, arm_c, mic_c = build_arm_c_probe(raw_cfg)
     rp_c = V16Params(**{f: getattr(rp_base, f)
-                        for f in V6Params.__dataclass_fields__}, v16=hp_c)
+                        for f in RouterParams.__dataclass_fields__}, v16=hp_c)
     arm_c_grid = run_grid(frames, anchor_cfg, params, rp_c, factory_c, arm_c,
                           contracts, segment="dev", equity0=EQUITY0,
                           mic_families=mic_c, enable_mic=True, tag="arm-C ")

@@ -251,7 +251,7 @@ def test_aggregate_12h_partial_tail_and_hole():
 
 
 def test_replay_cognition_parity_prepare_cognition():
-    from market_operator.backtest_v6 import prepare_cognition
+    from market_operator.replay import prepare_cognition
     from market_operator.events import EventDetector
     import pandas as pd
 

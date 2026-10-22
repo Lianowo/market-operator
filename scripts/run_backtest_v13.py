@@ -16,7 +16,7 @@
   战役认知帧细化到 trigger_tf_map 对应帧(协议:映射缺失/帧不可用 ⇒
   最近可用帧 + 如实声明;N_a_mic=N_a×scale,N_f_mic=N_f×scale,阈值=认知帧 ATR)。
 - parity 双锚:① 冻结时代名名单(8 档 BREAKOUT_ACCEPTED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED,与 reports/
-  backtest_v6_turtle.json 自述 config 一致)探针回放走同一批战役帧 ⇒
+  replay_turtle.json 自述 config 一致)探针回放走同一批战役帧 ⇒
   与该冻结产物**逐格全等** —— 硬断言,不等即 raise(代码零回归锚,与
   v10 同锚但只读比对,历史产物不覆写);② 现行名单(16 档)bar 臂 9 格
   作为 v13 canonical-parity 在册基线(冻结产物系 #19 语义路由决议之前的
@@ -33,7 +33,7 @@
   前向)。本脚本为唯一一次 v13 test 评估的执行入口;判据沿用 v6 升级线
   (n≥60 且 test 净期望@1.5x>0 且 test PF@2x>1 ⇒ PAPER_CANDIDATE,否则
   RESEARCH_ONLY),如实填报,不产生额外叙述。
-- 合约规格强制离线缓存;freeze:历史产物(reports/backtest_v6_turtle.*、
+- 合约规格强制离线缓存;freeze:历史产物(reports/replay_turtle.*、
   reports/backtest_v10_* 等)只读比对,不覆写。
 """
 
@@ -57,7 +57,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import run_backtest_v6 as rb                                     # noqa: E402
 from market_operator import aggregate as agg                     # noqa: E402
 from market_operator import data as mo_data                      # noqa: E402
-from market_operator.backtest_v6 import (                        # noqa: E402
+from market_operator.replay import (                        # noqa: E402
     alignment_issues_ci,
     compute_metrics,
     prepare_cognition,
@@ -68,7 +68,7 @@ from market_operator.campaign import (                           # noqa: E402
 )
 from market_operator.broker import CONTRACTS_PATH                # noqa: E402
 from market_operator.research import block_bootstrap_ci          # noqa: E402
-from market_operator.strategy_v6 import V6Params                 # noqa: E402
+from market_operator.routing import RouterParams                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
 from market_operator.trigger import (                            # noqa: E402
     TRIGGER_TF_MAP,
@@ -77,7 +77,7 @@ from market_operator.trigger import (                            # noqa: E402
 )
 
 CONFIG_V13 = ROOT / "config" / "v13.json"
-FROZEN_TURTLE = ROOT / "reports" / "backtest_v6_turtle.json"
+FROZEN_TURTLE = ROOT / "reports" / "replay_turtle.json"
 REPORTS = ROOT / "reports"
 SEGMENTS = ("full", "dev", "test")
 COST_MULTS = (1.0, 1.5, 2.0)
@@ -86,7 +86,7 @@ MIN_TRADES_TEST = 60
 MS_1H = 3_600_000
 TRIGGER_LABEL = {900: "15m", 1800: "30m", 3600: "1h", 7200: "2h", 14400: "4h"}
 # 冻结时代名单(#16 时代 canonical 8 档;log#21 语义路由决议前的运行口径,
-# 与 reports/backtest_v6_turtle.json 自述 config.whitelist 逐一致 —— 运行
+# 与 reports/replay_turtle.json 自述 config.whitelist 逐一致 —— 运行
 # 时硬断言同源)。仅用于代码零回归探针;v13 在册两臂用现行 canonical 全表。
 FROZEN_ERA_WHITELIST = (("BREAKOUT_ACCEPTED", -1), ("BREAKOUT_ACCEPTED", 1), ("LEVEL_REJECTED", -1), ("LEVEL_REJECTED", 1),
                         ("STRUCTURE_BROKEN", -1), ("STRUCTURE_BROKEN", 1), ("FLIP_RETESTED", -1), ("FLIP_RETESTED", 1))
@@ -379,7 +379,7 @@ def trades_frame_v13(trades: list) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def run_grid(frames: dict, raw_cfg: dict, params: Params, rp_base: V6Params,
+def run_grid(frames: dict, raw_cfg: dict, params: Params, rp_base: RouterParams,
              contracts: dict, *, enable_mic: bool, segments=SEGMENTS) -> dict:
     broker_kw = dict(dev_frac=float(raw_cfg["dev_frac"]), equity0=300.0,
                      risk_frac=float(raw_cfg["risk_frac"]),
@@ -453,7 +453,7 @@ def main() -> None:
     if raw_cfg.get("enable_mic") is not False:
         raise RuntimeError("v13 默认 enable_mic=false(bar 对照臂;协议 §2)")
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
+    rp_base = RouterParams(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)
@@ -563,7 +563,7 @@ def main() -> None:
         },
         "dev_1_5x_vs_frozen_armB": {
             "cascade": cell(res_mic, "dev", 1.5),
-            "frozen(backtest_v6_turtle)": cell(
+            "frozen(replay_turtle)": cell(
                 {("dev", 1.5): (None, frozen["runs"]["turtle|dev@1.5x"]["metrics"])},
                 "dev", 1.5),
             "delta_net": res_mic[("dev", 1.5)][1]["net_pnl"]
@@ -650,7 +650,7 @@ def main() -> None:
             "e1_e8_detector_invariant": "BREAKOUT_ACCEPTED-EDGE_RECLAIMED bar 事件检测零改动;mic 帧复放的 "
                                         "bar 事件流 == prepare_cognition 逐字段"
                                         "硬断言(见 bar_stream_parity)。",
-            "parity_discipline": "双锚:冻结时代名单(8 档,与 backtest_v6_turtle "
+            "parity_discipline": "双锚:冻结时代名单(8 档,与 replay_turtle "
                                  "自述 config 一致)探针 == 冻结产物逐格全等(代码"
                                  "零回归,只读比对);在册 bar/cascade 两臂 = 现行 "
                                  "canonical.json 16 档语义路由(log#21),与冻结"
@@ -704,7 +704,7 @@ def main() -> None:
                               "n_events_by_campaign": mic_parity},
         "frozen_era_parity_probe": {
             "description": "冻结时代名单(8 档 BREAKOUT_ACCEPTED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED)同一批战役帧回放 "
-                           "== reports/backtest_v6_turtle.json 逐格全等(硬断言;"
+                           "== reports/replay_turtle.json 逐格全等(硬断言;"
                            "代码零回归锚,与 v10 同锚,历史产物只读不覆写)",
             "runs": parity_rows},
         "canonical19_whitelist_delta": {
@@ -843,12 +843,12 @@ def render_md(payload: dict) -> str:
               f"| {_f(c['cascade']['profit_factor'])} "
               f"| {_f(c['cascade']['expectancy_usdt'], 4)} "
               f"| {_f(c['cascade']['expectancy_r'], 4)} |",
-              f"| frozen backtest_v6_turtle(8 档冻义) | {_f(c['frozen(backtest_v6_turtle)']['net_pnl'])} "
-              f"| {c['frozen(backtest_v6_turtle)']['n_trades']} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['winrate'], 3)} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['profit_factor'])} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['expectancy_usdt'], 4)} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['expectancy_r'], 4)} |",
+              f"| frozen replay_turtle(8 档冻义) | {_f(c['frozen(replay_turtle)']['net_pnl'])} "
+              f"| {c['frozen(replay_turtle)']['n_trades']} "
+              f"| {_f(c['frozen(replay_turtle)']['winrate'], 3)} "
+              f"| {_f(c['frozen(replay_turtle)']['profit_factor'])} "
+              f"| {_f(c['frozen(replay_turtle)']['expectancy_usdt'], 4)} "
+              f"| {_f(c['frozen(replay_turtle)']['expectancy_r'], 4)} |",
               f"| **Δ(cascade−frozen)** | **{_f(c['delta_net'])}** | — | — | — | — | — |",
               "",
               f"> {c['cross_semantics_note']}", "",

@@ -47,10 +47,10 @@ from market_operator.campaign import (                             # noqa: E402
 from market_operator.events import canonical_event_id                # noqa: E402
 from market_operator.broker import Broker                          # noqa: E402
 from market_operator.structure import Params, Regime               # noqa: E402
-from market_operator.strategy_v6 import (                          # noqa: E402
+from market_operator.routing import (                          # noqa: E402
     ROUTE_LEVEL_REJECTED,
-    V6Params,
-    V6Router,
+    RouterParams,
+    MarketRouter,
 )
 from market_operator.trigger import prepare_mic_cognition          # noqa: E402
 
@@ -73,7 +73,7 @@ CSV_COLS = ("trade_id", "symbol", "tf", "event_id", "regime", "direction",
 # ---------------------------------------------------------------------------
 
 
-class _TransitionGateRouter(V6Router):
+class _TransitionGateRouter(MarketRouter):
     """regime=TRANSITION 时丢弃指定家族事件(其余原样通过)。
 
     家族按 canonical id 匹配(E 族规范形:BREAKOUT_ACCEPTED=ACCEPT / LEVEL_REJECTED=REJECT)。
@@ -113,7 +113,7 @@ class RejectTransitionGateRouter(_TransitionGateRouter):
 # ---------------------------------------------------------------------------
 
 
-class RejectFrontMakerRouter(V6Router):
+class RejectFrontMakerRouter(MarketRouter):
     """e3_market 决策改前缘限价(long 挂 zone_lo / short 挂 zone_hi)。
 
     限价必须在回调方向(可能成交为 maker);无 zone 或限价在同侧 ⇒ 保持
@@ -250,7 +250,7 @@ class Ctx:
 
         cfg = self.cfg
         wl = frozenset((str(e), int(d)) for e, d in cfg["whitelist"])
-        self.base_rp = V6Params(
+        self.base_rp = RouterParams(
             k_dq=float(cfg["k_dq"]), k_imp=float(cfg["k_imp"]),
             k_is=float(cfg["k_is"]),
             turtle_stop_atr=float(cfg["turtle_stop_atr"]),

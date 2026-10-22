@@ -2,7 +2,7 @@
 
 规范地位:v8 研究轮(第 11 次 test 曝光,research-log #14 预注册)的策略实现,
 在战役引擎上以 `router_factory=V8Router` 接插(campaign.run_campaigns 缝,
-默认行为不变)。canonical 语义链(strategy_v6/position/broker)只读复用:
+默认行为不变)。canonical 语义链(routing/position/broker)只读复用:
 不 subclass、不改参数;RouteDecision/Hypothesis/计数器/explain 与 v6 同构接。
 
 v8-protocol §1 入场几何(与 canonical turtle 的唯一差异,如实声明):
@@ -32,7 +32,7 @@ from typing import Optional, Sequence
 from .broker import OrderIntent, OrderKind
 from .events import EDGE_RECLAIMED, MarketEvent
 from .hypothesis import Hypothesis, StructureView
-from .strategy_v6 import RouteDecision, V6Params
+from .routing import RouteDecision, RouterParams
 from .structure import _bar_parts
 
 ROUTE_EDGE_RECLAIMED = "edge_reclaimed_market"               # EDGE_RECLAIMED 市价次 1h 开盘(协议§1 单执行风格)
@@ -41,7 +41,7 @@ WHITELIST_V8 = frozenset({(EDGE_RECLAIMED, -1), (EDGE_RECLAIMED, +1)})
 
 
 @dataclass(frozen=True)
-class V8Params(V6Params):
+class V8Params(RouterParams):
     """v8 路由参数(docs/v8-protocol.md §1;k_is/r_min 冻结先验;whitelist 只含
     (EDGE_RECLAIMED,±1)。k_dq/k_imp/turtle_stop_atr 沿父类默认值但在 v8 路径不可达
     (无质量路由、无 turtle 防线 —— 失效取事件结构锚),如实声明。"""
@@ -51,7 +51,7 @@ class V8Params(V6Params):
 
 
 class V8Router:
-    """事件 → 路由决策(白名单唯一分支 EDGE_RECLAIMED;接口与 V6Router 同构,供
+    """事件 → 路由决策(白名单唯一分支 EDGE_RECLAIMED;接口与 MarketRouter 同构,供
     campaign.run_campaigns(router_factory=...) 接插)。"""
 
     def __init__(self, params: Optional[V8Params] = None) -> None:

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import run_backtest_v6 as rb
 from market_operator.campaign import run_campaigns
 from market_operator.structure import Params
-from market_operator.strategy_v6 import V6Params
+from market_operator.routing import RouterParams
 
 CONFIG = ROOT / "config" / "canonical.json"
 
@@ -24,7 +24,7 @@ def main():
     params = Params.from_json(CONFIG)
     syms = list(raw["symbols"]); tfs = list(raw["tf_list"])
     wl = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
-    rp = V6Params(k_dq=float(raw["k_dq"]), k_imp=float(raw["k_imp"]),
+    rp = RouterParams(k_dq=float(raw["k_dq"]), k_imp=float(raw["k_imp"]),
                   k_is=float(raw["k_is"]), turtle_stop_atr=float(raw["turtle_stop_atr"]),
                   k_bm=float(raw["k_bm"]), whitelist=wl)
     contracts, _ = rb.load_contracts_cache(syms)

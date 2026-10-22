@@ -3,7 +3,7 @@
 钉死:
 - 带沿条款边界:inclusive(pos=0.35 空过、pos=0.65 多过,半步外拒)、
   缺侧 pivot/带退化 fail-closed、pos 计算与 quality.swing_band_pos 同值;
-- arm0 回归:V15Router(band_side=None)与 V6Router 账本逐位一致;
+- arm0 回归:V15Router(band_side=None)与 MarketRouter 账本逐位一致;
 - 组件启停矩阵:maker 仅 fade 家族(c2_family)、stop-entry 仅续涨家族
   (未匹配 C3 的续涨信号落回 canonical)、TREND_RESUMED/RANGE_ROTATED 不落 C2;
 - v14 行为保存:ArmConfig 缺省 c2_family=None ⇒ C2 接管全部入口(逐位);
@@ -17,7 +17,7 @@ import json
 import pandas as pd
 import pytest
 
-from market_operator.backtest_v6 import SymbolCognition
+from market_operator.replay import SymbolCognition
 from market_operator.bandside import (
     BandSideParams,
     V15Params,
@@ -29,7 +29,7 @@ from market_operator.campaign import ArmConfig, build_campaign_frame, run_campai
 from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, TREND_RESUMED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.quality import swing_band_pos
-from market_operator.strategy_v6 import V6Params, V6Router
+from market_operator.routing import RouterParams, MarketRouter
 from market_operator.structure import (
     Params,
     Pivot,
@@ -129,7 +129,7 @@ def _frame(tf_hours, events_by=None, exec_overrides=None, view=VIEW_OK,
 def _run(frames, **over):
     kw = dict(KW)
     kw.update(over)
-    kw.setdefault("router_params", V6Params(whitelist=WL16))
+    kw.setdefault("router_params", RouterParams(whitelist=WL16))
     return run_campaigns(frames, **kw)
 
 
@@ -184,7 +184,7 @@ def test_band_side_pos_identical_to_quality_swing_band_pos():
 
 def test_v15router_none_bitwise_v6router():
     frames = {"TEST@2h": _frame(2, events_by={2: [_ev(BREAKOUT_ACCEPTED, -1, 2, 2)]})}
-    r_v6 = _run(frames, router_factory=V6Router)
+    r_v6 = _run(frames, router_factory=MarketRouter)
     r_15 = _run(frames, router_params=V15Params(whitelist=WL16),
                 router_factory=V15Router)
     assert json.dumps(r_v6.ledger) == json.dumps(r_15.ledger)

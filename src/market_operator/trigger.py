@@ -436,9 +436,9 @@ class MicTracker:
                 events.append(fired)
                 # v8 EDGE_RECLAIMED:伴随 BREAKOUT_FAILED 发射(与 events.py 同序:BREAKOUT_FAILED 紧随其伴随 EDGE_RECLAIMED)
                 if self.enable_e8 and fired.id == BREAKOUT_FAILED:
-                    e8 = self._edge_reclaim(ep, z, res, ts, a, c, h, l, ctx)
-                    if e8 is not None:
-                        events.append(e8)
+                    reclaimed = self._edge_reclaim(ep, z, res, ts, a, c, h, l, ctx)
+                    if reclaimed is not None:
+                        events.append(reclaimed)
             else:
                 if not extreme_first:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
@@ -572,15 +572,15 @@ class MicTracker:
             l_star_forming=l_form, h_star_forming=h_form)
 
     def _range_rotation(self, ts: object, a: int, c: float, ctx: _Context,
-                        e3_events: list) -> list[MarketEvent]:
-        if not e3_events or ctx.regime is not Regime.RANGE or ctx.band is None:
+                        rejected_events: list) -> list[MarketEvent]:
+        if not rejected_events or ctx.regime is not Regime.RANGE or ctx.band is None:
             return []
         band_lo, band_hi = ctx.band
         edge_tol = self.p.e5_edge_atr * ctx.atr
         room_min = self.p.k_room * ctx.atr
         out: list[MarketEvent] = []
-        for e3 in e3_events:
-            z: Zone = e3.attrs["zone"]
+        for rejection in rejected_events:
+            z: Zone = rejection.attrs["zone"]
             zc = 0.5 * (z.lo + z.hi)
             near_top = abs(zc - band_hi) <= edge_tol
             near_bot = abs(zc - band_lo) <= edge_tol
@@ -589,11 +589,11 @@ class MicTracker:
             room = (c - band_lo) if near_top else (band_hi - c)
             if room < room_min:
                 continue
-            out.append(self._mk(RANGE_ROTATED, e3.direction, ts, a, {
-                "zone": z.clone(), "ref": e3.attrs["ref"],
-                "invalid": e3.attrs["invalid"],
+            out.append(self._mk(RANGE_ROTATED, rejection.direction, ts, a, {
+                "zone": z.clone(), "ref": rejection.attrs["ref"],
+                "invalid": rejection.attrs["invalid"],
                 "band": (band_lo, band_hi), "room": room,
-                "via_known": e3.known_index}))
+                "via_known": rejection.known_index}))
         return out
 
     def _edge_reclaim(self, ep: _MicEpisode, z: Zone, res: bool, ts: object,

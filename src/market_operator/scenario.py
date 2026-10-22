@@ -30,11 +30,11 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from . import aggregate, data as datafeed
-from .backtest_v6 import prepare_cognition
+from .replay import prepare_cognition
 from .broker import ContractSpec
 from .campaign import ArmConfig, build_campaign_frame, run_campaigns
 from .structure import Params
-from .strategy_v6 import V6Params
+from .routing import RouterParams
 from .trigger import prepare_mic_cognition
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,8 +101,8 @@ class ScenarioSettings:
 
     raw: Mapping[str, Any]
     structure: Params
-    router: V6Params
-    router_by_timeframe: Mapping[str, V6Params]
+    router: RouterParams
+    router_by_timeframe: Mapping[str, RouterParams]
     arm: ArmConfig
     costs: ExecutionCosts
     trigger_seconds_by_timeframe: Mapping[str, Optional[int]]
@@ -131,7 +131,7 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
 
     whitelist = frozenset(
         (str(event), int(direction)) for event, direction in raw["whitelist"])
-    router = V6Params(
+    router = RouterParams(
         k_dq=float(raw["k_dq"]),
         k_imp=float(raw["k_imp"]),
         k_is=float(raw["k_is"]),
@@ -305,8 +305,8 @@ class ScenarioRunner:
     def run(self, *, segment: str = "full", cost_multiplier: float = 1.0,
             equity0: float = 300.0,
             router_factory: Optional[type] = None,
-            router_params: Optional[V6Params] = None,
-            router_params_by_timeframe: Optional[Mapping[str, V6Params]] = None,
+            router_params: Optional[RouterParams] = None,
+            router_params_by_timeframe: Optional[Mapping[str, RouterParams]] = None,
             tf_cap_by_timeframe: Optional[Mapping[str, float]] = None,
             arm: Optional[ArmConfig] = None) -> ScenarioOutcome:
         """按场景回放。所有可替换项缺省为配置值(即"现行语义")。"""

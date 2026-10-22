@@ -76,7 +76,7 @@ class LifecycleParams:
 @dataclass(frozen=True)
 class V20Params(V19Params):
     """v6 路由先验 + v19 阶梯配注层 + v20 生命周期层(默认 None ⇒ 逐位
-    V19Router/V6Router 行为)。"""
+    V19Router/MarketRouter 行为)。"""
 
     v20: Optional[LifecycleParams] = None
 

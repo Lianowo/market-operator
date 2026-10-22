@@ -10,7 +10,7 @@
   ×0.5;多条款相乘(0.5×0.75=0.375);硬禁 F1 / target_missing(恰界);
 - 夭折:半窗恰界(23 根不出 / 24 根 MFE<0.3R 出,恰 0.3R 持有)+ 连续≥3
   逆根(恰 0 收平复位)+ 先触发先算(同 bar 同触发 ⇒ 半窗优先);
-- parity:V19Router(tiered=None) ≡ V6Router;early_exit=False 时夭折块
+- parity:V19Router(tiered=None) ≡ MarketRouter;early_exit=False 时夭折块
   整段不生效;
 - 战役级:size_mult 上成交数量,v19tier 记账后缀;半窗夭折真实出场与
   early_half_mfe 收割桶标签;确定性双跑。
@@ -25,7 +25,7 @@ import sys
 import pandas as pd
 import pytest
 
-from market_operator.backtest_v6 import SymbolCognition
+from market_operator.replay import SymbolCognition
 from market_operator.broker import ContractSpec
 from market_operator.campaign import (
     ArmConfig,
@@ -41,7 +41,7 @@ from market_operator.position import (
     EARLY_HALF_MFE_R,
     PositionManager,
 )
-from market_operator.strategy_v6 import V6Params, V6Router
+from market_operator.routing import RouterParams, MarketRouter
 from market_operator.structure import (
     Params,
     Pivot,
@@ -100,7 +100,7 @@ def _view(zones=(), pivots=PIVOTS, regime=Regime.TRANSITION) -> StructureView:
 
 
 def _vp19(tp=None) -> V19Params:
-    kw = {f: getattr(V6Params(), f) for f in V6Params.__dataclass_fields__}
+    kw = {f: getattr(RouterParams(), f) for f in RouterParams.__dataclass_fields__}
     kw["whitelist"] = WL_ALL
     return V19Params(**kw, tiered=tp)
 
@@ -405,7 +405,7 @@ def test_v19_router_fail_closed_and_reason_tag():
 
 
 def test_v19_router_tiered_none_is_v6_identical():
-    r6 = V6Router(V6Params(whitelist=WL_ALL))
+    r6 = MarketRouter(RouterParams(whitelist=WL_ALL))
     r19 = V19Router(_vp19(None))
     bar = _bar(T0 + 3 * 2 * H)
     evs = [_fade_e3(ts=T0 + 3 * 2 * H, known_index=3),
@@ -593,8 +593,8 @@ def test_v19_campaign_parity_tiered_none_router():
                           attrs={"ref": 95.0, "invalid": 94.0,
                                  "mic": True, "trigger_tf": 1800})]})
     r6 = run_campaigns({campaign_key("TEST", "2h"): mk()}, **dict(KW),
-                       router_params=V6Params(whitelist=WL_ALL),
-                       router_factory=V6Router, enable_mic=True,
+                       router_params=RouterParams(whitelist=WL_ALL),
+                       router_factory=MarketRouter, enable_mic=True,
                        mic_families=STOP_FAMILY)
     r19 = run_campaigns({campaign_key("TEST", "2h"): mk()}, **dict(KW),
                         router_params=_vp19(None), router_factory=V19Router,

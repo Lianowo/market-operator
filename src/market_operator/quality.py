@@ -35,7 +35,7 @@ B 档 = 强制全过(=0.75×risk);C(不可进)= 强制条款拒单、counters �
 quality_reject_q1_pos / quality_reject_q2_room / quality_reject_q5_f1。
 
 确定性:纯函数 `evaluate_quality` + 无状态档注;`V14Router` 在 quality=None
-时逐位同 `V6Router`(质量层短路不回读)。
+时逐位同 `MarketRouter`(质量层短路不回读)。
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from .hypothesis import TARGET_STATES
-from .strategy_v6 import V6Params, V6Router
+from .routing import RouterParams, MarketRouter
 from .structure import PivotKind, Regime, ZoneRole
 
 
@@ -168,25 +168,25 @@ def evaluate_quality(p: QualityParams, *, direction: int, entry_ref: float,
 
 
 # ---------------------------------------------------------------------------
-# 路由接线(V6Router 子类;quality=None ⇒ 逐位同父类)
+# 路由接线(MarketRouter 子类;quality=None ⇒ 逐位同父类)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class V14Params(V6Params):
-    """v6 路由先验 + v14 质量层(默认 None ⇒ 逐位 V6Router 行为)。"""
+class V14Params(RouterParams):
+    """v6 路由先验 + v14 质量层(默认 None ⇒ 逐位 MarketRouter 行为)。"""
 
     quality: Optional[QualityParams] = None
 
 
-class V14Router(V6Router):
+class V14Router(MarketRouter):
     """优质才进条款的路由落点:父类产出决策 ⇒ C1 评估 ⇒ 拒单/定档注记。
 
     - 拒单(强制条款不过):决策丢弃,counters 记 quality_reject_<reason>,
       notes 记完整 reason(协议:"否拒并以 reason 记录");
     - 过单:meta 附 quality_tier / size_mult / quality_pos / quality_room_R
       (C5 配注:broker 定仓读 meta.size_mult;杠杆/容量不动)。
-    - quality=None(arm0):短路返回父类决策,逐位 V6Router 行为。
+    - quality=None(arm0):短路返回父类决策,逐位 MarketRouter 行为。
     """
 
     def on_bar(self, symbol: str, bar, bar_index: int, view, atr: float,

@@ -52,7 +52,7 @@ import run_backtest_v13 as rv13                                  # noqa: E402
 import run_v16 as rv16                                           # noqa: E402
 import run_v17 as rv17                                           # noqa: E402
 from market_operator import aggregate as agg                     # noqa: E402
-from market_operator.backtest_v6 import compute_metrics          # noqa: E402
+from market_operator.replay import compute_metrics          # noqa: E402
 from market_operator.broker import CONTRACTS_PATH                # noqa: E402
 from market_operator.campaign import (                           # noqa: E402
     ArmConfig,
@@ -79,13 +79,13 @@ from market_operator.repairs import (                            # noqa: E402
     V18Router,
 )
 from market_operator.research import block_bootstrap_ci          # noqa: E402
-from market_operator.strategy_v6 import V6Params                 # noqa: E402
+from market_operator.routing import RouterParams                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
 from market_operator.trigger import TRIGGER_TF_MAP               # noqa: E402
 
 CONFIG_V18 = ROOT / "config" / "v18.json"
 CONFIG_V17 = ROOT / "config" / "v17.json"
-FROZEN_TURTLE = ROOT / "reports" / "backtest_v6_turtle.json"
+FROZEN_TURTLE = ROOT / "reports" / "replay_turtle.json"
 FROZEN_V13 = ROOT / "reports" / "backtest_v13_cascade.json"
 V17_REPORT_C = ROOT / "reports" / "v17_arm-C.json"
 REPORTS = ROOT / "reports"
@@ -177,9 +177,9 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _v18_params(rp_base: V6Params, hp, repair: RepairParams) -> V18Params:
+def _v18_params(rp_base: RouterParams, hp, repair: RepairParams) -> V18Params:
     return V18Params(**{f: getattr(rp_base, f)
-                        for f in V6Params.__dataclass_fields__},
+                        for f in RouterParams.__dataclass_fields__},
                      v16=hp, v18=repair)
 
 
@@ -367,7 +367,7 @@ def main() -> None:
     dev_frac = float(raw_cfg["dev_frac"])
     symbols = list(raw_cfg["symbols"])
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
+    rp_base = RouterParams(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)

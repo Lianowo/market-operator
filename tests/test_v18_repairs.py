@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 
 from market_operator import campaign as camp
-from market_operator.backtest_v6 import SymbolCognition
+from market_operator.replay import SymbolCognition
 from market_operator.broker import ContractSpec
 from market_operator.campaign import (
     ArmConfig,
@@ -55,7 +55,7 @@ from market_operator.repairs import (
     prior_moves_delta,
     range_quantile,
 )
-from market_operator.strategy_v6 import V6Params
+from market_operator.routing import RouterParams
 from market_operator.structure import (
     Params,
     Pivot,
@@ -100,7 +100,7 @@ def _view(regime: Regime = Regime.TRANSITION) -> StructureView:
 
 
 def _vp18(repair: RepairParams = None) -> V18Params:
-    kw = {f: getattr(V6Params(), f) for f in V6Params.__dataclass_fields__}
+    kw = {f: getattr(RouterParams(), f) for f in RouterParams.__dataclass_fields__}
     kw["whitelist"] = WL_ALL
     return V18Params(**kw, v16=HarvestParams(), v18=repair)
 

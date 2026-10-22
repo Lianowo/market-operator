@@ -442,9 +442,9 @@ class EventDetector:
                 events.append(fired)
                 # v8 EDGE_RECLAIMED:伴随 BREAKOUT_FAILED 发射(模块 docstring v8 条款);与 A3 去重正交互
                 if self.enable_e8 and fired.id == BREAKOUT_FAILED:
-                    e8 = self._edge_reclaim(ep, z, res, t, ts, c, h, l, atr)
-                    if e8 is not None:
-                        events.append(e8)
+                    reclaimed = self._edge_reclaim(ep, z, res, t, ts, c, h, l, atr)
+                    if reclaimed is not None:
+                        events.append(reclaimed)
             else:
                 # 后序情形:判完回退后再以本 bar 极值推进 ex
                 if not extreme_first:
@@ -570,8 +570,8 @@ class EventDetector:
     # -- RANGE_ROTATED:RANGE_ROTATION(A8) ------------------------------------------------
 
     def _range_rotation(self, t: int, ts: object, c: float, atr: float,
-                        e3_events: list[MarketEvent]) -> list[MarketEvent]:
-        if not e3_events or self.structure.regime() is not Regime.RANGE:
+                        rejected_events: list[MarketEvent]) -> list[MarketEvent]:
+        if not rejected_events or self.structure.regime() is not Regime.RANGE:
             return []
         band = self._band()
         if band is None:
@@ -580,8 +580,8 @@ class EventDetector:
         edge_tol = self.params.e5_edge_atr * atr
         room_min = self.params.k_room * atr
         out: list[MarketEvent] = []
-        for e3 in e3_events:
-            z: Zone = e3.attrs["zone"]
+        for rejection in rejected_events:
+            z: Zone = rejection.attrs["zone"]
             zc = 0.5 * (z.lo + z.hi)
             near_top = abs(zc - band_hi) <= edge_tol    # 阻力侧贴带上缘
             near_bot = abs(zc - band_lo) <= edge_tol    # 支撑侧贴带下缘
@@ -591,11 +591,11 @@ class EventDetector:
             if room < room_min:
                 continue
             out.append(MarketEvent(
-                id=RANGE_ROTATED, direction=e3.direction, ts=ts, known_index=t,
-                attrs={"zone": z.clone(), "ref": e3.attrs["ref"],
-                       "invalid": e3.attrs["invalid"],
+                id=RANGE_ROTATED, direction=rejection.direction, ts=ts, known_index=t,
+                attrs={"zone": z.clone(), "ref": rejection.attrs["ref"],
+                       "invalid": rejection.attrs["invalid"],
                        "band": (band_lo, band_hi), "room": room,
-                       "via_known": e3.known_index},
+                       "via_known": rejection.known_index},
             ))
         return out
 

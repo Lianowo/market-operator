@@ -2,7 +2,7 @@
 预注册,先于运行)。
 
 规范地位:本模块是 v19 协议 §2"三闸软着陆为阶梯配注"在路由侧的唯一落点
-(V14Router/V16Router/V18Router 同型构造;tiered=None ⇒ 逐位 V6Router,
+(V14Router/V16Router/V18Router 同型构造;tiered=None ⇒ 逐位 MarketRouter,
 parity 钉死)。v16 三闸(位置/空间/F1)与 v18 决策侧三件(R1 大炮、R2 逆
 三拍、R3 TRANSITION fade)全部由"缺一不存在交易"改为逐条款 size_mult
 计档;硬禁只剩两种(F1 失效不足 0.8·ATR、结构性 target 不存在)。持仓侧
@@ -59,7 +59,7 @@ from typing import Optional, Sequence
 from .harvest import fade_front_edge, opposite_edge_price
 from .quality import swing_band_pos
 from .repairs import PMD_MIN, PMD_WINDOW, RNGQ_MAX, RNGQ_WINDOW
-from .strategy_v6 import RouteDecision, V6Params, V6Router
+from .routing import RouteDecision, RouterParams, MarketRouter
 from .structure import Regime
 
 # v19 §2 家族表(协议写死;与 campaign/repairs/v16_params 家族表硬对账)
@@ -99,8 +99,8 @@ class TieredParams:
 
 
 @dataclass(frozen=True)
-class V19Params(V6Params):
-    """v6 路由先验 + v19 阶梯配注层(默认 None ⇒ 逐位 V6Router 行为)。"""
+class V19Params(RouterParams):
+    """v6 路由先验 + v19 阶梯配注层(默认 None ⇒ 逐位 MarketRouter 行为)。"""
 
     tiered: Optional[TieredParams] = None
 
@@ -199,11 +199,11 @@ def evaluate_tiered(p: TieredParams, *, direction: int, entry_ref: float,
 
 
 # ---------------------------------------------------------------------------
-# 路由接线(V6Router 子类;tiered=None ⇒ 逐位同父类)
+# 路由接线(MarketRouter 子类;tiered=None ⇒ 逐位同父类)
 # ---------------------------------------------------------------------------
 
 
-class V19Router(V6Router):
+class V19Router(MarketRouter):
     """v19 阶梯配注的路由落点:父类决策 ⇒ (maker 臂 fade 前缘改单)⇒ 硬禁
     核 ⇒ 计档注记 ⇒ 结构锚 hyp 重建。
 
@@ -215,7 +215,7 @@ class V19Router(V6Router):
       款);hyp 重建 entry=entry_ref、invalid=结构锚、target_1=对面缘
       (fade;其余 None)、r_mult 重算;
     - 引擎在每决策前经 set_ctx18 注入 {"rngq","pmd","mic"}(读后即清;
-      tiered=None ⇒ 语境整层忽略,行为逐位 V6Router)。
+      tiered=None ⇒ 语境整层忽略,行为逐位 MarketRouter)。
     """
 
     def __init__(self, params: Optional[V19Params] = None) -> None:

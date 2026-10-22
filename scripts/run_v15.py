@@ -12,7 +12,7 @@ dev 主评 + test 一次。
 
 口径与纪律:
 - arm0 = 现 canonical(全部组件关),与 v14 同规双钉:① FROZEN_ERA 名单
-  (8 档,与 reports/backtest_v6_turtle.json 自述 config 一致)arm=None 探针
+  (8 档,与 reports/replay_turtle.json 自述 config 一致)arm=None 探针
   dev 三格须与冻结产物逐格全等(代码零回归硬断言);② arm0(现行 16 档)dev
   三格须与 reports/backtest_v13_cascade.json 在册 bar 臂逐格全等(Engine
   零回归硬断言)。不等即 raise,不写产物。
@@ -52,7 +52,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import run_backtest_v6 as rb                                     # noqa: E402
 import run_v14_arms as r14                                      # noqa: E402
-from market_operator.backtest_v6 import compute_metrics          # noqa: E402
+from market_operator.replay import compute_metrics          # noqa: E402
 from market_operator.bandside import (                           # noqa: E402
     BandSideParams,
     V15Params,
@@ -60,13 +60,13 @@ from market_operator.bandside import (                           # noqa: E402
 )
 from market_operator.broker import CONTRACTS_PATH                # noqa: E402
 from market_operator.campaign import ArmConfig, run_campaigns    # noqa: E402
-from market_operator.strategy_v6 import V6Params                 # noqa: E402
+from market_operator.routing import RouterParams                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
 from market_operator.research import block_bootstrap_ci          # noqa: E402
 
 CONFIG_V15 = ROOT / "config" / "v15.json"
 CONFIG_CANONICAL = ROOT / "config" / "canonical.json"
-FROZEN_TURTLE = ROOT / "reports" / "backtest_v6_turtle.json"
+FROZEN_TURTLE = ROOT / "reports" / "replay_turtle.json"
 FROZEN_V13 = ROOT / "reports" / "backtest_v13_cascade.json"
 REPORTS = ROOT / "reports"
 COST_MULTS = (1.0, 1.5, 2.0)
@@ -109,16 +109,16 @@ def load_config() -> dict:
     return v15
 
 
-def _v15_params(rp_base: V6Params, band) -> V15Params:
-    """canonical V6Params 逐项提升 + v15 带沿条款(合成臂路由参数)。"""
-    kw = {f: getattr(rp_base, f) for f in V6Params.__dataclass_fields__}
+def _v15_params(rp_base: RouterParams, band) -> V15Params:
+    """canonical RouterParams 逐项提升 + v15 带沿条款(合成臂路由参数)。"""
+    kw = {f: getattr(rp_base, f) for f in RouterParams.__dataclass_fields__}
     return V15Params(**kw, band_side=band)
 
 
 def build_arm(raw_cfg: dict, arm_id: str) -> tuple:
     """臂定义 → (band|None, router_factory, ArmConfig|None)。
 
-    arm0:(None, None, None)= plain V6Router + arm=None ⇒ 逐位 canonical;
+    arm0:(None, None, None)= plain MarketRouter + arm=None ⇒ 逐位 canonical;
     v15:V15Router(band_side 条款)+ ArmConfig(C2 仅 fade 家族,C3 续涨
     stop-entry,分层/配档/virtual 全关)。
     """
@@ -302,7 +302,7 @@ def main() -> None:
     if tf_list != ["1h", "2h", "4h", "12h", "1d"]:
         raise RuntimeError(f"config/v15.json tf_list 冻结: {tf_list}")
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
+    rp_base = RouterParams(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)
@@ -320,7 +320,7 @@ def main() -> None:
     frozen_turtle = json.loads(FROZEN_TURTLE.read_text(encoding="utf-8"))
     frozen_v13 = json.loads(FROZEN_V13.read_text(encoding="utf-8"))
 
-    # -- 锚①:FROZEN_ERA 名单(8 档)探针 == backtest_v6_turtle 冻结产物 ---------
+    # -- 锚①:FROZEN_ERA 名单(8 档)探针 == replay_turtle 冻结产物 ---------
     print("[anchor-1] 冻结时代名单探针(dev 三格;arm=None)", flush=True)
     rp_probe = dc_replace(rp_base, whitelist=frozenset(FROZEN_ERA_WHITELIST))
     probe = run_grid(frames, raw_cfg, params, rp_probe, None, None, contracts,
@@ -455,7 +455,7 @@ def main() -> None:
             "canonical_status": "arm0 = 现 canonical(v6 turtle 固化语义 × "
                                 "canonical.json 16 档语义路由);检测/收割/"
                                 "成本/容量/触发零改动。",
-            "parity_discipline": "双锚硬断言:FROZEN_ERA 探针 == backtest_v6_turtle "
+            "parity_discipline": "双锚硬断言:FROZEN_ERA 探针 == replay_turtle "
                                  "冻结产物逐格全等(代码零回归);arm0 == v13 在册 "
                                  "bar 臂逐格全等(engine 零回归)。不等即 raise, "
                                  "本报告不落地。",

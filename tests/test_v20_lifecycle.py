@@ -32,7 +32,7 @@ import sys
 import pandas as pd
 import pytest
 
-from market_operator.backtest_v6 import SymbolCognition
+from market_operator.replay import SymbolCognition
 from market_operator.broker import ContractSpec
 from market_operator.campaign import (
     ArmConfig,
@@ -56,7 +56,7 @@ from market_operator.position import (
     S2_LEVEL,
     PositionManager,
 )
-from market_operator.strategy_v6 import V6Params, ROUTE_LEVEL_REJECTED
+from market_operator.routing import RouterParams, ROUTE_LEVEL_REJECTED
 from market_operator.structure import (
     Params,
     Pivot,
@@ -111,13 +111,13 @@ def _view(zones=(), pivots=PIVOTS, regime=Regime.TRANSITION) -> StructureView:
 
 
 def _vp19(tp=None) -> V19Params:
-    kw = {f: getattr(V6Params(), f) for f in V6Params.__dataclass_fields__}
+    kw = {f: getattr(RouterParams(), f) for f in RouterParams.__dataclass_fields__}
     kw["whitelist"] = WL_ALL
     return V19Params(**kw, tiered=tp)
 
 
 def _vp20(lp=None, tp=None) -> V20Params:
-    kw = {f: getattr(V6Params(), f) for f in V6Params.__dataclass_fields__}
+    kw = {f: getattr(RouterParams(), f) for f in RouterParams.__dataclass_fields__}
     kw["whitelist"] = WL_ALL
     return V20Params(**kw, tiered=tp if tp is not None else TieredParams(),
                      v20=lp)

@@ -46,7 +46,7 @@ from market_operator.campaign import (                             # noqa: E402
     run_campaigns,
 )
 from market_operator.structure import Params                       # noqa: E402
-from market_operator.strategy_v6 import V6Params                   # noqa: E402
+from market_operator.routing import RouterParams                   # noqa: E402
 from market_operator.trigger import prepare_mic_cognition          # noqa: E402
 
 CONFIG = ROOT / "config" / "v21.json"
@@ -138,7 +138,7 @@ class Ctx:
 
         cfg = self.cfg
         wl = frozenset((str(e), int(d)) for e, d in cfg["whitelist"])
-        self.base_rp = V6Params(
+        self.base_rp = RouterParams(
             k_dq=float(cfg["k_dq"]), k_imp=float(cfg["k_imp"]),
             k_is=float(cfg["k_is"]),
             turtle_stop_atr=float(cfg["turtle_stop_atr"]),

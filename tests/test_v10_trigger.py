@@ -26,7 +26,7 @@ import json
 import pandas as pd
 import pytest
 
-from market_operator.backtest_v6 import SymbolCognition, prepare_cognition
+from market_operator.replay import SymbolCognition, prepare_cognition
 from market_operator.broker import ContractSpec
 from market_operator.campaign import (
     build_campaign_frame,

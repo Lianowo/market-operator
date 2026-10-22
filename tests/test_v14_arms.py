@@ -18,7 +18,7 @@ import json
 import pandas as pd
 import pytest
 
-from market_operator.backtest_v6 import SymbolCognition, compute_metrics
+from market_operator.replay import SymbolCognition, compute_metrics
 from market_operator.broker import ContractSpec
 from market_operator.campaign import (
     ArmConfig,
@@ -28,7 +28,7 @@ from market_operator.campaign import (
 from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.quality import QualityParams, V14Params, V14Router
-from market_operator.strategy_v6 import V6Params, V6Router
+from market_operator.routing import RouterParams, MarketRouter
 from market_operator.structure import (
     Params,
     Pivot,
@@ -52,7 +52,7 @@ KW = dict(segment="full", dev_frac=0.7, equity0=300.0, risk_frac=0.0075,
           n_fill=12, portfolio_cap_frac=0.03)
 WL16 = frozenset((e, d) for e in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED",
                                   "EDGE_RECLAIMED") for d in (-1, 1))
-RP16 = V6Params(whitelist=WL16)
+RP16 = RouterParams(whitelist=WL16)
 QPARAMS = QualityParams()
 VIEW_OK = StructureView(
     regime=Regime.TREND_DOWN,
@@ -147,7 +147,7 @@ def test_arm0_none_vs_default_armconfig_vs_v14router_bitwise():
     r_q_none = _run(frames, router_params=V14Params(), router_factory=V14Router)
     assert json.dumps(r_none.ledger) == json.dumps(r_q_none.ledger)
     assert r_none.counters == r_q_none.counters        # quality=None 短路逐位
-    r_v6 = _run(frames, router_params=V6Params(), router_factory=V6Router)
+    r_v6 = _run(frames, router_params=RouterParams(), router_factory=MarketRouter)
     assert json.dumps(r_none.ledger) == json.dumps(r_v6.ledger)
 
 

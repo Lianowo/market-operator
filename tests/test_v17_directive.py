@@ -28,7 +28,7 @@ import sys
 import pandas as pd
 import pytest
 
-from market_operator.backtest_v6 import SymbolCognition
+from market_operator.replay import SymbolCognition
 from market_operator.broker import Broker, ContractSpec, OrderIntent, OrderKind
 from market_operator.campaign import (
     ArmConfig,
@@ -41,7 +41,7 @@ from market_operator.campaign import (
 from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.harvest import HarvestParams, V16Params, V16Router
 from market_operator.hypothesis import StructureView
-from market_operator.strategy_v6 import V6Params
+from market_operator.routing import RouterParams
 from market_operator.structure import (
     Params,
     Pivot,
@@ -84,7 +84,7 @@ WL_ALL = frozenset((eid, d) for eid in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", 
 
 
 def _vp16() -> V16Params:
-    kw = {f: getattr(V6Params(), f) for f in V6Params.__dataclass_fields__}
+    kw = {f: getattr(RouterParams(), f) for f in RouterParams.__dataclass_fields__}
     kw["whitelist"] = WL_ALL
     return V16Params(**kw, v16=HarvestParams())
 

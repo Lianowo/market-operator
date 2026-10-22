@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from market_operator.backtest_v6 import prepare_cognition          # noqa: E402
+from market_operator.replay import prepare_cognition          # noqa: E402
 from market_operator.bitget_live import BitgetLiveClient, BitgetError  # noqa: E402
 from market_operator.secrets_loader import load_secrets            # noqa: E402
 from market_operator.structure import Params                        # noqa: E402

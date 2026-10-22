@@ -9,9 +9,9 @@ from market_operator.events import (
     ACCEPT, BREAKOUT_ACCEPTED, LEVEL_REJECTED, REJECT, EventDetector, MarketEvent, canonical_event_id,
 )
 from market_operator.hypothesis import StructureView
-from market_operator.strategy_v6 import (
+from market_operator.routing import (
     ROUTE_BREAKOUT_ACCEPTED, ROUTE_BREAKOUT_ACCEPTED, ROUTE_LEVEL_REJECTED, ROUTE_LEVEL_REJECTED, WHITELIST_BALANCE,
-    V6Params, V6Router,
+    RouterParams, MarketRouter,
 )
 from market_operator.structure import (
     MarketStructure, Params, Regime, Zone, ZoneRole, ZoneState,
@@ -27,7 +27,7 @@ def test_accept_reject_aliases_and_routing():
     assert ROUTE_LEVEL_REJECTED == ROUTE_LEVEL_REJECTED
 
     wl = frozenset({(ACCEPT, 1), (ACCEPT, -1), (REJECT, 1), (REJECT, -1)})
-    router = V6Router(V6Params(whitelist=wl))
+    router = MarketRouter(RouterParams(whitelist=wl))
     z = Zone(lo=98.0, hi=100.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
              touches=3, origin_known=1, last_change_known=5,
              box_opposite=90.0, box_quality=0.55, box_width_atr=5.0, box_rotations=3)
@@ -56,7 +56,7 @@ def test_accept_reject_aliases_and_routing():
 
 def test_restraint_gates_rotations_and_quality():
     wl = WHITELIST_BALANCE
-    router = V6Router(V6Params(whitelist=wl, min_box_rotations=3, min_box_quality=0.50))
+    router = MarketRouter(RouterParams(whitelist=wl, min_box_rotations=3, min_box_quality=0.50))
     z_weak = Zone(lo=98.0, hi=100.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
                   touches=2, origin_known=1, last_change_known=5,
                   box_opposite=92.0, box_quality=0.45, box_width_atr=3.0, box_rotations=2)

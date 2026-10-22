@@ -4,18 +4,18 @@
 用法:  python scripts/run_backtest_v6.py
 配置:  config/canonical.json(v6 turtle 语义固化的当前生产配置;父配置
        config/v6.json 冻结不改)
-产物:  reports/backtest_v6_turtle.json / backtest_v6_turtle.md
+产物:  reports/replay_turtle.json / replay_turtle.md
        reports/trades_v6_turtle_{seg}[_cost1_5,_cost2_0].csv
        reports/equity_v6_turtle_{seg}[_cost1_5,_cost2_0].csv
 
 语义地位(规范链唯一回放入口):
-- A/B 二臂判选已终局(docs/v6-protocol.md §2-S2;reports/backtest_v6.json/.md
+- A/B 二臂判选已终局(docs/v6-protocol.md §2-S2;reports/replay.json/.md
   冻结产物:两臂 dev@1.5x 净期望均 ≤ 0,按冻结规则取 t 统计较好的臂 B,
   如实声明非转正证据)。臂 B(turtle)自此固化为唯一策略语义:无固定目标,
   初始防线 turtle_stop_atr·atr(2.0),trailing 只紧不松,§8.6 时间止损
   关闭,减仓后 breakeven 允许(臂 A 的禁保本约束随臂 A 一并退役);F1
   (k_is=0.8)闸保留。历史双臂版本:research/rounds/v6/(可复现 A/B 判定,
-  产物 reports/backtest_v6.json/.md 保持冻结,本脚本不再写入)。
+  产物 reports/replay.json/.md 保持冻结,本脚本不再写入)。
 - test 段纪律:v6 轮已消耗 test 唯一一次评估曝光(research-log #12 终生
   声明)。本脚本为规范链现状度量/复现入口,不再做任何"判选/转正判定";
   样本量与升级线数字按同一冻结口径如实测量填报,不产生新协议判定。
@@ -54,7 +54,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import aggregate as agg                     # noqa: E402
 from market_operator import data as mo_data                      # noqa: E402
-from market_operator.backtest_v6 import (                        # noqa: E402
+from market_operator.replay import (                        # noqa: E402
     alignment_issues_ci,
     compute_metrics,
     prepare_cognition,
@@ -69,7 +69,7 @@ from market_operator.events import (                             # noqa: E402
     BREAKOUT_ACCEPTED, FLIP_RETESTED, STRUCTURE_BROKEN,
 )
 from market_operator.research import block_bootstrap_ci          # noqa: E402
-from market_operator.strategy_v6 import V6Params                 # noqa: E402
+from market_operator.routing import RouterParams                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
 
 CONFIG_CANONICAL = ROOT / "config" / "canonical.json"
@@ -476,7 +476,7 @@ def main() -> None:
     if raw_cfg["entry_mode"] != "quality_routed":
         raise RuntimeError("config/canonical.json entry_mode must be quality_routed")
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
+    rp_base = RouterParams(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)
@@ -608,7 +608,7 @@ def main() -> None:
             "meta": raw_cfg["meta"],
             "canonical_status": "turtle(原臂 B)固化为唯一策略语义;arm 切换与臂 A "
                                 "clamp2R 实现已移除;双臂归档 research/rounds/v6/",
-            "arm_selection_history": "reports/backtest_v6.json:arm_selection"
+            "arm_selection_history": "reports/replay.json:arm_selection"
                                      "(两臂 dev@1.5x 均 ≤ 0,取 t 统计较好者;非转正证据)",
             "test_eval_declaration": "test 段曝光纪律:第 10 次曝光(v6 唯一一次)已于 "
                                      "v6 轮消耗(research-log #12 终生声明);本运行"
@@ -667,10 +667,10 @@ def main() -> None:
         payload["runs"][f"{SEMANTICS}|{seg}@{mult}x"] = {"metrics": m,
                                                          "trades": res.trades}
 
-    (REPORTS / "backtest_v6_turtle.json").write_text(
+    (REPORTS / "replay_turtle.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-    (REPORTS / "backtest_v6_turtle.md").write_text(render_md(payload), encoding="utf-8")
-    print(f"-> reports/backtest_v6_turtle.json/.md, "
+    (REPORTS / "replay_turtle.md").write_text(render_md(payload), encoding="utf-8")
+    print(f"-> reports/replay_turtle.json/.md, "
           f"trades_v6_turtle/equity_v6_turtle CSVs "
           f"(total {time.time() - t_start:.0f}s)", flush=True)
 
@@ -732,7 +732,7 @@ def render_md(payload: dict) -> str:
         "- 语义:turtle(v6 臂 B)固化为唯一策略语义 —— 无固定目标,初始防线 "
         f"{cfg['turtle_stop_atr']}·atr,trailing 只紧不松,关 §8.6 时间止损;"
         f"F1 k_is={cfg['k_is']} 闸保留。A/B 判选历史(两臂 dev@1.5x 均 ≤ 0,"
-        "按冻结规则取臂 B,非转正证据)见 reports/backtest_v6.json/.md;双臂"
+        "按冻结规则取臂 B,非转正证据)见 reports/replay.json/.md;双臂"
         "实现与协议 A/B 原文保留于 research/rounds/v6/ 与 docs/v6-protocol.md。",
         "- 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役,隔离互不知晓;"
         f"共享权益 + 组合容量 {cfg['portfolio_cap_frac']}(最坏情景 FIFO 跳过,"
@@ -848,10 +848,10 @@ def render_md(payload: dict) -> str:
               "(无仓/无目标 ⇒ 市价,如机制设计);⑧ 决策时刻容量检查为预算口径,"
               "不含资金费;强弱路由质量量(impulse/margin)以认知 TF bar 度量。",
               "",
-              "机器可读全量:`reports/backtest_v6_turtle.json`;逐笔:"
+              "机器可读全量:`reports/replay_turtle.json`;逐笔:"
               "`reports/trades_v6_turtle_*.csv`(增列 campaign/tf/arm/route/"
               "mfe_r/giveback_r);逐执行细 bar 权益:`reports/equity_v6_turtle_*.csv`。",
-              "历史 A/B 全网格:`reports/backtest_v6.json/.md`(冻结,本脚本不再写入)。",
+              "历史 A/B 全网格:`reports/replay.json/.md`(冻结,本脚本不再写入)。",
               ""]
     return "\n".join(lines)
 

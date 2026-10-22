@@ -12,12 +12,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import run_backtest_v6 as rb                                  # noqa: E402
 from market_operator import aggregate as agg                  # noqa: E402
 from market_operator import data as mo_data                   # noqa: E402
-from market_operator.backtest_v6 import prepare_cognition     # noqa: E402
+from market_operator.replay import prepare_cognition     # noqa: E402
 from market_operator.campaign import (                        # noqa: E402
     build_campaign_frame,
     run_campaigns,
 )
-from market_operator.strategy_v6 import V6Params              # noqa: E402
+from market_operator.routing import RouterParams              # noqa: E402
 from market_operator.structure import Params                  # noqa: E402
 from market_operator.trigger import prepare_mic_cognition     # noqa: E402
 
@@ -78,7 +78,7 @@ def eval_run(label, frames, raw, contracts, params, eids=("BREAKOUT_ACCEPTED", "
                  k_bm=float(raw["k_bm"]), whitelist=wl)
     if rp_override:
         rp_kw.update(rp_override)
-    base_rp = V6Params(**rp_kw)
+    base_rp = RouterParams(**rp_kw)
     rp_by_tf = None
     if rp_by_tf_override:
         rp_by_tf = {tf_k: dc_replace(base_rp, **ovr) for tf_k, ovr in rp_by_tf_override.items()}

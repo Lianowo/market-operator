@@ -12,7 +12,7 @@
 
 口径与纪律:
 - 两臂同台:bar 臂 = enable_mic=False 走同一批(挂载 mic 认知的)战役帧 ⇒
-  与 canonical 规范链产物 reports/backtest_v6_turtle.json(臂 B 冻结产物)
+  与 canonical 规范链产物 reports/replay_turtle.json(臂 B 冻结产物)
   逐格全等 —— 硬断言,不等即 raise(parity 锚);mic 臂 = enable_mic=True,
   同一战略/收割/费用/容量,唯一差异 = 事件知时与成交细化到 trigger 帧
   (协议 §A:N_a_mic=N_a×scale,N_f_mic=N_f×scale,阈值=认知帧 ATR)。
@@ -26,7 +26,7 @@
   (n≥60 且 test 净期望@1.5x>0 且 test PF@2x>1 ⇒ PAPER_CANDIDATE,否则
   RESEARCH_ONLY),如实填报,不产生额外叙述。
 - 5m:仅 dev 段敏感性(data/raw/{sym}_5m.csv 缺失 ⇒ 如实记 not_evaluated)。
-- 合约规格强制离线缓存;freeze:历史产物(reports/backtest_v6_turtle.* 等)
+- 合约规格强制离线缓存;freeze:历史产物(reports/replay_turtle.* 等)
   只读比对,不覆写。
 """
 
@@ -50,7 +50,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import run_backtest_v6 as rb                                     # noqa: E402
 from market_operator import aggregate as agg                     # noqa: E402
 from market_operator import data as mo_data                      # noqa: E402
-from market_operator.backtest_v6 import (                        # noqa: E402
+from market_operator.replay import (                        # noqa: E402
     alignment_issues_ci,
     compute_metrics,
     prepare_cognition,
@@ -61,12 +61,12 @@ from market_operator.campaign import (                           # noqa: E402
 )
 from market_operator.broker import CONTRACTS_PATH                # noqa: E402
 from market_operator.research import block_bootstrap_ci          # noqa: E402
-from market_operator.strategy_v6 import V6Params                 # noqa: E402
+from market_operator.routing import RouterParams                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
 from market_operator.trigger import prepare_mic_cognition        # noqa: E402
 
 CONFIG_V10 = ROOT / "config" / "v10.json"
-FROZEN_TURTLE = ROOT / "reports" / "backtest_v6_turtle.json"
+FROZEN_TURTLE = ROOT / "reports" / "replay_turtle.json"
 REPORTS = ROOT / "reports"
 SEGMENTS = ("full", "dev", "test")
 COST_MULTS = (1.0, 1.5, 2.0)
@@ -308,7 +308,7 @@ def trades_frame_v10(trades: list) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def run_grid(frames: dict, raw_cfg: dict, params: Params, rp_base: V6Params,
+def run_grid(frames: dict, raw_cfg: dict, params: Params, rp_base: RouterParams,
              contracts: dict, *, enable_mic: bool, segments=SEGMENTS) -> dict:
     broker_kw = dict(dev_frac=float(raw_cfg["dev_frac"]), equity0=300.0,
                      risk_frac=float(raw_cfg["risk_frac"]),
@@ -376,7 +376,7 @@ def main() -> None:
     if float(raw_cfg.get("merge_max_atr", 0.0)) != 2.0:
         raise RuntimeError("v10 parent=canonical:merge_max_atr 必须 2.0")
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
-    rp_base = V6Params(k_dq=float(raw_cfg["k_dq"]),
+    rp_base = RouterParams(k_dq=float(raw_cfg["k_dq"]),
                        k_imp=float(raw_cfg["k_imp"]), k_is=float(raw_cfg["k_is"]),
                        turtle_stop_atr=float(raw_cfg["turtle_stop_atr"]),
                        k_bm=float(raw_cfg["k_bm"]), whitelist=whitelist)
@@ -473,7 +473,7 @@ def main() -> None:
         },
         "dev_1_5x_vs_frozen_armB": {
             "mic15m": cell(res_mic, "dev", 1.5),
-            "frozen(backtest_v6_turtle)": cell(
+            "frozen(replay_turtle)": cell(
                 {("dev", 1.5): (None, frozen["runs"]["turtle|dev@1.5x"]["metrics"])},
                 "dev", 1.5),
             "delta_net": res_mic[("dev", 1.5)][1]["net_pnl"]
@@ -632,7 +632,7 @@ def render_md(payload: dict) -> str:
         f"- **{payload['protocol']['test_eval_declaration']}**",
         f"- 检测器不变式:{payload['protocol']['e1_e8_detector_invariant']}",
         "- 两臂同台:bar 臂(enable_mic=False)与 canonical 规范链产物 "
-        "reports/backtest_v6_turtle.json 逐格**全等**(硬断言已过);mic 臂与其"
+        "reports/replay_turtle.json 逐格**全等**(硬断言已过);mic 臂与其"
         "余唯一差异 = 事件知时/成交细化。",
         f"- 合约:{payload['contracts']['source']}(离线强制)。",
         "",
@@ -679,12 +679,12 @@ def render_md(payload: dict) -> str:
               f"| {_f(c['mic15m']['profit_factor'])} "
               f"| {_f(c['mic15m']['expectancy_usdt'], 4)} "
               f"| {_f(c['mic15m']['expectancy_r'], 4)} |",
-              f"| frozen backtest_v6_turtle | {_f(c['frozen(backtest_v6_turtle)']['net_pnl'])} "
-              f"| {c['frozen(backtest_v6_turtle)']['n_trades']} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['winrate'], 3)} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['profit_factor'])} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['expectancy_usdt'], 4)} "
-              f"| {_f(c['frozen(backtest_v6_turtle)']['expectancy_r'], 4)} |",
+              f"| frozen replay_turtle | {_f(c['frozen(replay_turtle)']['net_pnl'])} "
+              f"| {c['frozen(replay_turtle)']['n_trades']} "
+              f"| {_f(c['frozen(replay_turtle)']['winrate'], 3)} "
+              f"| {_f(c['frozen(replay_turtle)']['profit_factor'])} "
+              f"| {_f(c['frozen(replay_turtle)']['expectancy_usdt'], 4)} "
+              f"| {_f(c['frozen(replay_turtle)']['expectancy_r'], 4)} |",
               f"| **Δ(mic−frozen)** | **{_f(c['delta_net'])}** | — | — | — | — | — |",
               "",
               f"> {adj['interpretation_note']}",

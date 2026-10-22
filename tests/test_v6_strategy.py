@@ -5,17 +5,17 @@ r_mult=None,不做 room/r_min 门);F1 闸;双向 episode 关联(WEAK-STRUCTURE_B
 ⇒ 同 episode 同向 FLIP_RETESTED 前缘限价,方向错位不匹配,消费一次)。
 历史 A/B 对照:臂 A clamp2R(S1 区缘失效/room 门/2R 钳制/未知臂拒)与
 完整双臂测试套件保留于 research/rounds/v6/tests/test_v6_strategy.py,对
-归档双臂实现(research/rounds/v6/strategy_v6.py)运行。
+归档双臂实现(research/rounds/v6/routing.py)运行。
 """
 
 from __future__ import annotations
 
 from market_operator.events import STRUCTURE_BROKEN, FLIP_RETESTED, MarketEvent
 from market_operator.hypothesis import StructureView
-from market_operator.strategy_v6 import (
+from market_operator.routing import (
     ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT,
-    V6Params,
-    V6Router,
+    RouterParams,
+    MarketRouter,
 )
 from market_operator.structure import Regime, Zone, ZoneRole, ZoneState
 
@@ -62,7 +62,7 @@ def _bar(close, hour=5, hi_pad=3.0, lo_pad=3.0, o=None):
 
 
 def _router(**over):
-    return V6Router(V6Params(**over))
+    return MarketRouter(RouterParams(**over))
 
 
 # ---------------------------------------------------------------------------

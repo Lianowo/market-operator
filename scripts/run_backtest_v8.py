@@ -7,7 +7,7 @@
 产物:  reports/backtest_v8.json / backtest_v8.md
        reports/trades_v8_{seg}[_cost1_5,_cost2_0].csv
        reports/equity_v8_{seg}[_cost1_5,_cost2_0].csv
-(canonical 冻结产物 reports/backtest_v6_turtle.* 与 trades_v6_turtle_* 一律只读,
+(canonical 冻结产物 reports/replay_turtle.* 与 trades_v6_turtle_* 一律只读,
 对照桶直接读它们拼表,不重跑 —— 协议§2"A/B 位置语义对照"的操作化。)
 
 语义地位(v8 研究轮,非规范链转正):
@@ -61,7 +61,7 @@ from run_backtest_v6 import (                                # noqa: E402
 )
 from market_operator import aggregate as agg                # noqa: E402
 from market_operator import data as mo_data                 # noqa: E402
-from market_operator.backtest_v6 import (                   # noqa: E402
+from market_operator.replay import (                   # noqa: E402
     alignment_issues_ci,
     compute_metrics,
     prepare_cognition,

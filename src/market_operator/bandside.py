@@ -11,7 +11,7 @@ size_mult/杠杆/容量;拒单以 reason 记录于 router notes/counters
 拒(同 quality.py Q1/EDGE_RECLAIMED 纪律)。
 
 确定性:纯函数 `band_side_check` + 无状态条款;`V15Router` 在
-band_side=None 时逐位同 `V6Router`(条款短路不回读,arm0 回归钉死)。
+band_side=None 时逐位同 `MarketRouter`(条款短路不回读,arm0 回归钉死)。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from .quality import swing_band_pos
-from .strategy_v6 import V6Params, V6Router
+from .routing import RouterParams, MarketRouter
 
 
 # ---------------------------------------------------------------------------
@@ -48,24 +48,24 @@ def band_side_check(p: BandSideParams, *, direction: int, entry_ref: float,
 
 
 # ---------------------------------------------------------------------------
-# 路由接线(V6Router 子类;band_side=None ⇒ 逐位同父类)
+# 路由接线(MarketRouter 子类;band_side=None ⇒ 逐位同父类)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class V15Params(V6Params):
-    """v6 路由先验 + v15 带沿条款(默认 None ⇒ 逐位 V6Router 行为)。"""
+class V15Params(RouterParams):
+    """v6 路由先验 + v15 带沿条款(默认 None ⇒ 逐位 MarketRouter 行为)。"""
 
     band_side: Optional[BandSideParams] = None
 
 
-class V15Router(V6Router):
+class V15Router(MarketRouter):
     """带沿条款的路由落点:父类产出决策 ⇒ 带沿评估 ⇒ 拒单/注记。
 
     - 拒单(错半边或门不可判):决策丢弃,counters 记 band_side_reject_pos,
       notes 记 pos 与事件(协议:"否拒并以 reason 记录",同 v14 C1 纪律);
     - 过单:meta 附 band_pos(溯源列,不上数值路径:不配档/不动量);
-    - band_side=None(arm0):短路返回父类决策,逐位 V6Router 行为。
+    - band_side=None(arm0):短路返回父类决策,逐位 MarketRouter 行为。
     """
 
     def on_bar(self, symbol: str, bar, bar_index: int, view, atr: float,

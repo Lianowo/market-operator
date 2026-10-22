@@ -61,7 +61,7 @@ from market_operator.position import Position, PositionManager  # noqa: E402
 from market_operator.repairs import (                           # noqa: E402
     prior_moves_delta, range_quantile)
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
-from market_operator.strategy_v6 import V6Params, V6Router      # noqa: E402
+from market_operator.routing import RouterParams, MarketRouter      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
 from market_operator.tg import TelegramNotifier                 # noqa: E402
 from market_operator.tiered import TieredParams                 # noqa: E402
@@ -96,7 +96,7 @@ def load_v21_params(cfg_path: Path = CONFIG_V21) -> tuple:
         whitelist=whitelist,
     )
     rp_extra = raw.get("router_params") or {}
-    base_rp = dc_replace(V6Params(**base_kw), **rp_extra)
+    base_rp = dc_replace(RouterParams(**base_kw), **rp_extra)
     rp_by_tf = {}
     for tf, tf_ov in (raw.get("router_params_by_tf") or {}).items():
         clean_ov = {("zone_cooldown_bars" if k == "min_zone_cooldown_bars" else k): v
@@ -727,7 +727,7 @@ class LiveRunner:
             obs_tf_seconds=obs_s, trigger_tf_seconds=trig_s)
         if self.engine_version == "v21":
             rp_tf = self.rp_by_tf.get(tf_label, self.rp)
-            router = V6Router(rp_tf)
+            router = MarketRouter(rp_tf)
             pm = new_position_manager(self.params, self.raw_strat)
         else:
             router = V20Router(self.rp)
@@ -1183,7 +1183,7 @@ class LiveRunner:
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
                     *, mic: bool) -> None:
-        """canonical 决策:支持 v20(ctx18)与 v21(V6Router) → 路由 → 意图。"""
+        """canonical 决策:支持 v20(ctx18)与 v21(MarketRouter) → 路由 → 意图。"""
         sym = cs.symbol
         if mic:
             rngq_bars, ri = cs.trig_bars, len(cs.trig_bars) - 1
