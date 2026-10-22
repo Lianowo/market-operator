@@ -1,4 +1,4 @@
-"""E2/E3/E4 退役家族解剖台(研究层,不改变执行白名单)。
+"""BREAKOUT_FAILED/LEVEL_REJECTED/TREND_RESUMED 退役家族解剖台(研究层,不改变执行白名单)。
 理论先行的维度(regime对齐/位置带/空间),对 H=24 事件级产物做切片。
 用法: python -X utf8 scripts/autopsy_e234.py
 """
@@ -9,7 +9,7 @@ from market_operator.structure import MarketStructure, Params
 P = Params.from_json("config/defaults.json")
 df = pd.concat([pd.read_csv("reports/event_study_events_dev.csv"),
                 pd.read_csv("reports/event_study_events_test.csv")])
-q = df[(df.H == 24) & (df.event_id.isin(["E2","E3","E4"]))].copy()
+q = df[(df.H == 24) & (df.event_id.isin(["BREAKOUT_FAILED","LEVEL_REJECTED","TREND_RESUMED"]))].copy()
 bands = {}
 for s in q.symbol.unique():
     d = pd.read_csv(f"data/raw/{s}_1h.csv"); ms = MarketStructure(P); snap = []
@@ -25,7 +25,7 @@ align = {"TREND_DOWN": -1, "TREND_UP": 1}
 q["aligned"] = q.apply(lambda r: align.get(r.regime) == r.direction, axis=1)
 def stat(g):
     return pd.Series(dict(n=len(g), net=g.net_atr_1_0.mean(), incr=g.incr_atr_1_0.mean())).round(3)
-for ev in ["E2","E3","E4"]:
+for ev in ["BREAKOUT_FAILED","LEVEL_REJECTED","TREND_RESUMED"]:
     e = q[q.event_id == ev]
     print(f"== {ev} n={len(e)} 全体 net={e.net_atr_1_0.mean():.3f} incr={e.incr_atr_1_0.mean():.3f}")
     print(e.groupby(["direction","aligned"]).apply(stat, include_groups=False).unstack())

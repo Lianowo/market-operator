@@ -1,5 +1,5 @@
 """v20 收尾:S1 结构脉冲激活 trail / S2 fade 双格收割 / S3 TRANSITION fade 禁
-/ S4 E3 归 maker 统一回测(任务书 v20/lifecycle,2026-10-20 核准语义;直接
+/ S4 LEVEL_REJECTED 归 maker 统一回测(任务书 v20/lifecycle,2026-10-20 核准语义;直接
 提交,不推不合)。基线 = arm-T(v19 arm-T 逐位:tier_sizing + market 默认 +
 8% cap,early_exit 关)。
 
@@ -73,7 +73,7 @@ from market_operator.campaign import (                           # noqa: E402
 )
 from market_operator.harvest import V16Params                   # noqa: E402
 from market_operator.lifecycle import (                         # noqa: E402
-    ROUTE_E3_MAKER,
+    ROUTE_LEVEL_REJECTED_MAKER,
     LifecycleParams,
     V20Params,
     V20Router,
@@ -201,7 +201,7 @@ def load_config() -> dict:
 
 def _tiered_of(raw_cfg: dict) -> TieredParams:
     """全臂同一 v19 配注先验(arm-T 基线;无 maker 臂 ⇒ fade_front_edge 恒
-    False,S4 只经 lifecycle 钩对 E3 生效)。"""
+    False,S4 只经 lifecycle 钩对 LEVEL_REJECTED 生效)。"""
     p19 = {k: v for k, v in raw_cfg["v19_params"].items() if k != "note"}
     return TieredParams(
         **{k: p19[k] for k in ("pos_short_min", "pos_long_max", "k_room_R",
@@ -311,7 +311,7 @@ def run_grid(frames: dict, raw_cfg: dict, params: Params, rp, factory, arm,
 
 
 def augment_trades_v20(trades: list, frames: dict, ledger: list) -> list:
-    """rv19.augment_trades_v19 + v20 增量:limit_from(S4 E3 前缘改单印记;
+    """rv19.augment_trades_v19 + v20 增量:limit_from(S4 LEVEL_REJECTED 前缘改单印记;
     e3_front_maker 路由重贴在 route 列)与 s2_partial(任一段落袋 reason
     带 "v16|target_partial|S2|";死桶回补分析用)。均溯源列,不上数值路径。
     """
@@ -604,7 +604,7 @@ def main() -> None:
         "s2_isolation": {**dv("arm-S2"),
                          "reading": "S2 fade 双格收割孤立差(arm-S2 − arm-T)"},
         "s4_isolation": {**dv("arm-S4"),
-                         "reading": "S4 E3 归 maker 孤立差(arm-S4 − arm-T)"},
+                         "reading": "S4 LEVEL_REJECTED 归 maker 孤立差(arm-S4 − arm-T)"},
     }
     net_full = m_of("arm-full", "dev", JUDGE_COST)["net_pnl"]
     net_t = m_of("arm-T", "dev", JUDGE_COST)["net_pnl"]
@@ -685,16 +685,16 @@ def main() -> None:
         "s4_route_audit": {
             "e3_market_route_trades_arm_S4": sum(
                 1 for t in grids["arm-S4"]["dev"][JUDGE_COST][0].trades
-                if t.get("route") == "e3_market"),
+                if t.get("route") == "level_rejected_market"),
             "e3_front_maker_route_trades_arm_S4": sum(
                 1 for t in grids["arm-S4"]["dev"][JUDGE_COST][0].trades
-                if t.get("route") == ROUTE_E3_MAKER),
+                if t.get("route") == ROUTE_LEVEL_REJECTED_MAKER),
             "e3_market_route_trades_arm_full": sum(
                 1 for t in grids["arm-full"]["dev"][JUDGE_COST][0].trades
-                if t.get("route") == "e3_market"),
+                if t.get("route") == "level_rejected_market"),
             "e3_front_maker_route_trades_arm_full": sum(
                 1 for t in grids["arm-full"]["dev"][JUDGE_COST][0].trades
-                if t.get("route") == ROUTE_E3_MAKER),
+                if t.get("route") == ROUTE_LEVEL_REJECTED_MAKER),
         },
     }
 
@@ -747,12 +747,12 @@ def main() -> None:
         "protocol": {
             "doc": "任务书 v20 收尾 S1-S4 + 统一回测(2026-10-20 核准语义)",
             "pre_registration": "任务书预声明(直接提交 v20/lifecycle,不推不合)",
-            "owner_rulings": ("核准语义(冻结,不谈判):S1 cont 家族与 E4 的 trail "
+            "owner_rulings": ("核准语义(冻结,不谈判):S1 cont 家族与 TREND_RESUMED 的 trail "
                               "扶手只在 MFE≥1R 或新确认顺向 pivot 之后上线,此前只许"
                               "破位/CHoCH/到目标出,上线后只紧不松,桶标签 "
                               "trail_armed/trail_pending;S2 fade 收割双格=缘前 25%"
                               " 落袋 40% 仓、缘收剩 60%(不是 R4 三段);S3 fade 仅非 "
-                              "TRANSITION regime 受理(v18 已证,无独立臂);S4 E3 归 "
+                              "TRANSITION regime 受理(v18 已证,无独立臂);S4 LEVEL_REJECTED 归 "
                               "maker(前缘限价语义回归,e3_market 路由下线)"),
             "arms": {a: raw_cfg["arms"][a]["note"] for a in ARM_IDS},
             "parity_discipline": ("四锚硬断言:FROZEN_ERA 探针(cap 0.03)== v6 冻结"
@@ -773,7 +773,7 @@ def main() -> None:
             "honesty_note": ("全臂 early_exit=False(v19 arm-T 基线,孤立组件差;"
                              "夭折不混入);S3 为事件层抑制 —— TRANSITION fade 候选"
                              "不存在,v19 软条款 transition_fade 自然不再命中(S3 "
-                             "开臂内),如实声明;S4 E3 走 canonical 限价主路(=E7 "
+                             "开臂内),如实声明;S4 LEVEL_REJECTED 走 canonical 限价主路(=FLIP_RETESTED "
                              "G3 同通道:严格穿过 maker 成交、maker 费、N_fill=12 "
                              "墙钟窗),F1/空间按计划限价计量(改单在配注评估之前,"
                              "因果序同 v19 maker 臂);e3_market 仅在 S4 开臂内下"
@@ -781,7 +781,7 @@ def main() -> None:
                              "顺向 pivot=多 pivot high 新高/空 pivot low 新低"
                              "(脉冲向结构确认,与 §8.3 收紧消费的逆向 pivot "
                              "互补;同种则闸退化 no-op,已实证钉死),上线后逆"
-                             "向 pivot 起只紧不松;扶手族外(E5)与 fade 收割"
+                             "向 pivot 起只紧不松;扶手族外(RANGE_ROTATED)与 fade 收割"
                              "模式不受 S1;组合容量决策账未乘档(照 v19 声明);"
                              "检测/费用/杠杆/单笔风险/历史产物/research-log 零改"
                              "动;不渲染任何转正叙述。"),
@@ -897,7 +897,7 @@ def render_md(payload: dict, grids: dict, attr: dict, test_arms: tuple,
     J = JUDGE_COST
     lines = [
         "# v20 收尾:S1 扶手激活 trail / S2 fade 双格收割 / S3 TRANSITION fade 禁"
-        " / S4 E3 归 maker 统一回测报告(判定表首页=期望矩阵;dev 主评 + test "
+        " / S4 LEVEL_REJECTED 归 maker 统一回测报告(判定表首页=期望矩阵;dev 主评 + test "
         "一次)", "",
         f"生成时间(UTC):{payload['generated_at_utc']}",
         "",
@@ -1082,7 +1082,7 @@ def render_md(payload: dict, grids: dict, attr: dict, test_arms: tuple,
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in TF_LIST:
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)
@@ -1103,16 +1103,16 @@ def render_md(payload: dict, grids: dict, attr: dict, test_arms: tuple,
               "抑制(候选不存在语义):arm-full 内 TRANSITION fade 不产生 v19 "
               "配注评估与 open_intent,计数单列 v20_s3_fade_transition_"
               "suppressed;S3 无独立臂(v18 R3 已证 §2),裁决表只给 full 残差"
-              ",不给 S3 打包喜报;③ S4 只对 E3:前缘改单在配注评估之前(计"
-              "划限价计 F1/空间),执行落 canonical 限价主路(=E7 G3 同通道:"
-              "严格穿过 maker 成交、maker 费 0.2bp、N_fill=12 墙钟窗、E1 优"
+              ",不给 S3 打包喜报;③ S4 只对 LEVEL_REJECTED:前缘改单在配注评估之前(计"
+              "划限价计 F1/空间),执行落 canonical 限价主路(=FLIP_RETESTED G3 同通道:"
+              "严格穿过 maker 成交、maker 费 0.2bp、N_fill=12 墙钟窗、BREAKOUT_ACCEPTED 优"
               "先级撤单/平仓撤销同一套);e3_market 仅在 S4 开臂内下线,arm-T/"
               "S1/S2 照旧;e3 缺 zone ⇒ fail-closed(v19_tier_reject_no_zone"
               " 沿链);④ S1 恰界与口径:MFE 恰 1R inclusive 上线;顺向 pivot"
               " = 多 pivot high 新高/空 pivot low 新低(脉冲向结构确认,与"
               " §8.3 收紧消费的逆向 pivot 互补;同种则闸退化 no-op,已实证"
               "钉死),上线后(含上线同批)首个逆向 pivot 起收紧;扶手族 = "
-              "E1/E6/E7/E4(E5 与 "
+              "BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED/TREND_RESUMED(RANGE_ROTATED 与 "
               "fade 收割模式不受 S1 闸);trail_pending/trail_armed 桶标签只在"
               "扶手族 §8.1 出场替换 trail/invalid,破位谓词本身不受限;⑤ S2 "
               "与 R4 互斥(同栈 raise,死亡名单不回锅);S2 段落袋 40% 以 OPEN"

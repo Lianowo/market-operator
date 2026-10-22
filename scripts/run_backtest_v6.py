@@ -22,13 +22,13 @@
 - 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役,隔离互不知晓;
   共享 equity + 组合容量 3%(最坏情景,按信号时间 FIFO 整笔跳过并记
   PORTFOLIO_CAP;成交时刻由 PR#9 已修 broker 口径第二层钳制,如实声明)。
-- 路由 = v5 质量路由(E1 市价优先 / E6 STRONG 市价 WEAK=E7 前缘限价)双向。
+- 路由 = v5 质量路由(BREAKOUT_ACCEPTED 市价优先 / STRUCTURE_BROKEN STRONG 市价 WEAK=FLIP_RETESTED 前缘限价)双向。
 - 执行路径:TF=1h → 15m;TF ≥ 2h → 1h(认知 bar 区间 [t,t+TF) 由细帧 bar
   无洞组成,对齐断言,违即 raise)。
 - 对账硬约束(任一不符即 raise):15m↔1h(v4 同契约)+ 1h↔TF compaction
-  OHLC 逐格一致;E7 发射/过 F1 计数(1h 战役)== reports/backtest_v2.json
-  冻结产物;E1+E6|short(1h 全历史)== reports/backtest.json(v1)go_events
-  (v1 parity 锚点);各 (symbol, TF≠1h) E7 计数 ==
+  OHLC 逐格一致;FLIP_RETESTED 发射/过 F1 计数(1h 战役)== reports/backtest_v2.json
+  冻结产物;BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short(1h 全历史)== reports/backtest.json(v1)go_events
+  (v1 parity 锚点);各 (symbol, TF≠1h) FLIP_RETESTED 计数 ==
   reports/event_study_v3.json(逐格,多 TF 证据锚)。
 - PR#9 的 opportunity.py 因果生命周期管线(现归档 research/rounds/external/)
   不参与本回测;本管线 §8 决策以认知 TF 收盘为口径(v1-v6 同)。
@@ -65,6 +65,9 @@ from market_operator.campaign import (                           # noqa: E402
 )
 from market_operator.broker import CONTRACTS_PATH, ContractSpec  # noqa: E402
 from market_operator.hypothesis import f1_invalid_distance_ok    # noqa: E402
+from market_operator.events import (                             # noqa: E402
+    BREAKOUT_ACCEPTED, FLIP_RETESTED, STRUCTURE_BROKEN,
+)
 from market_operator.research import block_bootstrap_ci          # noqa: E402
 from market_operator.strategy_v6 import V6Params                 # noqa: E402
 from market_operator.structure import Params                     # noqa: E402
@@ -79,7 +82,7 @@ SEGMENTS = ("full", "dev", "test")
 COST_MULTS = (1.0, 1.5, 2.0)
 SEMANTICS = "turtle"                       # v6 臂 B 固化为唯一语义(见头注)
 MIN_TRADES_TEST = 60                       # v6-protocol §4 样本量阈
-MECHANISMS = ("E1", "E6", "E7")
+MECHANISMS = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
 GIVEBACK_V1_BASELINE_R = 3.6               # v1 逐笔诊断回吐中位(协议 §4 锚点)
 GIVEBACK_TARGET_R = 1.5                    # v6-protocol §4 目标阈值
 
@@ -181,19 +184,21 @@ def prepare_frames(raw_cfg: dict, params: Params, tf_list: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 冻结产物对账(v1 parity / v2 E7 / v3 多 TF E7)
+# 冻结产物对账(v1 parity / v2 FLIP_RETESTED / v3 多 TF FLIP_RETESTED)
 # ---------------------------------------------------------------------------
 
-BASELINE_FIELDS = ("E1_long", "E1_short", "E6_long", "E6_short",
-                   "E7_long", "E7_short", "E7_fired", "E7_passed_f1")
+BASELINE_FIELDS = ("BREAKOUT_ACCEPTED_long", "BREAKOUT_ACCEPTED_short",
+                   "STRUCTURE_BROKEN_long", "STRUCTURE_BROKEN_short",
+                   "FLIP_RETESTED_long", "FLIP_RETESTED_short",
+                   "FLIP_RETESTED_fired", "FLIP_RETESTED_passed_f1")
 
 
 def campaign_event_counts(frames: dict, k_is: float) -> tuple:
-    """逐战役(symbol×TF)事件计数:E1/E6/E7 双向 + E7 fired/passed_f1。
+    """逐战役(symbol×TF)事件计数:突破接受/结构破坏双向 + 角色互换回踩发出与过闸。
 
     返回 (counts, atr_equal)。counts[key] 字段 = BASELINE_FIELDS;
-    atr_equal = E7 attrs['atr'] 恒等于认知缓存同 bar ATR(F1 口径核查)。
-    legacy(merge_max_atr=0)与 capped-v1 两路对账共用本计数器,口径同源。
+    atr_equal = 角色互换回踩 attrs['atr'] 恒等于认知缓存同 bar ATR(失效距离口径核查)。
+    legacy(merge_max_atr=0)与 canonical 两路对账共用本计数器,口径同源。
     """
     counts: dict = {}
     atr_equal = True
@@ -202,14 +207,15 @@ def campaign_event_counts(frames: dict, k_is: float) -> tuple:
         cell = {fld: 0 for fld in BASELINE_FIELDS}
         for i, evs in cog.events_by.items():
             for e in evs:
-                if e.id == "E7":
+                if e.id == FLIP_RETESTED:
                     if e.attrs.get("atr") != cog.atrs[i]:
                         atr_equal = False
-                    cell["E7_fired"] += 1
-                    cell["E7_long" if e.direction > 0 else "E7_short"] += 1
+                    cell["FLIP_RETESTED_fired"] += 1
+                    cell["FLIP_RETESTED_long" if e.direction > 0
+                         else "FLIP_RETESTED_short"] += 1
                     if f1_invalid_distance_ok(e, float(cog.bars[i][4]), k_is):
-                        cell["E7_passed_f1"] += 1
-                elif e.id in ("E1", "E6"):
+                        cell["FLIP_RETESTED_passed_f1"] += 1
+                elif e.id in (BREAKOUT_ACCEPTED, STRUCTURE_BROKEN):
                     cell[f"{e.id}_{'long' if e.direction > 0 else 'short'}"] += 1
         counts[key] = cell
     return counts, atr_equal
@@ -225,19 +231,22 @@ def cross_checks(frames: dict, k_is: float, merge_max_atr: float = 0.0) -> dict:
         if ES_V3_PATH.exists() else None
     e7_counts: dict = {}
     tf_counts: dict = {}
-    e1e6_short_total = 0
+    breakout_structure_short_total = 0
     for key, f in sorted(frames.items()):
         cell = counts[key]
-        rec = {"fired": cell["E7_fired"], "passed_f1": cell["E7_passed_f1"],
-               "E1_short": cell["E1_short"], "E6_short": cell["E6_short"]}
+        rec = {"fired": cell["FLIP_RETESTED_fired"],
+               "passed_f1": cell["FLIP_RETESTED_passed_f1"],
+               "BREAKOUT_ACCEPTED_short": cell["BREAKOUT_ACCEPTED_short"],
+               "STRUCTURE_BROKEN_short": cell["STRUCTURE_BROKEN_short"]}
         if f.tf_label == "1h":
             e7_counts[f.symbol] = rec
-            e1e6_short_total += rec["E1_short"] + rec["E6_short"]
+            breakout_structure_short_total += (rec["BREAKOUT_ACCEPTED_short"]
+                                 + rec["STRUCTURE_BROKEN_short"])
             v2c = bt_v2["e7_counts"][f.symbol]
             if (v2c["whitelist_events"], v2c["passed_f1"]) \
                     != (rec["fired"], rec["passed_f1"]):
                 raise RuntimeError(
-                    f"E7 计数对账失败 {f.symbol}: v6 fired={rec['fired']} "
+                    f"FLIP_RETESTED 计数对账失败 {f.symbol}: v6 fired={rec['fired']} "
                     f"passed={rec['passed_f1']} vs v2 冻结产物 {v2c}")
         else:
             tf_counts[key] = rec
@@ -246,21 +255,21 @@ def cross_checks(frames: dict, k_is: float, merge_max_atr: float = 0.0) -> dict:
                 if (es_c["n_events_fired"], es_c["n_passed_f1"]) \
                         != (rec["fired"], rec["passed_f1"]):
                     raise RuntimeError(
-                        f"E7 多TF对账失败 {key}: v6 fired={rec['fired']} "
+                        f"FLIP_RETESTED 多TF对账失败 {key}: v6 fired={rec['fired']} "
                         f"passed={rec['passed_f1']} vs event_study_v3 冻结产物 "
                         f"{es_c['n_events_fired']}/{es_c['n_passed_f1']}")
     if not atr_equal:
-        raise RuntimeError("E7 attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移)")
+        raise RuntimeError("FLIP_RETESTED attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移)")
     v1_go = bt_v1["runs"]["full@1.0x"]["metrics"]["counters"]["go_events"]
-    if e1e6_short_total != v1_go:
-        raise RuntimeError(f"E1+E6|short 计数对账失败: v6 认知={e1e6_short_total}"
+    if breakout_structure_short_total != v1_go:
+        raise RuntimeError(f"BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short 计数对账失败: v6 认知={breakout_structure_short_total}"
                            f" vs v1 冻结产物 go_events={v1_go}")
-    print(f"[xcheck] E7 1h 计数 == v2 冻结产物;E7 多TF计数 == event_study_v3"
-          f"({'在场' if es_v3 is not None else '缺失,跳过'});E1+E6|short="
-          f"{e1e6_short_total} == v1 go_events={v1_go}(v1 parity);E7 atr 一致",
+    print(f"[xcheck] FLIP_RETESTED 1h 计数 == v2 冻结产物;FLIP_RETESTED 多TF计数 == event_study_v3"
+          f"({'在场' if es_v3 is not None else '缺失,跳过'});BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short="
+          f"{breakout_structure_short_total} == v1 go_events={v1_go}(v1 parity);FLIP_RETESTED atr 一致",
           flush=True)
     return {"e7_counts_1h": e7_counts, "e7_counts_tf": tf_counts,
-            "e1e6_short_vs_v1": {"v6": e1e6_short_total, "v1": v1_go},
+            "breakout_structure_short_vs_v1": {"v6": breakout_structure_short_total, "v1": v1_go},
             "e7_attrs_atr_equals_cognition_atr": atr_equal,
             "es_v3_tf_match": es_v3 is not None}
 
@@ -268,16 +277,16 @@ def cross_checks(frames: dict, k_is: float, merge_max_atr: float = 0.0) -> dict:
 def _cross_checks_capped(counts: dict, atr_equal: bool,
                          merge_max_atr: float) -> dict:
     """canonical 合并封顶语义(merge_max_atr>0)硬对账:逐格比对
-    config/canonical_baseline_counts.json(capped-v1 重冻结基准,research-log #17)。
+    config/canonical_baseline_counts.json(capped-v2 重冻结基准,research-log #17)。
 
-    分叉说明(#15):merge cap 改变区域生命周期 ⇒ E7(FLIP)等事件计数与
+    分叉说明(#15):merge cap 改变区域生命周期 ⇒ FLIP_RETESTED(FLIP)等事件计数与
     v1/v2/event_study_v3 历史冻结产物(默认无界)语义性分叉,不可直接对账;
     基准由 scripts/freeze_canonical_baseline.py 在同一 canonical 语义下重冻结。
     """
     if not BASELINE_PATH.exists():
         raise RuntimeError(
             f"canonical 基准缺失: {BASELINE_PATH}(先运行 "
-            "python scripts/freeze_canonical_baseline.py 生成 capped-v1)")
+            "python scripts/freeze_canonical_baseline.py 生成 capped-v2)")
     base = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     bgen = base.get("generator", {})
     if float(bgen.get("merge_max_atr", 0.0)) != float(merge_max_atr):
@@ -286,7 +295,7 @@ def _cross_checks_capped(counts: dict, atr_equal: bool,
     bad: list = []
     e7_counts: dict = {}
     tf_counts: dict = {}
-    e1e6_short_total = 0
+    breakout_structure_short_total = 0
     for key, cell in sorted(counts.items()):
         b = base.get("cells", {}).get(key)
         if b is None:
@@ -296,35 +305,38 @@ def _cross_checks_capped(counts: dict, atr_equal: bool,
             if b.get(fld) != cell[fld]:
                 bad.append(f"{key}.{fld}: 回放={cell[fld]} vs 基准={b.get(fld)}")
         sym, tf = key.rsplit("@", 1)
-        rec = {"fired": cell["E7_fired"], "passed_f1": cell["E7_passed_f1"],
-               "E1_short": cell["E1_short"], "E6_short": cell["E6_short"]}
+        rec = {"fired": cell["FLIP_RETESTED_fired"],
+               "passed_f1": cell["FLIP_RETESTED_passed_f1"],
+               "BREAKOUT_ACCEPTED_short": cell["BREAKOUT_ACCEPTED_short"],
+               "STRUCTURE_BROKEN_short": cell["STRUCTURE_BROKEN_short"]}
         if tf == "1h":
             e7_counts[sym] = rec
-            e1e6_short_total += rec["E1_short"] + rec["E6_short"]
+            breakout_structure_short_total += (rec["BREAKOUT_ACCEPTED_short"]
+                                 + rec["STRUCTURE_BROKEN_short"])
         else:
             tf_counts[key] = rec
-    btot = base.get("totals", {}).get("e1e6_short_1h")
-    if btot != e1e6_short_total:
-        bad.append(f"E1+E6|short(1h): 回放={e1e6_short_total} vs 基准={btot}")
+    btot = base.get("totals", {}).get("breakout_structure_short_1h")
+    if btot != breakout_structure_short_total:
+        bad.append(f"BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short(1h): 回放={breakout_structure_short_total} vs 基准={btot}")
     if bad:
-        raise RuntimeError("capped-v1 基准对账失败(逐格逐项): "
+        raise RuntimeError("capped-v2 基准对账失败(逐格逐项): "
                            + "; ".join(bad[:12]))
     if not atr_equal:
-        raise RuntimeError("E7 attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移)")
+        raise RuntimeError("FLIP_RETESTED attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移)")
     try:
         bpath = BASELINE_PATH.relative_to(ROOT).as_posix()
     except ValueError:                                 # 测试注入的仓外路径
         bpath = str(BASELINE_PATH)
-    print(f"[xcheck] 基准=capped-v1({bpath}, "
+    print(f"[xcheck] 基准=capped-v2({bpath}, "
           f"merge_max_atr={bgen.get('merge_max_atr')}): {len(counts)} 格 "
-          f"E1/E6/E7 双向 + E7 fired/passed_f1 逐项一致;E1+E6|short(1h)="
-          f"{e1e6_short_total} == 基准;E7 atr 一致", flush=True)
-    return {"baseline": "capped-v1",
+          f"BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED 双向 + FLIP_RETESTED fired/passed_f1 逐项一致;BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short(1h)="
+          f"{breakout_structure_short_total} == 基准;FLIP_RETESTED atr 一致", flush=True)
+    return {"baseline": "capped-v2",
             "baseline_path": bpath,
             "baseline_generated_at_utc": base.get("generated_at_utc"),
             "baseline_merge_max_atr": bgen.get("merge_max_atr"),
             "e7_counts_1h": e7_counts, "e7_counts_tf": tf_counts,
-            "e1e6_short_1h": {"replay": e1e6_short_total, "baseline": btot},
+            "breakout_structure_short_1h": {"replay": breakout_structure_short_total, "baseline": btot},
             "e7_attrs_atr_equals_cognition_atr": atr_equal}
 
 
@@ -476,7 +488,7 @@ def main() -> None:
 
     merge_max_atr = float(raw_cfg.get("merge_max_atr", 0.0))
     if merge_max_atr > 0:
-        print(f"[xcheck] merge_max_atr={merge_max_atr} ⇒ 基准=capped-v1"
+        print(f"[xcheck] merge_max_atr={merge_max_atr} ⇒ 基准=capped-v2"
               f"(config/canonical_baseline_counts.json;v1/v2/event_study_v3 "
               f"历史冻结产物不再对账,语义分叉见 research-log #17)", flush=True)
 
@@ -685,24 +697,24 @@ def render_md(payload: dict) -> str:
         == "INSUFFICIENT_DATA"
 
     xc = payload["cross_checks"]
-    if xc.get("baseline") == "capped-v1":
+    if xc.get("baseline") == "capped-v2":
         xcheck_line = (
-            "- 认知对账(全部硬约束一致;基准=capped-v1 "
+            "- 认知对账(全部硬约束一致;基准=capped-v2 "
             f"{xc['baseline_path']},merge_max_atr={xc['baseline_merge_max_atr']}"
-            "):E1/E6/E7 双向 + E7 fired/passed_f1 逐 symbol×TF 格一致(1h: "
+            "):BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED 双向 + FLIP_RETESTED fired/passed_f1 逐 symbol×TF 格一致(1h: "
             + "; ".join(f"{s}={v['passed_f1']}/{v['fired']}"
                         for s, v in xc["e7_counts_1h"].items())
-            + f";多 TF {len(xc['e7_counts_tf'])} 格);E1+E6|short(1h)="
-            f"{xc['e1e6_short_1h']['replay']} == 基准同值(与 v1 冻结 go_events"
-            " 的语义分叉如实在 research-log #17 对账);E7 atr 一致。")
+            + f";多 TF {len(xc['e7_counts_tf'])} 格);BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short(1h)="
+            f"{xc['breakout_structure_short_1h']['replay']} == 基准同值(与 v1 冻结 go_events"
+            " 的语义分叉如实在 research-log #17 对账);FLIP_RETESTED atr 一致。")
     else:
         xcheck_line = (
-            "- 认知对账(全部硬约束一致):E7 1h 计数 == v2 冻结产物("
+            "- 认知对账(全部硬约束一致):FLIP_RETESTED 1h 计数 == v2 冻结产物("
             + "; ".join(f"{s}={v['passed_f1']}/{v['fired']}"
                         for s, v in xc["e7_counts_1h"].items())
-            + f");E7 多TF计数 == event_study_v3 冻结产物({len(xc['e7_counts_tf'])} 格;"
-            f"E1+E6|short={xc['e1e6_short_vs_v1']['v6']} == "
-            f"v1 go_events={xc['e1e6_short_vs_v1']['v1']}"
+            + f");FLIP_RETESTED 多TF计数 == event_study_v3 冻结产物({len(xc['e7_counts_tf'])} 格;"
+            f"BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short={xc['breakout_structure_short_vs_v1']['v6']} == "
+            f"v1 go_events={xc['breakout_structure_short_vs_v1']['v1']}"
             "(v1 parity 锚点,未破)。")
     merge_line = (
         f"- 结构合并封顶:merge_max_atr={cfg.get('merge_max_atr', 0.0)}×ATR"
@@ -725,9 +737,9 @@ def render_md(payload: dict) -> str:
         "- 战役:3 symbol × TF ∈ {1h,2h,4h,12h,1d} = 15 战役,隔离互不知晓;"
         f"共享权益 + 组合容量 {cfg['portfolio_cap_frac']}(最坏情景 FIFO 跳过,"
         "成交时刻 PR#9 broker 口径第二层钳制)。",
-        f"- 路由 = v5 质量路由双向(E1 市价优先/E6 STRONG 市价 WEAK=E7 前缘限价;"
+        f"- 路由 = v5 质量路由双向(BREAKOUT_ACCEPTED 市价优先/STRUCTURE_BROKEN STRONG 市价 WEAK=FLIP_RETESTED 前缘限价;"
         f"k_dq={cfg['k_dq']} k_imp={cfg['k_imp']};白名单 {cfg['whitelist']})。",
-    ] + ([merge_line] if xc.get("baseline") == "capped-v1" else []) + [
+    ] + ([merge_line] if xc.get("baseline") == "capped-v2" else []) + [
         "- 执行路径:TF=1h→15m,TF≥2h→1h(对齐断言;fill_after = 决策 bar 最末"
         f"细 bar;N_fill={cfg['n_fill']} 墙钟小时)。",
         f"- **{payload['protocol']['test_eval_declaration']}**",
@@ -826,8 +838,8 @@ def render_md(payload: dict) -> str:
                   "正』的叙述;样本量按格如实报告;基础设施(战役引擎)保留为永久资产。"]
 
     lines += ["", "## 6. 已知近似与如实声明", "",
-              "① E6→E7『同 episode』以 E7 attrs ref == 登记 ref 操作化(零检测器"
-              "改动,浮点同源 1e-9);② 每战役至多保留最新一个 weak-E6 登记;③ 限"
+              "① STRUCTURE_BROKEN→FLIP_RETESTED『同 episode』以 FLIP_RETESTED attrs ref == 登记 ref 操作化(零检测器"
+              "改动,浮点同源 1e-9);② 每战役至多保留最新一个 weak-STRUCTURE_BROKEN 登记;③ 限"
               "价严格穿过才成交、穿透缺口按 limit 价成交(保守);④ 武装成交的认"
               "知 bar 不做 §8 裁决(同 v4/v5);⑤ 组合容量按决策时刻参考价估算"
               "(不取整,略高估=保守),成交时刻 PR#9 broker 口径第二层钳制;⑥ "

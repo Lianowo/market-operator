@@ -25,7 +25,7 @@ from market_operator.campaign import (
     build_campaign_frame,
     run_campaigns,
 )
-from market_operator.events import E1, E3, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.quality import QualityParams, V14Params, V14Router
 from market_operator.strategy_v6 import V6Params, V6Router
@@ -50,8 +50,8 @@ KW = dict(segment="full", dev_frac=0.7, equity0=300.0, risk_frac=0.0075,
           slippage_per_side=0.0002, funding_per_8h=0.0001,
           cost_multiplier=1.0, contracts={"TEST": SPEC}, params=PARAMS,
           n_fill=12, portfolio_cap_frac=0.03)
-WL16 = frozenset((e, d) for e in ("E1", "E2", "E3", "E4", "E5", "E6", "E7",
-                                  "E8") for d in (-1, 1))
+WL16 = frozenset((e, d) for e in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED",
+                                  "EDGE_RECLAIMED") for d in (-1, 1))
 RP16 = V6Params(whitelist=WL16)
 QPARAMS = QualityParams()
 VIEW_OK = StructureView(
@@ -127,7 +127,7 @@ def _run(frames, **over):
     return run_campaigns(frames, **kw)
 
 
-E1_SHORT = lambda i, th: _ev(E1, -1, i, th)
+E1_SHORT = lambda i, th: _ev(BREAKOUT_ACCEPTED, -1, i, th)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ def test_quality_tier_b_size_mult_reaches_fill():
     oq = [r for r in res_q.ledger if r["kind"] == "OPEN"]
     oc = [r for r in res_c.ledger if r["kind"] == "OPEN"]
     assert len(oq) == len(oc) == 1
-    # E6 类无 zone / 顺风 TREND_DOWN 短但 zone_touches 由事件携带 … 此处无 zone
+    # STRUCTURE_BROKEN 类无 zone / 顺风 TREND_DOWN 短但 zone_touches 由事件携带 … 此处无 zone
     # ⇒ Q3 不成熟 ⇒ B 档 0.75 配注
     assert oq[0]["meta"]["quality_tier"] == "B"
     assert oq[0]["qty"] == pytest.approx(oc[0]["qty"] * 0.75, rel=0.011)
@@ -226,7 +226,7 @@ def test_quality_determinism_double_run():
 
 
 def test_stop_entry_armed_at_ref_minus_kbm_and_trigger_fill():
-    # 空 E1(决策 2h bar2,close=96.0):ref=99.5 ⇒ stop=99.5−0.1·2=99.3;行情
+    # 空 BREAKOUT_ACCEPTED(决策 2h bar2,close=96.0):ref=99.5 ⇒ stop=99.5−0.1·2=99.3;行情
     # 已在 96 区(sell stop 向下穿过语),首个可成交细 bar(决策 bar 后)即触发
     frames = {"TEST@2h": _frame(2, events_by={2: [E1_SHORT(2, 2)]})}
     res = _run(frames, arm=ArmConfig(stop_entry=True))
@@ -265,7 +265,7 @@ def test_stop_entry_timeout_misses_no_trade():
 
 
 def test_c2_exchange_converts_market_to_maker_limit_and_counts():
-    # E1 空方市价 ⇒ 决策收盘(96.0)限价卖单(maker);次细 bar 高 96.8 穿过成交
+    # BREAKOUT_ACCEPTED 空方市价 ⇒ 决策收盘(96.0)限价卖单(maker);次细 bar 高 96.8 穿过成交
     frames = {"TEST@2h": _frame(2, events_by={2: [E1_SHORT(2, 2)]})}
     res = _run(frames, arm=ArmConfig(fill_model="exchange_maker"))
     c = res.counters
@@ -302,7 +302,7 @@ def test_c2_virtual_guarantees_fill_on_touch_with_taker_fee():
 def _fade_frame(exec_overrides=None, n_1h=16):
     zone = Zone(lo=95.0, hi=97.0, role=ZoneRole.RESISTANCE,
                 state=ZoneState.ACTIVE, touches=4)
-    ev = _ev(E3, -1, 2, 2, ref=97.1, invalid=99.7, zone=zone)
+    ev = _ev(LEVEL_REJECTED, -1, 2, 2, ref=97.1, invalid=99.7, zone=zone)
     return _frame(2, events_by={2: [ev]}, exec_overrides=exec_overrides,
                   n_1h=n_1h)
 
@@ -324,7 +324,7 @@ def test_ladder_three_slices_merged_third_risk_weighted():
     # 第三份(内缘 97)未成交 ⇒ 过期(T0+18H)
     exp = [r for r in res.ledger if r["kind"] == "EXPIRED"]
     assert len(exp) == 1 and exp[0]["meta"]["limit_price"] == 97.0
-    assert exp[0]["meta"]["ladder_group"] == f"TEST@2h#{T0 + 4 * H}#E3"
+    assert exp[0]["meta"]["ladder_group"] == f"TEST@2h#{T0 + 4 * H}#LEVEL_REJECTED"
     assert c.get("ladder_entry_expired", 0) == 1
     # 合并均价 = 95/96 加权(各 1/3 风险份额 ⇒ 同距近等量),低于一口价 95?
     q1, q2 = fills[0]["qty"], adds[0]["qty"]

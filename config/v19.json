@@ -56,67 +56,67 @@
   "portfolio_cap_frac": 0.08,
   "whitelist": [
     [
-      "E1",
+      "BREAKOUT_ACCEPTED",
       -1
     ],
     [
-      "E1",
+      "BREAKOUT_ACCEPTED",
       1
     ],
     [
-      "E2",
+      "BREAKOUT_FAILED",
       -1
     ],
     [
-      "E2",
+      "BREAKOUT_FAILED",
       1
     ],
     [
-      "E3",
+      "LEVEL_REJECTED",
       -1
     ],
     [
-      "E3",
+      "LEVEL_REJECTED",
       1
     ],
     [
-      "E4",
+      "TREND_RESUMED",
       -1
     ],
     [
-      "E4",
+      "TREND_RESUMED",
       1
     ],
     [
-      "E5",
+      "RANGE_ROTATED",
       -1
     ],
     [
-      "E5",
+      "RANGE_ROTATED",
       1
     ],
     [
-      "E6",
+      "STRUCTURE_BROKEN",
       -1
     ],
     [
-      "E6",
+      "STRUCTURE_BROKEN",
       1
     ],
     [
-      "E7",
+      "FLIP_RETESTED",
       -1
     ],
     [
-      "E7",
+      "FLIP_RETESTED",
       1
     ],
     [
-      "E8",
+      "EDGE_RECLAIMED",
       -1
     ],
     [
-      "E8",
+      "EDGE_RECLAIMED",
       1
     ]
   ],
@@ -132,7 +132,7 @@
       "tiered": true,
       "early_exit": false,
       "exec": "market",
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "equity": 1000.0,
       "note": "arm-T 配注化基线:三闸阶梯配注(基础 A=1.0,条款照 §2)+ market 默认 + 组合 8% + 收割婚配/时间帽照链;夭折处置关(与 arm-X 孤立组件差)"
     },
@@ -140,7 +140,7 @@
       "tiered": true,
       "early_exit": true,
       "exec": "market",
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "equity": 1000.0,
       "note": "arm-X 基线+夭折(旗舰,early_exit 默认 ON):arm-T 全件 + 夭折处置(半窗 MFE<0.3R 出;连续≥3 根收盘全逆出;先触发先算)"
     },
@@ -148,7 +148,7 @@
       "tiered": true,
       "early_exit": true,
       "exec": "maker",
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "equity": 1000.0,
       "note": "arm-maker 执行对照臂:arm-X + fade 前缘 maker 挂单(v16 C2 语义,fade_front_edge 改单,N_fill=12);孤立执行价差"
     },
@@ -156,7 +156,7 @@
       "tiered": true,
       "early_exit": true,
       "exec": "stop_entry",
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "equity": 1000.0,
       "note": "arm-stop 执行对照臂:arm-X + 续涨 stop-entry 预埋(v16 C3 语义,ref±k_bm·ATR,超时 12×TF 作废);孤立执行价差"
     }
@@ -201,14 +201,14 @@
     "stop_wait_tf": 12,
     "k_bm": 0.1,
     "fade_family": [
-      "E2",
-      "E3",
-      "E8"
+      "BREAKOUT_FAILED",
+      "LEVEL_REJECTED",
+      "EDGE_RECLAIMED"
     ],
     "stop_family": [
-      "E1",
-      "E6",
-      "E7"
+      "BREAKOUT_ACCEPTED",
+      "STRUCTURE_BROKEN",
+      "FLIP_RETESTED"
     ],
     "note": "沿 v16/v17 协议写死,不碰(三闸/收割婚配先验与家族表逐值照抄 config/v17.json)"
   }

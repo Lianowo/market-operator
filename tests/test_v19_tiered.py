@@ -34,7 +34,7 @@ from market_operator.campaign import (
     campaign_key,
     run_campaigns,
 )
-from market_operator.events import E1, E3, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.position import (
     EARLY_CONSEC_N,
@@ -83,8 +83,8 @@ PIVOTS = (Pivot(price=110.0, forming_index=0, known_index=1,
           Pivot(price=80.0, forming_index=2, known_index=3,
                 kind=PivotKind.LOW))
 
-WL_ALL = frozenset((eid, d) for eid in ("E1", "E2", "E3", "E4", "E5",
-                                        "E6", "E7", "E8")
+WL_ALL = frozenset((eid, d) for eid in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED",
+                                        "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED")
                    for d in (-1, 1))
 
 # 满档对照区(短单 ref=96.5,risk=4.2 ⇒ room=(96.5−90)/4.2=1.5476 ≥1.5)
@@ -109,7 +109,7 @@ def _fade_e3(*, ts, known_index, invalid=100.7):
     zone = Zone(lo=99.0, hi=100.5, role=ZoneRole.RESISTANCE,
                 state=ZoneState.ACTIVE, touches=3)
     attrs = {"zone": zone, "ref": 100.5, "invalid": invalid}
-    return MarketEvent(id=E3, direction=-1, ts=ts, known_index=known_index,
+    return MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=ts, known_index=known_index,
                        attrs=attrs)
 
 
@@ -144,8 +144,8 @@ def _arm_v19(*, early=True, front_edge=False, fill="canonical",
              stop=False) -> ArmConfig:
     return ArmConfig(fill_model=fill, stop_entry=stop, stop_wait_tf=12,
                      k_bm=0.1,
-                     c2_family=(("E2", "E3", "E8") if front_edge else None),
-                     harvest_family=("E2", "E3", "E8"),
+                     c2_family=(("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED") if front_edge else None),
+                     harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
                      time_cap_bars=48, cap_mfe_min=0.5, early_exit=early)
 
 
@@ -211,7 +211,7 @@ def test_v19_config_parent_v18_hard_check():
         assert arm.fill_model == ("exchange_maker" if ex == "maker"
                                   else "canonical")
         assert arm.stop_entry is (ex == "stop_entry")
-        assert arm.harvest_family == ("E2", "E3", "E8")
+        assert arm.harvest_family == ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
         assert arm.time_cap_bars == 48 and not arm.harvest_ladder3  # R4 不回锅
     p19 = v19["v19_params"]
     d = TieredParams()
@@ -395,7 +395,7 @@ def test_v19_router_fail_closed_and_reason_tag():
     assert ds3[0].limit_price == 99.0
     assert ds3[0].meta["limit_from"] == "v19_fade_front_edge"
     # maker 臂 fade 缺 attrs zone ⇒ no_zone fail-closed
-    ev4 = MarketEvent(id=E3, direction=-1, ts=T0 + 3 * 2 * H, known_index=3,
+    ev4 = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=T0 + 3 * 2 * H, known_index=3,
                       attrs={"ref": 100.5, "invalid": 100.7})
     r4 = V19Router(_vp19(TieredParams(fade_front_edge=True)))
     ds4 = r4.on_bar("TEST", bar, 3, _view(zones=(SUPPORT_FULL,)), ATR,
@@ -409,7 +409,7 @@ def test_v19_router_tiered_none_is_v6_identical():
     r19 = V19Router(_vp19(None))
     bar = _bar(T0 + 3 * 2 * H)
     evs = [_fade_e3(ts=T0 + 3 * 2 * H, known_index=3),
-           MarketEvent(id=E1, direction=+1, ts=T0 + 3 * 2 * H, known_index=3,
+           MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 3 * 2 * H, known_index=3,
                        attrs={"ref": 95.0, "invalid": 94.0})]
     vw = _view()
     d6 = r6.on_bar("TEST", bar, 3, vw, ATR, evs,
@@ -427,7 +427,7 @@ def test_v19_router_tiered_none_is_v6_identical():
 
 
 def _pm19(early=True) -> PositionManager:
-    return PositionManager(time_stop=False, harvest_family=("E2", "E3", "E8"),
+    return PositionManager(time_stop=False, harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
                            time_cap_bars=48, cap_mfe_min=0.5,
                            early_exit=early)
 
@@ -451,7 +451,7 @@ def _lowbar(i, low):                               # 顺根 + 指定下影(MFE �
 def test_v19_early_half_window_boundary_pm():
     # A. 23 根未窗不许出;第 24 根仍 <0.3R ⇒ 出(半窗恰界 inclusive 于 bars_held)
     pm = _pm19(True)
-    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "E3", 0, 0)  # risk=5, 0.3R=1.5
+    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "LEVEL_REJECTED", 0, 0)  # risk=5, 0.3R=1.5
     for i in range(1, 24):
         assert pm.on_bar("X", _lowbar(i, 98.8), ATR) == [], \
             f"bars_held={i} 半窗未到不许出"
@@ -464,7 +464,7 @@ def test_v19_early_half_window_boundary_pm():
     assert "X" not in pm.positions
     # B. 恰 0.3R inclusive 持有:第 24 根首次达到 0.3R ⇒ 不出,其后 MFE 不降
     pm_b = _pm19(True)
-    p2 = pm_b.open("Y", -1, 100.0, 105.0, 90.0, "E3", 0, 0)
+    p2 = pm_b.open("Y", -1, 100.0, 105.0, 90.0, "LEVEL_REJECTED", 0, 0)
     for i in range(1, 24):
         pm_b.on_bar("Y", _lowbar(i, 98.8), ATR)
     assert pm_b.on_bar("Y", _lowbar(24, 98.5), ATR) == []   # mfe 恰 0.3R
@@ -472,7 +472,7 @@ def test_v19_early_half_window_boundary_pm():
     assert pm_b.on_bar("Y", _lowbar(25, 98.8), ATR) == []   # 恰界之下不逐
     # C. 半窗到达时 MFE 已 ≥0.3R ⇒ 不出
     pm_c = _pm19(True)
-    pm_c.open("Z", -1, 100.0, 105.0, 90.0, "E3", 0, 0)
+    pm_c.open("Z", -1, 100.0, 105.0, 90.0, "LEVEL_REJECTED", 0, 0)
     for i in range(1, 24):
         pm_c.on_bar("Z", _lowbar(i, 98.2), ATR)    # mfe=0.36R
     assert pm_c.on_bar("Z", _lowbar(24, 98.2), ATR) == []
@@ -480,7 +480,7 @@ def test_v19_early_half_window_boundary_pm():
 
 def test_v19_early_consec_adverse_reset_pm():
     pm = _pm19(True)
-    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "E3", 0, 0)
+    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "LEVEL_REJECTED", 0, 0)
     pm.on_bar("X", _adv(1), ATR)
     assert pos.consec_adverse == 1
     pm.on_bar("X", _adv(2), ATR)
@@ -501,7 +501,7 @@ def test_v19_early_consec_adverse_reset_pm():
 def test_v19_early_samebar_both_trigger_half_wins():
     """先触发先算:第 24 根同触 半窗(MFE<0.3R)与 3 连逆 ⇒ 半窗优先。"""
     pm = _pm19(True)
-    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "E3", 0, 0)
+    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "LEVEL_REJECTED", 0, 0)
     for i in range(1, 22):                         # bars 1..21 顺(MFE 浅)
         pm.on_bar("X", _lowbar(i, 98.8), ATR)
     pm.on_bar("X", _adv(22), ATR)                  # consec=1
@@ -515,7 +515,7 @@ def test_v19_early_samebar_both_trigger_half_wins():
 
 def test_v19_early_exit_off_parity():
     pm = _pm19(False)
-    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "E3", 0, 0)
+    pos = pm.open("X", -1, 100.0, 105.0, 90.0, "LEVEL_REJECTED", 0, 0)
     for i in range(1, 30):                         # 半窗过 + 全程连逆
         ints = pm.on_bar("X", _adv(i), ATR)
         assert ints == [], f"early_exit=False 时夭折块整段不生效({i})"
@@ -586,9 +586,9 @@ def test_v19_campaign_early_exit_fills_and_bucket_label():
 def test_v19_campaign_parity_tiered_none_router():
     mk = lambda: _frames_2h(
         {3: [_fade_e3(ts=T0 + 3 * 2 * H, known_index=3)],
-         5: [MarketEvent(id=E1, direction=+1, ts=T0 + 5 * 2 * H,
+         5: [MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 5 * 2 * H,
                          known_index=5, attrs={"ref": 95.0, "invalid": 94.0})]},
-        {21: [MarketEvent(id=E1, direction=+1, ts=T0 + 21 * M30,
+        {21: [MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 21 * M30,
                           known_index=21,
                           attrs={"ref": 95.0, "invalid": 94.0,
                                  "mic": True, "trigger_tf": 1800})]})
@@ -609,7 +609,7 @@ def test_v19_campaign_parity_tiered_none_router():
 def test_v19_determinism_double_run_tiered_early():
     mk = lambda: _frames_2h(
         {3: [_fade_e3(ts=T0 + 3 * 2 * H, known_index=3)]},
-        {21: [MarketEvent(id=E1, direction=+1, ts=T0 + 21 * M30,
+        {21: [MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 21 * M30,
                           known_index=21,
                           attrs={"ref": 95.0, "invalid": 94.0,
                                  "mic": True, "trigger_tf": 1800})]},

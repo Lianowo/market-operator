@@ -16,4 +16,7 @@ dev = ["pytest>=8.0"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "research/rounds"]
+testpaths = ["tests"]
+# research/rounds/ 是历史轮次的冻结快照(自带各自的旧实现副本),
+# 不参与活测试收集:它们验证的是当年的代码,不是现行系统。
+norecursedirs = ["research", "reports", "data", "node_modules", ".git"]

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from market_operator.events import E4, E6, MarketEvent
+from market_operator.events import TREND_RESUMED, STRUCTURE_BROKEN, MarketEvent
 from market_operator.position import PositionManager
 from market_operator.broker import OrderKind
 from market_operator.structure import Params, Pivot, PivotKind
@@ -23,7 +23,7 @@ def _mgr(allow_add: bool = False) -> PositionManager:
 def _short(mgr: PositionManager, invalid: float = 101.0,
            target: float = 94.0):
     return mgr.open("BTCUSDT", -1, entry=99.0, invalid=invalid,
-                    target_1=target, event_id="E1", ts=0, index=0)
+                    target_1=target, event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
 
 
 def _bar(ts: int, h: float, l: float, c: float, o: float = 99.0):
@@ -41,7 +41,7 @@ def _pivot_low(price: float, known: int = 1) -> Pivot:
 
 
 def _e6(direction: int) -> MarketEvent:
-    return MarketEvent(id=E6, direction=direction, ts=1, known_index=1,
+    return MarketEvent(id=STRUCTURE_BROKEN, direction=direction, ts=1, known_index=1,
                        attrs={"ref": 100.0, "invalid": 100.0,
                               "regime_before": "TREND_DOWN" if direction > 0
                               else "TREND_UP"})
@@ -75,7 +75,7 @@ def test_81_close_near_but_not_beyond_survives():
 
 
 # ---------------------------------------------------------------------------
-# §8.5 反向 E6 / 优先级 1>5
+# §8.5 反向 STRUCTURE_BROKEN / 优先级 1>5
 # ---------------------------------------------------------------------------
 
 
@@ -86,14 +86,14 @@ def test_85_reverse_e6_exits_all():
                        new_events=[_e6(+1)])
     assert len(intents) == 1
     assert intents[0].kind is OrderKind.EXIT
-    assert intents[0].reason.startswith("§8.5|E6 reverse CHoCH")
+    assert intents[0].reason.startswith("§8.5|STRUCTURE_BROKEN reverse CHoCH")
 
 
 def test_85_same_direction_e6_ignored():
     m = _mgr()
     _short(m)
     intents = m.on_bar("BTCUSDT", _bar(1, 99.5, 98.0, 99.0), ATR,
-                       new_events=[_e6(-1)])        # 同向 E6 不出场
+                       new_events=[_e6(-1)])        # 同向 STRUCTURE_BROKEN 不出场
     assert intents == []
 
 
@@ -184,7 +184,7 @@ def test_83_ignores_favorable_kind_pivots():
 def test_83_long_mirror():
     m = _mgr()
     pos = m.open("ETHUSDT", +1, entry=100.0, invalid=98.0, target_1=None,
-                 event_id="E6", ts=0, index=0)
+                 event_id="STRUCTURE_BROKEN", ts=0, index=0)
     m.on_bar("ETHUSDT", _bar(1, 101.0, 99.0, 100.5), ATR,
              new_pivots=[_pivot_low(99.0)])
     assert pos.invalid == 98.9                      # 99 - 0.1*atr(收紧)
@@ -243,7 +243,7 @@ def test_86_uses_bar_extremes_not_close():
 
 
 def _e4_short(invalid: float) -> MarketEvent:
-    return MarketEvent(id=E4, direction=-1, ts=1, known_index=1,
+    return MarketEvent(id=TREND_RESUMED, direction=-1, ts=1, known_index=1,
                        attrs={"leg_start": 103.0, "pb_price": 97.0,
                               "depth": 6.0, "ref": 98.5, "invalid": invalid,
                               "regime": "TREND_DOWN"})
@@ -252,7 +252,7 @@ def _e4_short(invalid: float) -> MarketEvent:
 def _trailed_short(m: PositionManager):
     """浮盈 ≥1R 且 invalid 已收紧至 97(锁盈)的空仓。"""
     pos = m.open("BTCUSDT", -1, entry=99.0, invalid=101.0, target_1=None,
-                 event_id="E1", ts=0, index=0)
+                 event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
     m.on_bar("BTCUSDT", _bar(1, 99.5, 96.5, 97.0), ATR)   # mfe=(99-96.5)/2=1.25R
     pos.invalid = 97.0                                    # 模拟 §8.3 已收紧
     return pos
@@ -261,13 +261,13 @@ def _trailed_short(m: PositionManager):
 def test_84_add_accepted_when_risk_neutral():
     m = _mgr(allow_add=True)
     pos = _trailed_short(m)
-    # 加 1.0 @ 95,均价 97;E4 invalid=96 ⇒ 合并 worst=-1*(97-96)*2=-2 ≤ 前-2
+    # 加 1.0 @ 95,均价 97;TREND_RESUMED invalid=96 ⇒ 合并 worst=-1*(97-96)*2=-2 ≤ 前-2
     intents = m.on_bar("BTCUSDT", _bar(2, 97.5, 94.5, 95.0), ATR,
                        new_events=[_e4_short(96.0)])
     assert len(intents) == 1
     it = intents[0]
     assert it.kind is OrderKind.ADD and it.qty_frac == 1.0
-    assert it.reason.startswith("§8.4|E4 add")
+    assert it.reason.startswith("§8.4|TREND_RESUMED add")
     assert pos.added and pos.size_frac == 2.0
     assert pos.entry == 97.0 and pos.invalid == 96.0
 
@@ -275,7 +275,7 @@ def test_84_add_accepted_when_risk_neutral():
 def test_84_add_rejected_when_worst_case_degrades():
     m = _mgr(allow_add=True)
     pos = _trailed_short(m)
-    # E4 invalid=98 ⇒ 合并防线仍 97(只收紧),worst=0 > 前-2 ⇒ 拒绝
+    # TREND_RESUMED invalid=98 ⇒ 合并防线仍 97(只收紧),worst=0 > 前-2 ⇒ 拒绝
     intents = m.on_bar("BTCUSDT", _bar(2, 97.5, 94.5, 95.0), ATR,
                        new_events=[_e4_short(98.0)])
     assert intents == []
@@ -286,7 +286,7 @@ def test_84_add_rejected_when_worst_case_degrades():
 def test_84_add_rejected_when_mfe_below_1r():
     m = _mgr(allow_add=True)
     pos = m.open("BTCUSDT", -1, entry=99.0, invalid=101.0, target_1=None,
-                 event_id="E1", ts=0, index=0)
+                 event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
     m.on_bar("BTCUSDT", _bar(1, 99.5, 98.5, 99.0), ATR)    # mfe=0.25R
     intents = m.on_bar("BTCUSDT", _bar(2, 99.5, 98.9, 99.0), ATR,
                        new_events=[_e4_short(98.0)])

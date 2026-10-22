@@ -13,7 +13,7 @@ target_1 = 结构目标(§7:"最近的对侧区域边缘 / RANGE 对侧边缘"):
   与事件同侧或骑跨 ref 的区域不算"前方目标"。
   (structure.py 的 ZoneState 命名为 ACTIVE/BROKEN/RETESTED/FLIPPED/DEAD;
   活视图中 FLIPPED/DEAD 已被移除,此处仍按 §4.2 状态名集合过滤。)
-- E5(RANGE_ROTATION):对侧边缘取 attrs["band"] 合成带边缘(多头 band_hi,
+- RANGE_ROTATED(RANGE_ROTATION):对侧边缘取 attrs["band"] 合成带边缘(多头 band_hi,
   空头 band_lo),不做区域搜索。
 - 若无结构目标 ⇒ target_1 = None(不编造固定 R 目标,§7 纪律)。
 
@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .events import E5, MarketEvent
+from .events import RANGE_ROTATED, MarketEvent
 from .structure import Params, Regime, Zone, ZoneRole, ZoneState
 
 TARGET_STATES = (ZoneState.ACTIVE, ZoneState.RETESTED, ZoneState.FLIPPED)
@@ -74,9 +74,9 @@ class Hypothesis:
 
 
 def _structural_target(event: MarketEvent, view: StructureView) -> Optional[float]:
-    """沿事件方向最近的对侧区域近缘;E5 取合成带对侧边缘。"""
+    """沿事件方向最近的对侧区域近缘;RANGE_ROTATED 取合成带对侧边缘。"""
     direction = event.direction
-    if event.id == E5 and "band" in event.attrs:
+    if event.id == RANGE_ROTATED and "band" in event.attrs:
         band_lo, band_hi = event.attrs["band"]
         return float(band_hi) if direction > 0 else float(band_lo)
 
@@ -131,7 +131,7 @@ def build(event: MarketEvent, structure_view: StructureView,
 
 
 def f1_invalid_distance_ok(event: MarketEvent, close: float, k_is: float) -> bool:
-    """F1 门:dist(close(t), invalid) ≥ k_is·atr(t) 才允许 E7 入场。
+    """F1 门:dist(close(t), invalid) ≥ k_is·atr(t) 才允许 FLIP_RETESTED 入场。
 
     距离取事件 bar(t)收盘至 invalid 的沿方向距离;atr 用事件 attrs["atr"]
     (发射 bar 时写入,与 invalid 同一知时刻度)。attrs 缺 "invalid"/"atr" 或

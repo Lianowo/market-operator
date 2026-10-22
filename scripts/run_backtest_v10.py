@@ -540,15 +540,15 @@ def main() -> None:
             "doc": "docs/v10-protocol.md §A(冻结,2026-10-20)",
             "meta": raw_cfg["meta"],
             "mic_semantics": "认知帧(1h/2h/4h/12h/1d)结构/区域/episode/pivot/"
-                             "regime 锁定;收盘类确认(E1 站稳/E2 收复/E3 回退/"
-                             "E4 回收/E6 破坏/E7 回踩拒绝)允许在 trigger_tf "
+                             "regime 锁定;收盘类确认(BREAKOUT_ACCEPTED 站稳/BREAKOUT_FAILED 收复/LEVEL_REJECTED 回退/"
+                             "TREND_RESUMED 回收/STRUCTURE_BROKEN 破坏/FLIP_RETESTED 回踩拒绝)允许在 trigger_tf "
                              "收盘先满足;N_a_mic=N_a×scale、N_f_mic=N_f×scale;"
                              "阈值=最近已收认知 bar 的 ATR;知时=trigger 收盘,"
                              "成交=次一 trigger 开盘;收割/费用/容量/组合不变。",
             "test_eval_declaration": "test 段第 13 次评估曝光(research-log #20 "
                                      "预注册,一次性,此后只许前向);本报告如实"
                                      "填报,不产生额外叙述。",
-            "e1_e8_detector_invariant": "E1-E8 bar 事件检测零改动;mic 帧复放的 "
+            "e1_e8_detector_invariant": "BREAKOUT_ACCEPTED-EDGE_RECLAIMED bar 事件检测零改动;mic 帧复放的 "
                                         "bar 事件流 == prepare_cognition 逐字段"
                                         "硬断言(见 bar_stream_parity)。",
         },

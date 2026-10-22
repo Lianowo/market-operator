@@ -1,207 +1,208 @@
 {
- "version": "capped-v1",
- "generated_at_utc": "2026-10-20T01:16:52+00:00",
- "generator": {
-  "command": "python scripts/freeze_canonical_baseline.py",
-  "script": "scripts/freeze_canonical_baseline.py",
-  "config_file": "config/canonical.json",
-  "config_version": "canonical-2026-10-19",
-  "merge_max_atr": 2.0,
-  "k_is": 0.8,
-  "symbols": [
-   "BTCUSDT",
-   "ETHUSDT",
-   "SOLUSDT"
-  ],
-  "tf_list": [
-   "1h",
-   "2h",
-   "4h",
-   "12h",
-   "1d"
-  ],
-  "data_manifest": {
-   "path": "data/manifest.json",
-   "sha256": "eaff1807d9e92c0819d7838e26ed8262c6e772e7baeba26d9df240a3e29558ae",
-   "n_files": 18,
-   "files_sha256": {
-    "BTCUSDT_12h.csv": "f8cf98d28003c4e1af2b6c90d738874b390b1cddac424ed69a8e039e1f43c44a",
-    "BTCUSDT_15m.csv": "e84018b6250aa0fe3f5b589a6d6ad216c51560d96493566b0231153e0628465a",
-    "BTCUSDT_1d.csv": "a4a2b2a224005f9020efc2731d4510b7225e27228ff955d47c2cea81935197d1",
-    "BTCUSDT_1h.csv": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
-    "BTCUSDT_2h.csv": "b8171b814bec472818bad35c97f17efc4a23c05fed96a5c0442699bd9c1aa4db",
-    "BTCUSDT_4h.csv": "ceb1eccabe8c5c4bf31ebe985338e157ff95da7c6702d044b64c4a0d42b2b79d",
-    "ETHUSDT_12h.csv": "448f7de9ffcc00c4cd1b5098e8b77b52c2144937ad2acfa46dae38cafa11344b",
-    "ETHUSDT_15m.csv": "ec419e6eaaf4a13fe0fba97cc60d6e80cc4746cc5bb36d5df1d512637a5c1b2b",
-    "ETHUSDT_1d.csv": "fa9900c81f1ed3ae2d24d27f2f1d4d799110466bf94a4025331a9cea12b1d60e",
-    "ETHUSDT_1h.csv": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
-    "ETHUSDT_2h.csv": "d4c0b3cb0219b51179fa624d0745605d70f7e4ad5d262062fff8a27d64b3fe14",
-    "ETHUSDT_4h.csv": "b0322d77c3a112695b5f5aa50abde3e6d850c3eefdaa023a45828e8a4e658579",
-    "SOLUSDT_12h.csv": "f023b0670a994d40ad0f5a43854c6ba5f1509d3c615d7dbc082d852aecb1ffa0",
-    "SOLUSDT_15m.csv": "e1a7e4fbc85aef196999f2b75461a0a03db9ce4ffbc4fc7a6fa7d4cbb2b6c4e2",
-    "SOLUSDT_1d.csv": "ed32f8eb5a71ce4b76f681e912c296d49c41dc35ae20ce7209ae2dbf5f341c06",
-    "SOLUSDT_1h.csv": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
-    "SOLUSDT_2h.csv": "19638d33dc80d2ee6234df8a0bc7790344371a516400737247336d37800bc43e",
-    "SOLUSDT_4h.csv": "0106b216ce0095df0ca14180a4d190a2a5c92288cad1ee8d153243a4a129ece6"
-   }
-  }
- },
- "semantics_note": "canonical 合并封顶语义(merge_max_atr>0,research-log #15)下的事件计数基准;与 v1/v2/event_study_v3(默认无界)历史冻结产物语义性分叉,不可混用 —— run_backtest_v6.py cross_checks 在 merge_max_atr>0 时仅以本文件为硬对账对象(research-log #17)。",
- "totals": {
-  "e1e6_short_1h": 4503,
-  "E7_fired": 20453,
-  "E7_passed_f1": 15012
- },
- "cells": {
-  "BTCUSDT@12h": {
-   "E1_long": 96,
-   "E1_short": 82,
-   "E6_long": 17,
-   "E6_short": 26,
-   "E7_long": 115,
-   "E7_short": 123,
-   "E7_fired": 238,
-   "E7_passed_f1": 155
+  "version": "capped-v2",
+  "generated_at_utc": "2026-10-20T01:16:52+00:00",
+  "generator": {
+    "command": "python scripts/freeze_canonical_baseline.py",
+    "script": "scripts/freeze_canonical_baseline.py",
+    "config_file": "config/canonical.json",
+    "config_version": "canonical-2026-10-19",
+    "merge_max_atr": 2.0,
+    "k_is": 0.8,
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT"
+    ],
+    "tf_list": [
+      "1h",
+      "2h",
+      "4h",
+      "12h",
+      "1d"
+    ],
+    "data_manifest": {
+      "path": "data/manifest.json",
+      "sha256": "eaff1807d9e92c0819d7838e26ed8262c6e772e7baeba26d9df240a3e29558ae",
+      "n_files": 18,
+      "files_sha256": {
+        "BTCUSDT_12h.csv": "f8cf98d28003c4e1af2b6c90d738874b390b1cddac424ed69a8e039e1f43c44a",
+        "BTCUSDT_15m.csv": "e84018b6250aa0fe3f5b589a6d6ad216c51560d96493566b0231153e0628465a",
+        "BTCUSDT_1d.csv": "a4a2b2a224005f9020efc2731d4510b7225e27228ff955d47c2cea81935197d1",
+        "BTCUSDT_1h.csv": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
+        "BTCUSDT_2h.csv": "b8171b814bec472818bad35c97f17efc4a23c05fed96a5c0442699bd9c1aa4db",
+        "BTCUSDT_4h.csv": "ceb1eccabe8c5c4bf31ebe985338e157ff95da7c6702d044b64c4a0d42b2b79d",
+        "ETHUSDT_12h.csv": "448f7de9ffcc00c4cd1b5098e8b77b52c2144937ad2acfa46dae38cafa11344b",
+        "ETHUSDT_15m.csv": "ec419e6eaaf4a13fe0fba97cc60d6e80cc4746cc5bb36d5df1d512637a5c1b2b",
+        "ETHUSDT_1d.csv": "fa9900c81f1ed3ae2d24d27f2f1d4d799110466bf94a4025331a9cea12b1d60e",
+        "ETHUSDT_1h.csv": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
+        "ETHUSDT_2h.csv": "d4c0b3cb0219b51179fa624d0745605d70f7e4ad5d262062fff8a27d64b3fe14",
+        "ETHUSDT_4h.csv": "b0322d77c3a112695b5f5aa50abde3e6d850c3eefdaa023a45828e8a4e658579",
+        "SOLUSDT_12h.csv": "f023b0670a994d40ad0f5a43854c6ba5f1509d3c615d7dbc082d852aecb1ffa0",
+        "SOLUSDT_15m.csv": "e1a7e4fbc85aef196999f2b75461a0a03db9ce4ffbc4fc7a6fa7d4cbb2b6c4e2",
+        "SOLUSDT_1d.csv": "ed32f8eb5a71ce4b76f681e912c296d49c41dc35ae20ce7209ae2dbf5f341c06",
+        "SOLUSDT_1h.csv": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
+        "SOLUSDT_2h.csv": "19638d33dc80d2ee6234df8a0bc7790344371a516400737247336d37800bc43e",
+        "SOLUSDT_4h.csv": "0106b216ce0095df0ca14180a4d190a2a5c92288cad1ee8d153243a4a129ece6"
+      }
+    }
   },
-  "BTCUSDT@1d": {
-   "E1_long": 42,
-   "E1_short": 38,
-   "E6_long": 8,
-   "E6_short": 8,
-   "E7_long": 59,
-   "E7_short": 52,
-   "E7_fired": 111,
-   "E7_passed_f1": 76
+  "semantics_note": "canonical 合并封顶语义(merge_max_atr>0,research-log #15)下的事件计数基准;与 v1/v2/event_study_v3(默认无界)历史冻结产物语义性分叉,不可混用 —— run_backtest_v6.py cross_checks 在 merge_max_atr>0 时仅以本文件为硬对账对象(research-log #17)。",
+  "totals": {
+    "breakout_structure_short_1h": 4503,
+    "FLIP_RETESTED_fired": 20453,
+    "E7_passed_f1": 15012
   },
-  "BTCUSDT@1h": {
-   "E1_long": 1310,
-   "E1_short": 1211,
-   "E6_long": 273,
-   "E6_short": 243,
-   "E7_long": 1940,
-   "E7_short": 1882,
-   "E7_fired": 3822,
-   "E7_passed_f1": 2825
+  "cells": {
+    "BTCUSDT@12h": {
+      "BREAKOUT_ACCEPTED_long": 96,
+      "BREAKOUT_ACCEPTED_short": 82,
+      "STRUCTURE_BROKEN_long": 17,
+      "STRUCTURE_BROKEN_short": 26,
+      "FLIP_RETESTED_long": 115,
+      "FLIP_RETESTED_short": 123,
+      "FLIP_RETESTED_fired": 238,
+      "FLIP_RETESTED_passed_f1": 155
+    },
+    "BTCUSDT@1d": {
+      "BREAKOUT_ACCEPTED_long": 42,
+      "BREAKOUT_ACCEPTED_short": 38,
+      "STRUCTURE_BROKEN_long": 8,
+      "STRUCTURE_BROKEN_short": 8,
+      "FLIP_RETESTED_long": 59,
+      "FLIP_RETESTED_short": 52,
+      "FLIP_RETESTED_fired": 111,
+      "FLIP_RETESTED_passed_f1": 76
+    },
+    "BTCUSDT@1h": {
+      "BREAKOUT_ACCEPTED_long": 1310,
+      "BREAKOUT_ACCEPTED_short": 1211,
+      "STRUCTURE_BROKEN_long": 273,
+      "STRUCTURE_BROKEN_short": 243,
+      "FLIP_RETESTED_long": 1940,
+      "FLIP_RETESTED_short": 1882,
+      "FLIP_RETESTED_fired": 3822,
+      "FLIP_RETESTED_passed_f1": 2825
+    },
+    "BTCUSDT@2h": {
+      "BREAKOUT_ACCEPTED_long": 627,
+      "BREAKOUT_ACCEPTED_short": 624,
+      "STRUCTURE_BROKEN_long": 142,
+      "STRUCTURE_BROKEN_short": 131,
+      "FLIP_RETESTED_long": 936,
+      "FLIP_RETESTED_short": 893,
+      "FLIP_RETESTED_fired": 1829,
+      "FLIP_RETESTED_passed_f1": 1308
+    },
+    "BTCUSDT@4h": {
+      "BREAKOUT_ACCEPTED_long": 340,
+      "BREAKOUT_ACCEPTED_short": 300,
+      "STRUCTURE_BROKEN_long": 82,
+      "STRUCTURE_BROKEN_short": 63,
+      "FLIP_RETESTED_long": 442,
+      "FLIP_RETESTED_short": 436,
+      "FLIP_RETESTED_fired": 878,
+      "FLIP_RETESTED_passed_f1": 622
+    },
+    "ETHUSDT@12h": {
+      "BREAKOUT_ACCEPTED_long": 99,
+      "BREAKOUT_ACCEPTED_short": 83,
+      "STRUCTURE_BROKEN_long": 15,
+      "STRUCTURE_BROKEN_short": 16,
+      "FLIP_RETESTED_long": 124,
+      "FLIP_RETESTED_short": 111,
+      "FLIP_RETESTED_fired": 235,
+      "FLIP_RETESTED_passed_f1": 167
+    },
+    "ETHUSDT@1d": {
+      "BREAKOUT_ACCEPTED_long": 45,
+      "BREAKOUT_ACCEPTED_short": 47,
+      "STRUCTURE_BROKEN_long": 7,
+      "STRUCTURE_BROKEN_short": 8,
+      "FLIP_RETESTED_long": 64,
+      "FLIP_RETESTED_short": 55,
+      "FLIP_RETESTED_fired": 119,
+      "FLIP_RETESTED_passed_f1": 68
+    },
+    "ETHUSDT@1h": {
+      "BREAKOUT_ACCEPTED_long": 1363,
+      "BREAKOUT_ACCEPTED_short": 1243,
+      "STRUCTURE_BROKEN_long": 228,
+      "STRUCTURE_BROKEN_short": 270,
+      "FLIP_RETESTED_long": 1929,
+      "FLIP_RETESTED_short": 1859,
+      "FLIP_RETESTED_fired": 3788,
+      "FLIP_RETESTED_passed_f1": 2848
+    },
+    "ETHUSDT@2h": {
+      "BREAKOUT_ACCEPTED_long": 649,
+      "BREAKOUT_ACCEPTED_short": 597,
+      "STRUCTURE_BROKEN_long": 121,
+      "STRUCTURE_BROKEN_short": 135,
+      "FLIP_RETESTED_long": 905,
+      "FLIP_RETESTED_short": 868,
+      "FLIP_RETESTED_fired": 1773,
+      "FLIP_RETESTED_passed_f1": 1267
+    },
+    "ETHUSDT@4h": {
+      "BREAKOUT_ACCEPTED_long": 316,
+      "BREAKOUT_ACCEPTED_short": 293,
+      "STRUCTURE_BROKEN_long": 64,
+      "STRUCTURE_BROKEN_short": 60,
+      "FLIP_RETESTED_long": 426,
+      "FLIP_RETESTED_short": 399,
+      "FLIP_RETESTED_fired": 825,
+      "FLIP_RETESTED_passed_f1": 591
+    },
+    "SOLUSDT@12h": {
+      "BREAKOUT_ACCEPTED_long": 94,
+      "BREAKOUT_ACCEPTED_short": 82,
+      "STRUCTURE_BROKEN_long": 21,
+      "STRUCTURE_BROKEN_short": 29,
+      "FLIP_RETESTED_long": 124,
+      "FLIP_RETESTED_short": 123,
+      "FLIP_RETESTED_fired": 247,
+      "FLIP_RETESTED_passed_f1": 167
+    },
+    "SOLUSDT@1d": {
+      "BREAKOUT_ACCEPTED_long": 45,
+      "BREAKOUT_ACCEPTED_short": 35,
+      "STRUCTURE_BROKEN_long": 10,
+      "STRUCTURE_BROKEN_short": 9,
+      "FLIP_RETESTED_long": 57,
+      "FLIP_RETESTED_short": 53,
+      "FLIP_RETESTED_fired": 110,
+      "FLIP_RETESTED_passed_f1": 72
+    },
+    "SOLUSDT@1h": {
+      "BREAKOUT_ACCEPTED_long": 1273,
+      "BREAKOUT_ACCEPTED_short": 1265,
+      "STRUCTURE_BROKEN_long": 252,
+      "STRUCTURE_BROKEN_short": 271,
+      "FLIP_RETESTED_long": 1943,
+      "FLIP_RETESTED_short": 1892,
+      "FLIP_RETESTED_fired": 3835,
+      "FLIP_RETESTED_passed_f1": 2854
+    },
+    "SOLUSDT@2h": {
+      "BREAKOUT_ACCEPTED_long": 632,
+      "BREAKOUT_ACCEPTED_short": 592,
+      "STRUCTURE_BROKEN_long": 119,
+      "STRUCTURE_BROKEN_short": 148,
+      "FLIP_RETESTED_long": 917,
+      "FLIP_RETESTED_short": 883,
+      "FLIP_RETESTED_fired": 1800,
+      "FLIP_RETESTED_passed_f1": 1374
+    },
+    "SOLUSDT@4h": {
+      "BREAKOUT_ACCEPTED_long": 296,
+      "BREAKOUT_ACCEPTED_short": 279,
+      "STRUCTURE_BROKEN_long": 67,
+      "STRUCTURE_BROKEN_short": 66,
+      "FLIP_RETESTED_long": 426,
+      "FLIP_RETESTED_short": 417,
+      "FLIP_RETESTED_fired": 843,
+      "FLIP_RETESTED_passed_f1": 618
+    }
   },
-  "BTCUSDT@2h": {
-   "E1_long": 627,
-   "E1_short": 624,
-   "E6_long": 142,
-   "E6_short": 131,
-   "E7_long": 936,
-   "E7_short": 893,
-   "E7_fired": 1829,
-   "E7_passed_f1": 1308
-  },
-  "BTCUSDT@4h": {
-   "E1_long": 340,
-   "E1_short": 300,
-   "E6_long": 82,
-   "E6_short": 63,
-   "E7_long": 442,
-   "E7_short": 436,
-   "E7_fired": 878,
-   "E7_passed_f1": 622
-  },
-  "ETHUSDT@12h": {
-   "E1_long": 99,
-   "E1_short": 83,
-   "E6_long": 15,
-   "E6_short": 16,
-   "E7_long": 124,
-   "E7_short": 111,
-   "E7_fired": 235,
-   "E7_passed_f1": 167
-  },
-  "ETHUSDT@1d": {
-   "E1_long": 45,
-   "E1_short": 47,
-   "E6_long": 7,
-   "E6_short": 8,
-   "E7_long": 64,
-   "E7_short": 55,
-   "E7_fired": 119,
-   "E7_passed_f1": 68
-  },
-  "ETHUSDT@1h": {
-   "E1_long": 1363,
-   "E1_short": 1243,
-   "E6_long": 228,
-   "E6_short": 270,
-   "E7_long": 1929,
-   "E7_short": 1859,
-   "E7_fired": 3788,
-   "E7_passed_f1": 2848
-  },
-  "ETHUSDT@2h": {
-   "E1_long": 649,
-   "E1_short": 597,
-   "E6_long": 121,
-   "E6_short": 135,
-   "E7_long": 905,
-   "E7_short": 868,
-   "E7_fired": 1773,
-   "E7_passed_f1": 1267
-  },
-  "ETHUSDT@4h": {
-   "E1_long": 316,
-   "E1_short": 293,
-   "E6_long": 64,
-   "E6_short": 60,
-   "E7_long": 426,
-   "E7_short": 399,
-   "E7_fired": 825,
-   "E7_passed_f1": 591
-  },
-  "SOLUSDT@12h": {
-   "E1_long": 94,
-   "E1_short": 82,
-   "E6_long": 21,
-   "E6_short": 29,
-   "E7_long": 124,
-   "E7_short": 123,
-   "E7_fired": 247,
-   "E7_passed_f1": 167
-  },
-  "SOLUSDT@1d": {
-   "E1_long": 45,
-   "E1_short": 35,
-   "E6_long": 10,
-   "E6_short": 9,
-   "E7_long": 57,
-   "E7_short": 53,
-   "E7_fired": 110,
-   "E7_passed_f1": 72
-  },
-  "SOLUSDT@1h": {
-   "E1_long": 1273,
-   "E1_short": 1265,
-   "E6_long": 252,
-   "E6_short": 271,
-   "E7_long": 1943,
-   "E7_short": 1892,
-   "E7_fired": 3835,
-   "E7_passed_f1": 2854
-  },
-  "SOLUSDT@2h": {
-   "E1_long": 632,
-   "E1_short": 592,
-   "E6_long": 119,
-   "E6_short": 148,
-   "E7_long": 917,
-   "E7_short": 883,
-   "E7_fired": 1800,
-   "E7_passed_f1": 1374
-  },
-  "SOLUSDT@4h": {
-   "E1_long": 296,
-   "E1_short": 279,
-   "E6_long": 67,
-   "E6_short": 66,
-   "E7_long": 426,
-   "E7_short": 417,
-   "E7_fired": 843,
-   "E7_passed_f1": 618
-  }
- }
+  "migrated_from": "capped-v1"
 }

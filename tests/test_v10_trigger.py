@@ -3,18 +3,18 @@
 覆盖(认知帧场景沿用 test_events.py/test_e7_v2.py/test_v8.py 的确定性价格
 路径;trigger 帧由 trig_of 合成,逐位聚合回认知帧 —— 测试内硬断言,保证
 两帧描述同一市场):
-- 知时细化正确性:E3/E6/E7/E1 在 trigger 收盘先满足 ⇒ mic 事件知时=该
+- 知时细化正确性:LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED/BREAKOUT_ACCEPTED 在 trigger 收盘先满足 ⇒ mic 事件知时=该
   trigger 收盘(ts=trigger 标签,known_index=trigger 序号),attrs 同族
   (id 与 bar 事件同族同方向同 ref;mic=True + trigger_tf 标注;阈值=最
   近已收**认知** bar 的 ATR —— invalid 公式的 atr 项钉死 atr(t-1) ≠ atr(t));
 - 无前馈:发射之后(含同认知 bar 内更晚的 trigger bar)的任意价格扰动不得
   改变已发射事件流(两段扰动:同 bar 后续根 + 全部未来),逐字段比对;
-- 超车早到量:E3 早 30 分钟、E6 早 30 分钟、E7 早 30 分钟(构造);
+- 超车早到量:LEVEL_REJECTED 早 30 分钟、STRUCTURE_BROKEN 早 30 分钟、FLIP_RETESTED 早 30 分钟(构造);
   数量闸门:N_a_mic = 3×4 = 12 根连续站稳恰界发射/断于第 12 根前的对照;
-  N_f_mic = 3×4 = 12:E2 收复在窗口内发射 / 窗口外不发射(镜像 A5);
+  N_f_mic = 3×4 = 12:BREAKOUT_FAILED 收复在窗口内发射 / 窗口外不发射(镜像 A5);
 - parity:mic 帧的 bar 事件流 == prepare_cognition 逐字段一致(检测器零改
   动的硬约束);run_campaigns(enable_mic=False) 挂不挂 mic 帧逐位一致;
-- 引擎接线:mic E1 注入 ⇒ 次一 trigger bar 开盘成交(decision_ts=trigger
+- 引擎接线:mic BREAKOUT_ACCEPTED 注入 ⇒ 次一 trigger bar 开盘成交(decision_ts=trigger
   标签,meta.mic=True,fill−decision=900s),同现象 bar 事件于认知收盘被槽
   位去重(恰一仓);确定性双跑(认知 + 引擎两层)。
 """
@@ -34,7 +34,7 @@ from market_operator.campaign import (
     run_campaigns,
 )
 from market_operator.events import (
-    E1, E2, E3, E6, E7, MarketEvent,
+    BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED, MarketEvent,
 )
 from market_operator.hypothesis import StructureView
 from market_operator.structure import Params, Regime
@@ -83,28 +83,28 @@ def trend_up_prefix(bars):
 
 
 def e3_bars():
-    """阻力区触碰(9)→ ex 逐 bar 推进(10/11)→ 回退 ≥ k_rj·atr ⇒ E3 @12。"""
+    """阻力区触碰(9)→ ex 逐 bar 推进(10/11)→ 回退 ≥ k_rj·atr ⇒ LEVEL_REJECTED @12。"""
     bars = []
     h1_prefix(bars)
     seg(bars, 100.0)                            # 8
     bar(bars, 100.0, 100.78, 99.82, 100.75)     # 9:触碰,ex=100.78
     bar(bars, 100.75, 100.84, 100.72, 100.8)    # 10:ex→100.84
     bar(bars, 100.8, 100.96, 100.76, 100.93)    # 11:ex→100.96
-    bar(bars, 100.93, 100.96, 100.6, 100.7)     # 12:回退 ⇒ E3 @12
+    bar(bars, 100.93, 100.96, 100.6, 100.7)     # 12:回退 ⇒ LEVEL_REJECTED @12
     return bars
 
 
 def e1_bars():
-    """h1_prefix + 破位候选(9)+ 连续 3 根站稳(9/10/11)⇒ E1 @11。"""
+    """h1_prefix + 破位候选(9)+ 连续 3 根站稳(9/10/11)⇒ BREAKOUT_ACCEPTED @11。"""
     bars = []
     h1_prefix(bars)
     seg(bars, 100.6, 101.3)    # 8;9 = 破位候选
-    seg(bars, 101.2, 101.25)   # 10;11 = 第 2、3 根 ⇒ E1 @11
+    seg(bars, 101.2, 101.25)   # 10;11 = 第 2、3 根 ⇒ BREAKOUT_ACCEPTED @11
     return bars
 
 
 def e7_long_bars():
-    """阻力破位(8)→ 回踩返回带内(9)→ 向上回退拒绝 ⇒ FLIPPED@9,E7|long。"""
+    """阻力破位(8)→ 回踩返回带内(9)→ 向上回退拒绝 ⇒ FLIPPED@9,FLIP_RETESTED|long。"""
     bars = []
     calm(bars, 100.0, 0.05, 6)
     seg(bars, 100.95, 100.3)      # 6(冲高形成 H pivot),7(确认;生成阻力区)
@@ -188,7 +188,7 @@ def _sig(e, atrs):
 
 def test_mic_bar_stream_parity_strict():
     cog_bars = e3_bars() + []
-    # 复合场景:E3 + E1 + E6 + E7 各自价格段顺序拼接(时间标签顺延)
+    # 复合场景:LEVEL_REJECTED + BREAKOUT_ACCEPTED + STRUCTURE_BROKEN + FLIP_RETESTED 各自价格段顺序拼接(时间标签顺延)
     more = []
     for build in (e1_bars, e7_long_bars):
         off = H * len(cog_bars)
@@ -202,11 +202,11 @@ def test_mic_bar_stream_parity_strict():
     want = sorted(_sig(e, None) for i, evs in ref.events_by.items()
                   for e in evs)
     assert got == want and len(want) >= 4, \
-        "mic 帧的 bar 事件流必须与 prepare_cognition 逐字段一致(E1-E7 零改动)"
+        "mic 帧的 bar 事件流必须与 prepare_cognition 逐字段一致(BREAKOUT_ACCEPTED-FLIP_RETESTED 零改动)"
 
 
 # ---------------------------------------------------------------------------
-# 知时细化:E3 提前 30 分钟;阈值 = 已收认知 bar ATR
+# 知时细化:LEVEL_REJECTED 提前 30 分钟;阈值 = 已收认知 bar ATR
 # ---------------------------------------------------------------------------
 
 
@@ -215,8 +215,8 @@ def test_mic_e3_early_know_time_and_cognitive_atr_threshold():
     trig = trig_of(cog_bars, reveal=1)     # 每根 1h 的信息于第 2 根 15m 揭示
     mic = prep(cog_bars, trig)
     ref = bar_stream(cog_bars)
-    mic_e3 = all_mic(mic, E3)
-    bar_e3 = [e for evs in ref.events_by.values() for e in evs if e.id == E3]
+    mic_e3 = all_mic(mic, LEVEL_REJECTED)
+    bar_e3 = [e for evs in ref.events_by.values() for e in evs if e.id == LEVEL_REJECTED]
     assert len(bar_e3) == 1 and len(mic_e3) == 1
     e, b = mic_e3[0], bar_e3[0]
     assert e.id == b.id and e.direction == b.direction == -1
@@ -240,7 +240,7 @@ def test_mic_e3_early_know_time_and_cognitive_atr_threshold():
 
 
 # ---------------------------------------------------------------------------
-# E2:窗口 N_f_mic = 12(镜像 A5);恰界发射 / 窗外不发射
+# BREAKOUT_FAILED:窗口 N_f_mic = 12(镜像 A5);恰界发射 / 窗外不发射
 # ---------------------------------------------------------------------------
 
 
@@ -255,10 +255,10 @@ def _e2_prefix(hover_c):
 
 def test_mic_e2_reclaim_inside_window_emits():
     cog_bars = _e2_prefix(None)
-    bar(cog_bars, 101.0, 101.03, 100.87, 100.9)     # 11:收复(c<hi)⇒ E2 @11
+    bar(cog_bars, 101.0, 101.03, 100.87, 100.9)     # 11:收复(c<hi)⇒ BREAKOUT_FAILED @11
     trig = trig_of(cog_bars, reveal=0)              # 每根信息于首根 15m 揭示
     mic = prep(cog_bars, trig)
-    e2s = all_mic(mic, E2)
+    e2s = all_mic(mic, BREAKOUT_FAILED)
     assert len(e2s) == 1
     e = e2s[0]
     assert e.direction == -1
@@ -283,30 +283,30 @@ def test_mic_e2_reclaim_outside_n_f_mic_window_no_event():
     assert hover < hi + bm_min and hover > hi
     trig = trig_of(cog_bars, reveal=0)
     mic = prep(cog_bars, trig)
-    assert all_mic(mic, E2) == [], \
-        "收复落于 N_f_mic=12 窗外(60−40=20)⇒ 无 mic E2(镜像 A5 窗口)"
+    assert all_mic(mic, BREAKOUT_FAILED) == [], \
+        "收复落于 N_f_mic=12 窗外(60−40=20)⇒ 无 mic BREAKOUT_FAILED(镜像 A5 窗口)"
     # 窗口边界反证:同场次把收复挪进窗内(11 根内)则必须发射
     bars2 = _e2_prefix(None)
     bar(bars2, 101.0, 101.03, 100.87, 100.9)    # 11:收复
     for _ in range(4):
         bar(bars2, hover, hover + 0.005, hover - 0.005, hover)
     mic2 = prep(bars2, trig_of(bars2, reveal=0))
-    assert len(all_mic(mic2, E2)) == 1
+    assert len(all_mic(mic2, BREAKOUT_FAILED)) == 1
 
 
 # ---------------------------------------------------------------------------
-# E1:N_a_mic = N_a×scale = 12 根连续 trigger 站稳;断于第 12 根前不发射
+# BREAKOUT_ACCEPTED:N_a_mic = N_a×scale = 12 根连续 trigger 站稳;断于第 12 根前不发射
 # ---------------------------------------------------------------------------
 
 
 def test_mic_e1_counting_gate_exactly_12_closes():
     cog_bars = e1_bars()
     ref = bar_stream(cog_bars)
-    bar_e1 = [e for evs in ref.events_by.values() for e in evs if e.id == E1]
+    bar_e1 = [e for evs in ref.events_by.values() for e in evs if e.id == BREAKOUT_ACCEPTED]
     assert len(bar_e1) == 1 and bar_e1[0].known_index == 11
     trig = trig_of(cog_bars, reveal=0)            # 破位于首根 15m 揭示(9.q0)
     mic = prep(cog_bars, trig)
-    e1s = all_mic(mic, E1)
+    e1s = all_mic(mic, BREAKOUT_ACCEPTED)
     assert len(e1s) == 1
     e, b = e1s[0], bar_e1[0]
     assert e.attrs["started"] == 4 * 9 == 36      # 候选 = 断位 trigger 收盘第 1 根
@@ -318,33 +318,33 @@ def test_mic_e1_counting_gate_exactly_12_closes():
     # 知时重合(站稳 12 根 ≡ 3 认知 bar 全程):提前 0 —— 不破"最多 45 分钟"上界
     assert close_ms_cog(11) - close_ms_trig(47) == 0
 
-    # 对照:第 12 根收盘失守 ⇒ 不得发射(bar 流同样无 E1,镜像 A4)
+    # 对照:第 12 根收盘失守 ⇒ 不得发射(bar 流同样无 BREAKOUT_ACCEPTED,镜像 A4)
     ctrl = []
     h1_prefix(ctrl)
     seg(ctrl, 100.6, 101.3)
     seg(ctrl, 101.2)
     bar(ctrl, 101.2, 101.25, 100.4, 100.5)      # 11:收盘跌回带内 ⇒ 候选作废
     mic_c = prep(ctrl, trig_of(ctrl, reveal=0))
-    assert all_mic(mic_c, E1) == []
+    assert all_mic(mic_c, BREAKOUT_ACCEPTED) == []
     ref_c = bar_stream(ctrl)
-    assert [e for evs in ref_c.events_by.values() for e in evs if e.id == E1] == []
+    assert [e for evs in ref_c.events_by.values() for e in evs if e.id == BREAKOUT_ACCEPTED] == []
 
 
 # ---------------------------------------------------------------------------
-# E6:破坏收盘在 trigger 帧先满足(趋势结构锁定认知帧,ref 逐位相同)
+# STRUCTURE_BROKEN:破坏收盘在 trigger 帧先满足(趋势结构锁定认知帧,ref 逐位相同)
 # ---------------------------------------------------------------------------
 
 
 def test_mic_e6_early_break_ref_identical():
     cog_bars = []
     trend_up_prefix(cog_bars)
-    seg(cog_bars, 103.0, 100.2)       # 17,18:收盘 < L*(100.52) − k_bm·atr ⇒ E6@18
+    seg(cog_bars, 103.0, 100.2)       # 17,18:收盘 < L*(100.52) − k_bm·atr ⇒ STRUCTURE_BROKEN@18
     ref = bar_stream(cog_bars)
-    bar_e6 = [e for evs in ref.events_by.values() for e in evs if e.id == E6]
+    bar_e6 = [e for evs in ref.events_by.values() for e in evs if e.id == STRUCTURE_BROKEN]
     assert len(bar_e6) == 1 and bar_e6[0].known_index == 18
     trig = trig_of(cog_bars, reveal=3, carry_at={18: 1})   # 破坏收盘于 18.q1 揭示
     mic = prep(cog_bars, trig)
-    e6s = all_mic(mic, E6)
+    e6s = all_mic(mic, STRUCTURE_BROKEN)
     assert len(e6s) == 1, "首个满足破坏的 trigger 收盘发射一次(后续 episode 另计)"
     e, b = e6s[0], bar_e6[0]
     assert e.id == b.id and e.direction == b.direction == -1
@@ -357,18 +357,18 @@ def test_mic_e6_early_break_ref_identical():
 
 
 # ---------------------------------------------------------------------------
-# E7:回踩拒绝在 trigger 帧先确认(翻转仍是认知帧结构事实,双发如实)
+# FLIP_RETESTED:回踩拒绝在 trigger 帧先确认(翻转仍是认知帧结构事实,双发如实)
 # ---------------------------------------------------------------------------
 
 
 def test_mic_e7_flip_retest_early():
     cog_bars = e7_long_bars()
     ref = bar_stream(cog_bars)
-    bar_e7 = [e for evs in ref.events_by.values() for e in evs if e.id == E7]
+    bar_e7 = [e for evs in ref.events_by.values() for e in evs if e.id == FLIP_RETESTED]
     assert len(bar_e7) == 1 and bar_e7[0].known_index == 9
     trig = trig_of(cog_bars, reveal=3, carry_at={9: 1})  # 回踩+回退于 9.q1 完成
     mic = prep(cog_bars, trig)
-    e7s = all_mic(mic, E7)
+    e7s = all_mic(mic, FLIP_RETESTED)
     assert len(e7s) == 1
     e, b = e7s[0], bar_e7[0]
     assert e.id == b.id and e.direction == b.direction == +1
@@ -457,7 +457,7 @@ VIEW2H = StructureView(regime=Regime.TRANSITION, zones=(), atr=ATR)
 
 
 def _engine_frames(with_mic):
-    """2h = 8×15m;认知 bar 2 注入 bar E1;mic(可选)注入同现象 trigger E1 @17。"""
+    """2h = 8×15m;认知 bar 2 注入 bar BREAKOUT_ACCEPTED;mic(可选)注入同现象 trigger BREAKOUT_ACCEPTED @17。"""
     n_trig = 64
     rows = []
     for i in range(n_trig):
@@ -472,21 +472,21 @@ def _engine_frames(with_mic):
                  df_exec.open[i * 2], max(df_exec.high[i * 2:i * 2 + 2]),
                  min(df_exec.low[i * 2:i * 2 + 2]), df_exec.close[i * 2 + 1], 1.0)
                 for i in range(8)]
-    bar_e1 = MarketEvent(id=E1, direction=+1, ts=T0 + 2 * 2 * H, known_index=2,
+    bar_e1 = MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 2 * 2 * H, known_index=2,
                          attrs={"ref": 95.0, "invalid": 94.0})
     cog = SymbolCognition(symbol="TEST", bars=cog_bars, atrs=[ATR] * 8,
                           events_by={2: [bar_e1]}, pivots_by={},
                           views={2: VIEW2H})
     mic = None
     if with_mic:
-        mic_e1 = MarketEvent(id=E1, direction=+1, ts=T0 + 17 * Q, known_index=17,
+        mic_e1 = MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 17 * Q, known_index=17,
                              attrs={"ref": 95.0, "invalid": 94.0,
                                     "mic": True, "trigger_tf": 900})
         mic = MicCognition(
             symbol="TEST", obs_tf_seconds=7200, trigger_tf_seconds=900,
             scale=8, bars=rows, cog_index_of=[i // 8 for i in range(64)],
             atrs=[ATR] * 64, events_by={17: [mic_e1]}, views={17: VIEW2H},
-            bar_events_by={2: [bar_e1]}, counters={"E1": 1})
+            bar_events_by={2: [bar_e1]}, counters={"BREAKOUT_ACCEPTED": 1})
     return build_campaign_frame(cog, df_exec, "2h", mic_cog=mic)
 
 
@@ -508,7 +508,7 @@ def test_engine_mic_fill_next_trigger_open_and_bar_dup_skip():
     assert row["ts"] - row["decision_ts"] == 900_000
     assert row["meta"]["mic"] is True
     assert row["meta"]["cog_index"] == 2
-    # 对照:同现象的 bar E1(认知 bar 2 收盘)若成交应在 T0+6h;实际被 dup
+    # 对照:同现象的 bar BREAKOUT_ACCEPTED(认知 bar 2 收盘)若成交应在 T0+6h;实际被 dup
     assert row["ts"] < T0 + 6 * H
     assert res.counters.get("dup", 0) >= 1
     assert res.counters["opens_filled"] == 1

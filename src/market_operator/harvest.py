@@ -13,21 +13,21 @@ V6Router,arm0 回归钉死)。持仓侧(收割模式/时间帽)在 position.py,�
   (拒绝只在缘在场且太挤,同 quality Q2 纪律);缘取法 = opposite_edge_price
   (与 quality.opposite_edge_R 同一搜索口径:沿交易方向、状态 ∈
   hypothesis.TARGET_STATES、严格越过 entry_ref 的最近对侧区域近缘);
-  ③ 失效 = 结构区缘 ∓ k_bm·ATR(= 事件 attrs["invalid"] §7 建议口径:E1
-  正缘外侧 / E2/E3 外缘外侧 / E8 刺穿极值外侧 / E6 结构 pivot±buf / E7
+  ③ 失效 = 结构区缘 ∓ k_bm·ATR(= 事件 attrs["invalid"] §7 建议口径:BREAKOUT_ACCEPTED
+  正缘外侧 / BREAKOUT_FAILED/LEVEL_REJECTED 外缘外侧 / EDGE_RECLAIMED 刺穿极值外侧 / STRUCTURE_BROKEN 结构 pivot±buf / FLIP_RETESTED
   远端边缘;v16 以此为唯一失效锚,替换 canonical turtle 2·ATR)且 F1:
   dist(entry_ref, invalid) ≥ k_is·ATR(0.8;dist ≤ 0 = 非保护性失效 ⇒
   拒,fail-closed;ATR 取决策 bar)。
   entry_ref 口径同 quality Q1:市价/续涨路由 = 决策 bar 收盘,限价路由 =
-  计划限价(fade ⇒ 计划 maker 前缘,E7 ⇒ G3 前缘)。
+  计划限价(fade ⇒ 计划 maker 前缘,FLIP_RETESTED ⇒ G3 前缘)。
 - **档(不挡)**:regime 顺风 ⇒ A×1.0,其余 ⇒ B×0.75(size_mult 经既有 C5
   meta 通道缩放 risk_frac 定仓;杠杆/容量不动);k(v11 厚假说 zone_touches
   > k_*=2)只作档注,不参与定档(与 v14 的 Q3∧Q4 定 A 不同,协议原文)。
-- **执行差分(协议 §入场-执行)**:fade(E2/E3/E8)决策改写为 kind="limit"
-  计划限价 = zone 前缘(接近侧缘:空 = zone.lo / 多 = zone.hi,与 E7 G3 及
+- **执行差分(协议 §入场-执行)**:fade(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)决策改写为 kind="limit"
+  计划限价 = zone 前缘(接近侧缘:空 = zone.lo / 多 = zone.hi,与 FLIP_RETESTED G3 及
   v14 C4 分层"前缘"同口径),由 campaign C2 通道(exchange_maker,
-  c2_family=fade)真挂单,N_fill=12;续涨(E1/E6/E7)由 C3 通道 stop-entry
-  预埋(ref ± k_bm·ATR,超时 12×TF 作废);E4/E5 不在两族 ⇒ canonical 市价
+  c2_family=fade)真挂单,N_fill=12;续涨(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED)由 C3 通道 stop-entry
+  预埋(ref ± k_bm·ATR,超时 12×TF 作废);TREND_RESUMED/RANGE_ROTATED 不在两族 ⇒ canonical 市价
   兜底。其余成交价/费/滑点/容量沿 canonical 不变。
 - **收割婚配(协议 §持仓)**:fade 持仓 target_1 = 对面结构缘(=空间闸丈量
   的同一对面缘,k_room=1.5 对面缘=收割目标;到价全平在 position.py 收割
@@ -39,7 +39,7 @@ V6Router,arm0 回归钉死)。持仓侧(收割模式/时间帽)在 position.py,�
   Q2/opposite_edge_R 同口径的"最近对侧区域近缘"(沿交易方向越过 entry_ref
   搜索视图 zones);(b)事件 attrs 自带 zone 的"对侧缘"。按任务裁决取
   **(a)**(与质量 Q2 同源同口径,"k_room=1.5 对面缘 = 收割目标"即此缘),
-  fail-closed 说明:attrs zone 缺(E6 类)或对面缘缺失时 fade 不编造目标,
+  fail-closed 说明:attrs zone 缺(STRUCTURE_BROKEN 类)或对面缘缺失时 fade 不编造目标,
   target_1=None 如实记录;与既有 hypothesis._structural_target 的差仅在
   搜索锚(本实现锚 entry_ref 计划入场价,hypothesis 锚 attrs["ref"])与
   返回量(本实现取缘价本身)。
@@ -77,7 +77,7 @@ class HarvestParams:
     tier_b_mult: float = 0.75        # 其余档 B risk 系数
     k_cap_hours: int = 48            # 时间帽(×TF 小时;经 ArmConfig 入持仓侧)
     cap_mfe_min: float = 0.5         # 时间帽 MFE 恰界(inclusive 持有)
-    fade_family: tuple = ("E2", "E3", "E8")
+    fade_family: tuple = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
 
 
 @dataclass(frozen=True)
@@ -113,7 +113,7 @@ def opposite_edge_price(zones: Sequence, direction: int, entry_ref: float
 
 
 def fade_front_edge(zone_lo: float, zone_hi: float, direction: int) -> float:
-    """fade maker 计划限价 = zone 前缘(接近侧缘,与 E7 G3/v14 C4 同口径):
+    """fade maker 计划限价 = zone 前缘(接近侧缘,与 FLIP_RETESTED G3/v14 C4 同口径):
     空(fade 阻力)= zone.lo;多(fade 支撑)= zone.hi。"""
     return float(zone_lo) if int(direction) < 0 else float(zone_hi)
 
@@ -202,7 +202,7 @@ class V16Router(V6Router):
     """v16 收割婚配的路由落点:父类决策 ⇒ fade 前缘改单 ⇒ 三闸 ⇒ 定档 ⇒
     结构锚 hyp 重建(invalid=结构、fade target=对面缘)。
 
-    - fade(E2/E3/E8):市场决策改写为 kind="limit",limit_price = zone 前缘
+    - fade(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED):市场决策改写为 kind="limit",limit_price = zone 前缘
       (attrs 溯源 zone_lo/zone_hi;缺 zone ⇒ fail-closed 拒,v16_reject_no_zone);
     - invalid:替换为事件结构失效(attrs["invalid"] 经 meta ev_invalid 溯源;
       缺失 ⇒ fail-closed 拒,v16_reject_no_invalid)——协议"一生一表全结构锚";

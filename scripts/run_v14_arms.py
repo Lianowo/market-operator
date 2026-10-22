@@ -74,8 +74,8 @@ ARM_IDS = [f"arm{i}" for i in range(7)]
 MIN_TRADES_TEST = 60
 SELECTION_RULE = ("dev@1.5x expectancy_usdt 降序,并列取净盈亏降序;"
                   "候选 = arm1-arm6(arm0 为 canonical 对照不参与候选)")
-FROZEN_ERA_WHITELIST = (("E1", -1), ("E1", 1), ("E3", -1), ("E3", 1),
-                        ("E6", -1), ("E6", 1), ("E7", -1), ("E7", 1))
+FROZEN_ERA_WHITELIST = (("BREAKOUT_ACCEPTED", -1), ("BREAKOUT_ACCEPTED", 1), ("LEVEL_REJECTED", -1), ("LEVEL_REJECTED", 1),
+                        ("STRUCTURE_BROKEN", -1), ("STRUCTURE_BROKEN", 1), ("FLIP_RETESTED", -1), ("FLIP_RETESTED", 1))
 METRIC_EQ = ("net_pnl", "n_trades", "winrate", "profit_factor")
 
 
@@ -749,7 +749,7 @@ def render_md(payload: dict) -> str:
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in ("1h", "2h", "4h", "12h", "1d"):
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)
@@ -775,8 +775,8 @@ def render_md(payload: dict) -> str:
               " R 基准取首份价(收割语义只用结构 invalid,MFE_R 报告口径受此"
               "近似,如实声明);⑤ 组合 3% 容量决策账未乘 tier(预算口径略高估"
               "=保守);⑥ Q2 对面缘缺失判空间无界=过(拒绝只认缘在场太挤);"
-              "⑦ Q3 为档注(k>k_*=2 成熟,v11 厚假说口径),E6 类无 zone 事件"
-              "不加成;⑧ pos 带取 E8 同口径(全名单最近 LOW/HIGH pivot;≤8 "
+              "⑦ Q3 为档注(k>k_*=2 成熟,v11 厚假说口径),STRUCTURE_BROKEN 类无 zone 事件"
+              "不加成;⑧ pos 带取 EDGE_RECLAIMED 同口径(全名单最近 LOW/HIGH pivot;≤8 "
               "窗口与全名单等价,因 pivot 严格高低交错);⑨ 差价归因按(战役×"
               "决策时刻×事件)硬匹配,匹配不上者单列不做插补;⑩ test 曝光纪"
               "律见 §5,test<60 ⇒ INSUFFICIENT_DATA 不另立判据。", "",

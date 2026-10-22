@@ -27,6 +27,6 @@
   "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
   "obs_tf_seconds": 3600,
   "k_is": 0.8,
-  "whitelist_v2": [["E7", -1], ["E7", 1]],
+  "whitelist_v2": [["FLIP_RETESTED", -1], ["FLIP_RETESTED", 1]],
   "k_is_sensitivity_report": [0.6, 1.0]
 }

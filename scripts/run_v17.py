@@ -5,7 +5,7 @@
 
 双臂(测量变体,不是协议重开):
 - arm-M:mic 全族(用户指令语义)——全部 8 事件允许在 trigger 收盘先知;
-- arm-C:仅续涨族(E1/E6/E7)激 mic,fade(E2/E3/E8)与 E4/E5 归 bar 触发
+- arm-C:仅续涨族(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED)激 mic,fade(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)与 TREND_RESUMED/RANGE_ROTATED 归 bar 触发
   (历史证据侧)。两臂共用同一批 mic 挂载战役帧,唯一差异 = mic_families。
 
 用法:  python scripts/run_v17.py
@@ -25,7 +25,7 @@
   bar 臂逐格全等(engine 零回归)。探针帧 = 臂帧(canonical 语义由 v13 引擎
   钉测试钉死:enable_mic=False 时挂载 mic 帧数值不变)+ 1h bar 战役帧。
 - 对账硬约束:mic 帧复放 bar 事件流 == prepare_cognition 逐字段(检测器零
-  改动);认知事件计数 == capped-v1 基准逐格(probe_frames 15 战役齐全);
+  改动);认知事件计数 == capped-v2 基准逐格(probe_frames 15 战役齐全);
   30m 帧 manifest 哈希复核;trigger 帧装载沿用 v13 校验链(validate/对齐/
   compaction 守恒);12h→2h、1d→4h 为协议 §1 "obs/4 无现帧取最近可用"声明档,
   如实声明。
@@ -164,7 +164,7 @@ def load_config() -> dict:
     if v17["arms"]["arm-M"]["mic_family"] != "all":
         raise RuntimeError("arm-M 必须 mic 全族(mic_family=all)")
     if v17["arms"]["arm-C"]["mic_family"] != list(STOP_FAMILY):
-        raise RuntimeError("arm-C 必须仅续涨族 mic(E1/E6/E7)")
+        raise RuntimeError("arm-C 必须仅续涨族 mic(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED)")
     return v17
 
 
@@ -292,7 +292,7 @@ def build_arm(raw_cfg: dict, arm_id: str) -> tuple:
                     cap_mfe_min=float(p["cap_mfe_min"]))
     mic_families = None if arm_id == "arm-M" else tuple(p["stop_family"])
     if arm_id == "arm-C" and mic_families != STOP_FAMILY:
-        raise RuntimeError("arm-C mic 族必须恰为续涨族 E1/E6/E7")
+        raise RuntimeError("arm-C mic 族必须恰为续涨族 BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED")
     return hp, V16Router, arm, mic_families
 
 
@@ -983,7 +983,7 @@ def render_md(arm_id: str, payload: dict, grids: dict, attr: dict,
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in TF_LIST:
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)

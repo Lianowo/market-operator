@@ -69,7 +69,7 @@ def build_frames_for_map(symbols, tf_list, trig_map, params, cog_by, df_cog_by,
     return frames
 
 
-def eval_run(label, frames, raw, contracts, params, eids=("E1", "E3"),
+def eval_run(label, frames, raw, contracts, params, eids=("BREAKOUT_ACCEPTED", "LEVEL_REJECTED"),
              enable_mic=False, rp_override=None, rp_by_tf_override=None,
              segment="full", cost_mult=1.0, show_by_tf=False):
     wl = frozenset((str(e), int(d)) for e in eids for d in (-1, 1))

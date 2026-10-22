@@ -39,7 +39,7 @@ def _broker(**kw):
 def _order(**kw):
     arg = dict(direction=-1, limit_price=100.0, armed_at_ts=0,
                expiry_ts=12 * H, fill_after_ts=0, symbol="TEST",
-               role="entry", invalid=104.0, target_1=None, event_id="E1",
+               role="entry", invalid=104.0, target_1=None, event_id="BREAKOUT_ACCEPTED",
                reason="T|v14", meta={"direction": -1})
     arg.update(kw)
     return RestingLimitOrder(**arg)
@@ -150,11 +150,11 @@ def test_stop_entry_expires_after_window():
 # ---------------------------------------------------------------------------
 
 
-def _ladder_group(b, group="TEST#0#E3"):
+def _ladder_group(b, group="TEST#0#LEVEL_REJECTED"):
     """sell 分层三份:前缘 100 / 中 101 / 内缘 102,invalid 108,各 1/3 风险份。"""
     for j, px in enumerate((100.0, 101.0, 102.0)):
         b.submit_limit(_order(limit_price=px, invalid=108.0,
-                              ladder_group=group, event_id="E3",
+                              ladder_group=group, event_id="LEVEL_REJECTED",
                               meta={"direction": -1, "size_mult": 1.0 / 3.0,
                                     "order_type": "ladder_entry",
                                     "ladder_slice": j}))
@@ -169,7 +169,7 @@ def test_ladder_two_slices_merge_weighted_entry_same_trade():
     assert len(lf) == 2
     assert len({r["trade_id"] for r in lf}) == 1               # 同一笔交易
     add = [r for r in lf if r["meta"].get("ladder_add")]
-    assert len(add) == 1 and add[0]["meta"]["ladder_group"] == "TEST#0#E3"
+    assert len(add) == 1 and add[0]["meta"]["ladder_group"] == "TEST#0#LEVEL_REJECTED"
     pos = b.position_of("TEST")
     assert pos is not None
     # 各份 qty = floor_step(risk_frac/3·equity/|px−invalid|, 0.01):0.09375→0.09、
@@ -193,7 +193,7 @@ def test_ladder_unfilled_slice_expires():
         rows += _bar(b, k * H, 99.0, 99.8, 98.2, 99.0)
     exp = [r for r in rows if r["kind"] == "EXPIRED"]
     assert len(exp) == 1 and exp[0]["meta"]["limit_price"] == 102.0
-    assert exp[0]["meta"]["ladder_group"] == "TEST#0#E3"
+    assert exp[0]["meta"]["ladder_group"] == "TEST#0#LEVEL_REJECTED"
 
 
 def test_ladder_foreign_group_dup_guard():
@@ -201,7 +201,7 @@ def test_ladder_foreign_group_dup_guard():
     _ladder_group(b)
     _bar(b, 1 * H, 99.0, 100.5, 98.5, 99.5)                    # 首份成
     assert b.position_of("TEST") is not None
-    b.submit_limit(_order(limit_price=99.5, ladder_group="OTHER#1#E3",
+    b.submit_limit(_order(limit_price=99.5, ladder_group="OTHER#1#LEVEL_REJECTED",
                           meta={"direction": -1}))
     rows = _bar(b, 2 * H, 99.0, 100.0, 98.0, 99.0)
     skip = [r for r in rows if r["kind"] == "SKIP"]

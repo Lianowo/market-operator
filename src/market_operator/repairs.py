@@ -8,13 +8,13 @@ position.py(harvest_ladder3)。基线 = v17 arm-C 语义(仅续涨 mic,fade
 
 协议条款 → 实现映射:
 - **R1 大炮走法(事件 bar 波幅分位 rngq,窗 48,恰 0.8 受理)**:
-  ① 续涨家族(E1/E6/E7)仅允许级联 mic 口径入场:bar 化身事件(认知收盘
+  ① 续涨家族(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED)仅允许级联 mic 口径入场:bar 化身事件(认知收盘
   到达、attrs 无 mic 标注)在进入 V6 路由前整体抑制 —— 大炮尾巴上的
-  决策层入场一律不存在;其 E1 优先级撤单/弱 episode 登记等副作用一并不
+  决策层入场一律不存在;其 BREAKOUT_ACCEPTED 优先级撤单/弱 episode 登记等副作用一并不
   展开(错峰语义:同现象的 mic 化身先到先决,bar 化身完全惰性);
   事件三根属性(ref/invalid/zone)不变、检测零改动。计数
   v18_r1_cont_bar_suppressed。
-  ② fade 家族(E2/E3/E8):rngq > 0.8(strictly;恰 0.8 受理)的事件不
+  ② fade 家族(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED):rngq > 0.8(strictly;恰 0.8 受理)的事件不
   入场(小级抢跑三度证伪后的存量条款),计数 v18_r1_fade_rngq_evaluated /
   _reject。
 - **R2 逆三拍(入场合法性核,与市况/收割解耦)**:决策时刻前三根认知帧
@@ -50,8 +50,8 @@ from .structure import Regime
 
 # v18 家族表(协议写死;与 campaign.STOP/FADE_FAMILY、v16_params 家族表
 # 硬对账 —— run_v18.load_config 与 config 测试双锚,漂移即 raise)
-CONT_FAMILY = ("E1", "E6", "E7")
-FADE_FAMILY = ("E2", "E3", "E8")
+CONT_FAMILY = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
+FADE_FAMILY = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
 
 RNGQ_WINDOW = 48                   # R1 rngq 窗(协议 §R1 写死)
 RNGQ_MAX = 0.8                     # fade 大炮阈值(strictly 超即拒;恰界受理)

@@ -23,9 +23,9 @@ def broker():
 
 def place(b: Broker, symbol: str, ts: int, invalid: float = 99.0):
     it = OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
-                     reason="E7|valid", ref_price=100.0, ts=ts)
+                     reason="FLIP_RETESTED|valid", ref_price=100.0, ts=ts)
     b.submit(it, ts, direction=1, invalid=invalid,
-             event_id="E7", target_1=110.0)
+             event_id="FLIP_RETESTED", target_1=110.0)
     return b.on_bar_open(symbol, ts + H, 100.0)[0]
 
 

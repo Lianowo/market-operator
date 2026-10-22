@@ -1,5 +1,5 @@
 """v9 事件研究管线(docs/v9-protocol.md,冻结于任何 v9 运行之前,2026-10-20;
-最后一轮协议级研究:过程式接受/拒绝 E9/E10)。
+最后一轮协议级研究:过程式接受/拒绝 PROCESS_ACCEPTED/PROCESS_REJECTED)。
 
 用法:  python scripts/run_event_study_v9.py
 产物:  reports/event_study_v9.json                 机器可读全量(机制 × 段 ×
@@ -8,12 +8,12 @@
        reports/event_study_events_v9_{dev,test}.csv  逐事件明细(含对照增量)
 
 纪律(v9-protocol §1-§6,冻结):
-- 唯一新机制 = E9 PROCESS_ACCEPTED / E10 PROCESS_REJECTED(events.py
+- 唯一新机制 = PROCESS_ACCEPTED PROCESS_ACCEPTED / PROCESS_REJECTED PROCESS_REJECTED(events.py
   enable_e9e10;四先验一次写死 min_age=3, occ=2/3, centroid=0.3, k_rj=0.3
   全来自 config/v9.json;敏感性 {min_age 2/4, occ 0.6/0.75, centroid
   0.2/0.5} 协议仅许 dev——本管线声明的交付范围为主判定网格一次,不含敏
   感性(协议§2 是许可+范围限制,非义务)。
-- 桶 = 事件 × 方向:E9|long, E9|short, E10|long, E10|short 四个主格;
+- 桶 = 事件 × 方向:PROCESS_ACCEPTED|long, PROCESS_ACCEPTED|short, PROCESS_REJECTED|long, PROCESS_REJECTED|short 四个主格;
   双向对称判定,不做方向挑选(协议§4)。
 - 评估协议 = methodology §9 全流程原样(v1 同路):TF=1h 认知帧、入场 =
   次 1h 开盘市价(taker,research 框架固有口径,即 protocol §3 次 1h 开
@@ -26,15 +26,15 @@
 - dev/test = 每品种前 dev_frac(0.7)为 dev;**test 段第 12 次曝光且此后
   只许前向**(research-log #18 预注册);四判据只在 test 段评估;n<60 ⇒
   INSUFFICIENT_DATA,不做叙述性补救(协议§4)。
-- 同池对照上下文(协议§5 动机的直接核验;非 v9 判定对象):E1|long,
-  E1|short, E3|long, E3|short 在同一回放、同一时间线、同一种子栅格下
-  过同一测量管线(v1 事件研究同口径,无 F1/白名单),与 E9/E10 同池对比。
+- 同池对照上下文(协议§5 动机的直接核验;非 v9 判定对象):BREAKOUT_ACCEPTED|long,
+  BREAKOUT_ACCEPTED|short, LEVEL_REJECTED|long, LEVEL_REJECTED|short 在同一回放、同一时间线、同一种子栅格下
+  过同一测量管线(v1 事件研究同口径,无 F1/白名单),与 PROCESS_ACCEPTED/PROCESS_REJECTED 同池对比。
 - 零样本病理探针(_GateProbe,脚本内局部):与主回放同参数的第二遍,
   逐门统计 aged episode bars;属事实证据、判定输入外(判定仍按 §9 原样
-  只依事件/对照测量;探针与主回放 E9/E10 发射硬对账,不符即 raise)。
+  只依事件/对照测量;探针与主回放 PROCESS_ACCEPTED/PROCESS_REJECTED 发射硬对账,不符即 raise)。
 - 区域/认知/成本/收割零改动:全部先验逐项来自 config/v9.json(其 parent
   = config/canonical.json,含 merge_max_atr=2.0 账面修复语义,与生产认知
-  同座);不改 E1-E8 检测;历史产物不动。
+  同座);不改 BREAKOUT_ACCEPTED-EDGE_RECLAIMED 检测;历史产物不动。
 """
 
 from __future__ import annotations
@@ -53,10 +53,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import data as mo_data                      # noqa: E402
 from market_operator.events import (                             # noqa: E402
-    E1,
-    E3,
-    E9,
-    E10,
+    BREAKOUT_ACCEPTED,
+    LEVEL_REJECTED,
+    PROCESS_ACCEPTED,
+    PROCESS_REJECTED,
     EventDetector,
 )
 from market_operator.hypothesis import f1_invalid_distance_ok     # noqa: E402
@@ -79,9 +79,9 @@ from market_operator.structure import Params                      # noqa: E402
 CONFIG_V9 = ROOT / "config" / "v9.json"
 REPORTS = ROOT / "reports"
 
-PRIMARY_MECHS = ("E9|long", "E9|short", "E10|long", "E10|short")
-COMPARE_MECHS = ("E1|long", "E1|short", "E3|long", "E3|short")
-STUDY_IDS = frozenset({E1, E3, E9, E10})
+PRIMARY_MECHS = ("PROCESS_ACCEPTED|long", "PROCESS_ACCEPTED|short", "PROCESS_REJECTED|long", "PROCESS_REJECTED|short")
+COMPARE_MECHS = ("BREAKOUT_ACCEPTED|long", "BREAKOUT_ACCEPTED|short", "LEVEL_REJECTED|long", "LEVEL_REJECTED|short")
+STUDY_IDS = frozenset({BREAKOUT_ACCEPTED, LEVEL_REJECTED, PROCESS_ACCEPTED, PROCESS_REJECTED})
 
 
 class _GateProbe(EventDetector):
@@ -162,7 +162,7 @@ def run() -> dict:
         fired, timeline = collect_events(df, params, event_ids=STUDY_IDS,
                                          **e9_kwargs)
         seg_of = lambda e: "dev" if e.known_index < boundary else "test"
-        proc = [e for e in fired if e.id in (E9, E10)]
+        proc = [e for e in fired if e.id in (PROCESS_ACCEPTED, PROCESS_REJECTED)]
         f1_stats[sym] = {
             k: {"fired": sum(1 for e in proc if seg_of(e) == k),
                 "would_pass_f1": sum(
@@ -191,10 +191,10 @@ def run() -> dict:
                 all_ctrls.append(pd.concat(ctrl_parts, ignore_index=True))
         sym_info[sym] = {
             "bars": n,
-            "n_e9_fired": sum(1 for e in fired if e.id == E9),
-            "n_e10_fired": sum(1 for e in fired if e.id == E10),
-            "n_e1_fired": sum(1 for e in fired if e.id == E1),
-            "n_e3_fired": sum(1 for e in fired if e.id == E3),
+            "n_e9_fired": sum(1 for e in fired if e.id == PROCESS_ACCEPTED),
+            "n_e10_fired": sum(1 for e in fired if e.id == PROCESS_REJECTED),
+            "n_e1_fired": sum(1 for e in fired if e.id == BREAKOUT_ACCEPTED),
+            "n_e3_fired": sum(1 for e in fired if e.id == LEVEL_REJECTED),
             "dev_end_index": boundary,
             "dev_end_ts": int(df["ts"][boundary]),
             "dev_end_iso": _iso(int(df["ts"][boundary])),
@@ -209,10 +209,10 @@ def run() -> dict:
         for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
             probe.update((row.ts, row.open, row.high, row.low,
                           row.close, row.volume))
-        probe_fired = Counter(e.id for e in probe.events if e.id in (E9, E10))
-        main_fired = Counter(e.id for e in fired if e.id in (E9, E10))
+        probe_fired = Counter(e.id for e in probe.events if e.id in (PROCESS_ACCEPTED, PROCESS_REJECTED))
+        main_fired = Counter(e.id for e in fired if e.id in (PROCESS_ACCEPTED, PROCESS_REJECTED))
         assert probe_fired == main_fired, (
-            f"{sym}: 探针与主回放 E9/E10 发射硬对账不符 "
+            f"{sym}: 探针与主回放 PROCESS_ACCEPTED/PROCESS_REJECTED 发射硬对账不符 "
             f"({probe_fired} vs {main_fired})")
         sym_info[sym]["gate_stats"] = {
             "episode_bars": probe.gate["episode_bars"],
@@ -227,7 +227,7 @@ def run() -> dict:
             "e9_centroid_ge_thr": probe.gate["e9_cent"],
             "e9_close_beyond": probe.gate["e9_close"],
         }
-        print(f"[{sym}] {n} bars, fired E9/E10/E1/E3 = "
+        print(f"[{sym}] {n} bars, fired PROCESS_ACCEPTED/PROCESS_REJECTED/BREAKOUT_ACCEPTED/LEVEL_REJECTED = "
               f"{sym_info[sym]['n_e9_fired']}/{sym_info[sym]['n_e10_fired']}/"
               f"{sym_info[sym]['n_e1_fired']}/{sym_info[sym]['n_e3_fired']}, "
               f"aged_bars={probe.gate['aged_bars']}, "
@@ -257,7 +257,7 @@ def run() -> dict:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "protocol": {
             "parent": "docs/v9-protocol.md(评估 = methodology §9 原样,"
-                      "机制 = E9/E10 过程式接受/拒绝,region/成本零改动)",
+                      "机制 = PROCESS_ACCEPTED/PROCESS_REJECTED 过程式接受/拒绝,region/成本零改动)",
             "meta": raw_cfg["meta"],
             "enable_e9e10": raw_cfg["enable_e9e10"],
             "e9e10_min_age": raw_cfg["e9e10_min_age"],
@@ -278,8 +278,8 @@ def run() -> dict:
                                        "交付范围 = 主判定网格一次,不含敏感性",
             "test_eval_declaration": "test 段第 12 次曝光(v9 唯一一次;此后只许"
                                      "前向;research-log #18)",
-            "family_declaration": "预注册主格 4 个(E9/E10 × 双向);全部格子数字"
-                                  "完整公布,不挑格子报喜;E1/E3 同池对照为上下"
+            "family_declaration": "预注册主格 4 个(PROCESS_ACCEPTED/PROCESS_REJECTED × 双向);全部格子数字"
+                                  "完整公布,不挑格子报喜;BREAKOUT_ACCEPTED/LEVEL_REJECTED 同池对照为上下"
                                   "文,不属 v9 判定家族",
         },
         "symbols": sym_info,
@@ -413,16 +413,16 @@ def render_md(result: dict) -> str:
     mechs = result["mechanisms"]
     pool = result["compare_pool"]
     lines = [
-        "# v9 事件研究报告(docs/v9-protocol.md:E9/E10 过程式接受/拒绝)",
+        "# v9 事件研究报告(docs/v9-protocol.md:PROCESS_ACCEPTED/PROCESS_REJECTED 过程式接受/拒绝)",
         "",
         f"生成时间(UTC):{result['generated_at_utc']}",
         "",
         "## 0. 协议与诚实性声明",
         "",
-        "- **最后一轮协议级研究**。预注册主格 4 个:E9/E10 × 双向;"
+        "- **最后一轮协议级研究**。预注册主格 4 个:PROCESS_ACCEPTED/PROCESS_REJECTED × 双向;"
         "全部格子数字完整公布,不挑格子报喜(§4)。",
-        "- 机制:E9 PROCESS_ACCEPTED(停留率 occ、重心位移 centroid、当根收穿远"
-        "缘;顺延续)与 E10 PROCESS_REJECTED(occ=0、试探失败 wickfail、距极"
+        "- 机制:PROCESS_ACCEPTED PROCESS_ACCEPTED(停留率 occ、重心位移 centroid、当根收穿远"
+        "缘;顺延续)与 PROCESS_REJECTED PROCESS_REJECTED(occ=0、试探失败 wickfail、距极"
         "值回退 k_rj·atr;反向),过程量全部 episode 相对、逐 bar 收盘累计。"
         f"先验一次写死:min_age={p['e9e10_min_age']}、occ 阈 = 2/3"
         f"({p['e9_occ_min']})、centroid 阈 = {p['e9_centroid_min']}·ATR、"
@@ -437,13 +437,13 @@ def render_md(result: dict) -> str:
         "- " + p["sensitivity_declaration"] + "。",
         "- F1/room/r_min 闸属回测层(protocol §3/§4 判别链),本主判定不施加"
         "(v1 事件研究同例);F1 参考计数见 §4,仅信息。",
-        "- E1/E3 同池对照(协议§5 动机核验):同一回放、同一时间线、同一种子"
+        "- BREAKOUT_ACCEPTED/LEVEL_REJECTED 同池对照(协议§5 动机核验):同一回放、同一时间线、同一种子"
         "栅格、同一测量管线(v1 口径);**不属 v9 判定家族**。",
         "",
         ""
     ]
     lines += _crit_table(
-        mechs, "1. GO / NO-GO 主格判定表(E9/E10 × 双向,test 段,H=" + ph
+        mechs, "1. GO / NO-GO 主格判定表(PROCESS_ACCEPTED/PROCESS_REJECTED × 双向,test 段,H=" + ph
         + ",判据同 §9.3;4 格完整公布)")
     lines += _summary_table(mechs, "test")
     lines += _summary_table(mechs, "dev")
@@ -455,15 +455,15 @@ def render_md(result: dict) -> str:
         epb = sum(info["gate_stats"]["episode_bars"]
                   for info in result["symbols"].values())
         lines += ["", "### 判别链(v9-protocol §4,如实记录)", "",
-                  f"四个主格 test+dev 合计 n = **0**:E9/E10 在 3 品种 × "
+                  f"四个主格 test+dev 合计 n = **0**:PROCESS_ACCEPTED/PROCESS_REJECTED 在 3 品种 × "
                   f"17,600 根 1h(约 6 年)上**一次都未发射**。判据 1(n≥60)全"
                   f"部失败 ⇒ 全格 INSUFFICIENT_DATA。零样本病理(§2.1)给出机"
                   f"制层证据:aged episode bars(a≥min_age 的存活 bar)合计 "
                   f"**{aged} / {epb}**(约 {aged/epb*100:.3f}%)——在冻结 "
                   f"A2/A3 episode 生命周期语义下,episode 几乎全部在 1-3 根"
-                  f"内被破位/E1/E2/E3 收场,过程式确认要的'段'根本长不出来;"
+                  f"内被破位/BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED 收场,过程式确认要的'段'根本长不出来;"
                   f"且在仅存 aged bars 上,wickfail≥2、occ≥2/3、centroid≥0.3 "
-                  f"各门通过数全为 0。按 §4 判别链,E10(过程式拒绝)与 E9(过"
+                  f"各门通过数全为 0。按 §4 判别链,PROCESS_REJECTED(过程式拒绝)与 PROCESS_ACCEPTED(过"
                   f"程式接受)双双再证伪 ⇒ 过程式世界观在本场座终结,项目按预"
                   f"案进入纯前向时代。"]
 
@@ -472,14 +472,14 @@ def render_md(result: dict) -> str:
         f1 = result["f1_reference"][sym]
         lines.append(
             f"- {sym}:dev_end = {info['dev_end_iso']} (index "
-            f"{info['dev_end_index']} / {info['bars']});fired E9/E10/E1/E3 = "
+            f"{info['dev_end_index']} / {info['bars']});fired PROCESS_ACCEPTED/PROCESS_REJECTED/BREAKOUT_ACCEPTED/LEVEL_REJECTED = "
             f"{info['n_e9_fired']}/{info['n_e10_fired']}/{info['n_e1_fired']}/"
-            f"{info['n_e3_fired']};E9/E10 fired dev {f1['dev']['fired']} / "
+            f"{info['n_e3_fired']};PROCESS_ACCEPTED/PROCESS_REJECTED fired dev {f1['dev']['fired']} / "
             f"test {f1['test']['fired']},F1 参考通过(仅信息)dev "
             f"{f1['dev']['would_pass_f1']} / test {f1['test']['would_pass_f1']}")
 
     lines += ["", "### 2.1 零样本病理(事实证据、**非判定输入**,判定仍按 §9 原样;探针 = 主回放同参数第二遍,逐门统计 aged episode bars,aged = episode 年龄 a ≥ min_age 的存活 bar)", "",
-              "| 品种 | episode bars | aged bars | E10 occ=0 | E10 wickfail≥2 | E10 回退到位 | E10 centroid≤0 | E10 occ0∧wf2 | E9 occ≥2/3 | E9 centroid≥0.3 | E9 收穿远缘 |",
+              "| 品种 | episode bars | aged bars | PROCESS_REJECTED occ=0 | PROCESS_REJECTED wickfail≥2 | PROCESS_REJECTED 回退到位 | PROCESS_REJECTED centroid≤0 | PROCESS_REJECTED occ0∧wf2 | PROCESS_ACCEPTED occ≥2/3 | PROCESS_ACCEPTED centroid≥0.3 | PROCESS_ACCEPTED 收穿远缘 |",
               "|---|---|---|---|---|---|---|---|---|---|---|"]
     for sym, info in result["symbols"].items():
         g = info["gate_stats"]
@@ -498,13 +498,13 @@ def render_md(result: dict) -> str:
         f"| {tot('e9_occ_ge_thr')} | {tot('e9_centroid_ge_thr')} "
         f"| {tot('e9_close_beyond')} |")
 
-    lines += ["", "## 3. 事件式同池对照(E1/E3,同一管线同一栅格;上下文,非判定)", "",
+    lines += ["", "## 3. 事件式同池对照(BREAKOUT_ACCEPTED/LEVEL_REJECTED,同一管线同一栅格;上下文,非判定)", "",
               "> 口径声明:本节数字由同一次 test 曝光内的同一测量管线产生,"
-              "仅作协议 §5 动机的位置对照;**不构成对 E1/E3 的新判定,不入"
+              "仅作协议 §5 动机的位置对照;**不构成对 BREAKOUT_ACCEPTED/LEVEL_REJECTED 的新判定,不入"
               "白名单讨论**——白名单与生产语义是 canonical 的既有口径,本"
               "轮不触(配置层 whitelist 逐项照抄 canonical)。NaN 行 = §9.1-5"
               " 同机制排除窗在高事件密度下覆盖全段、对照池为空,**增量在数"
-              "学上未定义**(如实呈现,非实现故障;v1 时代 E3 密度低、此态"
+              "学上未定义**(如实呈现,非实现故障;v1 时代 LEVEL_REJECTED 密度低、此态"
               "未现)。", ""]
     lines += _crit_table(pool, "3.1 同池对照桶判定参考(test 段,同一 §9 口径)")
     lines += _summary_table(pool, "test")

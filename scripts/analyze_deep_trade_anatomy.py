@@ -97,6 +97,6 @@ def main(path, label):
     return q
 
 
-q6 = main("reports/trades_v6_turtle_test.csv", "canonical(E3 开放, v6 turtle)")
+q6 = main("reports/trades_v6_turtle_test.csv", "canonical(LEVEL_REJECTED 开放, v6 turtle)")
 if __name__ == "__main__" and len(sys.argv) > 1:
     main("reports/trades_v13_cascade_cascade__test.csv", "v13 级联臂")

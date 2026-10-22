@@ -7,7 +7,7 @@
   PORTFOLIO_CAP(cap_skips + counters);
 - turtle 持仓接线:初始防线 2·atr、trailing 只紧不松、§8.6 时间止损关闭
   (PositionManager(breakeven_on_reduce=True, time_stop=False) 固化接线);
-- 段门控、E1 优先级撤单战役隔离、确定性双跑。
+- 段门控、BREAKOUT_ACCEPTED 优先级撤单战役隔离、确定性双跑。
 历史 A/B 对照:臂 A clamp2R 相关断言(S1 invalid 穿透、减仓后禁保本、
 容量恢复)与完整双臂套件保留于 research/rounds/v6/tests/test_v6_campaign.py,
 对归档双臂实现运行。
@@ -27,7 +27,7 @@ from market_operator.campaign import (
     campaign_key,
     run_campaigns,
 )
-from market_operator.events import E1, E6, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, STRUCTURE_BROKEN, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.position import PositionManager
 from market_operator.structure import (
@@ -60,7 +60,7 @@ VIEW = StructureView(
 
 
 def _e1_short(tf_idx, tf_hours, invalid=99.7, ref=99.5):
-    return MarketEvent(id=E1, direction=-1, ts=T0 + tf_idx * tf_hours * H,
+    return MarketEvent(id=BREAKOUT_ACCEPTED, direction=-1, ts=T0 + tf_idx * tf_hours * H,
                        known_index=tf_idx,
                        attrs={"ref": ref, "invalid": invalid, "started": 0})
 
@@ -218,12 +218,12 @@ def test_turtle_time_stop_disabled():
     res = _run({"TEST@2h": f2}, params=params)
     assert "TEST" in res.campaign_states["TEST@2h"]["pos_mgr"].positions
     pm = PositionManager(params, breakeven_on_reduce=False, time_stop=False)
-    pos = pm.open("X", -1, 96.0, 100.0, None, "E1", T0, 0)
+    pos = pm.open("X", -1, 96.0, 100.0, None, "BREAKOUT_ACCEPTED", T0, 0)
     bar = (T0 + H, 96.0, 96.4, 95.6, 96.0, 1.0)
     for _ in range(3):
         assert pm.on_bar("X", bar, ATR, (), ()) == []    # 时间止损整条关闭
     pm2 = PositionManager(params)
-    pm2.open("X", -1, 96.0, 100.0, None, "E1", T0, 0)
+    pm2.open("X", -1, 96.0, 100.0, None, "BREAKOUT_ACCEPTED", T0, 0)
     pm2.on_bar("X", bar, ATR, (), ())
     exits = pm2.on_bar("X", bar, ATR, (), ())            # bars_held=2=n_time
     assert exits and "§8.6" in exits[0].reason
@@ -253,10 +253,10 @@ def test_determinism_double_run():
 
 
 def test_e1_priority_cancel_isolated_per_campaign():
-    """E1 撤单只撤本战役挂单(跨战役挂单不受影响)。"""
-    # 2h 战役:bar2 E1 市价;此前 2h 已有 E7 前缘限价挂单(E1 先撤)
+    """BREAKOUT_ACCEPTED 撤单只撤本战役挂单(跨战役挂单不受影响)。"""
+    # 2h 战役:bar2 BREAKOUT_ACCEPTED 市价;此前 2h 已有 FLIP_RETESTED 前缘限价挂单(BREAKOUT_ACCEPTED 先撤)
     e7_short = MarketEvent(
-        id="E7", direction=-1, ts=T0 + 1 * 2 * H, known_index=1,
+        id="FLIP_RETESTED", direction=-1, ts=T0 + 1 * 2 * H, known_index=1,
         attrs={"zone": Zone(lo=90.0, hi=91.0, role=ZoneRole.RESISTANCE,
                             state=ZoneState.FLIPPED),
                "ref": 90.0, "invalid": 91.2,
@@ -269,20 +269,20 @@ def test_e1_priority_cancel_isolated_per_campaign():
                     state=ZoneState.BROKEN),),
         atr=ATR)
     f2 = _frame("TEST", 2, events_by={
-        1: [MarketEvent(id="E6", direction=-1, ts=T0 + 1 * 2 * H,
+        1: [MarketEvent(id="STRUCTURE_BROKEN", direction=-1, ts=T0 + 1 * 2 * H,
                         known_index=1,
                         attrs={"ref": 99.5, "invalid": 99.7,
                                "pivot_forming": 0,
                                "regime_before": Regime.TREND_UP.value})],
         3: [e7_short],
         4: [_e1_short(4, 2)]})
-    # bar1 E6:bar1 认知收盘 = exec idx3 = 96.9;margin=(99.5−96.9)/2=1.3,
+    # bar1 STRUCTURE_BROKEN:bar1 认知收盘 = exec idx3 = 96.9;margin=(99.5−96.9)/2=1.3,
     # impulse=(bar1 振幅)/2:认知 bar1 振幅=max h - min l(固定 +0.5/-0.5)
     # 未必弱;改用直接断言路由层语义(见 test_v6_strategy)。此处验证同战役
-    # E1 优先级撤单不影响 4h 战役挂单,复杂装配留给引擎集成冒烟。
+    # BREAKOUT_ACCEPTED 优先级撤单不影响 4h 战役挂单,复杂装配留给引擎集成冒烟。
     res = _run({"TEST@2h": f2, "TEST@4h": _frame("TEST", 4)})
     cancels = [r for r in res.ledger if r["kind"] == "CANCEL"
                and r["reason_code"] == "E1_PRIORITY"]
-    # 若 E6 判弱+E7 成单+E1 撤满,则撤单只可能发生在 TEST@2h
+    # 若 STRUCTURE_BROKEN 判弱+FLIP_RETESTED 成单+BREAKOUT_ACCEPTED 撤满,则撤单只可能发生在 TEST@2h
     for r in cancels:
         assert r["symbol"] == "TEST@2h"

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from market_operator.events import E1, E2, E3, E4, E5, E6, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, TREND_RESUMED, RANGE_ROTATED, STRUCTURE_BROKEN, MarketEvent
 from market_operator.research import (
     COST_MULTS,
     CostModel,
@@ -133,7 +133,7 @@ def _measured_synthetic():
         "low": [100.0] * n, "close": [100.0] * n, "volume": [1.0] * n,
     })
     zone = Zone(lo=100.0, hi=101.0, role=ZoneRole.RESISTANCE)
-    ev = MarketEvent(id=E3, direction=-1, ts=df["ts"][9], known_index=9,
+    ev = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=df["ts"][9], known_index=9,
                      attrs={"invalid": 101.1, "ref": 101.0, "zone": zone})
     views = {9: StructureView(regime=Regime.TRANSITION, zones=(), atr=1.0)}
     timeline = StructureTimeline(
@@ -166,7 +166,7 @@ def test_measure_events_skips_tail_without_forward_window():
         "low": [100.0] * n, "close": [100.0] * n, "volume": [1.0] * n,
     })
     zone = Zone(lo=100.0, hi=101.0, role=ZoneRole.RESISTANCE)
-    ev = MarketEvent(id=E3, direction=-1, ts=df["ts"][9], known_index=9,
+    ev = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=df["ts"][9], known_index=9,
                      attrs={"invalid": 101.1, "ref": 101.0, "zone": zone})
     views = {9: StructureView(regime=Regime.TRANSITION, zones=(), atr=1.0)}
     timeline = StructureTimeline(
@@ -182,7 +182,7 @@ def test_measure_events_skips_tail_without_forward_window():
 
 def test_control_pool_excludes_event_windows():
     n = 120
-    ev = MarketEvent(id=E3, direction=-1, ts=0, known_index=50, attrs={})
+    ev = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=0, known_index=50, attrs={})
     mask = exclusion_mask(n, [ev])
     assert mask[50:75].all()                        # [known, known+24] 全排除
     assert not mask[49] and not mask[75]
@@ -223,17 +223,17 @@ def _zone(role):
 def test_expected_direction_mapping():
     res, sup = ZoneRole.RESISTANCE, ZoneRole.SUPPORT
     cases = [
-        (MarketEvent(E1, 0, 0, 0, {"zone": _zone(res)}), +1),
-        (MarketEvent(E1, 0, 0, 0, {"zone": _zone(sup)}), -1),
-        (MarketEvent(E2, 0, 0, 0, {"zone": _zone(res)}), -1),
-        (MarketEvent(E2, 0, 0, 0, {"zone": _zone(sup)}), +1),
-        (MarketEvent(E3, 0, 0, 0, {"zone": _zone(res)}), -1),
-        (MarketEvent(E3, 0, 0, 0, {"zone": _zone(sup)}), +1),
-        (MarketEvent(E4, 0, 0, 0, {"leg_start": 110.0, "pb_price": 105.0}), +1),
-        (MarketEvent(E4, 0, 0, 0, {"leg_start": 95.0, "pb_price": 100.0}), -1),
-        (MarketEvent(E5, 0, 0, 0, {"zone": _zone(res)}), -1),
-        (MarketEvent(E6, 0, 0, 0, {"regime_before": "TREND_UP"}), -1),
-        (MarketEvent(E6, 0, 0, 0, {"regime_before": "TREND_DOWN"}), +1),
+        (MarketEvent(BREAKOUT_ACCEPTED, 0, 0, 0, {"zone": _zone(res)}), +1),
+        (MarketEvent(BREAKOUT_ACCEPTED, 0, 0, 0, {"zone": _zone(sup)}), -1),
+        (MarketEvent(BREAKOUT_FAILED, 0, 0, 0, {"zone": _zone(res)}), -1),
+        (MarketEvent(BREAKOUT_FAILED, 0, 0, 0, {"zone": _zone(sup)}), +1),
+        (MarketEvent(LEVEL_REJECTED, 0, 0, 0, {"zone": _zone(res)}), -1),
+        (MarketEvent(LEVEL_REJECTED, 0, 0, 0, {"zone": _zone(sup)}), +1),
+        (MarketEvent(TREND_RESUMED, 0, 0, 0, {"leg_start": 110.0, "pb_price": 105.0}), +1),
+        (MarketEvent(TREND_RESUMED, 0, 0, 0, {"leg_start": 95.0, "pb_price": 100.0}), -1),
+        (MarketEvent(RANGE_ROTATED, 0, 0, 0, {"zone": _zone(res)}), -1),
+        (MarketEvent(STRUCTURE_BROKEN, 0, 0, 0, {"regime_before": "TREND_UP"}), -1),
+        (MarketEvent(STRUCTURE_BROKEN, 0, 0, 0, {"regime_before": "TREND_DOWN"}), +1),
     ]
     for ev, want in cases:
         assert expected_direction(ev) == want, ev.id

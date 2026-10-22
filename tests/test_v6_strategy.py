@@ -1,8 +1,8 @@
 """v6 路由策略单元测试(规范 turtle 唯一语义,docs/v6-protocol.md §2-S2 臂 B)。
 
 覆盖:turtle 失效(初始防线 = close ∓ 2.0·atr,无目标 target_1=None,
-r_mult=None,不做 room/r_min 门);F1 闸;双向 episode 关联(WEAK-E6 登记
-⇒ 同 episode 同向 E7 前缘限价,方向错位不匹配,消费一次)。
+r_mult=None,不做 room/r_min 门);F1 闸;双向 episode 关联(WEAK-STRUCTURE_BROKEN 登记
+⇒ 同 episode 同向 FLIP_RETESTED 前缘限价,方向错位不匹配,消费一次)。
 历史 A/B 对照:臂 A clamp2R(S1 区缘失效/room 门/2R 钳制/未知臂拒)与
 完整双臂测试套件保留于 research/rounds/v6/tests/test_v6_strategy.py,对
 归档双臂实现(research/rounds/v6/strategy_v6.py)运行。
@@ -10,10 +10,10 @@ r_mult=None,不做 room/r_min 门);F1 闸;双向 episode 关联(WEAK-E6 登记
 
 from __future__ import annotations
 
-from market_operator.events import E6, E7, MarketEvent
+from market_operator.events import STRUCTURE_BROKEN, FLIP_RETESTED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.strategy_v6 import (
-    ROUTE_WEAK_E7,
+    ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT,
     V6Params,
     V6Router,
 )
@@ -31,7 +31,7 @@ def _view(*zones):
 
 def _e6(direction, hour=5, ref=99.5, bar_close=97.0):
     inv = ref + 0.2 if direction < 0 else ref - 0.2
-    return MarketEvent(id=E6, direction=direction, ts=T0 + hour * H,
+    return MarketEvent(id=STRUCTURE_BROKEN, direction=direction, ts=T0 + hour * H,
                        known_index=hour,
                        attrs={"ref": ref, "invalid": inv, "pivot_forming": 0,
                               "regime_before": (Regime.TREND_UP.value
@@ -40,10 +40,10 @@ def _e6(direction, hour=5, ref=99.5, bar_close=97.0):
 
 
 def _e7(direction, hour=6, lo=99.5, hi=99.8, invalid=None):
-    # 检测器冻结口径:E7 invalid = 翻转区缘 ± k_bm·atr
+    # 检测器冻结口径:FLIP_RETESTED invalid = 翻转区缘 ± k_bm·atr
     if invalid is None:
         invalid = (hi + K_BM * ATR) if direction < 0 else (lo - K_BM * ATR)
-    return MarketEvent(id=E7, direction=direction, ts=T0 + hour * H,
+    return MarketEvent(id=FLIP_RETESTED, direction=direction, ts=T0 + hour * H,
                        known_index=hour,
                        attrs={"zone": Zone(lo=lo, hi=hi, role=(
                            ZoneRole.RESISTANCE if direction < 0 else
@@ -105,7 +105,7 @@ def test_long_mirror():
 
 
 def test_weak_episode_direction_isolated():
-    """weak-E6|short 登记不消费 E7|long(方向错位 episode 不匹配)。"""
+    """weak-STRUCTURE_BROKEN|short 登记不消费 FLIP_RETESTED|long(方向错位 episode 不匹配)。"""
     r = _router()
     r.on_bar("X", _bar(97.0, hi_pad=0.5, lo_pad=0.5), 5, _view(), ATR,
              [_e6(-1, ref=99.5)], position_open=False, entry_resting=False)
@@ -131,6 +131,6 @@ def test_weak_episode_consumed_once_by_matching_e7_long():
                    [_e7(+1, hour=6, lo=100.2, hi=100.5)], position_open=False,
                    entry_resting=False)
     assert len(dec) == 1 and dec[0].kind == "limit"
-    assert dec[0].route == ROUTE_WEAK_E7
+    assert dec[0].route == ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT
     assert dec[0].limit_price == 100.5           # long 前缘 = zone.hi
     assert r.pending_of("X") is None             # 消费一次

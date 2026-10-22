@@ -305,9 +305,9 @@ def test_mode_gate_fail_closed(tmp_path):
 
 
 def test_client_oid_idempotent_and_short():
-    a = lr.client_oid_of("mo20", "BTCUSDT", "E3", "buy", 1_796_400_000_000)
-    b = lr.client_oid_of("mo20", "BTCUSDT", "E3", "buy", 1_796_400_000_000)
-    c = lr.client_oid_of("mo20", "BTCUSDT", "E3", "sell", 1_796_400_000_000)
+    a = lr.client_oid_of("mo20", "BTCUSDT", "LEVEL_REJECTED", "buy", 1_796_400_000_000)
+    b = lr.client_oid_of("mo20", "BTCUSDT", "LEVEL_REJECTED", "buy", 1_796_400_000_000)
+    c = lr.client_oid_of("mo20", "BTCUSDT", "LEVEL_REJECTED", "sell", 1_796_400_000_000)
     assert a == b and a != c and len(a) <= 36
 
 

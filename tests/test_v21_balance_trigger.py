@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 
 from market_operator.events import (
-    ACCEPT, E1, E3, REJECT, EventDetector, MarketEvent, canonical_event_id,
+    ACCEPT, BREAKOUT_ACCEPTED, LEVEL_REJECTED, REJECT, EventDetector, MarketEvent, canonical_event_id,
 )
 from market_operator.hypothesis import StructureView
 from market_operator.strategy_v6 import (
-    ROUTE_ACCEPT, ROUTE_E1, ROUTE_E3, ROUTE_REJECT, WHITELIST_BALANCE,
+    ROUTE_BREAKOUT_ACCEPTED, ROUTE_BREAKOUT_ACCEPTED, ROUTE_LEVEL_REJECTED, ROUTE_LEVEL_REJECTED, WHITELIST_BALANCE,
     V6Params, V6Router,
 )
 from market_operator.structure import (
@@ -19,12 +19,12 @@ from market_operator.structure import (
 
 
 def test_accept_reject_aliases_and_routing():
-    assert canonical_event_id(ACCEPT) == E1
-    assert canonical_event_id(REJECT) == E3
-    assert canonical_event_id("E1") == E1
-    assert canonical_event_id("E3") == E3
-    assert ROUTE_ACCEPT == ROUTE_E1
-    assert ROUTE_REJECT == ROUTE_E3
+    assert canonical_event_id(ACCEPT) == BREAKOUT_ACCEPTED
+    assert canonical_event_id(REJECT) == LEVEL_REJECTED
+    assert canonical_event_id("BREAKOUT_ACCEPTED") == BREAKOUT_ACCEPTED
+    assert canonical_event_id("LEVEL_REJECTED") == LEVEL_REJECTED
+    assert ROUTE_BREAKOUT_ACCEPTED == ROUTE_BREAKOUT_ACCEPTED
+    assert ROUTE_LEVEL_REJECTED == ROUTE_LEVEL_REJECTED
 
     wl = frozenset({(ACCEPT, 1), (ACCEPT, -1), (REJECT, 1), (REJECT, -1)})
     router = V6Router(V6Params(whitelist=wl))
@@ -34,23 +34,23 @@ def test_accept_reject_aliases_and_routing():
     view = StructureView(regime=Regime.RANGE, zones=(z,), atr=2.0)
 
     # 1. ACCEPT (+1) 事件触发市价开多
-    ev_acc = MarketEvent(id=E1, direction=1, ts=1000, known_index=10,
+    ev_acc = MarketEvent(id=BREAKOUT_ACCEPTED, direction=1, ts=1000, known_index=10,
                          attrs={"zone": z, "ref": 100.0, "invalid": 97.8})
     decs = router.on_bar("BTCUSDT", (1000, 100.0, 101.5, 99.5, 101.0, 1.0),
                          10, view, 2.0, [ev_acc],
                          position_open=False, entry_resting=False)
     assert len(decs) == 1
-    assert decs[0].route == ROUTE_ACCEPT
+    assert decs[0].route == ROUTE_BREAKOUT_ACCEPTED
     assert decs[0].hyp.direction == 1
 
     # 2. REJECT (-1) 事件触发市价开空
-    ev_rej = MarketEvent(id=E3, direction=-1, ts=2000, known_index=11,
+    ev_rej = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=2000, known_index=11,
                          attrs={"zone": z, "ref": 100.0, "invalid": 100.2})
     decs2 = router.on_bar("BTCUSDT", (2000, 100.0, 100.5, 98.5, 99.0, 1.0),
                           11, view, 2.0, [ev_rej],
                           position_open=False, entry_resting=False)
     assert len(decs2) == 1
-    assert decs2[0].route == ROUTE_REJECT
+    assert decs2[0].route == ROUTE_LEVEL_REJECTED
     assert decs2[0].hyp.direction == -1
 
 
@@ -65,13 +65,13 @@ def test_restraint_gates_rotations_and_quality():
                     box_opposite=92.0, box_quality=0.60, box_width_atr=4.0, box_rotations=3)
     view = StructureView(regime=Regime.RANGE, zones=(z_weak, z_strong), atr=2.0)
 
-    ev1 = MarketEvent(id=E3, direction=-1, ts=1000, known_index=10,
+    ev1 = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=1000, known_index=10,
                       attrs={"zone": z_weak, "ref": 100.0, "invalid": 100.2})
     assert router.on_bar("BTCUSDT", (1000, 100.0, 100.5, 98.5, 99.0, 1.0),
                          10, view, 2.0, [ev1],
                          position_open=False, entry_resting=False) == []
 
-    ev2 = MarketEvent(id=E3, direction=-1, ts=2000, known_index=11,
+    ev2 = MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=2000, known_index=11,
                       attrs={"zone": z_strong, "ref": 100.0, "invalid": 100.2})
     decs = router.on_bar("BTCUSDT", (2000, 100.0, 100.5, 98.5, 99.0, 1.0),
                          11, view, 2.0, [ev2],
@@ -128,7 +128,7 @@ def test_v21_per_tf_capacity_and_dynamic_risk_tiers():
         time_stop=False,
         reject_opp_lock_frac=-0.50,
     )
-    pos = pm.open("BTCUSDT", -1, 100.0, 105.0, 90.0, E3, 1000, 0)
+    pos = pm.open("BTCUSDT", -1, 100.0, 105.0, 90.0, LEVEL_REJECTED, 1000, 0)
     # 1. 仅极值触及 90.0 但收盘 92.0 未突破对侧 -> 不锁利、不减仓,原止损 105.0 不动
     intents1 = pm.on_bar("BTCUSDT", (2000, 98.0, 99.0, 89.5, 92.0, 1.0), 2.0)
     assert intents1 == []
@@ -184,7 +184,7 @@ def test_dual_bot_telegram_and_bw_kline_chart():
     }, session=DummySession(), async_mode=False)
 
     ok_sig = tg.send_signal(
-        "BTCUSDT", "E3", "空", "e3_market", 111.5, 114.0,
+        "BTCUSDT", "LEVEL_REJECTED", "空", "level_rejected_market", 111.5, 114.0,
         size_note="规模 0.5", regime="range", tf_label="12h",
         bars=bars, box_lo=98.0, box_hi=112.0, target_1=98.0
     )
@@ -200,7 +200,7 @@ def test_dual_bot_telegram_and_bw_kline_chart():
     assert all(len(ln) > 0 for ln in cap_lines)
 
     ok_fill = tg.send_fill(
-        "BTCUSDT", "开仓(live)", 0.5, 111.5, note="E3 e3_market",
+        "BTCUSDT", "开仓(live)", 0.5, 111.5, note="LEVEL_REJECTED e3_market",
         tf_label="12h", direction=-1, stop_price=114.0, target_price=98.0,
         box_lo=98.0, box_hi=112.0, bars=bars
     )
@@ -372,7 +372,7 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
         "qty": 1.0,
         "invalid": 95.0,
         "target_1": 110.0,
-        "event_id": "E3",
+        "event_id": "LEVEL_REJECTED",
         "route": "reject_market",
         "box_lo": 96.0,
         "box_hi": 110.0,

@@ -43,7 +43,7 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
   "portfolio_cap_skips";成交时刻由 PR#9 已修的 broker 口径
   (portfolio_stop_risk_frac / available_entry_notional,跨品种/跨战役
   杠杆账)做第二层保守钳制(缩量,如实声明)。
-- 每战役同时一仓一挂单(槽位纪律,同 v5);E1 优先级撤单不动 §8 减仓单
+- 每战役同时一仓一挂单(槽位纪律,同 v5);BREAKOUT_ACCEPTED 优先级撤单不动 §8 减仓单
   (持仓不与入场挂单共存)。
 
 段(§9 同一规则):每战役按自身 TF 帧 split_boundary(n, dev_frac);OPEN
@@ -75,10 +75,10 @@ from .strategy_v6 import V6Params, V6Router
 from .structure import Params
 
 # v14 施工包(docs/v14-protocol.md;None ⇒ canonical 逐位):续涨/fade 家族表
-# 与协议原文一致(E1/E6/E7 续涨;E3/E2/E8 fade;E4/E5 不在两族,按 fill_model
+# 与协议原文一致(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED 续涨;LEVEL_REJECTED/BREAKOUT_FAILED/EDGE_RECLAIMED fade;TREND_RESUMED/RANGE_ROTATED 不在两族,按 fill_model
 # 兜底),不写死阈值 —— 阈值全在 config/v14.json。
-STOP_FAMILY = ("E1", "E6", "E7")
-FADE_FAMILY = ("E2", "E3", "E8")
+STOP_FAMILY = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
+FADE_FAMILY = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
 
 
 @dataclass(frozen=True)
@@ -93,12 +93,12 @@ class ArmConfig:
 
     v15 加性扩展(docs/v15-protocol.md;c2_family=None ⇒ 逐位 v14 行为):
     c2_family 非 None 时 C2 maker 双模式只接管该家族事件(v15 合成件 =
-    fade 家族 E2/E3/E8),其余事件(E4/E5 与未匹配 C3 的续涨族)不走 C2,
+    fade 家族 BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED),其余事件(TREND_RESUMED/RANGE_ROTATED 与未匹配 C3 的续涨族)不走 C2,
     落回 canonical 提交路径;阈值协议写死,阈值来源 config/v15.json。
 
     v16 加性扩展(docs/v16-protocol.md,收割婚配;全 None ⇒ 逐位旧行为):
     harvest_family 非 None 时持仓侧 PositionManager 进入收割婚配 —— 家族
-    (fade E2/E3/E8)持仓达对面结构缘全部落袋、禁用 trail;time_cap_bars
+    (fade BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)持仓达对面结构缘全部落袋、禁用 trail;time_cap_bars
     (= k_cap_hours,48×TF 小时认知 bar 根数)非 None 开时间帽:到期且
     MFE < cap_mfe_min(恰界 inclusive 持有)⇒ 出;新开关注入见
     run_campaigns 的 PositionManager 接线,阈值来源 config/v16.json。
@@ -115,7 +115,7 @@ class ArmConfig:
     EARLY_CONSEC_N;半窗基数 = time_cap_bars)。
 
     v20 加性扩展(v20 收尾 S1/S2;全 False ⇒ 逐位旧行为):trail_arm_gate
-    =True 时持仓侧 S1 结构脉冲激活 trail(cont 家族 E1/E6/E7 + E4,trail
+    =True 时持仓侧 S1 结构脉冲激活 trail(cont 家族 BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED + TREND_RESUMED,trail
     扶手只在 MFE≥1R 或新确认顺向 pivot 之后上线,Threshold 数源
     position.S1_TRAIL_ARM_MFE_R / S1_FAMILY);harvest_fade_2leg=True 时持
     仓侧 S2 fade 双格收割(缘前 25% 落袋 40% 仓、缘收剩 60%,数源
@@ -382,8 +382,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     v20 加性钩(v20 收尾;全默认 ⇒ 逐位旧行为):arm.trail_arm_gate /
     arm.harvest_fade_2leg 接通持仓侧 S1 扶手闸 / S2 双格收割(position.py);
     S2 段/缘收计数 v20_s2_partial_banked / v20_s2_edge_collect(仅该路径
-    新增计数键);决策侧 S3(TRANSITION fade 事件层抑制)与 S4(E3 前缘限
-    价改单,落 canonical 限价主路 = E7 G3 同一通道)在 lifecycle.V20Router,
+    新增计数键);决策侧 S3(TRANSITION fade 事件层抑制)与 S4(LEVEL_REJECTED 前缘限
+    价改单,落 canonical 限价主路 = FLIP_RETESTED G3 同一通道)在 lifecycle.V20Router,
     经 router_factory/router_params 注入,引擎零新增缝。
     """
     if segment not in ("full", "dev", "test"):
@@ -827,7 +827,7 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             for od in broker.resting.get(key, ()):
                 if od.armed_at_ts >= cancel_moment:
                     raise RuntimeError(
-                        f"E1 cancel moment {cancel_moment} <= armed "
+                        f"BREAKOUT_ACCEPTED cancel moment {cancel_moment} <= armed "
                         f"{od.armed_at_ts} ({key})")
             rows_cancel = broker.cancel_resting(
                 key, cancel_moment, reason_code="E1_PRIORITY",
@@ -912,10 +912,10 @@ def _arm_route(st: _CampaignState, broker: Broker, d, arm: ArmConfig,
     """v14 arm 语义提交分流;返回 True = 已由 arm 路径接管(主路 continue)。
 
     分流序 = 家族特异性优先:C3(stop,续涨家族)> C4(分层,fade 家族)>
-    C2(maker/virtual 双模式,剩余全部入口 —— E4/E5/未配 C3 时的续涨族与
+    C2(maker/virtual 双模式,剩余全部入口 —— TREND_RESUMED/RANGE_ROTATED/未配 C3 时的续涨族与
     未配 C4 时的 fade 族)。组合容量闸在主路已先执行,此处只换新成交语义;
     窗口/武装/撤单因果护栏与现有限价框架同一套(同一 RestingLimitOrder,
-    E1 优先级撤单/平仓撤销/超时路径自然覆盖新单种)。
+    BREAKOUT_ACCEPTED 优先级撤单/平仓撤销/超时路径自然覆盖新单种)。
     """
     key = st.frame.key
     f = st.frame
@@ -959,7 +959,7 @@ def _arm_route(st: _CampaignState, broker: Broker, d, arm: ArmConfig,
             _lc(counters, "ladder_armed")
         _lc(counters, "ladder_signals")
         return True
-    # C2 maker 双模式(市价决策 → 决策收盘参考价挂单;弱 E7 前缘限价 → 同模式)
+    # C2 maker 双模式(市价决策 → 决策收盘参考价挂单;弱 FLIP_RETESTED 前缘限价 → 同模式)
     # v15:c2_family 非 None 时仅接管该家族事件,其余落回 canonical 主路。
     if arm.fill_model in ("exchange_maker", "virtual_limit") \
             and (arm.c2_family is None or ev in arm.c2_family):

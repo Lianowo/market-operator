@@ -8,7 +8,7 @@ is_buyer_maker;fetch_aggtrades.py 契约)。taker 方向:主动买 = is_buyer_ma
 
 接触点(v19-orderflow §2,因果窗):事件 = canonical 语义重放
 (research.collect_events 原样,Params.from_json(config/canonical.json),
-E1/E2/E3/E6/E7,enable_e7=True);接触时刻 t_contact = known bar 收盘 =
+BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED,enable_e7=True);接触时刻 t_contact = known bar 收盘 =
 known_ts + 3_600_000(1h bar 时间戳 = 开盘时刻,收盘即知时,A10 纪律)。
 全部 tape 特征只用 [t_contact − W, t_contact) 的 trade 行 —— 严格 trailing,
 不含收盘时刻本身(ts == t_contact 的 trade 属于下一根 bar,排除;因果)。
@@ -45,7 +45,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .events import E1, E2, E3, E6, E7
+from .events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED
 from .research import collect_events
 from .structure import Params
 
@@ -62,8 +62,8 @@ CVD_GRID_MS = 60_000
 BIG_TOP_FRAC = 0.10                    # big_share Top-10% 笔数占比
 TAIL_MS = WIN_60M_MS + 60_000          # 前一日尾保留(61 分钟余量)
 
-STUDY_EVENT_IDS = frozenset({E1, E2, E3, E6, E7})   # v19-orderflow §2
-REJECTION_EVENT_IDS = frozenset({E2, E3})           # §4 H2 拒绝类
+STUDY_EVENT_IDS = frozenset({BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED})   # v19-orderflow §2
+REJECTION_EVENT_IDS = frozenset({BREAKOUT_FAILED, LEVEL_REJECTED})           # §4 H2 拒绝类
 
 FEATURE_NAMES = ("delta_share_15m", "delta_share_60m", "cvd_slope_60m",
                  "big_share_15m", "eff_15m", "vol15_rel")

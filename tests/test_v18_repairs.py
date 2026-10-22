@@ -35,7 +35,7 @@ from market_operator.campaign import (
     campaign_key,
     run_campaigns,
 )
-from market_operator.events import E1, E3, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.harvest import HarvestParams, V16Router
 from market_operator.hypothesis import StructureView
 from market_operator.position import (
@@ -90,8 +90,8 @@ PIVOTS = (Pivot(price=110.0, forming_index=0, known_index=1,
           Pivot(price=80.0, forming_index=2, known_index=3,
                 kind=PivotKind.LOW))
 
-WL_ALL = frozenset((eid, d) for eid in ("E1", "E2", "E3", "E4", "E5",
-                                        "E6", "E7", "E8")
+WL_ALL = frozenset((eid, d) for eid in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED",
+                                        "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED")
                    for d in (-1, 1))
 
 
@@ -108,8 +108,8 @@ def _vp18(repair: RepairParams = None) -> V18Params:
 def _arm_cfg(ladder3: bool = False) -> ArmConfig:
     return ArmConfig(fill_model="exchange_maker", stop_entry=True,
                      stop_wait_tf=12, k_bm=0.1,
-                     c2_family=("E2", "E3", "E8"),
-                     harvest_family=("E2", "E3", "E8"),
+                     c2_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
+                     harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
                      time_cap_bars=48, cap_mfe_min=0.5,
                      harvest_ladder3=ladder3)
 
@@ -120,7 +120,7 @@ def _fade_e3(*, ts, known_index, mic=False):
     attrs = {"zone": zone, "ref": 100.5, "invalid": 100.7}
     if mic:
         attrs.update({"mic": True, "trigger_tf": 1800})
-    return MarketEvent(id=E3, direction=-1, ts=ts, known_index=known_index,
+    return MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=ts, known_index=known_index,
                        attrs=attrs)
 
 
@@ -128,7 +128,7 @@ def _cont_e1(*, ts, known_index, mic=False):
     attrs = {"ref": 95.0, "invalid": 94.0}
     if mic:
         attrs.update({"mic": True, "trigger_tf": 1800})
-    return MarketEvent(id=E1, direction=+1, ts=ts, known_index=known_index,
+    return MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=ts, known_index=known_index,
                        attrs=attrs)
 
 
@@ -210,7 +210,7 @@ def test_v18_config_parent_v17_hard_check():
               "arm-full": ["R1", "R2", "R3", "R4"]}
     for a, reps in expect.items():
         assert cfg["arms"][a]["repairs"] == reps
-        assert cfg["arms"][a]["mic_family"] == ["E1", "E6", "E7"]
+        assert cfg["arms"][a]["mic_family"] == ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"]
     hp, factory, arm, mic_f, repair = run_v18.build_arm(cfg, "arm-R4")
     assert arm.harvest_ladder3 and repair is not None and not repair.r1
     hp, factory, arm_c, mic_f, repair_c = run_v18.build_arm(cfg, "arm-C")
@@ -311,7 +311,7 @@ def test_v18_r1_fade_rngq_boundary_router():
 
 def test_v18_r2_pmd_boundary_router():
     ev_long = _cont_e1(ts=T0 + 3 * 2 * H, known_index=3)
-    ev_short = MarketEvent(id=E1, direction=-1, ts=T0 + 3 * 2 * H,
+    ev_short = MarketEvent(id=BREAKOUT_ACCEPTED, direction=-1, ts=T0 + 3 * 2 * H,
                            known_index=3, attrs={"ref": 98.0, "invalid": 99.5})
     bar = _bar(T0 + 3 * 2 * H)
 
@@ -378,7 +378,7 @@ def test_v18_r3_regime_enumeration(regime, allowed):
 
 
 def test_v18_r1_continuation_mic_only_stagger():
-    # (a) bar 化身 E1:R1 ⇒ 抑制(无 stop 预埋;错峰语义)
+    # (a) bar 化身 BREAKOUT_ACCEPTED:R1 ⇒ 抑制(无 stop 预埋;错峰语义)
     f = _frames_2h({5: [_cont_e1(ts=T0 + 5 * 2 * H, known_index=5)]}, {},
                    with_mic=True)
     base = _run(f, repair=None)
@@ -389,7 +389,7 @@ def test_v18_r1_continuation_mic_only_stagger():
     assert r1.counters.get("v18_r1_cont_bar_suppressed", 0) == 1
     assert not [row for row in r1.ledger if row["kind"] == "OPEN"]
 
-    # (b) mic 化身 E1:R1 ⇒ 照常(C3 stop-entry 预埋;mic-only 的"only"侧)
+    # (b) mic 化身 BREAKOUT_ACCEPTED:R1 ⇒ 照常(C3 stop-entry 预埋;mic-only 的"only"侧)
     fmic = _frames_2h({}, {21: [_cont_e1(ts=T0 + 21 * M30, known_index=21,
                                          mic=True)]}, with_mic=True)
     r1m = _run(fmic, repair=RepairParams(r1=True))
@@ -398,7 +398,7 @@ def test_v18_r1_continuation_mic_only_stagger():
     assert [row for row in r1m.ledger if row["kind"] == "OPEN"], \
         "mic 续涨应正常预埋/成交(stop 价)"
 
-    # (c) 错峰:resting fade maker 不被 bar 化身 E1 撤单(bar 化身完全惰性)
+    # (c) 错峰:resting fade maker 不被 bar 化身 BREAKOUT_ACCEPTED 撤单(bar 化身完全惰性)
     # (认知帧波幅差异化:fade 事件 bar rngq = 2/3 ≤ 0.8 ⇒ R1b 不拒)
     cogs = []
     for k in range(24):
@@ -411,9 +411,9 @@ def test_v18_r1_continuation_mic_only_stagger():
     base_b = _run(fb, repair=None)
     r1_b = _run(fb, repair=RepairParams(r1=True))
     assert base_b.counters.get("e1_priority_cancels", 0) == 1, \
-        "基线:bar E1 优先级撤掉 resting fade maker(v17 既定)"
+        "基线:bar BREAKOUT_ACCEPTED 优先级撤掉 resting fade maker(v17 既定)"
     assert r1_b.counters.get("e1_priority_cancels", 0) == 0, \
-        "R1:bar 化身 E1 入路由前被抑制 ⇒ 不产生撤单副作用"
+        "R1:bar 化身 BREAKOUT_ACCEPTED 入路由前被抑制 ⇒ 不产生撤单副作用"
     assert r1_b.counters.get("maker_entry_expired", 0) == 1, \
         "R1:fade maker 挂单自然到期(错峰保留,不被大炮尾巴撤单)"
 
@@ -424,14 +424,14 @@ def test_v18_r1_continuation_mic_only_stagger():
 
 
 def _fade_pm(ladder3: bool = True) -> PositionManager:
-    return PositionManager(harvest_family=("E2", "E3", "E8"),
+    return PositionManager(harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
                            time_cap_bars=48, cap_mfe_min=0.5,
                            harvest_ladder3=ladder3)
 
 
 def test_v18_r4_ladder_stagger_fills_pm():
     pm = _fade_pm(True)
-    pos = pm.open("X", -1, 99.0, 100.7, 96.0, "E3", 0, 0)
+    pos = pm.open("X", -1, 99.0, 100.7, 96.0, "LEVEL_REJECTED", 0, 0)
     inv0 = pos.invalid
     # 段 1:low=98.2 触及 lvl25(98.25),不触 lvl50(97.5)
     ints1 = pm.on_bar("X", (1000, 99.0, 99.6, 98.2, 98.8, 1.0), ATR)
@@ -466,7 +466,7 @@ def test_v18_r4_ladder_stagger_fills_pm():
 
 def test_v18_r4_ladder_samebar_batch_stagger():
     pm = _fade_pm(True)
-    pos = pm.open("X", -1, 99.0, 100.7, 96.0, "E3", 0, 0)
+    pos = pm.open("X", -1, 99.0, 100.7, 96.0, "LEVEL_REJECTED", 0, 0)
     ints = pm.on_bar("X", (1000, 99.0, 99.2, 95.5, 96.5, 1.0), ATR)
     kinds = [i.kind.value for i in ints]
     assert kinds == ["REDUCE", "REDUCE", "EXIT"]
@@ -479,7 +479,7 @@ def test_v18_r4_ladder_samebar_batch_stagger():
     assert "X" not in pm.positions
     # 多向对照:entry 90 invalid 88 target 96;lvl25=91.5 lvl50=93.0
     pl = _fade_pm(True)
-    pos_l = pl.open("Y", +1, 90.0, 88.0, 96.0, "E3", 0, 0)
+    pos_l = pl.open("Y", +1, 90.0, 88.0, 96.0, "LEVEL_REJECTED", 0, 0)
     ints_l = pl.on_bar("Y", (1000, 90.0, 91.6, 89.8, 91.2, 1.0), ATR)
     assert [i.qty_frac for i in ints_l] == [pytest.approx(1.0 / 6.0)]
     assert pos_l.r4_stage == 1
@@ -488,7 +488,7 @@ def test_v18_r4_ladder_samebar_batch_stagger():
     assert ints_l2[-1].qty_frac == pytest.approx(2.0 / 3.0)
     # 退化(目标方向不齐)⇒ 退回 v16 单段收割
     pd_ = _fade_pm(True)
-    pd_.open("Z", -1, 99.0, 100.7, 100.5, "E3", 0, 0)
+    pd_.open("Z", -1, 99.0, 100.7, 100.5, "LEVEL_REJECTED", 0, 0)
     ints_d = pd_.on_bar("Z", (1000, 99.0, 99.2, 96.0, 97.0, 1.0), ATR)
     assert ints_d and ints_d[0].reason.startswith("v16|target|对面结构缘收割")
     assert ints_d[0].qty_frac == pytest.approx(1.0)

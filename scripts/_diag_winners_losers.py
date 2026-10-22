@@ -84,7 +84,7 @@ def main():
     print(f"  赢家 中位{W.r_mult_planned.median():.2f} | 输家 中位{L.r_mult_planned.median():.2f}")
 
     print("\n[G] 入场路由 (赢/亏)")
-    for rt in ["e1_market", "strong_e6", "weak_e7_limit"]:
+    for rt in ["breakout_accepted_market", "structure_broken_strong_market", "structure_broken_weak_limit"]:
         s = c[c.route == rt]
         if len(s):
             print(f"  {rt:15s} n={len(s):4d} 胜率{100*len(s[s.gR>0])/len(s):.1f}% 净{s.net_pnl.sum():+.1f}")

@@ -590,7 +590,7 @@ def main() -> None:
                            "v17 不变口径"),
             "upgrade_line": UPGRADE_LINE,
             "cascade_declarations": prep["declarations"],
-            "honesty_note": ("mic 拓扑全臂沿 arm-C(续涨 mic,fade/E4/E5 归 "
+            "honesty_note": ("mic 拓扑全臂沿 arm-C(续涨 mic,fade/TREND_RESUMED/RANGE_ROTATED 归 "
                              "bar);mic 层的 rngq 定义(trigger 帧自身 48 窗)在"
                              "测量网格中惰性(fade 无 mic 决策),仅单元测试行"
                              "使,如实声明;R4 段落市量价撮合(taker 次细 bar "
@@ -844,7 +844,7 @@ def render_md(payload: dict, grids: dict, attr: dict) -> str:
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in TF_LIST:
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)
@@ -870,7 +870,7 @@ def render_md(payload: dict, grids: dict, attr: dict) -> str:
               "协议 pmd≤−0.3 口径);历史不足三根或 ctx 缺失 ⇒ 不拒(定向禁"
               "令非 fail-closed,如实声明);③ 条款拒绝次序 R1b→R2→R3(逐决"
               "策至多落一个拒绝桶);R1a 在事件层(续涨 bar 化身抑制含其 "
-              "E1 优先级撤单/episode 副作用,错峰惰性),R1b/R2/R3 在决策层"
+              "BREAKOUT_ACCEPTED 优先级撤单/episode 副作用,错峰惰性),R1b/R2/R3 在决策层"
               "(v16 三闸之后的假设合法性核);④ R4 段落 1/6 仓以 OPEN 名义"
               "为基准,市价撮合(次一执行细 bar 开盘,taker),摊薄均价入账"
               "由 broker/reconstruct 既有口径承担;缘收净沿 v16 EXIT 口径不"

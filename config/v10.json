@@ -40,7 +40,7 @@
   "k_imp": 1.5,
   "turtle_stop_atr": 2.0,
   "portfolio_cap_frac": 0.03,
-  "whitelist": [["E1", -1], ["E1", 1], ["E6", -1], ["E6", 1], ["E7", -1], ["E7", 1], ["E3", -1], ["E3", 1]],
+  "whitelist": [["BREAKOUT_ACCEPTED", -1], ["BREAKOUT_ACCEPTED", 1], ["STRUCTURE_BROKEN", -1], ["STRUCTURE_BROKEN", 1], ["FLIP_RETESTED", -1], ["FLIP_RETESTED", 1], ["LEVEL_REJECTED", -1], ["LEVEL_REJECTED", 1]],
   "n_fill": 12,
   "exec_tf_seconds": 900,
   "maker_fee": 0.0002,

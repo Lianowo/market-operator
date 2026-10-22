@@ -17,7 +17,7 @@
   分割 = 前 60 天 dev / 后 30 天 test,按 t_contact(known bar 收盘 =
   known_ts + 3_600_000)归属;split_ts = 首日 + 60d。
 - 接触点 = canonical 重放(Params.from_json(config/canonical.json),断言
-  merge_max_atr=2.0)E1/E2/E3/E6/E7(enable_e7=True)的 t_contact;测量层
+  merge_max_atr=2.0)BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED(enable_e7=True)的 t_contact;测量层
   沿用 methodology §9 语义:入场 = 次 1h 开盘,H = 24h,MFE/MAE 以事件
   ATR 为单位(net@1x = 毛 − taker 双程成本,CostModel.from_config(
   canonical));对照 = 同品种/同 regime/同方向、避同机制 [known, +24] 窗、
@@ -27,9 +27,9 @@
   与 research.measure_controls 同一抽样引擎(单机校验:在 H=48 兼容池上
   与 research.measure_controls 逐事件对照均值全等,结果写入本报告)。
   迭代硬声明:首跑误把对照池限制于磁带窗内(超出 §9 口径),~70% 接触
-  点 incr 未定义(E3 高密度段结构性饱和,v12 docstring 同病理),该跑
+  点 incr 未定义(LEVEL_REJECTED 高密度段结构性饱和,v12 docstring 同病理),该跑
   标题判定 = H1 no_increment(dev 推进 0/50)、H2 INSUFFICIENT_DATA
-  (test 吸收/非吸收 26/141 < 50,拒绝人口实际只剩 E2);按 §9 还原段
+  (test 吸收/非吸收 26/141 < 50,拒绝人口实际只剩 BREAKOUT_FAILED);按 §9 还原段
   口径重跑即本报告,两跑判定均在 §6 如实并列。
 - 特征 = aggtape 模块六特征(§3 逐字;全部 trailing 因果窗;NaN 口径同模块
   docstring,不编造)。±15m 敏感性 = 特征族本身即 15m/60m 双档(delta_15/60,
@@ -47,7 +47,7 @@
   "有增量 + 哪个特征";全部不过 ⇒ "无增量"。多重性:10 机制 × 5 特征 =
   50 单元族,家族-wise 未校正,如实声明;信息维度各自的 test 只评一次
   (本报告即该次)。
-- H2(§4,吸收签名):接触全体 = 拒绝类 E2/E3(双向合并,符号合并)。
+- H2(§4,吸收签名):接触全体 = 拒绝类 BREAKOUT_FAILED/LEVEL_REJECTED(双向合并,符号合并)。
   阈:dev 拒绝接触的 vol15_rel ≥ dev 70 分位 且 eff_15m ≤ dev 30 分位
   (H2_VOL_Q = 0.70,H2_EFF_Q = 0.30,分位法 numpy linear,dev 计算后冻结
   应用于 test)。拒绝残幅 = mfe_incr = mfe_atr − 对照 42 种子 mfe 均值。
@@ -80,7 +80,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import aggtape as at                            # noqa: E402
-from market_operator.events import E1, E2, E3, E6, E7                # noqa: E402
+from market_operator.events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED                # noqa: E402
 from market_operator.flow_study import tercile_diff_ci, tercile_labels  # noqa: E402
 from market_operator.research import (                               # noqa: E402
     BOOT_REPS,
@@ -112,7 +112,7 @@ DEV_DAYS = 60                           # 分割:dev 60d / test 30d(协议 §4)
 H2_VOL_Q = 0.70                         # 吸收阈:vol15_rel ≥ dev 70 分位
 H2_EFF_Q = 0.30                         #       eff_15m ≤ dev 30 分位
 MIN_N = 50                              # 协议 §4:样品量 < 50 ⇒ INSUFFICIENT_DATA
-MECHS = tuple(f"{e}|{d}" for e in (E1, E2, E3, E6, E7)
+MECHS = tuple(f"{e}|{d}" for e in (BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED)
               for d in ("long", "short"))
 SLICERS = ("s_delta_share_15m", "s_delta_share_60m", "s_cvd_slope_60m",
            "big_share_15m", "eff_15m")
@@ -317,7 +317,7 @@ def process_symbol(symbol: str, window: dict, params: Params, cost: CostModel
     # --- 对照池(§9 协议语义:决策 bar 取自认知帧同段 —— dev = [0, split),
     # test = [split, n),与 v12 measure_controls 的段口径一致;不在磁带窗上
     # 再加限制。首跑曾把池限制在磁带窗内,超出 §9 口径,使 ~70% 接触点
-    # incr 未定义(池退化为空,尤其 E3 高密度段结构性饱和 —— v12 docstring
+    # incr 未定义(池退化为空,尤其 LEVEL_REJECTED 高密度段结构性饱和 —— v12 docstring
     # 已载同病理);本版按 §9 还原,两跑标题判定都在报告 §6 硬声明) ---
     by_mech: dict = {}
     for e in fired:
@@ -651,9 +651,9 @@ def run(skip_klines_fetch: bool = False, symbols: list | None = None) -> dict:
     issues.append(
         "实现迭代(两跑如实并列):首跑误将对照池限制在磁带窗内(超出 §9 段"
         "口径),标题判定 = H1 no_increment(dev 推进 0/50)、"
-        "H2 INSUFFICIENT_DATA(test 吸收/非吸收 26/141 < 50,拒绝人口因 E3 "
-        "对照池结构性空而只剩 E2);本报告 = 按 §9 段口径(dev=[0,split),"
-        "test=[split,n))还原后的一跑。E3 对照池在两种口径下均结构性饱和"
+        "H2 INSUFFICIENT_DATA(test 吸收/非吸收 26/141 < 50,拒绝人口因 LEVEL_REJECTED "
+        "对照池结构性空而只剩 BREAKOUT_FAILED);本报告 = 按 §9 段口径(dev=[0,split),"
+        "test=[split,n))还原后的一跑。LEVEL_REJECTED 对照池在两种口径下均结构性饱和"
         "(密度驱动,v12 docstring 已载同病理),其 incr 大面积未定义为数据"
         "事实,非实现选择。")
     issues.append(
@@ -684,7 +684,7 @@ def run(skip_klines_fetch: bool = False, symbols: list | None = None) -> dict:
             "klines_source": "data/raw_binance/{SYM}_1h_w90.csv = fapi api-fallback"
                              "(fetch_binance_klines 实现;与 vision 重叠日 parity "
                              "实测逐位一致;覆盖到最近已收盘 bar 以保 24h 前向窗)",
-            "contact_definition": "E1/E2/E3/E6/E7 known bar 收盘 = known_ts + "
+            "contact_definition": "BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED known bar 收盘 = known_ts + "
                                   "3_600_000(enable_e7=True)",
             "feature_module": "src/market_operator/aggtape.py(六特征口径与 NaN/"
                               "warmup 规则见其 docstring,先于结果观察冻结)",
@@ -695,7 +695,7 @@ def run(skip_klines_fetch: bool = False, symbols: list | None = None) -> dict:
             "h1_rule": "单元 = 机制×5 特征;三瓜分 top−bottom diff(incr@1x H24);"
                        "日块 bootstrap 2000 固定种子;dev diff>0 且 CI 不含 0 推进,"
                        "test 同线判别,每维度 test 一次;n<50 INSUFFICIENT",
-            "h2_rule": "吸收 = vol15_rel ≥ dev q70 且 eff_15m ≤ dev q30(E2/E3,"
+            "h2_rule": "吸收 = vol15_rel ≥ dev q70 且 eff_15m ≤ dev q30(BREAKOUT_FAILED/LEVEL_REJECTED,"
                        "阈 dev 定后冻结);H2a vs 对照均值>0 且 CI 不含 0,H2b vs 非"
                        "吸收差>0 且 CI 不含 0;两个都过才算增量存在;n<50 INSUFFICIENT",
             "seeds": {"controls": SEED_BASE, "bootstrap": "research.BOOT_SEED / "

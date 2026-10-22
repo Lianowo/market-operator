@@ -699,7 +699,7 @@ def main() -> None:
             "cascade_declarations": prep["declarations"],
             "honesty_note": ("硬禁只剩 F1 与结构性 target 不存在(no_invalid/"
                              "no_zone 为沿链 fail-closed 通道,逐键计数);对面缘缺"
-                             "失 ⇒ 拒(原 v16 闸②'空间无界 ⇒ 过'反转,续涨/E4/E5 "
+                             "失 ⇒ 拒(原 v16 闸②'空间无界 ⇒ 过'反转,续涨/TREND_RESUMED/RANGE_ROTATED "
                              "同受,如实声明);fail-closed 通道与 fail-open 条款"
                              "(rngq/pmd 不可判不乘,同 v18 声明)分记;顺风 A/B 双档"
                              "在 tier_sizing 下退位(q4 只注);'认微帧'按 §8 裁决"
@@ -818,7 +818,7 @@ def render_matrix(mat: dict, ratio: dict) -> list:
     lines = ["| 事件 | TF | 方向 | n | 净盈亏 | 期望USDT | 判定 |",
              "|---|---|---|---|---|---|---|"]
     any_rows = False
-    for ev in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+    for ev in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
         if ev not in mat:
             continue
         for tf in TF_LIST:
@@ -1000,7 +1000,7 @@ def render_md(payload: dict, grids: dict, attr: dict) -> str:
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in TF_LIST:
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)
@@ -1019,7 +1019,7 @@ def render_md(payload: dict, grids: dict, attr: dict) -> str:
               "① 阶梯配注硬禁恰两条:F1(<0.8·ATR 失效)与结构性 target 不存在"
               "(对面结构缘缺失,no_invalid/no_zone 为沿链 fail-closed 通道,"
               "逐项计数);原闸②'缘缺失 ⇒ 空间无界 ⇒ 过'按协议反转为拒,续涨/"
-              "E4/E5 同受,如实声明;② 条款恰界:pos 边界 inclusive(≥0.35 空"
+              "TREND_RESUMED/RANGE_ROTATED 同受,如实声明;② 条款恰界:pos 边界 inclusive(≥0.35 空"
               "/≤0.65 多过,恰界不扣);room 恰 1.0 入中档×0.75、恰 1.5 不扣;"
               "rngq 恰 0.8 受理(>0.8 ×0.75,'mic-only 处' = trigger 收盘决策,"
               "判定用注入 ctx 的 mic 标志);pmd 恰 −0.003 计档 ×0.5(恰界侧与"

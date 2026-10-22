@@ -55,7 +55,7 @@ def main():
         print(f"  {ev:3s} {rg:10s} {'long' if dr>0 else 'short':5s} | {r['net']:+8.1f} | n={int(r['n']):4d} | {r['ar']:+.2f}")
 
     print("\n[B] 入场路由 亏损/该路由总 与胜率")
-    for rt in ["e1_market", "strong_e6", "weak_e7_limit"]:
+    for rt in ["breakout_accepted_market", "structure_broken_strong_market", "structure_broken_weak_limit"]:
         allr = c[c.route == rt]; sub = L[L.route == rt]
         if len(allr):
             print(f"  {rt:15s} | 亏{len(sub):4d}/{len(allr):4d} | 该路由胜率{100*(1-len(sub)/len(allr)):.1f}%")

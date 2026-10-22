@@ -44,9 +44,9 @@ def _intent(kind, frac=None, reason="§X|test intent", ref=100.0, ts=0):
 def _open_short(b: Broker, invalid=101.0, decision_ts=T0, meta=None):
     m = {"direction": -1}
     m.update(meta or {})
-    b.submit(_intent(OrderKind.OPEN, None, "E1|short GO test", 100.0, decision_ts),
+    b.submit(_intent(OrderKind.OPEN, None, "BREAKOUT_ACCEPTED|short GO test", 100.0, decision_ts),
              decision_ts=decision_ts, direction=-1, invalid=invalid,
-             target_1=94.0, event_id="E1", meta=m)
+             target_1=94.0, event_id="BREAKOUT_ACCEPTED", meta=m)
 
 
 # ---------------------------------------------------------------------------
@@ -72,14 +72,14 @@ def test_open_short_sizing_fee_slippage_exact():
     assert r["used_leverage"] <= 5.0
     assert b.cash == pytest.approx(300.0 - notional * 0.0006, rel=1e-12)
     assert r["decision_ts"] == T0 and r["ts"] == T0 + H
-    assert r["reason_code"] == "E1"
+    assert r["reason_code"] == "BREAKOUT_ACCEPTED"
 
 
 def test_open_long_slippage_adverse_buy():
     b = _broker()
-    b.submit(_intent(OrderKind.OPEN, None, "E6|long GO test", 100.0, T0),
+    b.submit(_intent(OrderKind.OPEN, None, "STRUCTURE_BROKEN|long GO test", 100.0, T0),
              decision_ts=T0, direction=+1, invalid=99.0, target_1=104.0,
-             event_id="E6", meta={"direction": +1})
+             event_id="STRUCTURE_BROKEN", meta={"direction": +1})
     rows = b.on_bar_open("TEST", T0 + H, 100.0)
     assert rows[0]["price"] == pytest.approx(100.0 * (1 + 0.0002), abs=1e-12)
     assert rows[0]["side"] == "buy"
@@ -369,9 +369,9 @@ def _multi_symbol_broker():
 
 def _open_multi(b, symbol, ts):
     intent = OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
-                         reason="E7|portfolio", ref_price=100.0, ts=ts)
+                         reason="FLIP_RETESTED|portfolio", ref_price=100.0, ts=ts)
     b.submit(intent, decision_ts=ts, direction=+1, invalid=99.0,
-             target_1=105.0, event_id="E7")
+             target_1=105.0, event_id="FLIP_RETESTED")
 
 
 def test_portfolio_cap_blocks_second_symbol_market_entry():
@@ -393,8 +393,8 @@ def test_portfolio_cap_blocks_second_symbol_maker_entry():
     b.submit_limit(RestingLimitOrder(
         direction=+1, limit_price=100.0, armed_at_ts=T0,
         expiry_ts=T0 + 2 * H, symbol="B", role="entry",
-        invalid=99.0, target_1=105.0, event_id="E7",
-        reason="E7|long limit"))
+        invalid=99.0, target_1=105.0, event_id="FLIP_RETESTED",
+        reason="FLIP_RETESTED|long limit"))
     fills = b.on_15m_bar("B", T0 + H, 100.0, 101.0, 99.0, 100.0)
     assert len(fills) == 1
     assert fills[0]["kind"] == "SKIP" and fills[0]["reason_code"] == "MIN_SIZE"

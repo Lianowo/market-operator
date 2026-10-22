@@ -35,7 +35,7 @@
   "k_imp": 1.5,
   "turtle_stop_atr": 2.0,
   "portfolio_cap_frac": 0.03,
-  "whitelist": [["E8", -1], ["E8", 1]],
+  "whitelist": [["EDGE_RECLAIMED", -1], ["EDGE_RECLAIMED", 1]],
   "n_fill": 12,
   "exec_tf_seconds": 900,
   "maker_fee": 0.0002

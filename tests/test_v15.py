@@ -5,7 +5,7 @@
   缺侧 pivot/带退化 fail-closed、pos 计算与 quality.swing_band_pos 同值;
 - arm0 回归:V15Router(band_side=None)与 V6Router 账本逐位一致;
 - 组件启停矩阵:maker 仅 fade 家族(c2_family)、stop-entry 仅续涨家族
-  (未匹配 C3 的续涨信号落回 canonical)、E4/E5 不落 C2;
+  (未匹配 C3 的续涨信号落回 canonical)、TREND_RESUMED/RANGE_ROTATED 不落 C2;
 - v14 行为保存:ArmConfig 缺省 c2_family=None ⇒ C2 接管全部入口(逐位);
 - 确定性双跑;config/v15.json 与 canonical 共享键逐项一致、开关矩阵冻结。
 """
@@ -26,7 +26,7 @@ from market_operator.bandside import (
 )
 from market_operator.broker import ContractSpec
 from market_operator.campaign import ArmConfig, build_campaign_frame, run_campaigns
-from market_operator.events import E1, E3, E4, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, TREND_RESUMED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.quality import swing_band_pos
 from market_operator.strategy_v6 import V6Params, V6Router
@@ -51,9 +51,9 @@ KW = dict(segment="full", dev_frac=0.7, equity0=300.0, risk_frac=0.0075,
           slippage_per_side=0.0002, funding_per_8h=0.0001,
           cost_multiplier=1.0, contracts={"TEST": SPEC}, params=PARAMS,
           n_fill=12, portfolio_cap_frac=0.03)
-WL16 = frozenset((e, d) for e in ("E1", "E2", "E3", "E4", "E5", "E6", "E7",
-                                  "E8") for d in (-1, 1))
-FADE = ("E2", "E3", "E8")
+WL16 = frozenset((e, d) for e in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED",
+                                  "EDGE_RECLAIMED") for d in (-1, 1))
+FADE = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
 BS = BandSideParams()
 V15_ARM = ArmConfig(fill_model="exchange_maker", stop_entry=True,
                     c2_family=FADE)
@@ -183,7 +183,7 @@ def test_band_side_pos_identical_to_quality_swing_band_pos():
 
 
 def test_v15router_none_bitwise_v6router():
-    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(E1, -1, 2, 2)]})}
+    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(BREAKOUT_ACCEPTED, -1, 2, 2)]})}
     r_v6 = _run(frames, router_factory=V6Router)
     r_15 = _run(frames, router_params=V15Params(whitelist=WL16),
                 router_factory=V15Router)
@@ -193,7 +193,7 @@ def test_v15router_none_bitwise_v6router():
 
 
 def test_band_side_rejects_wrong_half_and_counts():
-    frames = {"TEST@2h": _frame(2, events_by={7: [_ev(E1, -1, 7, 2)]},
+    frames = {"TEST@2h": _frame(2, events_by={7: [_ev(BREAKOUT_ACCEPTED, -1, 7, 2)]},
                                 view=VIEW_BAD_POS)}
     res = _run(frames, router_params=V15Params(whitelist=WL16, band_side=BS),
                router_factory=V15Router)
@@ -205,7 +205,7 @@ def test_band_side_rejects_wrong_half_and_counts():
 
 
 def test_band_side_pass_carries_band_pos_no_tier_meta():
-    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(E1, -1, 2, 2)]})}
+    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(BREAKOUT_ACCEPTED, -1, 2, 2)]})}
     res = _run(frames, router_params=V15Params(whitelist=WL16, band_side=BS),
                router_factory=V15Router, arm=ArmConfig(stop_entry=True))
     o = [r for r in res.ledger if r["kind"] == "OPEN"]
@@ -221,30 +221,30 @@ def test_band_side_pass_carries_band_pos_no_tier_meta():
 
 
 def test_c2_family_fade_only_maker_armed_continuation_canonical():
-    # E1 续涨:c2_family=fade 即使 fill_model=exchange_maker 也不接管 ⇒
-    # 无 stop_entry 时落回 canonical 市价;E3 fade ⇒ maker 真挂单。
-    # fade 限价挂出后价格反向远离,12×N_fill 细 bar 内不触价 ⇒ 过期(E1
+    # BREAKOUT_ACCEPTED 续涨:c2_family=fade 即使 fill_model=exchange_maker 也不接管 ⇒
+    # 无 stop_entry 时落回 canonical 市价;LEVEL_REJECTED fade ⇒ maker 真挂单。
+    # fade 限价挂出后价格反向远离,12×N_fill 细 bar 内不触价 ⇒ 过期(BREAKOUT_ACCEPTED
     # 决策在过期之后,槽位已空)。
     zone = _fade_zone()
-    evs = {1: [_ev(E3, -1, 1, 2, ref=97.1, zone=zone)],
-           10: [_ev(E1, -1, 10, 2)]}
+    evs = {1: [_ev(LEVEL_REJECTED, -1, 1, 2, ref=97.1, zone=zone)],
+           10: [_ev(BREAKOUT_ACCEPTED, -1, 10, 2)]}
     # 决策收盘 96.9 ⇒ 空限价 96.9;后续 bar 高点恒 ≤96.0 永不回穿 ⇒ 过期
     ov = {i: (95.5, 96.0, 94.6, 95.2) for i in range(4, 21)}
     frames = {"TEST@2h": _frame(2, events_by=evs, exec_overrides=ov, n_1h=32)}
     res = _run(frames, arm=ArmConfig(fill_model="exchange_maker",
                                      c2_family=FADE))
     c = res.counters
-    assert c["maker_entry_armed"] == 1                       # 仅 E3 fade
+    assert c["maker_entry_armed"] == 1                       # 仅 LEVEL_REJECTED fade
     lf = [r for r in res.ledger if r["kind"] == "LIMIT_FILL"
           and r["meta"].get("order_type") == "maker_entry"]
     exps = [r for r in res.ledger if r["kind"] == "EXPIRED"]
     assert not lf and len(exps) == 1                         # 偏离后未触价过期
     o = [r for r in res.ledger if r["kind"] == "OPEN"]
-    assert len(o) == 1 and o[0]["meta"]["event_id"] == "E1"  # 续涨市价兜底
+    assert len(o) == 1 and o[0]["meta"]["event_id"] == "BREAKOUT_ACCEPTED"  # 续涨市价兜底
 
 
 def test_stop_entry_only_continuation_fade_not_stopped():
-    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(E1, -1, 2, 2)]})}
+    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(BREAKOUT_ACCEPTED, -1, 2, 2)]})}
     res = _run(frames, arm=V15_ARM)
     c = res.counters
     assert c["stop_entry_armed"] == 1 and c.get("maker_entry_armed", 0) == 0
@@ -253,7 +253,7 @@ def test_stop_entry_only_continuation_fade_not_stopped():
 
 def test_fade_event_never_routes_to_stop_entry():
     zone = _fade_zone()
-    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(E3, -1, 2, 2, ref=97.1,
+    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(LEVEL_REJECTED, -1, 2, 2, ref=97.1,
                                                       zone=zone)]})}
     res = _run(frames, arm=V15_ARM)
     c = res.counters
@@ -262,7 +262,7 @@ def test_fade_event_never_routes_to_stop_entry():
 
 
 def test_c2_family_none_preserves_v14_takeover_all():
-    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(E1, -1, 2, 2)]})}
+    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(BREAKOUT_ACCEPTED, -1, 2, 2)]})}
     res = _run(frames, arm=ArmConfig(fill_model="exchange_maker"))
     c = res.counters                        # 缺省 c2_family=None ⇒ v14 逐位
     assert c["maker_entry_armed"] == 1 and c["maker_entry_fills"] == 1
@@ -270,13 +270,13 @@ def test_c2_family_none_preserves_v14_takeover_all():
 
 
 def test_e4_not_in_families_never_maker():
-    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(E4, -1, 2, 2)]})}
+    frames = {"TEST@2h": _frame(2, events_by={2: [_ev(TREND_RESUMED, -1, 2, 2)]})}
     res = _run(frames, arm=V15_ARM)
-    c = res.counters                        # E4 不在两族 ⇒ canonical 市价兜底
+    c = res.counters                        # TREND_RESUMED 不在两族 ⇒ canonical 市价兜底
     assert c.get("maker_entry_armed", 0) == 0
     assert c.get("stop_entry_armed", 0) == 0
     o = [r for r in res.ledger if r["kind"] == "OPEN"]
-    assert len(o) == 1 and o[0]["meta"]["event_id"] == "E4"
+    assert len(o) == 1 and o[0]["meta"]["event_id"] == "TREND_RESUMED"
 
 
 # ---------------------------------------------------------------------------
@@ -286,9 +286,9 @@ def test_e4_not_in_families_never_maker():
 
 def test_composition_determinism_double_run():
     zone = _fade_zone()
-    frames = {"TEST@2h": _frame(2, events_by={1: [_ev(E3, -1, 1, 2, ref=97.1,
+    frames = {"TEST@2h": _frame(2, events_by={1: [_ev(LEVEL_REJECTED, -1, 1, 2, ref=97.1,
                                                       zone=zone)],
-                                              4: [_ev(E1, -1, 4, 2)]})}
+                                              4: [_ev(BREAKOUT_ACCEPTED, -1, 4, 2)]})}
     kw = dict(router_params=V15Params(whitelist=WL16, band_side=BS),
               router_factory=V15Router, arm=V15_ARM)
     r1 = _run(frames, **kw)
@@ -319,7 +319,7 @@ def test_config_v15_matches_canonical_shared_keys_and_switch_matrix():
     assert not off["band_side"] and off["fill_model"] == "canonical"
     assert not off["c3_stop_entry"] and not off["c4_laddering"] \
         and not off["tiersize"]
-    assert v15["c2_params"]["family"] == ["E2", "E3", "E8"]
+    assert v15["c2_params"]["family"] == ["BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"]
     assert v15["band_side_params"]["pos_short_min"] == 0.35
     assert v15["band_side_params"]["pos_long_max"] == 0.65
     assert v15["c3_params"]["stop_wait_tf"] == 12

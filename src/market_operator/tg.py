@@ -33,15 +33,15 @@ MAX_CAPTION_LEN = 1000
 _KIND_TAG = {"signal": "信号", "fill": "成交", "daily": "日结", "alert": "告警"}
 
 _EVENT_DISPLAY = {
-    "E1": "ACCEPT (突破接受)",
+    "BREAKOUT_ACCEPTED": "ACCEPT (突破接受)",
     "ACCEPT": "ACCEPT (突破接受)",
-    "E3": "REJECT (刺穿拒绝)",
+    "LEVEL_REJECTED": "REJECT (刺穿拒绝)",
     "REJECT": "REJECT (刺穿拒绝)",
 }
 
 _ROUTE_DISPLAY = {
-    "e1_market": "ACCEPT 市价",
-    "e3_market": "REJECT 市价",
+    "breakout_accepted_market": "ACCEPT 市价",
+    "level_rejected_market": "REJECT 市价",
     "accept_market": "ACCEPT 市价",
     "reject_market": "REJECT 市价",
 }
@@ -55,7 +55,7 @@ def format_route_display(route: str) -> str:
     r = str(route).strip()
     if r in _ROUTE_DISPLAY:
         return _ROUTE_DISPLAY[r]
-    return r.replace("e1_market", "ACCEPT 市价").replace("e3_market", "REJECT 市价")
+    return r.replace("breakout_accepted_market", "ACCEPT 市价").replace("level_rejected_market", "REJECT 市价")
 
 
 def render_bw_kline_png(
@@ -371,8 +371,8 @@ class TelegramNotifier:
         png = None
         if bars:
             d_int = 1 if side in ("long", "buy", "多") else -1
-            ev_short = "ACCEPT" if str(event_id) in ("E1", "ACCEPT") else (
-                "REJECT" if str(event_id) in ("E3", "REJECT") else str(event_id))
+            ev_short = "ACCEPT" if str(event_id) in ("BREAKOUT_ACCEPTED", "ACCEPT") else (
+                "REJECT" if str(event_id) in ("LEVEL_REJECTED", "REJECT") else str(event_id))
             png = render_bw_kline_png(
                 bars, symbol=symbol, tf_label=tf_label,
                 title_tag=f"SIGNAL {ev_short} {side.upper()}",
@@ -408,10 +408,10 @@ class TelegramNotifier:
             lines.append(f"{pnl_emoji} 实现盈亏: {pnl:+.2f} USDT")
         if note:
             clean_note = (str(note)
-                          .replace("E1 e1_market", "ACCEPT (突破接受) | 市价")
-                          .replace("E3 e3_market", "REJECT (刺穿拒绝) | 市价")
-                          .replace("e1_market", "ACCEPT 市价")
-                          .replace("e3_market", "REJECT 市价"))
+                          .replace("BREAKOUT_ACCEPTED e1_market", "ACCEPT (突破接受) | 市价")
+                          .replace("LEVEL_REJECTED e3_market", "REJECT (刺穿拒绝) | 市价")
+                          .replace("breakout_accepted_market", "ACCEPT 市价")
+                          .replace("level_rejected_market", "REJECT 市价"))
             lines.append(f"📝 详情说明: {clean_note}")
         png = None
         if bars:

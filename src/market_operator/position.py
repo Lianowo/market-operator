@@ -5,14 +5,14 @@
 同 bar 并存,§8.2 在前):
 
 1. §8.1 破位退出:收盘越过 invalid ⇒ EXIT 剩余全部。
-2. §8.5 反向 E6:新事件中存在方向与持仓相反的 E6 ⇒ EXIT 剩余全部(CHoCH)。
+2. §8.5 反向 STRUCTURE_BROKEN:新事件中存在方向与持仓相反的 STRUCTURE_BROKEN ⇒ EXIT 剩余全部(CHoCH)。
 3. §8.2 target_1:bar 极值触及目标 ⇒ REDUCE 当前仓 50%(仅一次,§9.1 的
    target 为结构区域近缘),余仓 invalid 移至 entry(保本,只收紧不放松)。
 4. §8.3 移动防线:每新确认的逆向 pivot(空仓=pivot high,多仓=pivot low)
    ⇒ invalid 收紧至 pivot 外侧 ± k_bm·atr(只许向有利方向移动,永不放松;
    防线调整无订单,记录于 Position.log)。
-5. §8.4 加仓:v1 关闭(PositionManager(allow_add=False),阶段 3 E4
-   NO-GO ⇒ 策略层不出现加仓输入)。try_add 完整实现:同向新 E4 且浮盈
+5. §8.4 加仓:v1 关闭(PositionManager(allow_add=False),阶段 3 TREND_RESUMED
+   NO-GO ⇒ 策略层不出现加仓输入)。try_add 完整实现:同向新 TREND_RESUMED 且浮盈
    ≥ 1R 时允许一次,合并后最坏情景损失不得劣于加仓前(风险中性约束),
    由独立测试验证。
 6. §8.6 时间止损:bars_held 达到 n_time(§7 先验 N_time=24)时
@@ -30,7 +30,7 @@ v6 增量(docs/v6-protocol.md §2-S2,加性开关,默认参数行为逐位不变
   ⇒ v1/v4/v5 逐位旧行为。
 
 v16 增量(docs/v16-protocol.md,收割婚配;加性开关,默认参数行为逐位不变):
-- harvest_family(缺省 None ⇒ 关):开仓 event_id 命中 fade 家族(E2/E3/E8)
+- harvest_family(缺省 None ⇒ 关):开仓 event_id 命中 fade 家族(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)
   的持仓进入收割模式 —— **到达对面结构缘(target_1)⇒ 全部落袋**(结构
   目标收割,EXIT 全平,不走 §8.2 50% 减仓),**收割模式禁用 §8.3 trailing**
   (协议持仓第 2/4 条:fade 走 target-harvest,trail 只对续涨保留);续涨
@@ -78,7 +78,7 @@ early_exit=False ⇒ 逐位旧行为,parity 钉死):
 v20 增量(v20 收尾 S1/S2,冻结 2026-10-20;加性开关,默认参数行为逐位
 不变,parity 钉死):
 - **S1 结构脉冲激活 trail**(trail_arm_gate=False ⇒ 逐位旧行为):扶手对
-  象 = cont 家族(E1/E6/E7)与 E4(trail_arm_family);该族持仓的 §8.3
+  象 = cont 家族(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED)与 TREND_RESUMED(trail_arm_family);该族持仓的 §8.3
   trail 扶手只在 (a) MFE ≥ s1_mfe_r(1R,恰界 inclusive 上线)或 (b) 本
   bar 出现新确认**顺向** pivot(多=pivot high 新高 / 空=pivot low 新
   低 —— 脉冲向结构确认,与 §8.3 收紧消费的**逆向** pivot 互补;若与
@@ -107,7 +107,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
-from .events import E4, E6, MarketEvent
+from .events import TREND_RESUMED, STRUCTURE_BROKEN, MarketEvent
 from .hypothesis import Hypothesis
 from .broker import OrderIntent, OrderKind
 from .structure import Params, Pivot, PivotKind, _bar_parts
@@ -123,7 +123,7 @@ EARLY_HALF_MFE_R = 0.3   # 半窗(k_cap/2 后)MFE < 0.3R ⇒ 出
 EARLY_CONSEC_N = 3       # 连续 ≥3 根收盘全逆(认知帧,d·(c−o)<0)⇒ 出
 # v20 收尾 S1/S2(任务书写死;恰界 inclusive 触/上线,config/v20.json 硬对账)
 S1_TRAIL_ARM_MFE_R = 1.0          # S1:trail 上线 MFE 闸(恰 1R 上线)
-S1_FAMILY = ("E1", "E6", "E7", "E4")   # S1 扶手对象:cont 家族 + E4
+S1_FAMILY = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "TREND_RESUMED")   # S1 扶手对象:cont 家族 + TREND_RESUMED
 S2_LEVEL = 0.25                   # S2:缘前 25%(entry→target 行程,恰触 inclusive)
 S2_BANK_FRAC = 0.4                # S2:缘前 25% 落袋 40% 仓(缘收剩 60%)
 
@@ -138,7 +138,7 @@ class Position:
     entry: float                   # 加权均价(加仓后更新)
     invalid: float                 # 当前结构失效价(只许向有利方向移动)
     target_1: Optional[float]
-    event_id: str                  # 开仓机制(E1/E6)
+    event_id: str                  # 开仓机制(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN)
     opened_ts: object
     opened_index: int
     initial_risk: float            # |entry_open − invalid_open|(R 基准,>0)
@@ -199,7 +199,7 @@ class PositionManager:
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
         self.time_stop = time_stop                      # v6 臂 B:False=关 §8.6
         # v16 收割婚配开关(全 None ⇒ 逐位 canonical 旧行为,回归钉死)
-        self.harvest_family = harvest_family            # fade 家族(E2/E3/E8)
+        self.harvest_family = harvest_family            # fade 家族(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)
         self.time_cap_bars = time_cap_bars              # k_cap_hours(48)
         self.cap_mfe_min = float(cap_mfe_min)           # MFE 恰界 inclusive 持有
         # v18 R4 三段收割开关(False ⇒ 逐位 v16 收割行为,回归钉死)
@@ -292,10 +292,10 @@ class PositionManager:
                 reason = f"v16|{tag}|" + reason
             return [self._exit(pos, ts, c, reason)]
 
-        # 2. §8.5 反向 E6(CHoCH 出场)
+        # 2. §8.5 反向 STRUCTURE_BROKEN(CHoCH 出场)
         for ev in new_events:
-            if ev.id == E6 and ev.direction == -pos.direction:
-                reason = (f"§8.5|E6 reverse CHoCH event_ts={ev.ts} "
+            if ev.id == STRUCTURE_BROKEN and ev.direction == -pos.direction:
+                reason = (f"§8.5|STRUCTURE_BROKEN reverse CHoCH event_ts={ev.ts} "
                           f"exit all")
                 if self._v16:
                     reason = "v16|choch|" + reason
@@ -373,7 +373,7 @@ class PositionManager:
 
         # 4. §8.3 移动防线:新确认逆向 pivot ⇒ invalid 收紧(永不放松);
         #    v16 fade 收割模式禁用 trail(协议持仓第 4 条:trail 只对续涨保留)
-        #    v20 S1:扶手族(E1/E6/E7/E4)trail 扶手只在 (a) MFE≥1R 或 (b) 本
+        #    v20 S1:扶手族(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED/TREND_RESUMED)trail 扶手只在 (a) MFE≥1R 或 (b) 本
         #    bar 新确认顺向 pivot(多=pivot high 新高 / 空=pivot low 新低 ——
         #    脉冲向结构确认,与 §8.3 收紧消费的逆向 pivot 互补)之后上线;未
         #    上线 §8.3 整段不裁决(扶手不收紧,破位/CHoCH/到目标照先行);
@@ -400,7 +400,7 @@ class PositionManager:
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
         if self.allow_add and not pos.added and not pos.pending_add:
             for ev in new_events:
-                if ev.id == E4 and ev.direction == pos.direction:
+                if ev.id == TREND_RESUMED and ev.direction == pos.direction:
                     intent = self.try_add(pos, ev, c, add_frac=pos.size_frac,
                                           ts=ts, defer=defer_add)
                     if intent is not None:
@@ -590,7 +590,7 @@ class PositionManager:
         return out
 
     def _s1_gated(self, pos: Position) -> bool:
-        """v20 S1 扶手对象判定:扶手闸开 ∧ 持仓事件 ∈ 扶手族(cont+E4)。"""
+        """v20 S1 扶手对象判定:扶手闸开 ∧ 持仓事件 ∈ 扶手族(cont+TREND_RESUMED)。"""
         return self.trail_arm_gate and str(pos.event_id) in self.trail_arm_family
 
     def _s2_ladder(self, pos: Position, ts: object, c: float, h: float,
@@ -662,11 +662,11 @@ class PositionManager:
                 defer: bool = False) -> Optional[OrderIntent]:
         """§8.4 风险中性加仓(v1 由 allow_add 门控)。
 
-        条件:同向 E4、浮盈 ≥ 1R、加仓仅一次。合并口径:合并仓位的失效价取
-        min/max(现 invalid, E4 建议 invalid)(只收紧),合并均价按名义加权;
+        条件:同向 TREND_RESUMED、浮盈 ≥ 1R、加仓仅一次。合并口径:合并仓位的失效价取
+        min/max(现 invalid, TREND_RESUMED 建议 invalid)(只收紧),合并均价按名义加权;
         风险中性约束 = 合并后最坏情景损失 ≤ 加仓前,不满足则拒绝(记录理由)。
         """
-        if (event.id != E4 or event.direction != pos.direction or
+        if (event.id != TREND_RESUMED or event.direction != pos.direction or
                 pos.added or pos.pending_add):
             return None
         if pos.mfe_r < ADD_MIN_R:
@@ -697,7 +697,7 @@ class PositionManager:
             pos.size_frac = merged_size
             pos.invalid = new_inv
             pos.added = True
-        reason = (f"§8.4|E4 add risk-neutral avg_entry={avg:.8g} "
+        reason = (f"§8.4|TREND_RESUMED add risk-neutral avg_entry={avg:.8g} "
                   f"invalid={new_inv:.8g} worst {worst_before:.8g}"
                   f"->{worst_after:.8g}")
         self.last.append(reason)

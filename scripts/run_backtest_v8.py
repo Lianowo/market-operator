@@ -1,4 +1,4 @@
-"""v8 研究轮回测全管线:E8 EDGE_RECLAIM(docs/v8-protocol.md,冻结于任何 v8
+"""v8 研究轮回测全管线:EDGE_RECLAIMED EDGE_RECLAIM(docs/v8-protocol.md,冻结于任何 v8
 运行之前)—— campaign 引擎 × v8 路由(次 1h 市价/结构失效/带缘目标/room 门)。
 
 用法:  python scripts/run_backtest_v8.py
@@ -14,12 +14,12 @@
 - test 段曝光纪律:v8-protocol §2/research-log #14 —— test 为第 11 次曝光,
   一次性评估;此后任何 v8 迭代只许前向。本脚本即该一次。test 合并战役成交
   笔数 < 60 ⇒ INSUFFICIENT_DATA,不产生任何"看起来转正"的叙述(协议§2)。
-- 机制:E8 事件(events.py,enable_e8,pos_edge=0.20 冻结先验,regime 无关,
-  confirmed band 语境 + 收复确认;伴随 E2 发射,E1-E7 检测零改动 —— 本脚本
-  仍以冻结产物对账硬约束守护:E7 1h 计数 == reports/backtest_v2.json;E7 多
-  TF == reports/event_study_v3.json;E1+E6|short == reports/backtest.json
+- 机制:EDGE_RECLAIMED 事件(events.py,enable_e8,pos_edge=0.20 冻结先验,regime 无关,
+  confirmed band 语境 + 收复确认;伴随 BREAKOUT_FAILED 发射,BREAKOUT_ACCEPTED-FLIP_RETESTED 检测零改动 —— 本脚本
+  仍以冻结产物对账硬约束守护:FLIP_RETESTED 1h 计数 == reports/backtest_v2.json;FLIP_RETESTED 多
+  TF == reports/event_study_v3.json;BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short == reports/backtest.json
   go_events(v1 parity);任一漂移即 raise)。
-- 路由 = strategy_v8(白名单独含 (E8,±1);协议§1 单一执行风格 = 次 1h 开盘
+- 路由 = strategy_v8(白名单独含 (EDGE_RECLAIMED,±1);协议§1 单一执行风格 = 次 1h 开盘
   市价,与 v6 桶可比;失效 = 事件 attrs invalid(刺穿极值∓k_bm·atr);F1
   k_is=0.8 闸;目标 = 对侧结构边缘 band H*/L*;room < r_min·risk 拒);
   出场 = §8 全套沿用 canonical(PositionManager(breakeven_on_reduce=True,
@@ -28,9 +28,9 @@
   组合容量 3%(最坏情景 FIFO 整笔跳过);fill_ts > decision_ts 恒等(Broker
   行内断言 + 模块级 assert_fill_after_decision);15m↔1h、1h↔TF compaction
   对账违即 raise;合约规格离线缓存强制(逐条 sha256)。
-- 判别量(协议§2,写作在先):① E8 桶入场 pos 分布(事件 pos 构造过门 +
+- 判别量(协议§2,写作在先):① EDGE_RECLAIMED 桶入场 pos 分布(事件 pos 构造过门 +
   成交 pos 应集中边缘带;构造校验)与胜率/平均R/净额按 (TF×方向);
-  ② 同期 canonical E6/E7 对照桶(读 trades_v6_turtle_*.csv,同段同成本);
+  ② 同期 canonical STRUCTURE_BROKEN/FLIP_RETESTED 对照桶(读 trades_v6_turtle_*.csv,同段同成本);
   ③ dev 位置带敏感性 {0.15, 0.20, 0.25}(仅 dev,不择优);
   ④ 升级判定:test≥60 且 1.5x 净期望>0 且 2x PF>1。
 """
@@ -76,7 +76,7 @@ from market_operator.research import (                      # noqa: E402
     split_boundary,
 )
 from market_operator.strategy_v8 import (                   # noqa: E402
-    ROUTE_E8,
+    ROUTE_EDGE_RECLAIMED,
     V8Params,
     V8Router,
 )
@@ -86,8 +86,8 @@ CONFIG_V8 = ROOT / "config" / "v8.json"
 REPORTS = ROOT / "reports"
 SEMANTICS = "v8"
 MIN_TRADES_TEST = 60                       # v8-protocol §2 升级线样本量阈(不变)
-MECHANISMS = ("E8",)
-CANON_EVENTS = ("E6", "E7")                # 协议§2 对照桶(位置语义 A/B)
+MECHANISMS = ("EDGE_RECLAIMED",)
+CANON_EVENTS = ("STRUCTURE_BROKEN", "FLIP_RETESTED")                # 协议§2 对照桶(位置语义 A/B)
 
 TRADE_COLUMNS = [
     "trade_id", "campaign", "symbol", "tf", "direction", "arm", "route",
@@ -103,11 +103,11 @@ TRADE_COLUMNS = [
     "reason_open", "reason_reduce", "reason_exit",
 ]
 
-E1E7_IDS = ("E1", "E2", "E3", "E4", "E5", "E6", "E7")
+E1E7_IDS = ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
 
 
 # ---------------------------------------------------------------------------
-# 数据装配(一次装载/校验;认知缓存按 pos_edge 重放 —— 仅 E8 目录受 gate 影响)
+# 数据装配(一次装载/校验;认知缓存按 pos_edge 重放 —— 仅 EDGE_RECLAIMED 目录受 gate 影响)
 # ---------------------------------------------------------------------------
 
 
@@ -169,27 +169,27 @@ def build_frames(sym_data: dict, params: Params, pos_edge: float) -> dict:
             f = build_campaign_frame(cog, df_exec, tf)
             frames[f.key] = f
             n_e8 = sum(1 for evs in cog.events_by.values()
-                       for e in evs if e.id == "E8")
+                       for e in evs if e.id == "EDGE_RECLAIMED")
             n_ev = sum(len(v) for v in cog.events_by.values())
             print(f"[frame] {sym}@{tf}: {len(df_cog)} 认知 bar, {n_ev} events "
-                  f"(E8={n_e8}, pos_edge={pos_edge}) ({time.time() - t0:.1f}s)",
+                  f"(EDGE_RECLAIMED={n_e8}, pos_edge={pos_edge}) ({time.time() - t0:.1f}s)",
                   flush=True)
     return frames
 
 
 # ---------------------------------------------------------------------------
-# 逐笔增广:MFE_R / 回吐 R / E8 入场 pos(构造校验核心量)
+# 逐笔增广:MFE_R / 回吐 R / EDGE_RECLAIMED 入场 pos(构造校验核心量)
 # ---------------------------------------------------------------------------
 
 
 def _e8_lookup(frames: dict) -> dict:
-    """战役 → (direction, decision_ts) → [E8 attrs](同 bar 多 zone episode 并存)。"""
+    """战役 → (direction, decision_ts) → [EDGE_RECLAIMED attrs](同 bar 多 zone episode 并存)。"""
     lut: dict = {}
     for key, f in frames.items():
         m: dict = {}
         for _i, evs in f.cog.events_by.items():
             for e in evs:
-                if e.id == "E8":
+                if e.id == "EDGE_RECLAIMED":
                     m.setdefault((e.direction, int(e.ts)), []).append(e.attrs)
         lut[key] = m
     return lut
@@ -214,7 +214,7 @@ def augment_trades_v8(trades: list, frames: dict) -> list:
             lows = min(b[3] for b in f.cog.bars[e_i:x_i + 1])
             mfe_px = (highs - t["entry"]) if d > 0 else (t["entry"] - lows)
             mfe_r = mfe_px / risk_px if risk_px > 0 else None
-        # E8 入场 pos(构造校验):事件知时 band + 事件 pos(检测器写的门值,
+        # EDGE_RECLAIMED 入场 pos(构造校验):事件知时 band + 事件 pos(检测器写的门值,
         # 构造 ≤0.20/≥0.80)与成交 pos(实际成交价,可因滑点/隔夜微出带)。
         pos_event = pos_entry = band_lo = band_hi = None
         cands = lut.get(t["campaign"], {}).get(
@@ -244,14 +244,14 @@ def giveback_summary(trades: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ① 判别量:E8 入场 pos 构造校验(事件 pos ⊆ 门 + 成交 pos 分布)
+# ① 判别量:EDGE_RECLAIMED 入场 pos 构造校验(事件 pos ⊆ 门 + 成交 pos 分布)
 # ---------------------------------------------------------------------------
 
 
 def pos_construction(trades: list) -> dict:
     out: dict = {}
     for t in trades:
-        if t["event_id"] != "E8" or not t["in_segment_open"]:
+        if t["event_id"] != "EDGE_RECLAIMED" or not t["in_segment_open"]:
             continue
         side = "long" if t["direction"] > 0 else "short"
         g = out.setdefault(side, {"n": 0, "pos_event": [], "pos_entry": []})
@@ -282,7 +282,7 @@ def pos_construction(trades: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ② canonical E6/E7 对照桶(读 v6 冻结产物拼表,不重跑)
+# ② canonical STRUCTURE_BROKEN/FLIP_RETESTED 对照桶(读 v6 冻结产物拼表,不重跑)
 # ---------------------------------------------------------------------------
 
 
@@ -291,7 +291,7 @@ def _cost_suffix(mult: float) -> str:
 
 
 def canonical_buckets(seg: str, mult: float) -> dict:
-    """同期 canonical E6/E7 机制桶(n/胜率/平均R/净额;与 bucket_tables 同口径,
+    """同期 canonical STRUCTURE_BROKEN/FLIP_RETESTED 机制桶(n/胜率/平均R/净额;与 bucket_tables 同口径,
     winrate/avg_r 以 closed 笔计;segment 原生 CSV,段口径与 v6 metrics 一致)。"""
     path = REPORTS / f"trades_v6_turtle_{seg}{_cost_suffix(mult)}.csv"
     if not path.exists():
@@ -316,7 +316,7 @@ def canonical_buckets(seg: str, mult: float) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# E8 事件计数(认知缓存直数,段 = 每战役 TF 帧 split_boundary,不含路由门)
+# EDGE_RECLAIMED 事件计数(认知缓存直数,段 = 每战役 TF 帧 split_boundary,不含路由门)
 # ---------------------------------------------------------------------------
 
 
@@ -328,14 +328,14 @@ def e8_event_counts(frames: dict, dev_frac: float) -> dict:
         for i, evs in f.cog.events_by.items():
             seg = "dev" if 0 <= i < b else "test"
             for e in evs:
-                if e.id == "E8":
+                if e.id == "EDGE_RECLAIMED":
                     cnt[seg][f"{f.tf_label}×"
                              f"{'long' if e.direction > 0 else 'short'}"] += 1
     return {seg: dict(sorted(c.items())) for seg, c in cnt.items()}
 
 
 def e1_e7_parity_counts(frames: dict) -> dict:
-    """E1-E7 认知总数(enable_e8=True 下;应与 canonical 产物口径一致 ——
+    """BREAKOUT_ACCEPTED-FLIP_RETESTED 认知总数(enable_e8=True 下;应与 canonical 产物口径一致 ——
     交叉强证由 cross_checks 的冻结锚点对账承担,此处仅计数留档)。"""
     per: dict = {}
     for key, f in sorted(frames.items()):
@@ -383,7 +383,7 @@ def main() -> None:
     if tf_list != ["1h", "2h", "4h", "12h", "1d"]:
         raise RuntimeError(f"config/v8.json tf_list 冻结为 "
                            f"['1h','2h','4h','12h','1d']: {tf_list}")
-    if raw_cfg["entry_mode"] != "e8_market":
+    if raw_cfg["entry_mode"] != "edge_reclaimed_market":
         raise RuntimeError("config/v8.json entry_mode must be e8_market "
                            "(v8 协议§1 单执行风格)")
     whitelist = frozenset((str(i), int(d)) for i, d in raw_cfg["whitelist"])
@@ -438,7 +438,7 @@ def main() -> None:
     if liq != 0:
         raise RuntimeError(f"强平非预期触发: {liq}")
 
-    # -- ③ dev 位置带敏感性(仅 dev,不择优;共享仓位/容量语义,仅 E8 门变化) ------
+    # -- ③ dev 位置带敏感性(仅 dev,不择优;共享仓位/容量语义,仅 EDGE_RECLAIMED 门变化) ------
     sens_runs: dict = {}
     if sens_edges:
         for edge in sens_edges:
@@ -537,11 +537,11 @@ def main() -> None:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "semantics": SEMANTICS,
         "protocol": {
-            "doc": "docs/v8-protocol.md(E8 EDGE_RECLAIM,冻结于任何 v8 运行之前)",
+            "doc": "docs/v8-protocol.md(EDGE_RECLAIMED EDGE_RECLAIM,冻结于任何 v8 运行之前)",
             "meta": raw_cfg["meta"],
-            "mechanism": ("E8:confirmed band 语境 pos 门(底带 ≤0.20/顶带 ≥0.80,"
-                          "regime 无关)+ 区域刺穿 ≤N_f=3 根收复确认;伴随 E2 发射,"
-                          "E1-E7 检测零改动(cross_checks 冻结锚点守护)"),
+            "mechanism": ("EDGE_RECLAIMED:confirmed band 语境 pos 门(底带 ≤0.20/顶带 ≥0.80,"
+                          "regime 无关)+ 区域刺穿 ≤N_f=3 根收复确认;伴随 BREAKOUT_FAILED 发射,"
+                          "BREAKOUT_ACCEPTED-FLIP_RETESTED 检测零改动(cross_checks 冻结锚点守护)"),
             "entry_geometry": ("次 1h 开盘市价(单执行风格,与 v6 桶可比);"
                                "失效=刺穿极值∓k_bm·atr;F1 k_is=0.8;目标=对侧"
                                "结构边缘 band H*/L*;room<r_min=1.5 拒;"
@@ -550,7 +550,7 @@ def main() -> None:
                                       " #14 预注册),v8 唯一一次评估;此后任何 v8"
                                       " 迭代只许前向。"),
             "comparison_policy": ("canonical 对照桶直接读 reports/trades_v6_turtle_"
-                                  "*.csv(同段同成本,不重跑);E6/E7 为协议§2 指定"
+                                  "*.csv(同段同成本,不重跑);STRUCTURE_BROKEN/FLIP_RETESTED 为协议§2 指定"
                                   "的位置语义 A/B 对照。"),
         },
         "config": {
@@ -635,16 +635,16 @@ def render_md(payload: dict) -> str:
         == "INSUFFICIENT_DATA"
 
     lines = [
-        "# v8 回测报告(E8 EDGE_RECLAIM 边缘收复;协议 docs/v8-protocol.md)",
+        "# v8 回测报告(EDGE_RECLAIMED EDGE_RECLAIM 边缘收复;协议 docs/v8-protocol.md)",
         "",
         f"生成时间(UTC):{payload['generated_at_utc']}",
         "",
         "## 0. 地位与诚实性声明",
         "",
-        "- 机制:E8 摆动带边缘收复(confirmed band `B=[L*,H*]`,多 pos ≤ "
+        "- 机制:EDGE_RECLAIMED 摆动带边缘收复(confirmed band `B=[L*,H*]`,多 pos ≤ "
         f"{cfg['pos_edge']}/空 pos ≥ {1.0 - cfg['pos_edge']:.2f},regime 无关;"
-        "区域刺穿 + ≤N_f=3 根收复确认;伴随 E2 发射,A3 episode 去重继承;"
-        "E1-E7 检测零改动)。",
+        "区域刺穿 + ≤N_f=3 根收复确认;伴随 BREAKOUT_FAILED 发射,A3 episode 去重继承;"
+        "BREAKOUT_ACCEPTED-FLIP_RETESTED 检测零改动)。",
         "- 入场几何(协议§1):次 1h 开盘市价(单执行风格,与 v6 桶可比);失效 = "
         "刺穿极值 ∓ k_bm·atr(结构锚);F1 k_is=0.8 闸;目标 = 对侧结构边缘 "
         f"band H*/L*;room < r_min={cfg['r_min']}·risk 拒;出场 = §8 全套沿用 "
@@ -656,13 +656,13 @@ def render_md(payload: dict) -> str:
         f"{payload['sample_size']['threshold']} ⇒ "
         f"**{payload['sample_size']['sample_size_verdict']}**"
         + ("——本报告不给出任何转正叙述。" if insufficient else "。"),
-        "- 认知对账(全部硬约束一致 ⇒ E8 检测未扰动 E1-E7):E7 1h 计数 == "
+        "- 认知对账(全部硬约束一致 ⇒ EDGE_RECLAIMED 检测未扰动 BREAKOUT_ACCEPTED-FLIP_RETESTED):FLIP_RETESTED 1h 计数 == "
         "v2 冻结产物("
         + "; ".join(f"{s}={v['passed_f1']}/{v['fired']}"
                     for s, v in payload["cross_checks"]["e7_counts_1h"].items())
-        + f");E7 多TF计数 == event_study_v3 冻结产物;E1+E6|short="
-        f"{payload['cross_checks']['e1e6_short_vs_v1']['v6']} == v1 go_events="
-        f"{payload['cross_checks']['e1e6_short_vs_v1']['v1']}(v1 parity,未破)。",
+        + f");FLIP_RETESTED 多TF计数 == event_study_v3 冻结产物;BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short="
+        f"{payload['cross_checks']['breakout_structure_short_vs_v1']['v6']} == v1 go_events="
+        f"{payload['cross_checks']['breakout_structure_short_vs_v1']['v1']}(v1 parity,未破)。",
         f"- 合约规格:{payload['contracts']['source']}(离线强制)。",
         "",]
 
@@ -681,7 +681,7 @@ def render_md(payload: dict) -> str:
                 f"| {_f(g['expectancy_r'], 4)} |")
 
     # -- ① 判别量:pos 构造校验 ---------------------------------------------------
-    lines += ["", "## 2. 判别量①:E8 入场 pos 构造校验(协议§2,写作在先)", "",
+    lines += ["", "## 2. 判别量①:EDGE_RECLAIMED 入场 pos 构造校验(协议§2,写作在先)", "",
               "事件 pos(检测门值,构造 ⊆[0,0.20]/[0.80,1])与成交 pos(实际成交价"
               "落带内位置,可因滑点/隔夜微出带;选言:c 为无效段记 0 笔)。", ""]
     for seg in ("dev", "test"):
@@ -706,7 +706,7 @@ def render_md(payload: dict) -> str:
                     f"| {_f(s['max'], 3)} | {_f(100 * s['in_event_band_edge_share'], 1)}% |")
         lines.append("")
 
-    lines += ["### E8 机制桶(v8,TF × 方向;笔数/胜率/平均R/净额)", ""]
+    lines += ["### EDGE_RECLAIMED 机制桶(v8,TF × 方向;笔数/胜率/平均R/净额)", ""]
     for seg, mult in (("dev", 1.0), ("test", 1.0)):
         tag = f"{SEMANTICS}|{seg}@{mult}x"
         lines += [f"#### {seg}@{mult}x", "",
@@ -717,7 +717,7 @@ def render_md(payload: dict) -> str:
         lines.append("")
 
     ec = payload["e8_event_counts"]
-    lines += ["### E8 事件计数(认知直数,路由门前;dev/test × 方向)", "",
+    lines += ["### EDGE_RECLAIMED 事件计数(认知直数,路由门前;dev/test × 方向)", "",
               "| TF×方向 | dev | test |", "|---|---|---|"]
     keys = sorted(set(ec.get("dev", {})) | set(ec.get("test", {})))
     for k in keys:
@@ -725,13 +725,13 @@ def render_md(payload: dict) -> str:
                      f"| {ec.get('test', {}).get(k, 0)} |")
 
     # -- ② canonical 对照 ---------------------------------------------------------
-    lines += ["", "## 3. 判别量②:canonical E6/E7 对照桶(读 trades_v6_turtle_* "
+    lines += ["", "## 3. 判别量②:canonical STRUCTURE_BROKEN/FLIP_RETESTED 对照桶(读 trades_v6_turtle_* "
               "拼表,同段同成本,不重跑)", "",
-              "协议§2 判别(写作在先):位置假说成立 ⇒ E8 桶胜率显著高于同尺度 "
-              "E6/E7 桶;此处只把两表并置如实报告。", ""]
+              "协议§2 判别(写作在先):位置假说成立 ⇒ EDGE_RECLAIMED 桶胜率显著高于同尺度 "
+              "STRUCTURE_BROKEN/FLIP_RETESTED 桶;此处只把两表并置如实报告。", ""]
     for seg in ("dev", "test"):
         tag = f"turtle|{seg}@1.0x"
-        lines += [f"### canonical {seg}@1.0x(E6/E7)", "",
+        lines += [f"### canonical {seg}@1.0x(STRUCTURE_BROKEN/FLIP_RETESTED)", "",
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         cb = payload["canonical_comparison"].get(tag, {})
@@ -790,15 +790,15 @@ def render_md(payload: dict) -> str:
                   "正』的叙述;样本量按格如实报告;此后 v8 迭代只许前向 paper。"]
 
     lines += ["", "## 6. 已知近似与如实声明", "",
-              "① E8 事件伴随 E2 发射(A3 episode 去重继承:E2 成立的 episode 至多"
-              "一枚 E8;多区并存 = 逐 zone episode 独立判定,同 E2 语义);② pos "
+              "① EDGE_RECLAIMED 事件伴随 BREAKOUT_FAILED 发射(A3 episode 去重继承:BREAKOUT_FAILED 成立的 episode 至多"
+              "一枚 EDGE_RECLAIMED;多区并存 = 逐 zone episode 独立判定,同 BREAKOUT_FAILED 语义);② pos "
               "门以收复 bar 收盘与彼时 confirmed band 度量(因果,含同 bar 新确认"
               " pivot 对 band 的更新);③ 失效 = 刺穿行程极值(episode ex ∪ 收复"
               " bar 极值)∓ k_bm·atr —— 锚在被扫流动性最深价外侧;④ 组合容量按决"
               "策时刻参考价估算(不取整,略高估=保守),成交时刻 PR#9 broker 口径"
               "第二层钳制;⑤ gap 市价单实际成交价越过结构失效时 Broker 记 "
               "BAD_INVALID 跳过(如实,无这笔交易);⑥ 敏感性仅 dev 重放认知+回放,"
-              "{0.15, 0.25} 门变化只影响 E8 目录;⑦ 对照桶读 v6 冻结产物(segm"
+              "{0.15, 0.25} 门变化只影响 EDGE_RECLAIMED 目录;⑦ 对照桶读 v6 冻结产物(segm"
               "ent 原生 CSV,段口径与 v6 metrics 一致),不重跑 canonical。", "",
               "机器可读全量:`reports/backtest_v8.json`;逐笔:"
               "`reports/trades_v8_*.csv`(增列 pos_event/pos_entry/band_lo/band_hi);"

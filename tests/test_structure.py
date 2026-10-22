@@ -269,7 +269,7 @@ def test_replay_contract_and_event_timestamps():
     df = make_random_df()
     structure, events = replay(df)
     assert structure.bars_seen == len(df)
-    assert all(isinstance(e.id, str) and e.id in {"E1", "E2", "E3", "E4", "E5", "E6"}
+    assert all(isinstance(e.id, str) and e.id in {"BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN"}
                for e in events)
     tss = df["ts"].tolist()
     for e in events:

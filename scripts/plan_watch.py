@@ -42,8 +42,8 @@ def replay_plan(plan, df, det_events):
     side = plan["side"]
     sgn = 1 if side == "long" else -1
     entry_i = None; trig_kind = None
-    # 计划区对应的 E3/E2 事件(创建后)
-    cand = [e for e in det_events if e.known_index >= idx0 and e.id in ("E3", "E2")
+    # 计划区对应的 LEVEL_REJECTED/BREAKOUT_FAILED 事件(创建后)
+    cand = [e for e in det_events if e.known_index >= idx0 and e.id in ("LEVEL_REJECTED", "BREAKOUT_FAILED")
             and e.direction == sgn and
             e.attrs.get("zone") and e.attrs["zone"].hi >= z_lo and e.attrs["zone"].lo <= z_hi]
     for i, b in enumerate(df.iloc[idx0:].itertuples()):
@@ -63,7 +63,7 @@ def replay_plan(plan, df, det_events):
         return {"state": "WATCHING", "zone_pos": where,
                 "last_close": float(last.close),
                 "triggers_armed": f"{trig_kind or '无'}",
-                "need": "价格进入[%s,%s]且出现 E2/E3 确认" % (z_lo, z_hi)}
+                "need": "价格进入[%s,%s]且出现 BREAKOUT_FAILED/LEVEL_REJECTED 确认" % (z_lo, z_hi)}
     ent = float(df.open.iloc[entry_i])
     risk = plan["risk_frac"] * plan["equity_usdt"]
     per_r = abs(ent - plan["invalid"])

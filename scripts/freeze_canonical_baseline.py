@@ -1,10 +1,10 @@
-"""canonical 合并封顶语义基准重冻结(capped-v1,research-log #17)。
+"""canonical 合并封顶语义基准重冻结(capped-v2,research-log #17)。
 
 背景:#15 区域合并封顶(merge_max_atr)修复巨区吞细结构的账面缺陷,代价是
-区域生命周期改变 ⇒ E7(FLIP)等事件计数与 v1/v2/event_study_v3 历史冻结产物
+区域生命周期改变 ⇒ FLIP_RETESTED(FLIP)等事件计数与 v1/v2/event_study_v3 历史冻结产物
 (默认无界)语义性分叉,run_backtest_v6.py 的 cross_checks 无法再以历史
 产物为硬对账锚。本脚本在 canonical(merge_max_atr>0)语义下重放事件检测,
-把逐 symbol×TF 的 E1/E6/E7 双向计数与 E7 fired/passed_f1 重冻结为
+把逐 symbol×TF 的 BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED 双向计数与 FLIP_RETESTED fired/passed_f1 重冻结为
 config/canonical_baseline_counts.json;此后 canonical 回放的硬对账基准即该
 文件(merge_max_atr=0 的 legacy 路径仍对账历史冻结产物,一字不变)。
 
@@ -55,7 +55,7 @@ def legacy_verify() -> int:
     bt_v1 = json.loads(rb.BT_V1_PATH.read_text(encoding="utf-8"))
     es_v3 = json.loads(rb.ES_V3_PATH.read_text(encoding="utf-8"))
     ok = atr_equal
-    e1e6_short_total = 0
+    breakout_structure_short_total = 0
     print(f"[legacy-verify] merge_max_atr=0(历史无界)重放,逐项对账冻结产物:")
     for key in sorted(counts):
         cell = counts[key]
@@ -64,22 +64,22 @@ def legacy_verify() -> int:
             v2c = bt_v2["e7_counts"][sym]
             frozen = f"{v2c['whitelist_events']}/{v2c['passed_f1']}"
             src = "backtest_v2"
-            e1e6_short_total += cell["E1_short"] + cell["E6_short"]
+            breakout_structure_short_total += cell["BREAKOUT_ACCEPTED_short"] + cell["STRUCTURE_BROKEN_short"]
         else:
             es_c = es_v3["timeframes"][tf]["symbols"][sym]
             frozen = f"{es_c['n_events_fired']}/{es_c['n_passed_f1']}"
             src = "event_study_v3"
-        replay = f"{cell['E7_fired']}/{cell['E7_passed_f1']}"
+        replay = f"{cell['FLIP_RETESTED_fired']}/{cell['FLIP_RETESTED_passed_f1']}"
         match = replay == frozen
         ok = ok and match
-        print(f"  {key:16s} E7 fired/passed_f1 回放={replay:>10s} "
+        print(f"  {key:16s} FLIP_RETESTED fired/passed_f1 回放={replay:>10s} "
               f"{src} 冻结={frozen:>10s} {'== OK' if match else '!= MISMATCH'}")
     v1_go = bt_v1["runs"]["full@1.0x"]["metrics"]["counters"]["go_events"]
-    match = e1e6_short_total == v1_go
+    match = breakout_structure_short_total == v1_go
     ok = ok and match
-    print(f"  E1+E6|short(1h 合计) 回放={e1e6_short_total} "
+    print(f"  BREAKOUT_ACCEPTED+STRUCTURE_BROKEN|short(1h 合计) 回放={breakout_structure_short_total} "
           f"backtest.json go_events={v1_go} {'== OK' if match else '!= MISMATCH'}")
-    print(f"  E7 attrs['atr'] == 认知缓存同 bar ATR: {atr_equal}")
+    print(f"  FLIP_RETESTED attrs['atr'] == 认知缓存同 bar ATR: {atr_equal}")
     verdict = ("全部一致 ⇒ 计数分叉仅来自 merge cap 语义" if ok
                else "存在不一致 ⇒ 真 bug,停止重冻结!")
     print(f"[legacy-verify] 结论: {verdict}", flush=True)
@@ -94,13 +94,13 @@ def freeze() -> None:
                          "基准(legacy 语义的对账对象仍是历史冻结产物)")
     _, counts, atr_equal = _build_counts(merge_max_atr)
     if not atr_equal:
-        raise SystemExit("E7 attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移),"
+        raise SystemExit("FLIP_RETESTED attrs['atr'] != 认知缓存同 bar ATR(F1 口径漂移),"
                          "拒绝冻结")
     manifest_bytes = (ROOT / "data" / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes.decode("utf-8"))
     cells = {key: counts[key] for key in sorted(counts)}
     payload = {
-        "version": "capped-v1",
+        "version": "capped-v2",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "generator": {
             "command": "python scripts/freeze_canonical_baseline.py",
@@ -125,22 +125,22 @@ def freeze() -> None:
             "分叉,不可混用 —— run_backtest_v6.py cross_checks 在 "
             "merge_max_atr>0 时仅以本文件为硬对账对象(research-log #17)。"),
         "totals": {
-            "e1e6_short_1h": sum(c["E1_short"] + c["E6_short"]
+            "breakout_structure_short_1h": sum(c["BREAKOUT_ACCEPTED_short"] + c["STRUCTURE_BROKEN_short"]
                                  for k, c in cells.items() if k.endswith("@1h")),
-            "E7_fired": sum(c["E7_fired"] for c in cells.values()),
-            "E7_passed_f1": sum(c["E7_passed_f1"] for c in cells.values()),
+            "FLIP_RETESTED_fired": sum(c["FLIP_RETESTED_fired"] for c in cells.values()),
+            "FLIP_RETESTED_passed_f1": sum(c["FLIP_RETESTED_passed_f1"] for c in cells.values()),
         },
         "cells": cells,
     }
     BASELINE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=1)
                              + "\n", encoding="utf-8")
-    print(f"[freeze] merge_max_atr={merge_max_atr} 逐格计数(E7 fired/passed_f1,"
-          f"E1/E6/E7 双向见文件):")
+    print(f"[freeze] merge_max_atr={merge_max_atr} 逐格计数(FLIP_RETESTED fired/passed_f1,"
+          f"BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED 双向见文件):")
     for key in sorted(cells):
         c = cells[key]
-        print(f"  {key:16s} E7={c['E7_fired']}/{c['E7_passed_f1']:<5d} "
-              f"E1={c['E1_long']}/{c['E1_short']} E6={c['E6_long']}/{c['E6_short']} "
-              f"E7L/S={c['E7_long']}/{c['E7_short']}")
+        print(f"  {key:16s} FLIP_RETESTED={c['FLIP_RETESTED_fired']}/{c['FLIP_RETESTED_passed_f1']:<5d} "
+              f"BREAKOUT_ACCEPTED={c['BREAKOUT_ACCEPTED_long']}/{c['BREAKOUT_ACCEPTED_short']} STRUCTURE_BROKEN={c['STRUCTURE_BROKEN_long']}/{c['STRUCTURE_BROKEN_short']} "
+              f"E7L/S={c['FLIP_RETESTED_long']}/{c['FLIP_RETESTED_short']}")
     print(f"[freeze] totals={payload['totals']}")
     print(f"-> {BASELINE_PATH.relative_to(ROOT)}", flush=True)
 

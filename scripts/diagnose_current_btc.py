@@ -123,11 +123,11 @@ def plan(df, det, t, atr):
     hs = [p for p in piv if p.kind.value == "high"]
     ls = [p for p in piv if p.kind.value == "low"]
     bm = P.k_bm * atr
-    print("\n== 计划扳机(canonical 白名单 E1/E6/E7, F1≥0.8ATR, turtle收割) ==")
+    print("\n== 计划扳机(canonical 白名单 BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED, F1≥0.8ATR, turtle收割) ==")
     if ms.regime().value == "TREND_DOWN" and hs:
         h_star = hs[-1].price
         trig = h_star + 0.5 * atr
-        print(f"[CHoCH 反转多] 收盘 > {h_star + bm:.0f} 触发 E6|long;"
+        print(f"[CHoCH 反转多] 收盘 > {h_star + bm:.0f} 触发 STRUCTURE_BROKEN|long;"
               f" STRONG 路由需 margin≥0.5ATR ⇒ 收盘 ≥ {trig:.0f} 且 bar 振幅 ≥ {1.5*atr:.0f} ⇒ 次开盘市价多")
         print(f"  失效: 突破翻转区下沿−buf(±{P.k_zw*atr:.0f}), F1 距离须≥{0.8*atr:.0f};"
               f" 否则该单不存在(不为交易而交易)")
@@ -136,12 +136,12 @@ def plan(df, det, t, atr):
         near = min([z for z in sup if z.hi > last.close * 0.99], key=lambda z: abs(z.lo - last.close), default=None)
         if near:
             accept = near.lo - bm
-            print(f"[跌破接受空] 收盘 < {accept:.0f} 破位候选;随后 3 根全部收在 {near.lo:.0f} 下 ⇒ E1|short 次开盘市价")
+            print(f"[跌破接受空] 收盘 < {accept:.0f} 破位候选;随后 3 根全部收在 {near.lo:.0f} 下 ⇒ BREAKOUT_ACCEPTED|short 次开盘市价")
             print(f"  失效: {near.hi + bm:.0f}(区界+buf) 其一;距离 {near.hi+bm-accept:.0f}≥{0.8*atr:.0f} F1 闸"
                   f" ⇒ 满足;目标=2R(实际失效距离)或对侧区,以 room≥1.5R 为闸")
-            print(f"[回踩翻转空] 若先破后回测 {near.lo:.0f}-{near.hi:.0f} 被拒(FLIPPED) ⇒ E7|short 挂限价 {near.lo:.0f}(前缘),等待 ≤12×1h")
+            print(f"[回踩翻转空] 若先破后回测 {near.lo:.0f}-{near.hi:.0f} 被拒(FLIPPED) ⇒ FLIP_RETESTED|short 挂限价 {near.lo:.0f}(前缘),等待 ≤12×1h")
     print(f"\n[风险预算] 单笔风险 = 0.75%×权益(300 USDT → $2.25);杠杆 cap 5x;组合容量 3%")
-    print("[推翻当前判断] 收盘站回上方 BROKEN 支撑带(角色已转阻力)之上 ⇒ TREND_DOWN 失效,E6|short 语义转向")
+    print("[推翻当前判断] 收盘站回上方 BROKEN 支撑带(角色已转阻力)之上 ⇒ TREND_DOWN 失效,STRUCTURE_BROKEN|short 语义转向")
 
 
 if __name__ == "__main__":

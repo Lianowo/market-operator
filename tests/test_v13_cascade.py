@@ -9,14 +9,14 @@
   如实声明;无候选 ⇒ raise;
 - 30m 聚合真实数据:逐位 == 15m 2:1 重算;30m 2:1 → 1h == 盘上 1h(锚定);
   validate 零缺口;manifest 条目 sha256 == 文件字节、源流/锚定记录齐全;
-- 各 obs TF 的 mic 超前量(合成确定性):2h→30m E3 早 60 分钟、4h→1h 早 120
-  分钟、1d→4h 早 960 分钟(E3 于第 2 根 trigger 揭示,N_f_mic 窗内);
+- 各 obs TF 的 mic 超前量(合成确定性):2h→30m LEVEL_REJECTED 早 60 分钟、4h→1h 早 120
+  分钟、1d→4h 早 960 分钟(LEVEL_REJECTED 于第 2 根 trigger 揭示,N_f_mic 窗内);
 - 数量闸门换算:2h→30m N_a_mic = 12 恰界发射/断于第 12 根不发射(bar 流
   同判);1d→4h scale=6 ⇒ MicTracker N_a_mic/N_f_mic = 18;恰 18 根站稳发射;
 - parity(cascade):mic 帧 bar 事件流 == prepare_cognition 逐字段(2h→30m
   与 1d→4h)—— 检测器零改动硬约束;run_campaigns(enable_mic=False) 挂不挂
   级联 mic 帧逐位一致(bar 对照臂逐格同 canonical 的引擎级钉死);
-- 引擎接线(cascade):2h 战役 + 30m trigger 注入 mic E1 ⇒ 次一 30m 开盘成交
+- 引擎接线(cascade):2h 战役 + 30m trigger 注入 mic BREAKOUT_ACCEPTED ⇒ 次一 30m 开盘成交
   (decision=30m 收盘,fill−decision=1800s,advance vs 认知收盘 = 60 分钟),
   同现象 bar 事件认知收盘被槽位去重(恰一仓);确定性双跑(认知 + 引擎)。
 """
@@ -39,7 +39,7 @@ from market_operator.campaign import (
     run_campaigns,
 )
 from market_operator.events import (
-    E1, E3, MarketEvent,
+    BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent,
 )
 from market_operator.hypothesis import StructureView
 from market_operator.structure import Params, Regime
@@ -97,14 +97,14 @@ def _scenario(step):
         bar(bars, 100.0, 100.78, 99.82, 100.75)     # 9:触碰,ex=100.78
         bar(bars, 100.75, 100.84, 100.72, 100.8)    # 10:ex→100.84
         bar(bars, 100.8, 100.96, 100.76, 100.93)    # 11:ex→100.96
-        bar(bars, 100.93, 100.96, 100.6, 100.7)     # 12:回退 ⇒ E3 @12
+        bar(bars, 100.93, 100.96, 100.6, 100.7)     # 12:回退 ⇒ LEVEL_REJECTED @12
         return bars
 
     def e1_bars():
         bars = []
         h1_prefix(bars)
         seg(bars, 100.6, 101.3)    # 8;9 = 破位候选
-        seg(bars, 101.2, 101.25)   # 10;11 = 第 2、3 根 ⇒ E1 @11
+        seg(bars, 101.2, 101.25)   # 10;11 = 第 2、3 根 ⇒ BREAKOUT_ACCEPTED @11
         return bars
 
     return calm, seg, bar, h1_prefix, e3_bars, e1_bars
@@ -325,11 +325,11 @@ def test_v13_e3_advance_minutes_per_obs_tf(obs_step, trig_step, tf):
     trig = trig_of(cog_bars, trig_step, reveal=_E3_REVEAL)
     mic = prep_cascade(cog_bars, trig, obs_step // 1000, trig_step // 1000)
     ref = bar_stream(cog_bars)
-    mic_e3 = all_mic(mic, E3)
-    bar_e3 = [e for evs in ref.events_by.values() for e in evs if e.id == E3]
+    mic_e3 = all_mic(mic, LEVEL_REJECTED)
+    bar_e3 = [e for evs in ref.events_by.values() for e in evs if e.id == LEVEL_REJECTED]
     assert len(bar_e3) == 1 and len(mic_e3) == 1, tf
     e, b = mic_e3[0], bar_e3[0]
-    a_expect = ratio * 12 + _E3_REVEAL            # E3 认知 bar = 12
+    a_expect = ratio * 12 + _E3_REVEAL            # LEVEL_REJECTED 认知 bar = 12
     assert e.known_index == a_expect
     assert e.attrs["mic"] is True
     assert e.attrs["trigger_tf"] == trig_step // 1000
@@ -354,11 +354,11 @@ def test_v13_e1_counting_gate_2h_30m_exactly_12():
     _calm, _seg, _bar, _h1, _e3, e1_bars = _scenario(2 * H)
     cog_bars = e1_bars()
     ref = bar_stream(cog_bars)
-    bar_e1 = [e for evs in ref.events_by.values() for e in evs if e.id == E1]
+    bar_e1 = [e for evs in ref.events_by.values() for e in evs if e.id == BREAKOUT_ACCEPTED]
     assert len(bar_e1) == 1 and bar_e1[0].known_index == 11
     trig = trig_of(cog_bars, M30, reveal=0)       # 破位于首根 30m 揭示
     mic = prep_cascade(cog_bars, trig, 7200, 1800)
-    e1s = all_mic(mic, E1)
+    e1s = all_mic(mic, BREAKOUT_ACCEPTED)
     assert len(e1s) == 1
     e = e1s[0]
     assert e.attrs["started"] == 4 * 9 == 36      # 候选 = 破位 trigger 第 1 根
@@ -368,7 +368,7 @@ def test_v13_e1_counting_gate_2h_30m_exactly_12():
     # 站稳 12 根 ≡ 3 认知 bar 全程 ⇒ 提前 0(同 v10 上界语义)
     assert (T0 + 2 * H * 12) - (T0 + M30 * 48) == 0
 
-    # 对照:第 12 根收盘失守 ⇒ 不得发射(bar 流同样无 E1)
+    # 对照:第 12 根收盘失守 ⇒ 不得发射(bar 流同样无 BREAKOUT_ACCEPTED)
     ctrl = []
     _calm(ctrl, 100.0, 0.05, 6)
     _seg(ctrl, 100.95, 100.3)
@@ -376,10 +376,10 @@ def test_v13_e1_counting_gate_2h_30m_exactly_12():
     _seg(ctrl, 101.2)
     _bar(ctrl, 101.2, 101.25, 100.4, 100.5)       # 11:收盘跌回带内
     mic_c = prep_cascade(ctrl, trig_of(ctrl, M30, reveal=0), 7200, 1800)
-    assert all_mic(mic_c, E1) == []
+    assert all_mic(mic_c, BREAKOUT_ACCEPTED) == []
     ref_c = bar_stream(ctrl)
     assert [e for evs in ref_c.events_by.values() for e in evs
-            if e.id == E1] == []
+            if e.id == BREAKOUT_ACCEPTED] == []
 
 
 def test_v13_scale_1d_4h_n_gates():
@@ -387,12 +387,12 @@ def test_v13_scale_1d_4h_n_gates():
                     obs_tf_seconds=86_400)
     assert tr.n_a_mic == P2.n_a * 6 == 18
     assert tr.n_f_mic == P2.n_f * 6 == 18
-    # 恰 18 根连续外侧站稳发射(1d→4h,E1 @ trigger 6×9+17=71,提前 0)
+    # 恰 18 根连续外侧站稳发射(1d→4h,BREAKOUT_ACCEPTED @ trigger 6×9+17=71,提前 0)
     _calm, _seg, _bar, _h1, _e3, e1_bars = _scenario(24 * H)
     cog_bars = e1_bars()
     trig = trig_of(cog_bars, 4 * H, reveal=0)
     mic = prep_cascade(cog_bars, trig, 86_400, 14_400)
-    e1s = all_mic(mic, E1)
+    e1s = all_mic(mic, BREAKOUT_ACCEPTED)
     assert len(e1s) == 1
     assert e1s[0].attrs["started"] == 6 * 9 == 54
     assert e1s[0].known_index == 54 + 17 == 71
@@ -468,8 +468,8 @@ VIEW2H = StructureView(regime=Regime.TRANSITION, zones=(), atr=ATR)
 
 
 def _engine_frames_2h30m(with_mic):
-    """2h 战役:exec=1h(16 根),trigger=30m(32 根);bar E1 认知 bar 2;
-    mic(可选)注入同现象 trigger E1 @ a=9(cog 2 的第 2 根 30m)。"""
+    """2h 战役:exec=1h(16 根),trigger=30m(32 根);bar BREAKOUT_ACCEPTED 认知 bar 2;
+    mic(可选)注入同现象 trigger BREAKOUT_ACCEPTED @ a=9(cog 2 的第 2 根 30m)。"""
     n_trig = 32
     rows = []
     for i in range(n_trig):
@@ -485,14 +485,14 @@ def _engine_frames_2h30m(with_mic):
                  df_exec.open[i * 2], max(df_exec.high[i * 2:i * 2 + 2]),
                  min(df_exec.low[i * 2:i * 2 + 2]), df_exec.close[i * 2 + 1],
                  1.0) for i in range(8)]
-    bar_e1 = MarketEvent(id=E1, direction=+1, ts=T0 + 2 * 2 * H, known_index=2,
+    bar_e1 = MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 2 * 2 * H, known_index=2,
                          attrs={"ref": 95.0, "invalid": 94.0})
     cog = SymbolCognition(symbol="TEST", bars=cog_bars, atrs=[ATR] * 8,
                           events_by={2: [bar_e1]}, pivots_by={},
                           views={2: VIEW2H})
     mic = None
     if with_mic:
-        mic_e1 = MarketEvent(id=E1, direction=+1, ts=T0 + 9 * M30,
+        mic_e1 = MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 9 * M30,
                              known_index=9,
                              attrs={"ref": 95.0, "invalid": 94.0,
                                     "mic": True, "trigger_tf": 1800})
@@ -500,7 +500,7 @@ def _engine_frames_2h30m(with_mic):
             symbol="TEST", obs_tf_seconds=7200, trigger_tf_seconds=1800,
             scale=4, bars=rows, cog_index_of=[i // 4 for i in range(32)],
             atrs=[ATR] * 32, events_by={9: [mic_e1]}, views={9: VIEW2H},
-            bar_events_by={2: [bar_e1]}, counters={"E1": 1})
+            bar_events_by={2: [bar_e1]}, counters={"BREAKOUT_ACCEPTED": 1})
     return build_campaign_frame(cog, df_exec, "2h", mic_cog=mic)
 
 
@@ -530,7 +530,7 @@ def test_engine_cascade_fill_next_trigger_open_and_bar_dup_skip():
 def _engine_frames_cog4h_trig2h(with_mic):
     """4h 战役:exec=1h(16 根),trigger=2h(8 根)—— trigger 粗于执行帧。
 
-    mic(可选)注入 trigger E1 @ a=1(标签 T0+2h,收盘 T0+4h):因果正确成交 =
+    mic(可选)注入 trigger BREAKOUT_ACCEPTED @ a=1(标签 T0+2h,收盘 T0+4h):因果正确成交 =
     次一 trigger bar(T0+4h);v13 修补前会被中间执行 bar(T0+3h)揪出 ⇒
     早于决策收盘成交(前馈)。bar 对照事件不注入(本测试只钉 mic 因果)。
     """
@@ -548,14 +548,14 @@ def _engine_frames_cog4h_trig2h(with_mic):
                           events_by={}, pivots_by={}, views={})
     mic = None
     if with_mic:
-        mic_e1 = MarketEvent(id=E1, direction=+1, ts=T0 + 2 * H, known_index=1,
+        mic_e1 = MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=T0 + 2 * H, known_index=1,
                              attrs={"ref": 95.0, "invalid": 94.0,
                                     "mic": True, "trigger_tf": 7200})
         mic = MicCognition(
             symbol="TEST", obs_tf_seconds=14_400, trigger_tf_seconds=7200,
             scale=2, bars=rows, cog_index_of=[i // 2 for i in range(8)],
             atrs=[ATR] * 8, events_by={1: [mic_e1]}, views={1: VIEW2H},
-            bar_events_by={}, counters={"E1": 1})
+            bar_events_by={}, counters={"BREAKOUT_ACCEPTED": 1})
     return build_campaign_frame(cog, df_exec, "4h", mic_cog=mic)
 
 
@@ -592,7 +592,7 @@ def test_engine_mic_limit_no_lookahead_when_trigger_coarser_than_exec():
         direction=+1, limit_price=96.0, armed_at_ts=T0 + 2 * H,
         expiry_ts=T0 + 2 * H + 12 * H, fill_after_ts=(T0 + 2 * H) - H,
         symbol="TEST", role="entry", invalid=94.0, target_1=None,
-        event_id="E1", reason="mic|test",
+        event_id="BREAKOUT_ACCEPTED", reason="mic|test",
         meta={"direction": 1, "mic": True}))
     # 非 mic 路径(执行帧)反复经过:不得超时、不得消耗、不得成交
     for k in range(1, 3):

@@ -11,11 +11,11 @@
 
 口径与纪律:
 - 两臂同台:bar/cascade 两臂同行于**现行 canonical.json 语义**(log#21
-  语义路由,全 E1-E8 路由表;v13.json 逐项照抄)。cascade 臂 =
+  语义路由,全 BREAKOUT_ACCEPTED-EDGE_RECLAIMED 路由表;v13.json 逐项照抄)。cascade 臂 =
   enable_mic=True,同一战略/收割/费用/容量,唯一差异 = 事件知时与成交按
   战役认知帧细化到 trigger_tf_map 对应帧(协议:映射缺失/帧不可用 ⇒
   最近可用帧 + 如实声明;N_a_mic=N_a×scale,N_f_mic=N_f×scale,阈值=认知帧 ATR)。
-- parity 双锚:① 冻结时代名名单(8 档 E1/E3/E6/E7,与 reports/
+- parity 双锚:① 冻结时代名名单(8 档 BREAKOUT_ACCEPTED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED,与 reports/
   backtest_v6_turtle.json 自述 config 一致)探针回放走同一批战役帧 ⇒
   与该冻结产物**逐格全等** —— 硬断言,不等即 raise(代码零回归锚,与
   v10 同锚但只读比对,历史产物不覆写);② 现行名单(16 档)bar 臂 9 格
@@ -88,8 +88,8 @@ TRIGGER_LABEL = {900: "15m", 1800: "30m", 3600: "1h", 7200: "2h", 14400: "4h"}
 # 冻结时代名单(#16 时代 canonical 8 档;log#21 语义路由决议前的运行口径,
 # 与 reports/backtest_v6_turtle.json 自述 config.whitelist 逐一致 —— 运行
 # 时硬断言同源)。仅用于代码零回归探针;v13 在册两臂用现行 canonical 全表。
-FROZEN_ERA_WHITELIST = (("E1", -1), ("E1", 1), ("E3", -1), ("E3", 1),
-                        ("E6", -1), ("E6", 1), ("E7", -1), ("E7", 1))
+FROZEN_ERA_WHITELIST = (("BREAKOUT_ACCEPTED", -1), ("BREAKOUT_ACCEPTED", 1), ("LEVEL_REJECTED", -1), ("LEVEL_REJECTED", 1),
+                        ("STRUCTURE_BROKEN", -1), ("STRUCTURE_BROKEN", 1), ("FLIP_RETESTED", -1), ("FLIP_RETESTED", 1))
 
 TRADE_COLUMNS = list(rb.TRADE_COLUMNS) + ["mic", "cog_index", "advance_minutes"]
 
@@ -638,8 +638,8 @@ def main() -> None:
             "doc": "docs/v13-protocol.md(冻结,2026-10-20)",
             "meta": raw_cfg["meta"],
             "cascade_semantics": "认知帧(1h/2h/4h/12h/1d)结构/区域/episode/pivot/"
-                                 "regime 锁定;收盘类确认(E1 站稳/E2 收复/E3 回退/"
-                                 "E4 回收/E6 破坏/E7 回踩拒绝)允许在战役映射的 "
+                                 "regime 锁定;收盘类确认(BREAKOUT_ACCEPTED 站稳/BREAKOUT_FAILED 收复/LEVEL_REJECTED 回退/"
+                                 "TREND_RESUMED 回收/STRUCTURE_BROKEN 破坏/FLIP_RETESTED 回踩拒绝)允许在战役映射的 "
                                  "trigger_tf 收盘先满足;N_a_mic=N_a×scale、"
                                  "N_f_mic=N_f×scale;阈值=最近已收认知 bar 的 "
                                  "ATR;知时=trigger 收盘,成交=次一 trigger 开盘;"
@@ -647,7 +647,7 @@ def main() -> None:
             "test_eval_declaration": "test 段第 16 次评估曝光(research-log #26 "
                                      "预注册,一次性,此后只许前向);本报告如实"
                                      "填报,不产生额外叙述。",
-            "e1_e8_detector_invariant": "E1-E8 bar 事件检测零改动;mic 帧复放的 "
+            "e1_e8_detector_invariant": "BREAKOUT_ACCEPTED-EDGE_RECLAIMED bar 事件检测零改动;mic 帧复放的 "
                                         "bar 事件流 == prepare_cognition 逐字段"
                                         "硬断言(见 bar_stream_parity)。",
             "parity_discipline": "双锚:冻结时代名单(8 档,与 backtest_v6_turtle "
@@ -703,7 +703,7 @@ def main() -> None:
                                              "prepare_cognition 逐字段",
                               "n_events_by_campaign": mic_parity},
         "frozen_era_parity_probe": {
-            "description": "冻结时代名单(8 档 E1/E3/E6/E7)同一批战役帧回放 "
+            "description": "冻结时代名单(8 档 BREAKOUT_ACCEPTED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED)同一批战役帧回放 "
                            "== reports/backtest_v6_turtle.json 逐格全等(硬断言;"
                            "代码零回归锚,与 v10 同锚,历史产物只读不覆写)",
             "runs": parity_rows},

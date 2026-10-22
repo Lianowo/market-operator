@@ -13,11 +13,11 @@
    H·bar_hours 小时,1h 数据恒等,见 measure_events)。
 3. 事件方向映射(§9.1-3 口径,与 events.py 的发射语义硬核对,见
    `expected_direction`;collect_events 对每个事件断言,不符即抛错):
-   E1 顺势(阻力破位 → 多 / 支撑破位 → 空);E2 反向(刺穿收回 → 阻力空 / 支撑多);
-   E3 区域正面反向(阻力区拒绝 → 空,支撑区拒绝 → 多);E4 顺势(TREND_UP 恢复 → 多);
-   E5 向对侧边缘(跟随来源 E3:上缘拒绝 → 空);E6 反向(TREND_UP 破坏 → 空)。
-   (v9 追加:E9 顺势延续 = 阻力区过程式接受 → 多 / 支撑区 → 空;E10 反向 =
-   阻力区过程式拒绝 → 空 / 支撑区 → 多;v9-protocol §2,E1-E8 口径不变。)
+   BREAKOUT_ACCEPTED 顺势(阻力破位 → 多 / 支撑破位 → 空);BREAKOUT_FAILED 反向(刺穿收回 → 阻力空 / 支撑多);
+   LEVEL_REJECTED 区域正面反向(阻力区拒绝 → 空,支撑区拒绝 → 多);TREND_RESUMED 顺势(TREND_UP 恢复 → 多);
+   RANGE_ROTATED 向对侧边缘(跟随来源 LEVEL_REJECTED:上缘拒绝 → 空);STRUCTURE_BROKEN 反向(TREND_UP 破坏 → 空)。
+   (v9 追加:PROCESS_ACCEPTED 顺势延续 = 阻力区过程式接受 → 多 / 支撑区 → 空;PROCESS_REJECTED 反向 =
+   阻力区过程式拒绝 → 空 / 支撑区 → 多;v9-protocol §2,BREAKOUT_ACCEPTED-EDGE_RECLAIMED 口径不变。)
 4. 对照组(§9.1-5):同品种、同 regime、同方向、且决策 bar 不在**同机制**事件
    窗口 [known_index, known_index+24] 内的随机入场(口径见 measure_controls
    docstring);42 个固定种子(SEED_BASE+i,完全可复现),测同样指标(MFE/MAE
@@ -55,7 +55,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .events import E1, E2, E3, E4, E5, E6, E7, E9, E10, EventDetector, MarketEvent
+from .events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, TREND_RESUMED, RANGE_ROTATED, STRUCTURE_BROKEN, FLIP_RETESTED, PROCESS_ACCEPTED, PROCESS_REJECTED, EventDetector, MarketEvent
 from .hypothesis import Hypothesis, StructureView, build
 from .structure import Params, Regime, ZoneRole
 
@@ -112,23 +112,23 @@ class CostModel:
 def expected_direction(event: MarketEvent) -> int:
     """§9.1-3 冻结方向映射下该事件应有的方向(+1/-1)。"""
     a = event.attrs
-    if event.id == E1:      # 顺势:阻力破位 → 多;支撑破位 → 空
+    if event.id == BREAKOUT_ACCEPTED:      # 顺势:阻力破位 → 多;支撑破位 → 空
         return +1 if a["zone"].role is ZoneRole.RESISTANCE else -1
-    if event.id in (E2, E3, E5):   # 反向 / 区域正面反向 / E5 跟随来源 E3
+    if event.id in (BREAKOUT_FAILED, LEVEL_REJECTED, RANGE_ROTATED):   # 反向 / 区域正面反向 / RANGE_ROTATED 跟随来源 LEVEL_REJECTED
         return -1 if a["zone"].role is ZoneRole.RESISTANCE else +1
-    if event.id == E4:      # 顺势:TREND_UP 恢复 → 多(回调腿:前高 > 回调低点)
+    if event.id == TREND_RESUMED:      # 顺势:TREND_UP 恢复 → 多(回调腿:前高 > 回调低点)
         # 注意不能用 attrs["regime"](发射 bar 的 regime,激活后可能已变);
         # 独立可核对证据:多头回调腿 leg_start(前高 pivot) > pb_price(L_pb)。
         return +1 if a["leg_start"] > a["pb_price"] else -1
-    if event.id == E6:      # 反向:TREND_UP 破坏 → 空
+    if event.id == STRUCTURE_BROKEN:      # 反向:TREND_UP 破坏 → 空
         return -1 if a["regime_before"] == Regime.TREND_UP.value else +1
-    if event.id == E7:      # v2 FLIP_RETEST(v2-protocol §1):role_new 阻力 → 空;
+    if event.id == FLIP_RETESTED:      # v2 FLIP_RETEST(v2-protocol §1):role_new 阻力 → 空;
         # from_role(旧区角色)为独立可核对证据:旧支撑破位 ⇒ role_new=resistance
         return -1 if a["from_role"] == ZoneRole.SUPPORT.value else +1
-    if event.id == E9:      # v9 PROCESS_ACCEPTED(v9-protocol §2):顺延续,
+    if event.id == PROCESS_ACCEPTED:      # v9 PROCESS_ACCEPTED(v9-protocol §2):顺延续,
         # 阻力区过程式接受 → 多;支撑区镜像 → 空
         return +1 if a["zone"].role is ZoneRole.RESISTANCE else -1
-    if event.id == E10:     # v9 PROCESS_REJECTED(v9-protocol §2):反向,
+    if event.id == PROCESS_REJECTED:     # v9 PROCESS_REJECTED(v9-protocol §2):反向,
         # 阻力区过程式拒绝 → 空;支撑区镜像 → 多
         return -1 if a["zone"].role is ZoneRole.RESISTANCE else +1
     raise ValueError(f"unknown event id: {event.id}")
@@ -159,10 +159,10 @@ def collect_events(df: pd.DataFrame, params: Params,
     """严格时间序回放,返回 (events, StructureTimeline)。
 
     每个事件的方向按 §9.1-3 映射硬核对一次(不一致即 ValueError)。
-    `event_ids` 为可选机制过滤器(v2 事件研究用,如 frozenset({"E7"}));
-    None = 全量(v1 路径,行为不变)。`enable_e7` 打开 v2 E7 发射(v1 默认关)。
+    `event_ids` 为可选机制过滤器(v2 事件研究用,如 frozenset({"FLIP_RETESTED"}));
+    None = 全量(v1 路径,行为不变)。`enable_e7` 打开 v2 FLIP_RETESTED 发射(v1 默认关)。
     v9 增量(docs/v9-protocol.md §1-§3,默认关,对其他事件目录零影响):
-    `enable_e9e10` 打开 E9/E10 发射,三参数 = 冻结先验(min_age=3、occ 阈
+    `enable_e9e10` 打开 PROCESS_ACCEPTED/PROCESS_REJECTED 发射,三参数 = 冻结先验(min_age=3、occ 阈
     2/3、centroid 阈 0.3);敏感性 {min_age 2/4, occ 0.6/0.75, centroid
     0.2/0.5} 仅 dev 由调用方显式传入,不做择优。
     """

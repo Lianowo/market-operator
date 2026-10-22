@@ -8,12 +8,12 @@
 五问操作化(解释性决定,逐条标注;先验全部冻结,不许调):
 - **Q1 位置正当**:摆动带 B=[L*,H*] = 已 confirmed pivots 中最近 LOW/HIGH
   pivot 价(全名单中最后同型 pivot;口径同 scripts/analyze_entry_position.py
-  与 E8(§1);pivot 严格高低交错 ⇒ StructureView.pivots(≤8 个)与全名单
+  与 EDGE_RECLAIMED(§1);pivot 严格高低交错 ⇒ StructureView.pivots(≤8 个)与全名单
   的"最近同型"恒等价,因果)。pos = (entry_ref − L*)/(H* − L*);空需
   pos ≥ 0.35,多需 pos ≤ 0.65(边界 inclusive,"错半边不交易"死因簿实证)。
-  缺一侧 pivot 或 H*−L* ≤ 0 ⇒ 门不可判 ⇒ fail-closed 拒绝(同 E8 纪律)。
+  缺一侧 pivot 或 H*−L* ≤ 0 ⇒ 门不可判 ⇒ fail-closed 拒绝(同 EDGE_RECLAIMED 纪律)。
   entry_ref:市价路由 = 决策 bar 收盘(= intent.ref_price);限价路由 =
-  计划限价(E7 前缘)——计划入场价丈量位置,与协议"入场前评估"一致。
+  计划限价(FLIP_RETESTED 前缘)——计划入场价丈量位置,与协议"入场前评估"一致。
 - **Q2 空间够**:对面结构缘 = 沿交易方向、状态 ∈ hypothesis.TARGET_STATES
   (ACTIVE/RETESTED/FLIPPED)、严格越过 entry_ref 的最近对侧区域近缘(多:
   阻力 z.lo 最小者;空:支撑 z.hi 最大者;§7 目标搜索同口径)。room_R =
@@ -23,7 +23,7 @@
 - **Q3 区域履历**(只做档注,不构强制):k = 触发 zone 的触碰序数
   (zone.touches,冻结 §4.3 事实);k > k_*(=2,v11 dev 冻结断点,
   reports/zonebio.json)即"k 成熟"(v11 厚假说:越被触碰防守越强 ⇒
-  供给累积为加分信息);zone 缺失(E6 等非区事件)⇒ 不成熟(不加成)。
+  供给累积为加分信息);zone 缺失(STRUCTURE_BROKEN 等非区事件)⇒ 不成熟(不加成)。
 - **Q4 regime 顺风**:多且 TREND_UP / 空且 TREND_DOWN。
 - **Q5 失效定结构 + F1 ≥ 0.8·ATR**:invalid 有限且沿方向距离
   dist = direction·(entry_ref − invalid) ≥ k_is·atr(atr>0);turtle 语义

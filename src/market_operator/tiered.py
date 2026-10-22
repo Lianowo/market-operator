@@ -19,7 +19,7 @@ parity 钉死)。v16 三闸(位置/空间/F1)与 v18 决策侧三件(R1 大炮�
   一搜索口径):room = d·(target−entry_ref)/|entry_ref−invalid|,
   ≥ k_room_R(1.5)⇒ 不乘(1.0);∈ [1.0,1.5) ⇒ ×0.75;< 1.0 ⇒ ×0.5;
 - **REGIME=TRANSITION 内 fade ×0.5**(v18 R3 软着陆):仅 fade 家族
-  (E2/E3/E8)且 regime=TRANSITION;三态(TREND_UP/TREND_DOWN/RANGE)与
+  (BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)且 regime=TRANSITION;三态(TREND_UP/TREND_DOWN/RANGE)与
   非 fade 不受该条;
 - **大蛋糕 ×0.75**(v18 R1 软着陆):rngq(窗 48,恰 0.8 受理,>0.8 计档)
   事件到达于"不 mic-only 处"(bar 认知收盘路径)⇒ ×0.75;mic-only 处
@@ -36,7 +36,7 @@ parity 钉死)。v16 三闸(位置/空间/F1)与 v18 决策侧三件(R1 大炮�
   v19_tier_reject_no_invalid);fade_front_edge 臂 fade 缺 attrs zone ⇒
   拒(计 v19_tier_reject_no_zone,maker 臂前缘不可判,同 v16 纪律);
 - **结构锚(照链)**:过单 hyp 重建 entry=entry_ref、invalid=attrs 结构失
-  效(turtle 2·ATR 继续不参与)、target_1=对面缘(fade;续涨/E4/E5
+  效(turtle 2·ATR 继续不参与)、target_1=对面缘(fade;续涨/TREND_RESUMED/RANGE_ROTATED
   None)、r_mult 重算;档注 q3(zone_touches > k_*=2)只注不参档;v16 的
   顺风 A/B 双档在 tier_sizing 下退位(基础 A=1.0 已含,q4 只作注记);
 - **执行差分臂化**(协议默认执行价=market):fade 前缘改单只在
@@ -63,8 +63,8 @@ from .strategy_v6 import RouteDecision, V6Params, V6Router
 from .structure import Regime
 
 # v19 §2 家族表(协议写死;与 campaign/repairs/v16_params 家族表硬对账)
-FADE_FAMILY = ("E2", "E3", "E8")
-STOP_FAMILY = ("E1", "E6", "E7")
+FADE_FAMILY = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
+STOP_FAMILY = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
 
 ROOM_LO = 1.0                        # 空间中档下缘(恰 1.0 入中档 ×0.75)
 
@@ -235,12 +235,12 @@ class V19Router(V6Router):
     # -- 前缘改单接插缝(v20 S4 重载;tiered 路径默认逐位旧行为) -----------------
 
     def _front_edge_maker(self, tp: TieredParams, ev_id: str) -> bool:
-        """fade 前缘改单谓词(v19 maker 臂 = tp.fade_front_edge;v20 S4 对 E3
+        """fade 前缘改单谓词(v19 maker 臂 = tp.fade_front_edge;v20 S4 对 LEVEL_REJECTED
         重载,见 lifecycle.V20Router)。默认逐位旧行为。"""
         return bool(tp.fade_front_edge)
 
     def _front_edge_label(self, ev_id: str) -> str:
-        """前缘改单溯源标签(v20 S4 E3 重载为 v20_e3_front_edge)。"""
+        """前缘改单溯源标签(v20 S4 LEVEL_REJECTED 重载为 v20_e3_front_edge)。"""
         return "v19_fade_front_edge"
 
     def on_bar(self, symbol: str, bar, bar_index: int, view, atr: float,

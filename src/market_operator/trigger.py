@@ -4,8 +4,8 @@
 执行、费用与组合容量语义零改动**(events.py/structure.py/position.py/broker
 成本模型不动;bar 事件流由本模块自跑的同一 EventDetector 复放产出,脚本层
 对账 == prepare_cognition,逐位一致是硬约束)。mic 层是纯增量:同族模式的
-收盘确认条件(E1 连续站稳 A4 / E2 收复 A5 / E3 回退 A6 / E4 回收 A7 /
-E6 破坏 A9 / E7 回踩拒绝翻转 §4.2)允许在 trigger_tf 收盘上先满足,事件
+收盘确认条件(BREAKOUT_ACCEPTED 连续站稳 A4 / BREAKOUT_FAILED 收复 A5 / LEVEL_REJECTED 回退 A6 / TREND_RESUMED 回收 A7 /
+STRUCTURE_BROKEN 破坏 A9 / FLIP_RETESTED 回踩拒绝翻转 §4.2)允许在 trigger_tf 收盘上先满足,事件
 知时 = 该 trigger bar 收盘,入场 = 次一根 trigger bar 开盘(1h→15m 最多
 早 45 分钟)。
 
@@ -16,40 +16,40 @@ E6 破坏 A9 / E7 回踩拒绝翻转 §4.2)允许在 trigger_tf 收盘上先满�
   连续站稳计数、回踩极值),不产生新 pivot、新区域、新 episode、新 regime。
   即 episode 生命周期(open=认知 bar 的 A2 触碰、zone 生灭=认知帧状态机)照
   旧在认知帧;"开盘/收盘"类确认判定的知时钟细化到 trigger_tf。
-- [§A 阈值] 一切 ATR 阈值(bm/rj/N 窗口外的距离量、invalid 缓冲、E5/E8 带
+- [§A 阈值] 一切 ATR 阈值(bm/rj/N 窗口外的距离量、invalid 缓冲、RANGE_ROTATED/EDGE_RECLAIMED 带
   量)用最近已收认知 bar 的 ATR(atr(t),事件知时因果量;trigger bar 自身
   的 TR 不入阈)。计数闸门按尺度比换算:N_a_mic = N_a×scale、N_f_mic =
-  N_f×scale(scale = obs_tf/trigger_tf;1h→15m ⇒ 12,E2/E3/E4 窗口 E1 计数
+  N_f×scale(scale = obs_tf/trigger_tf;1h→15m ⇒ 12,BREAKOUT_FAILED/LEVEL_REJECTED/TREND_RESUMED 窗口 BREAKOUT_ACCEPTED 计数
   同一换算,协议 §A 原式对全部数量闸门适用)。
 - [§A-锚] trigger 极值/收盘与认知帧的对应关系由数据 compaction 守恒保证:
   trigger 高位 ⊂ 认知 bar 高位 ⇒ 刺穿/极值类条件在认知帧与 trigger 帧判到
   同一现象(时间细化、无事实分叉);收盘类条件(破位/站稳/回收)以 trigger
   收盘为准时与认知收盘可以分叉(这正是细化语义:先满足先知,收盘点 cancel
   者不成交 —— 但有真正成交差异,如实记录)。
-- [同步收尸] 每认知收盘同步:episode/candidate/retest/E4 以其认知层对应物
+- [同步收尸] 每认知收盘同步:episode/candidate/retest/TREND_RESUMED 以其认知层对应物
   为准校验 —— episode 对应认知 episode 消亡或 zone 离开 ACTIVE(A3 续绑语
   义同 events.py)⇒ mic 侧终结;mic 破位候选在认知收盘时 zone 未到破位态
-  (收盘未破位 = 认知帧 A4 不成立)⇒ 作废;E4 候选已被认知层消费(认知
-  收盘发 E4)⇒ mic 侧丢弃。反向(认知层存而 mic 侧无)只在 ATR 抖动边
+  (收盘未破位 = 认知帧 A4 不成立)⇒ 作废;TREND_RESUMED 候选已被认知层消费(认知
+  收盘发 TREND_RESUMED)⇒ mic 侧丢弃。反向(认知层存而 mic 侧无)只在 ATR 抖动边
   界发生(trigger 收盘未越 bm(atr(t-1)) 而认知收盘越过 bm(atr(t))),
   如实接受:该路径 bar 事件照常发射,mic 不发射。
 - [刺穿 anchored] episode 采用自认知层时,认知 puncture_index(帧单位)映
-  射为该认知 bar 的 **首根** trigger bar(可用的最早刺穿时刻 ⇒ E2 窗口最早
+  射为该认知 bar 的 **首根** trigger bar(可用的最早刺穿时刻 ⇒ BREAKOUT_FAILED 窗口最早
   关闭,保守);ex_index 映射为其认知 bar 的 **末根** trigger bar 之前的
   …同首根口径(窗口最早关闭,保守,与刺穿一致)。
 - [§4.3 事实记账] 拒绝类事实(rejects+1)只在认知层记账;mic 发射不改任
   何认知 zone 对象(只读),“事件语义纯增量”。
-- [E7 细化] 回踩跟踪(破位→首次返回带内→回退 ≥ k_rj·atr_ctx)逐 trigger
+- [FLIP_RETESTED 细化] 回踩跟踪(破位→首次返回带内→回退 ≥ k_rj·atr_ctx)逐 trigger
   bar 进行(结构 §4.2 的确认类判定;认知层 FLIPPED 仍是认知帧事实,bar
-  E7 在认知收盘照常发射,mic E7 是其提前知时版本)。
+  FLIP_RETESTED 在认知收盘照常发射,mic FLIP_RETESTED 是其提前知时版本)。
 - [发射纪律] 同一 trigger bar 的因果序镜像 events.py:破位登记(触发的
-  episode 终结 + candidate 注册 + 回踩跟踪武装)→ E1 推进 → episode 判定
-  (E2 先于 E3,伴随 E8)→ E5 合成(E3 携带)→ E4 → E6 → E7。知时 =
+  episode 终结 + candidate 注册 + 回踩跟踪武装)→ BREAKOUT_ACCEPTED 推进 → episode 判定
+  (BREAKOUT_FAILED 先于 LEVEL_REJECTED,伴随 EDGE_RECLAIMED)→ RANGE_ROTATED 合成(LEVEL_REJECTED 携带)→ TREND_RESUMED → STRUCTURE_BROKEN → FLIP_RETESTED。知时 =
   trigger bar 标签(与全仓 ts=bar 开盘标签约定一致;收盘时刻 = 标签+step)。
 - [去重] 每个 mic episode/candidate 至多产出一枚主事件(A3 同语义,伴随
-  E5/E8 不在去重清单);E6 无 once-only(认知层本来就每个合格 bar 发射,
-  mic 同语义逐合格 trigger bar 发射);E7 每回踩过程至多一次。
-- [E9/E10] 过程量语义未在 trigger 尺度定义,本层不发射(v9 目录照旧仅在
+  RANGE_ROTATED/EDGE_RECLAIMED 不在去重清单);STRUCTURE_BROKEN 无 once-only(认知层本来就每个合格 bar 发射,
+  mic 同语义逐合格 trigger bar 发射);FLIP_RETESTED 每回踩过程至多一次。
+- [PROCESS_ACCEPTED/PROCESS_REJECTED] 过程量语义未在 trigger 尺度定义,本层不发射(v9 目录照旧仅在
   认知帧,由 bar 检测器承担)。
 
 MicCognition = 单 campaign 的 trigger 帧认知缓存;prepare_mic_cognition
@@ -71,7 +71,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .events import (
-    E1, E2, E3, E4, E5, E6, E7, E8, EventDetector, MarketEvent,
+    BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, TREND_RESUMED, RANGE_ROTATED, STRUCTURE_BROKEN, FLIP_RETESTED, EDGE_RECLAIMED, EventDetector, MarketEvent,
 )
 from .hypothesis import StructureView
 from .structure import (
@@ -150,7 +150,7 @@ class _MicCandidate:
 
 @dataclass
 class _MicRetest:
-    """§4.2 回踩跟踪(破位→返回带内→回退拒绝)的 trigger 级推进(E7 细化)。"""
+    """§4.2 回踩跟踪(破位→返回带内→回退拒绝)的 trigger 级推进(FLIP_RETESTED 细化)。"""
 
     zone: Zone                      # 认知层活引用(只读)
     armed: bool                     # 已"首次从远侧返回带内"(RETESTED 等价)
@@ -160,7 +160,7 @@ class _MicRetest:
 
 @dataclass
 class _MicE4:
-    """A7 E4 候选(认知层激活;pivot 确认只发生在认知收盘,故只采用不新建)。"""
+    """A7 TREND_RESUMED 候选(认知层激活;pivot 确认只发生在认知收盘,故只采用不新建)。"""
 
     direction: int
     leg_start: float
@@ -180,10 +180,10 @@ class _Context:
     regime: Regime
     zones: tuple                    # tuple[Zone] 认知层活引用(只读)
     pivots: tuple                   # tuple[Pivot] 全部 confirmed
-    band: Optional[tuple]           # A8 合成带 (lo, hi)(E5 用;不足则 None)
-    l_star: Optional[float]         # pivots 全名单最后 low(E6/E8 语境)
+    band: Optional[tuple]           # A8 合成带 (lo, hi)(RANGE_ROTATED 用;不足则 None)
+    l_star: Optional[float]         # pivots 全名单最后 low(STRUCTURE_BROKEN/EDGE_RECLAIMED 语境)
     h_star: Optional[float]         # 镜像:最后 high
-    l_star_forming: Optional[int]   # E6 attrs 溯源(认知帧 forming 索引)
+    l_star_forming: Optional[int]   # STRUCTURE_BROKEN attrs 溯源(认知帧 forming 索引)
     h_star_forming: Optional[int]
 
 
@@ -249,7 +249,7 @@ class MicTracker:
         # 已破位 zone 身份(trigger 级 + 采用级合并;A4 转移只发生一次 ——
         # 防同一 zone 在后续 trigger 收盘上"重复破位"重置连续计数)
         self._broken: set = set()                  # id(zone)
-        # E6 同现象去重(ref, regime):每个认知覆盖区间至多一发(镜像认知层
+        # STRUCTURE_BROKEN 同现象去重(ref, regime):每个认知覆盖区间至多一发(镜像认知层
         # "每个合格认知收盘一发"的频率形状;emit 后同段内重复收盘不再发)
         self._e6_fired: Optional[tuple] = None
 
@@ -328,7 +328,7 @@ class MicTracker:
                     extreme=z._retest_extreme
                     if z.state is ZoneState.RETESTED else None))
 
-        # E4 候选:认知层已消费(发射/过期) ⇒ 弃;新激活 ⇒ 采用,窗口映射为
+        # TREND_RESUMED 候选:认知层已消费(发射/过期) ⇒ 弃;新激活 ⇒ 采用,窗口映射为
         # 帧 (activated, activated+n_f] 的 trigger 覆盖([§A-锚] 同一现象)
         cog_e4 = {(cd.activated, cd.pb_price, cd.leg_start, cd.direction)
                   for cd in det._e4}
@@ -342,14 +342,14 @@ class MicTracker:
             self._adopted_e4.add(k)
             # deadline 是未来帧索引(activated+n_f):由调用方负责把帧索引
             # 换算到 trigger 序号(含尾段超帧钳制);此处不得用当前已知 bar
-            # 数截断 —— 那会把窗口永远钳死在采用 bar(曾致 E4 零发射)
+            # 数截断 —— 那会把窗口永远钳死在采用 bar(曾致 TREND_RESUMED 零发射)
             deadline = span_end_of(cd.deadline)
             self._e4.append(_MicE4(
                 direction=cd.direction, leg_start=cd.leg_start,
                 pb_price=cd.pb_price, depth=cd.depth,
                 activated=cd.activated, deadline=deadline))
 
-        # E6 一 bar 一发,无 mic 态;E5/E8 语境在 ctx。
+        # STRUCTURE_BROKEN 一 bar 一发,无 mic 态;RANGE_ROTATED/EDGE_RECLAIMED 语境在 ctx。
 
     # -- 推进:一根已收盘 trigger bar ------------------------------------------
 
@@ -382,7 +382,7 @@ class MicTracker:
                 self._retests.append(_MicRetest(zone=z, armed=False,
                                                 extreme=None, started=a))
 
-        # ② E1 推进:任一 trigger 收盘未在外侧即作废;第 N_a_mic 根收盘发射
+        # ② BREAKOUT_ACCEPTED 推进:任一 trigger 收盘未在外侧即作废;第 N_a_mic 根收盘发射
         kept_cd: list[_MicCandidate] = []
         for cd in self._candidates:
             hold = (c > cd.hi) if cd.role is res_role else (c < cd.lo)
@@ -393,7 +393,7 @@ class MicTracker:
             if cd.count >= self.n_a_mic:
                 direction = +1 if cd.role is res_role else -1
                 ref = cd.hi if cd.role is res_role else cd.lo
-                events.append(self._mk(E1, direction, ts, a, {
+                events.append(self._mk(BREAKOUT_ACCEPTED, direction, ts, a, {
                     "zone": cd.zone.clone(), "ref": ref,
                     "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
                     "started": cd.started}))
@@ -401,7 +401,7 @@ class MicTracker:
             kept_cd.append(cd)
         self._candidates = kept_cd
 
-        # ③ episode 判定(E2 先于 E3;§8.4 次序启发式镜像 events.py)
+        # ③ episode 判定(BREAKOUT_FAILED 先于 LEVEL_REJECTED;§8.4 次序启发式镜像 events.py)
         survivors: list[_MicEpisode] = []
         new_e3: list[MarketEvent] = []
         for ep in self._episodes:
@@ -424,18 +424,18 @@ class MicTracker:
                 returned = (c < z.hi) if res else (c > z.lo)
                 if returned:
                     direction = -1 if res else +1
-                    fired = self._reject(E2, direction, ep, z, ts, a, bm, edge)
+                    fired = self._reject(BREAKOUT_FAILED, direction, ep, z, ts, a, bm, edge)
             if fired is None and (extreme_first or ep.ex_index < a) \
                     and a - ep.ex_index <= self.n_f_mic:
                 retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
                 if retreat >= rj:
                     direction = -1 if res else +1
-                    fired = self._reject(E3, direction, ep, z, ts, a, bm, edge)
+                    fired = self._reject(LEVEL_REJECTED, direction, ep, z, ts, a, bm, edge)
                     new_e3.append(fired)
             if fired is not None:
                 events.append(fired)
-                # v8 E8:伴随 E2 发射(与 events.py 同序:E2 紧随其伴随 E8)
-                if self.enable_e8 and fired.id == E2:
+                # v8 EDGE_RECLAIMED:伴随 BREAKOUT_FAILED 发射(与 events.py 同序:BREAKOUT_FAILED 紧随其伴随 EDGE_RECLAIMED)
+                if self.enable_e8 and fired.id == BREAKOUT_FAILED:
                     e8 = self._edge_reclaim(ep, z, res, ts, a, c, h, l, ctx)
                     if e8 is not None:
                         events.append(e8)
@@ -447,17 +447,17 @@ class MicTracker:
                 survivors.append(ep)
         self._episodes = survivors
 
-        # ④ E5 合成(A8;regime/band 取冻结语境)
+        # ④ RANGE_ROTATED 合成(A8;regime/band 取冻结语境)
         events.extend(self._range_rotation(ts, a, c, ctx, new_e3))
 
-        # ⑤ E4 触发:(activated, activated+n_f] 帧窗的 trigger 覆盖内回收
+        # ⑤ TREND_RESUMED 触发:(activated, activated+n_f] 帧窗的 trigger 覆盖内回收
         kept_e4: list[_MicE4] = []
         for cd in self._e4:
             if a > cd.deadline:
                 continue
             level = cd.pb_price + cd.direction * p.e4_recovery * cd.depth
             if (c > level) if cd.direction > 0 else (c < level):
-                events.append(self._mk(E4, cd.direction, ts, a, {
+                events.append(self._mk(TREND_RESUMED, cd.direction, ts, a, {
                     "leg_start": cd.leg_start, "pb_price": cd.pb_price,
                     "depth": cd.depth, "ref": level,
                     "invalid": cd.pb_price - cd.direction * p.k_bm * ctx.atr,
@@ -466,14 +466,14 @@ class MicTracker:
             kept_e4.append(cd)
         self._e4 = kept_e4
 
-        # ⑥ E6:冻结语境 regime 曾为趋势 ⇒ 收盘破坏最近 HL/LH(A9 镜像);
+        # ⑥ STRUCTURE_BROKEN:冻结语境 regime 曾为趋势 ⇒ 收盘破坏最近 HL/LH(A9 镜像);
         # 同现象每覆盖区间至多一发(镜像认知层"每合格认知收盘一发"的频率)
         e6_key = None
         if ctx.regime is Regime.TREND_UP and ctx.l_star is not None \
                 and c < ctx.l_star - bm:
             e6_key = (ctx.l_star, Regime.TREND_UP.value)
             if self._e6_fired != e6_key:
-                events.append(self._mk(E6, -1, ts, a, {
+                events.append(self._mk(STRUCTURE_BROKEN, -1, ts, a, {
                     "ref": ctx.l_star, "invalid": ctx.l_star + bm,
                     "pivot_forming": ctx.l_star_forming,
                     "regime_before": Regime.TREND_UP.value}))
@@ -481,14 +481,14 @@ class MicTracker:
                 and c > ctx.h_star + bm:
             e6_key = (ctx.h_star, Regime.TREND_DOWN.value)
             if self._e6_fired != e6_key:
-                events.append(self._mk(E6, +1, ts, a, {
+                events.append(self._mk(STRUCTURE_BROKEN, +1, ts, a, {
                     "ref": ctx.h_star, "invalid": ctx.h_star - bm,
                     "pivot_forming": ctx.h_star_forming,
                     "regime_before": Regime.TREND_DOWN.value}))
         if e6_key is not None:
             self._e6_fired = e6_key
 
-        # ⑦ E7:回踩跟踪逐 trigger bar 推进(§4.2 镜像;破位 bar 自身不判
+        # ⑦ FLIP_RETESTED:回踩跟踪逐 trigger bar 推进(§4.2 镜像;破位 bar 自身不判
         # 回踩 —— 结构的 BROKEN 首根无 _retest 同语义;armed 后同 bar 即判)
         if self.enable_e7:
             kept_rt: list[_MicRetest] = []
@@ -515,7 +515,7 @@ class MicTracker:
                     direction = +1 if res else -1
                     ref = z.lo if direction < 0 else z.hi
                     invalid = (z.hi + bm) if direction < 0 else (z.lo - bm)
-                    events.append(self._mk(E7, direction, ts, a, {
+                    events.append(self._mk(FLIP_RETESTED, direction, ts, a, {
                         "zone": z.clone(), "ref": ref, "invalid": invalid,
                         "from_role": z.role.value, "atr": ctx.atr}))
                     continue                        # 一回踩过程至多一次
@@ -535,8 +535,8 @@ class MicTracker:
 
     def _reject(self, eid: str, direction: int, ep: _MicEpisode, z: Zone,
                 ts: object, a: int, bm: float, edge: float) -> MarketEvent:
-        """E2/E3 发射(镜像 events._reject 的 attrs 契约;不碰认知 zone 计数)。"""
-        if eid == E2:
+        """BREAKOUT_FAILED/LEVEL_REJECTED 发射(镜像 events._reject 的 attrs 契约;不碰认知 zone 计数)。"""
+        if eid == BREAKOUT_FAILED:
             extra = {"puncture_index": ep.puncture_index}
         else:
             extra = {"ex": ep.ex, "ex_index": ep.ex_index}
@@ -589,7 +589,7 @@ class MicTracker:
             room = (c - band_lo) if near_top else (band_hi - c)
             if room < room_min:
                 continue
-            out.append(self._mk(E5, e3.direction, ts, a, {
+            out.append(self._mk(RANGE_ROTATED, e3.direction, ts, a, {
                 "zone": z.clone(), "ref": e3.attrs["ref"],
                 "invalid": e3.attrs["invalid"],
                 "band": (band_lo, band_hi), "room": room,
@@ -599,7 +599,7 @@ class MicTracker:
     def _edge_reclaim(self, ep: _MicEpisode, z: Zone, res: bool, ts: object,
                       a: int, c: float, h: float, l: float, ctx: _Context
                       ) -> Optional[MarketEvent]:
-        """E8 伴随 E2(冻结语境 band L*/H* + trigger 收盘 pos 门;镜像 events)。"""
+        """EDGE_RECLAIMED 伴随 BREAKOUT_FAILED(冻结语境 band L*/H* + trigger 收盘 pos 门;镜像 events)。"""
         l_star, h_star = ctx.l_star, ctx.h_star
         if l_star is None or h_star is None:
             return None
@@ -615,7 +615,7 @@ class MicTracker:
         elif pos < 1.0 - edge_pos:
             return None
         ex = max(ep.ex, h) if res else min(ep.ex, l)
-        return self._mk(E8, direction, ts, a, {
+        return self._mk(EDGE_RECLAIMED, direction, ts, a, {
             "zone": z.clone(), "ref": (z.hi if res else z.lo),
             "invalid": (ex + ctx.bm) if res else (ex - ctx.bm),
             "pos": pos, "band": (l_star, h_star), "atr": ctx.atr,

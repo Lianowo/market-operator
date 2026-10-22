@@ -63,67 +63,67 @@
   "portfolio_cap_frac": 0.08,
   "whitelist": [
     [
-      "E1",
+      "BREAKOUT_ACCEPTED",
       -1
     ],
     [
-      "E1",
+      "BREAKOUT_ACCEPTED",
       1
     ],
     [
-      "E2",
+      "BREAKOUT_FAILED",
       -1
     ],
     [
-      "E2",
+      "BREAKOUT_FAILED",
       1
     ],
     [
-      "E3",
+      "LEVEL_REJECTED",
       -1
     ],
     [
-      "E3",
+      "LEVEL_REJECTED",
       1
     ],
     [
-      "E4",
+      "TREND_RESUMED",
       -1
     ],
     [
-      "E4",
+      "TREND_RESUMED",
       1
     ],
     [
-      "E5",
+      "RANGE_ROTATED",
       -1
     ],
     [
-      "E5",
+      "RANGE_ROTATED",
       1
     ],
     [
-      "E6",
+      "STRUCTURE_BROKEN",
       -1
     ],
     [
-      "E6",
+      "STRUCTURE_BROKEN",
       1
     ],
     [
-      "E7",
+      "FLIP_RETESTED",
       -1
     ],
     [
-      "E7",
+      "FLIP_RETESTED",
       1
     ],
     [
-      "E8",
+      "EDGE_RECLAIMED",
       -1
     ],
     [
-      "E8",
+      "EDGE_RECLAIMED",
       1
     ]
   ],
@@ -140,9 +140,9 @@
       "early_exit": false,
       "exec": "market",
       "mic_family": [
-        "E1",
-        "E6",
-        "E7"
+        "BREAKOUT_ACCEPTED",
+        "STRUCTURE_BROKEN",
+        "FLIP_RETESTED"
       ],
       "equity": 1000.0,
       "s1": false,
@@ -156,9 +156,9 @@
       "early_exit": false,
       "exec": "market",
       "mic_family": [
-        "E1",
-        "E6",
-        "E7"
+        "BREAKOUT_ACCEPTED",
+        "STRUCTURE_BROKEN",
+        "FLIP_RETESTED"
       ],
       "equity": 1000.0,
       "s1": true,
@@ -172,9 +172,9 @@
       "early_exit": false,
       "exec": "market",
       "mic_family": [
-        "E1",
-        "E6",
-        "E7"
+        "BREAKOUT_ACCEPTED",
+        "STRUCTURE_BROKEN",
+        "FLIP_RETESTED"
       ],
       "equity": 1000.0,
       "s1": false,
@@ -188,9 +188,9 @@
       "early_exit": false,
       "exec": "market",
       "mic_family": [
-        "E1",
-        "E6",
-        "E7"
+        "BREAKOUT_ACCEPTED",
+        "STRUCTURE_BROKEN",
+        "FLIP_RETESTED"
       ],
       "equity": 1000.0,
       "s1": false,
@@ -204,9 +204,9 @@
       "early_exit": false,
       "exec": "market",
       "mic_family": [
-        "E1",
-        "E6",
-        "E7"
+        "BREAKOUT_ACCEPTED",
+        "STRUCTURE_BROKEN",
+        "FLIP_RETESTED"
       ],
       "equity": 1000.0,
       "s1": true,
@@ -256,24 +256,24 @@
     "stop_wait_tf": 12,
     "k_bm": 0.1,
     "fade_family": [
-      "E2",
-      "E3",
-      "E8"
+      "BREAKOUT_FAILED",
+      "LEVEL_REJECTED",
+      "EDGE_RECLAIMED"
     ],
     "stop_family": [
-      "E1",
-      "E6",
-      "E7"
+      "BREAKOUT_ACCEPTED",
+      "STRUCTURE_BROKEN",
+      "FLIP_RETESTED"
     ],
     "note": "沿 v16/v17 协议写死,不碰(三闸/收割婚配先验与家族表逐值照抄 config/v17.json)"
   },
   "v20_params": {
     "s1_mfe_r": 1.0,
     "s1_family": [
-      "E1",
-      "E6",
-      "E7",
-      "E4"
+      "BREAKOUT_ACCEPTED",
+      "STRUCTURE_BROKEN",
+      "FLIP_RETESTED",
+      "TREND_RESUMED"
     ],
     "s2_level": 0.25,
     "s2_bank_frac": 0.4,

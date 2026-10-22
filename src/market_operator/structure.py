@@ -11,7 +11,7 @@
   本 bar 极值推进——bar 内路径不可知,而 §0.3/A10 要求 forming_index 指向严格的历史
   位置,此读法保证 `known_index > forming_index` 恒成立(测试断言);代价是同根新高
   不会被记为上一腿的极值(保守、宁可延迟成形也不提前知时)。§8.4 的路径启发式
-  (close < open 视为先高后低)仍用于事件检测层 E3 的同根"ex 建立→回退"次序
+  (close < open 视为先高后低)仍用于事件检测层 LEVEL_REJECTED 的同根"ex 建立→回退"次序
   (见 events.py)与 SwingTracker 未定向时的首腿定向。
 - [§4.1] "origin 保留最早者"取最早 `origin_known_index`;新 pivot 生成的区域自带
   touches=1(波段端点处的市场反应即该区域的第一次触碰,§4 开头"市场曾经在那里给出
@@ -25,14 +25,14 @@
   "回踩后反向重新 acceptance 穿回"(收盘越过正缘 k_bm*atr)则旧区 DEAD,不生成新区。
   终止态(FLIPPED/DEAD)在发生 bar 处理完毕后即从 `zones` 视图移除,
   其继承事实由新生反向区携带(A10:知时即刻生效)。
-- [§5] "价格未破坏最近抬升低点(见 E6)"纳入 regime 谓词,以当前 bar 收盘判定:
-  收盘已破坏最近 HL/LH 则不报告趋势。因此 E6 恰好发射于 regime 退出趋势的那一根
-  (E6 检测器以 `regime(t-1)` 为"TREND_UP/…中"之判定,见 events.py)。
+- [§5] "价格未破坏最近抬升低点(见 STRUCTURE_BROKEN)"纳入 regime 谓词,以当前 bar 收盘判定:
+  收盘已破坏最近 HL/LH 则不报告趋势。因此 STRUCTURE_BROKEN 恰好发射于 regime 退出趋势的那一根
+  (STRUCTURE_BROKEN 检测器以 `regime(t-1)` 为"TREND_UP/…中"之判定,见 events.py)。
 - [§5/§6A-A8] 趋势与区间结构统一由最近至多 `range_max_pivots` 个 confirmed pivots 判定
   (A8 明示 RANGE 窗口;趋势取同一窗口内的最近两个高/低点序列,即"最近 4+ 个交错
   pivot"的冻结读法)。
 - [v2] ZoneBook.flips:每根 bar 的 FLIPPED 角色互换事实记录(见 ZoneFlip)。只读追加,
-  不改变任何生命周期判断与视图移除时序(v1 行为不变);供 v2 事件 E7 使用,机制
+  不改变任何生命周期判断与视图移除时序(v1 行为不变);供 v2 事件 FLIP_RETESTED 使用,机制
   定义见 docs/v2-protocol.md §1。
 """
 
@@ -58,15 +58,15 @@ class Params:
     k_rev: float = 1.0                   # §3 反转确认幅度(ATR 倍数)
     k_zw: float = 0.5                    # §4.1 区域半宽(ATR 倍数)
     k_bm: float = 0.1                    # §4.2 acceptance 破位余量(ATR 倍数)
-    k_rj: float = 0.3                    # §6 E3 / §4.2 回踩拒绝回退幅度(ATR 倍数)
+    k_rj: float = 0.3                    # §6 LEVEL_REJECTED / §4.2 回踩拒绝回退幅度(ATR 倍数)
     k_span: float = 3.0                  # §5 RANGE 总跨度上限(ATR 倍数)
-    k_room: float = 2.0                  # §6 E5 对侧空间下限(ATR 倍数)
+    k_room: float = 2.0                  # §6 RANGE_ROTATED 对侧空间下限(ATR 倍数)
     tol_atr: float = 0.1                 # §5 pivot 相等容差(ATR 倍数)
-    n_a: int = 3                         # §6 E1 连续接受根数 N_a
-    n_f: int = 3                         # §6 E2/E3/E4 窗口 N_f
+    n_a: int = 3                         # §6 BREAKOUT_ACCEPTED 连续接受根数 N_a
+    n_f: int = 3                         # §6 BREAKOUT_FAILED/LEVEL_REJECTED/TREND_RESUMED 窗口 N_f
     n_time: int = 24                     # §7 时间失效(认知层不用,契约保留)
-    e4_depth_atr: tuple = (0.5, 2.5)     # §6A-A7 E4 回调深度区间
-    e4_recovery: float = 0.5             # §6A-A7 E4 回收比例
+    e4_depth_atr: tuple = (0.5, 2.5)     # §6A-A7 TREND_RESUMED 回调深度区间
+    e4_recovery: float = 0.5             # §6A-A7 TREND_RESUMED 回收比例
     range_max_pivots: int = 8            # §6A-A8 结构判定的最多 pivot 数
     e5_edge_atr: float = 0.75            # §6A-A8 带边缘容差(ATR 倍数)
     merge_max_atr: float = 0.0           # 区域并集宽度上限(ATR 倍数;0=无界,历史默认)
@@ -442,7 +442,7 @@ class ZoneBook:
         - 上沿 [hi_ext - w, hi_ext] → RESISTANCE
         - 下沿 [lo_ext, lo_ext + w] → SUPPORT
         若与场内已有 ACTIVE 区匹配(距离 ≤ tol)则原位保留(不打断存活 episode);
-        已破位的边缘保留至多 60 bars 供 E1 破位接受确认与回踩,未破位的活跃边缘保留
+        已破位的边缘保留至多 60 bars 供 BREAKOUT_ACCEPTED 破位接受确认与回踩,未破位的活跃边缘保留
         至多 120 bars(当市场由平衡进入趋势迁移时,刚离开的平衡箱上下沿仍是最近的结构阶梯)。
         """
         self._bal_det.push((ts, o, h, l, c, v), atr_val)
@@ -601,7 +601,7 @@ def _regime_from(pivots: list[Pivot], atr_val: float, p: Params,
     bm = p.k_bm * atr_val
     up_struct = highs[-1] > highs[-2] + tol and lows[-1] > lows[-2] + tol
     dn_struct = highs[-1] < highs[-2] - tol and lows[-1] < lows[-2] - tol
-    # §5:"且价格未破坏最近抬升低点(见 E6)"(以当前收盘判定,镜像同理)
+    # §5:"且价格未破坏最近抬升低点(见 STRUCTURE_BROKEN)"(以当前收盘判定,镜像同理)
     if up_struct and (close is None or close >= lows[-1] - bm):
         return Regime.TREND_UP
     if dn_struct and (close is None or close <= highs[-1] + bm):

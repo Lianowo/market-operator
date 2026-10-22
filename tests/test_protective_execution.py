@@ -18,8 +18,8 @@ def broker():
 
 
 def enter(b,side,invalid):
-    b.submit(OrderIntent(OrderKind.OPEN,"BTC",None,"E7|test",100,T0),T0,
-             direction=side,invalid=invalid,event_id="E7",target_1=None)
+    b.submit(OrderIntent(OrderKind.OPEN,"BTC",None,"FLIP_RETESTED|test",100,T0),T0,
+             direction=side,invalid=invalid,event_id="FLIP_RETESTED",target_1=None)
     assert b.on_bar_open("BTC",T0+H,100)[0]["kind"]=="OPEN"
 
 

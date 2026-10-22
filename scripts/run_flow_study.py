@@ -10,7 +10,7 @@
   如实声明,见符号信息);Bitget 数据/历史产物/E 检测零改动。
 - 事件 = canonical 语义重放:Params.from_json(config/canonical.json)
   (merge_max_atr=2.0 账面修复语义,与生产认知同座;先验逐项 = canonical),
-  E1/E2/E3/E6/E7(E7 = enable_e7,v2 语义;不施 rehearse-whitelist,
+  BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED(FLIP_RETESTED = enable_e7,v2 语义;不施 rehearse-whitelist,
   白名单已在 canonical 废弃,research-log #21)。
 - 流特征 = flow_features(delta_vol/share/cvd_24/cvd_48/delta_z,全因果,
   tok=收盘知时),切片特征 = 触发 bar(known_index)的 delta_z。
@@ -48,7 +48,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import data as mo_data                      # noqa: E402
-from market_operator.events import E1, E2, E3, E6, E7           # noqa: E402
+from market_operator.events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED           # noqa: E402
 from market_operator.flow_features import attach as attach_flow  # noqa: E402
 from market_operator.flow_study import (                         # noqa: E402
     MIN_TERCILE_N,
@@ -74,8 +74,8 @@ CONFIG_CANONICAL = ROOT / "config" / "canonical.json"
 REPORTS = ROOT / "reports"
 DATA_BINANCE = ROOT / "data" / "raw_binance"
 
-STUDY_IDS = frozenset({E1, E2, E3, E6, E7})
-MECHS = tuple(f"{e}|{d}" for e in (E1, E2, E3, E6, E7) for d in ("long", "short"))
+STUDY_IDS = frozenset({BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED})
+MECHS = tuple(f"{e}|{d}" for e in (BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, STRUCTURE_BROKEN, FLIP_RETESTED) for d in ("long", "short"))
 TERCILE_NAMES = {0: "bottom", 1: "middle", 2: "top"}
 
 
@@ -185,7 +185,7 @@ def run() -> dict:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "protocol": {
             "parent": "docs/v12-protocol.md(评估测量层 = methodology §9 原样;"
-                      "机制 = canonical E1/E2/E3/E6/E7 在币安 1h 重放)",
+                      "机制 = canonical BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED 在币安 1h 重放)",
             "venue_declaration": "Binance USDⓈ-M(data.binance.vision);与 Bitget "
                                  "非同构,检验'bar 层流特征值不值钱',不复刻 Bitget",
             "params_source": "config/canonical.json(merge_max_atr=2.0 断言通过;"
@@ -232,7 +232,7 @@ def run() -> dict:
             if len(top) == 0 or len(bot) == 0:   # 对照池全空等病态
                 out[seg] = {"n": n, "inference": "INSUFFICIENT_DATA",
                             "reason": "tercile degenerate(对照池空:同机制排除窗在"
-                                      "高事件密度下覆盖全段,增量未定义;v9 E3 同病理)"}
+                                      "高事件密度下覆盖全段,增量未定义;v9 LEVEL_REJECTED 同病理)"}
                 continue
             diff, ci_lo, ci_hi = tercile_diff_ci(
                 top["incr_atr_1_0"].to_numpy(), top["ts"].to_numpy(),
@@ -313,7 +313,7 @@ def render_md(result: dict) -> str:
         "- 检验对象:1h bar 主动买卖差(v12 §1 '可回放的轻量订单流')对 canonical "
         "事件后期望的增量。**venue 声明**:Binance USDⓈ-M 永续(data.binance.vision) "
         "≠ Bitget microstructure;本轮只回答'bar 层流特征值不值钱'。",
-        f"- 事件 = canonical 语义重放({p['params_source']}),E1/E2/E3/E6/E7;",
+        f"- 事件 = canonical 语义重放({p['params_source']}),BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/STRUCTURE_BROKEN/FLIP_RETESTED;",
         f"  测量层 = methodology §9 原样:{p['discriminant']}。",
         f"- 切片 = {p['slice_feature']},{p['slice_rule']};"
         f"  CI = {p['bootstrap']}。",

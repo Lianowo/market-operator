@@ -56,67 +56,67 @@
   "portfolio_cap_frac": 0.03,
   "whitelist": [
     [
-      "E1",
+      "BREAKOUT_ACCEPTED",
       -1
     ],
     [
-      "E1",
+      "BREAKOUT_ACCEPTED",
       1
     ],
     [
-      "E2",
+      "BREAKOUT_FAILED",
       -1
     ],
     [
-      "E2",
+      "BREAKOUT_FAILED",
       1
     ],
     [
-      "E3",
+      "LEVEL_REJECTED",
       -1
     ],
     [
-      "E3",
+      "LEVEL_REJECTED",
       1
     ],
     [
-      "E4",
+      "TREND_RESUMED",
       -1
     ],
     [
-      "E4",
+      "TREND_RESUMED",
       1
     ],
     [
-      "E5",
+      "RANGE_ROTATED",
       -1
     ],
     [
-      "E5",
+      "RANGE_ROTATED",
       1
     ],
     [
-      "E6",
+      "STRUCTURE_BROKEN",
       -1
     ],
     [
-      "E6",
+      "STRUCTURE_BROKEN",
       1
     ],
     [
-      "E7",
+      "FLIP_RETESTED",
       -1
     ],
     [
-      "E7",
+      "FLIP_RETESTED",
       1
     ],
     [
-      "E8",
+      "EDGE_RECLAIMED",
       -1
     ],
     [
-      "E8",
+      "EDGE_RECLAIMED",
       1
     ]
   ],
@@ -132,7 +132,7 @@
       "v16": true,
       "fill_model": "exchange_maker",
       "c3_stop_entry": true,
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "repairs": [],
       "equity": 1000.0,
       "note": "基线 = v17 arm-C 语义(仅续涨 mic / fade 归 bar;修复件全关,V18Router(v18=None) 逐位 V16Router;与在册 reports/v17_arm-C.json dev 三格硬对账)"
@@ -141,7 +141,7 @@
       "v16": true,
       "fill_model": "exchange_maker",
       "c3_stop_entry": true,
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "repairs": ["R1"],
       "equity": 1000.0,
       "note": "基线+R1 大炮走法:续涨族仅级联 mic 口径入场(bar 化身整层抑制,错峰惰性;三根属性不变);fade 族 rngq>0.8 不入场(恰 0.8 受理)"
@@ -150,7 +150,7 @@
       "v16": true,
       "fill_model": "exchange_maker",
       "c3_stop_entry": true,
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "repairs": ["R2"],
       "equity": 1000.0,
       "note": "基线+R2 逆三拍:决策时刻前三根认知帧 bar 净方向与入场方向相反且幅 ≥0.3%(d·pmd ≤ −0.003,恰界拒)⇒ 不入场(假设合法性核,与市况/收割解耦)"
@@ -159,7 +159,7 @@
       "v16": true,
       "fill_model": "exchange_maker",
       "c3_stop_entry": true,
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "repairs": ["R3"],
       "equity": 1000.0,
       "note": "基线+R3(候选条款,单独归因):fade 族仅 regime ∈ {TREND_UP,TREND_DOWN,RANGE} 受理,TRANSITION 不入场"
@@ -168,7 +168,7 @@
       "v16": true,
       "fill_model": "exchange_maker",
       "c3_stop_entry": true,
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "repairs": ["R4"],
       "equity": 1000.0,
       "note": "基线+R4 fade 三段收割:缘前 25%/50% 各落袋 1/6 仓(半仓 1/3,市价次细 bar 开盘,摊薄均价入账),到缘收净剩余,无 trail 无保本;收割序 target_partial 标注"
@@ -177,7 +177,7 @@
       "v16": true,
       "fill_model": "exchange_maker",
       "c3_stop_entry": true,
-      "mic_family": ["E1", "E6", "E7"],
+      "mic_family": ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"],
       "repairs": ["R1", "R2", "R3", "R4"],
       "equity": 1000.0,
       "note": "基线+四件全合(R1 大炮走法 + R2 逆三拍 + R3 TRANSITION fade 候选 + R4 fade 三段收割)"
@@ -206,14 +206,14 @@
     "stop_wait_tf": 12,
     "k_bm": 0.1,
     "fade_family": [
-      "E2",
-      "E3",
-      "E8"
+      "BREAKOUT_FAILED",
+      "LEVEL_REJECTED",
+      "EDGE_RECLAIMED"
     ],
     "stop_family": [
-      "E1",
-      "E6",
-      "E7"
+      "BREAKOUT_ACCEPTED",
+      "STRUCTURE_BROKEN",
+      "FLIP_RETESTED"
     ],
     "note": "沿 v16/v17 协议写死,不碰(三闸/收割婚配先验与家族表逐值照抄 config/v17.json)"
   }

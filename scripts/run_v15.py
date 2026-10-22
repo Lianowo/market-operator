@@ -73,8 +73,8 @@ COST_MULTS = (1.0, 1.5, 2.0)
 JUDGE_COST = 1.5                       # dev 主锚成本(协议 §判定 dev@1.5x)
 ARM_IDS = ("arm0", "v15")
 MIN_TRADES_TEST = 60
-FROZEN_ERA_WHITELIST = (("E1", -1), ("E1", 1), ("E3", -1), ("E3", 1),
-                        ("E6", -1), ("E6", 1), ("E7", -1), ("E7", 1))
+FROZEN_ERA_WHITELIST = (("BREAKOUT_ACCEPTED", -1), ("BREAKOUT_ACCEPTED", 1), ("LEVEL_REJECTED", -1), ("LEVEL_REJECTED", 1),
+                        ("STRUCTURE_BROKEN", -1), ("STRUCTURE_BROKEN", 1), ("FLIP_RETESTED", -1), ("FLIP_RETESTED", 1))
 METRIC_EQ = ("net_pnl", "n_trades", "winrate", "profit_factor")
 UPGRADE_LINE = ("既往升级线(v4-v8 不变口径):test≥60 笔 ∧ 1.5x 净期望>0 ∧ "
                 "2x PF>1 ⇒ 才谈 forward dry-run;否则 Research Only 维持")
@@ -104,7 +104,7 @@ def load_config() -> dict:
     if any((a0["band_side"], a0["fill_model"] != "canonical",
             a0["c3_stop_entry"], a0["c4_laddering"], a0["tiersize"])):
         raise RuntimeError(f"config/v15.json arm0 必须全组件关(canonical): {a0}")
-    if json.loads(json.dumps(v15["c2_params"]["family"])) != ["E2", "E3", "E8"]:
+    if json.loads(json.dumps(v15["c2_params"]["family"])) != ["BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"]:
         raise RuntimeError("config/v15.json c2_params.family 冻结 = fade 家族")
     return v15
 
@@ -448,8 +448,8 @@ def main() -> None:
             "doc": "docs/v15-protocol.md(冻结,2026-10-20)",
             "construction": "四件套合成(v14 arm 矩阵裁决 log#28 存活件):①位置"
                             "带沿条款(v14 Q1 语义,只拒不配档)②fade 家族"
-                            "(E2/E3/E8)exchange_maker 真挂单 ③续涨家族"
-                            "(E1/E6/E7)stop-entry 预埋 ④收割/费用/容量/组合 "
+                            "(BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)exchange_maker 真挂单 ③续涨家族"
+                            "(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED)stop-entry 预埋 ④收割/费用/容量/组合 "
                             "3% 沿 canonical 不变;明确丢开 Q2 空间闸(误杀版)/"
                             "Q3-Q4 配档与 tiersize/virtual 挂单/分层/级联。",
             "canonical_status": "arm0 = 现 canonical(v6 turtle 固化语义 × "
@@ -649,7 +649,7 @@ def render_md(payload: dict) -> str:
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in ("1h", "2h", "4h", "12h", "1d"):
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)

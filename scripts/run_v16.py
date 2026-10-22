@@ -22,8 +22,8 @@ test 一次(test 第 19 次曝光,research-log #30)。
   v16 − arm0 为主锚,Δ ≤ 0 ⇒ 合成如实打回;若整体仍负 ⇒ Acceptance 最终
   章(协议原文:结构语言家族在本场座最优形态=近打平研究系统),如实填报,
   不产生转正叙述。
-- 归因(协议 §判定):合成整体 + 分家族(fade E2/E3/E8 / 续涨 E1/E6/E7 /
-  其他 E4/E5)+ 分闸(v16_gate_reject_q1_pos/q2_room/f1)与收割桶(目标/
+- 归因(协议 §判定):合成整体 + 分家族(fade BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED / 续涨 BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED /
+  其他 TREND_RESUMED/RANGE_ROTATED)+ 分闸(v16_gate_reject_q1_pos/q2_room/f1)与收割桶(目标/
   CHoCH/trail/失效/时间帽,由持仓侧 reason 机读标签解析,arm0 无标签恒空)。
 - test 段评估计数 v16 一次:对 v16 合成臂一次跑齐成本 1/1.5/2x 三格(一次
   落座,同 canonical 各轮口径);样本量 <60 ⇒ INSUFFICIENT_DATA 一如以往如
@@ -73,13 +73,13 @@ COST_MULTS = (1.0, 1.5, 2.0)
 JUDGE_COST = 1.5                       # dev 主锚成本(协议 §判定 dev@1.5x)
 ARM_IDS = ("arm0", "v16")
 MIN_TRADES_TEST = 60
-FROZEN_ERA_WHITELIST = (("E1", -1), ("E1", 1), ("E3", -1), ("E3", 1),
-                        ("E6", -1), ("E6", 1), ("E7", -1), ("E7", 1))
+FROZEN_ERA_WHITELIST = (("BREAKOUT_ACCEPTED", -1), ("BREAKOUT_ACCEPTED", 1), ("LEVEL_REJECTED", -1), ("LEVEL_REJECTED", 1),
+                        ("STRUCTURE_BROKEN", -1), ("STRUCTURE_BROKEN", 1), ("FLIP_RETESTED", -1), ("FLIP_RETESTED", 1))
 METRIC_EQ = ("net_pnl", "n_trades", "winrate", "profit_factor")
 UPGRADE_LINE = ("既往升级线(v4-v8 不变口径):test≥60 笔 ∧ 1.5x 净期望>0 ∧ "
                 "2x PF>1 ⇒ 才谈 forward dry-run;否则 Research Only 维持")
-FADE_FAMILY = ("E2", "E3", "E8")
-STOP_FAMILY = ("E1", "E6", "E7")
+FADE_FAMILY = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
+STOP_FAMILY = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
 HARVEST_BUCKETS = ("target", "choch", "trail", "invalid", "time_cap", "other")
 FINAL_CHAPTER = ("若整体仍负 ⇒ Acceptance 最终章(协议原文):结构语言家族在"
                  "本场座最优形态=近打平研究系统,不再进化。")
@@ -547,8 +547,8 @@ def main() -> None:
                             "多 pos≤0.65、对面结构缘距离≥1.5R、失效=结构区缘∓"
                             "k_bm·ATR 且 F1≥0.8·ATR,缺一不存在交易)②档(顺风"
                             "=A×1.0、其余=B×0.75,k(v11) 只作档注)③执行差分"
-                            "(fade E2/E3/E8→maker 前缘限价 N_fill=12;续涨 "
-                            "E1/E6/E7→stop-entry 预埋最大等待 12×TF;E4/E5 "
+                            "(fade BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED→maker 前缘限价 N_fill=12;续涨 "
+                            "BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED→stop-entry 预埋最大等待 12×TF;TREND_RESUMED/RANGE_ROTATED "
                             "canonical 兜底)④一生一表收割(fade 达对面结构缘"
                             "全平+不加仓+禁 trail、续涨 turtle 保留、反向 "
                             "CHoCH、trailing 只收紧、时间帽 48×TF 且 MFE<0.5R "
@@ -795,7 +795,7 @@ def render_md(payload: dict) -> str:
                   "| 机制 | TF | 方向 | 笔数 | 胜率 | 平均R | 净额 |",
                   "|---|---|---|---|---|---|---|"]
         any_rows = False
-        for mech in ("E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"):
+        for mech in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED", "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED"):
             for tf in ("1h", "2h", "4h", "12h", "1d"):
                 for side in ("short", "long"):
                     cell = bt.get(mech, {}).get(tf, {}).get(side)
@@ -812,11 +812,11 @@ def render_md(payload: dict) -> str:
 
     lines += ["", "## 7. 已知近似与如实声明", "",
               "① fade maker 前缘限价 = 事件 zone 接近侧缘(空 zone.lo / 多 "
-              "zone.hi,E7 G3 与 v14 C4 前缘同口径),真挂单严格穿过成交、穿"
+              "zone.hi,FLIP_RETESTED G3 与 v14 C4 前缘同口径),真挂单严格穿过成交、穿"
               "透缺口按限价成交(排队乐观性如实声明);决策 bar 收盘仍在区内"
-              "附近时成交可能劣于收盘参照,保守性如实声明;② E8 在 canonical "
+              "附近时成交可能劣于收盘参照,保守性如实声明;② EDGE_RECLAIMED 在 canonical "
               "战役帧未开启发射(enable_e8=False,检测零改动纪律):fade 家族"
-              "接线含 E8 但本场无 E8 事件,如实声明(触发即按同一收割语义处"
+              "接线含 EDGE_RECLAIMED 但本场无 EDGE_RECLAIMED 事件,如实声明(触发即按同一收割语义处"
               "理);③ 时间帽 48×TF = bars_held ≥ 48 根认知 bar(1h→48h、"
               "12h→24d),到期且 MFE<0.5R 才出、恰 0.5R inclusive 不放逐,到"
               "期后逐收盘 bar 复核(同 §8.6 的 bars_held>= idiom,如实声明);"
@@ -824,7 +824,7 @@ def render_md(payload: dict) -> str:
               "丈量,turtle 2·ATR 防线在 v16 不参与;R 基准=计划入场价至结构"
               "失效的价差,与 broker 定仓 risk_per_unit 同源;⑤ fade 收割目"
               "标 = 对面结构缘(与空间闸同一搜索口径的对面缘价;对面缘缺失 ⇒"
-              " 无收割目标,v16_fade_no_target 如实计数);⑥ E4/E5 不在两家"
+              " 无收割目标,v16_fade_no_target 如实计数);⑥ TREND_RESUMED/RANGE_ROTATED 不在两家"
               "族,canonical 市价 + turtle 管理(过同一三闸与结构锚、无收割"
               "目标),归入家族桶 other;⑦ 收割桶由出场 reason 机读标签解析"
               "(v16|<bucket>|),arm0 无标签全落 other;trailing 防线收紧后"

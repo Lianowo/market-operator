@@ -4,14 +4,14 @@
 - config/v17.json parent=v16 硬对账(逐键仅允许 (version/note/meta/arms/
   tf_list/arm/equity/enable_mic/trigger_tf_map) 差;equity=1000;tf_list
   恰 [2h,4h,12h,1d] 不含 1h;双臂钉死:arm-M mic_family=all、arm-C
-  mic_family=[E1,E6,E7];v16_params 深等;trigger 映射 == 冻结级联);
+  mic_family=[BREAKOUT_ACCEPTED,STRUCTURE_BROKEN,FLIP_RETESTED];v16_params 深等;trigger 映射 == 冻结级联);
 - 1h 不在场断言:tf_of / assert_frames_no_1h(脚本级)+ 级联解析四档精确;
-- mic 家族过滤(arm-C):fade(E3)mic 事件不入路由(mic_family_filtered+1,
+- mic 家族过滤(arm-C):fade(LEVEL_REJECTED)mic 事件不入路由(mic_family_filtered+1,
   成交账本无 mic 痕迹),其 bar 化身仍按 bar 语义路由(归 bar);
   arm-C ≡ mic 全族臂的 fade 差分;arm-M 全族 unfiltered;
 - mic 决策接 arm 语义(V16Router 三闸 + C3 stop-entry / C2 maker):mic
-  续涨 E1 → order_type=stop_entry(stop 价 = ev_ref ± k_bm·ATR,v16_tier/
-  size_mult 注入,fill 严格晚于决策 trigger 收盘);mic fade E3 → maker
+  续涨 BREAKOUT_ACCEPTED → order_type=stop_entry(stop 价 = ev_ref ± k_bm·ATR,v16_tier/
+  size_mult 注入,fill 严格晚于决策 trigger 收盘);mic fade LEVEL_REJECTED → maker
   前缘限价(zone.lo,成交窗口超期 EXPIRED 于 armed+12h);
 - equity–min_size 边界:qty 恰落 size_min 过(inclusive)、半步之下拒
   (floor 至 0),同一决策 300 拒而 1000 过(真实 BTC 合约规格);
@@ -38,7 +38,7 @@ from market_operator.campaign import (
     parse_key,
     run_campaigns,
 )
-from market_operator.events import E1, E3, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.harvest import HarvestParams, V16Params, V16Router
 from market_operator.hypothesis import StructureView
 from market_operator.strategy_v6 import V6Params
@@ -78,8 +78,8 @@ PIVOTS = (Pivot(price=110.0, forming_index=0, known_index=1,
 VIEW = StructureView(regime=Regime.TRANSITION, zones=(), atr=ATR,
                      pivots=PIVOTS)
 
-WL_ALL = frozenset((eid, d) for eid in ("E1", "E2", "E3", "E4", "E5",
-                                        "E6", "E7", "E8")
+WL_ALL = frozenset((eid, d) for eid in ("BREAKOUT_ACCEPTED", "BREAKOUT_FAILED", "LEVEL_REJECTED", "TREND_RESUMED", "RANGE_ROTATED",
+                                        "STRUCTURE_BROKEN", "FLIP_RETESTED", "EDGE_RECLAIMED")
                    for d in (-1, 1))
 
 
@@ -92,8 +92,8 @@ def _vp16() -> V16Params:
 def _arm_cfg() -> ArmConfig:
     return ArmConfig(fill_model="exchange_maker", stop_entry=True,
                      stop_wait_tf=12, k_bm=0.1,
-                     c2_family=("E2", "E3", "E8"),
-                     harvest_family=("E2", "E3", "E8"),
+                     c2_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
+                     harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
                      time_cap_bars=48, cap_mfe_min=0.5)
 
 
@@ -130,7 +130,7 @@ def _fade_e3(*, ts, known_index, mic=False):
     attrs = {"zone": zone, "ref": 100.5, "invalid": 100.7}
     if mic:
         attrs.update({"mic": True, "trigger_tf": 1800})
-    return MarketEvent(id=E3, direction=-1, ts=ts, known_index=known_index,
+    return MarketEvent(id=LEVEL_REJECTED, direction=-1, ts=ts, known_index=known_index,
                        attrs=attrs)
 
 
@@ -138,7 +138,7 @@ def _cont_e1(*, ts, known_index, mic=False):
     attrs = {"ref": 95.0, "invalid": 94.0}
     if mic:
         attrs.update({"mic": True, "trigger_tf": 1800})
-    return MarketEvent(id=E1, direction=+1, ts=ts, known_index=known_index,
+    return MarketEvent(id=BREAKOUT_ACCEPTED, direction=+1, ts=ts, known_index=known_index,
                        attrs=attrs)
 
 
@@ -168,7 +168,7 @@ def test_v17_config_parent_v16_hard_check():
             v17["trigger_tf_map"].items()} == TRIGGER_TF_MAP
     assert set(v17["arms"]) == {"arm-M", "arm-C"}
     assert v17["arms"]["arm-M"]["mic_family"] == "all"
-    assert v17["arms"]["arm-C"]["mic_family"] == ["E1", "E6", "E7"]
+    assert v17["arms"]["arm-C"]["mic_family"] == ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"]
     for a in ("arm-M", "arm-C"):
         s = v17["arms"][a]
         assert s["v16"] and s["fill_model"] == "exchange_maker" \
@@ -176,7 +176,7 @@ def test_v17_config_parent_v16_hard_check():
 
 
 def test_v17_1h_offline_assertions():
-    assert list(STOP_FAMILY) == ["E1", "E6", "E7"]
+    assert list(STOP_FAMILY) == ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"]
     # 函数级:tf 冻结与 1h 帧守卫
     assert run_v17.tf_of(["2h", "4h", "12h", "1d"]) is None
     with pytest.raises(RuntimeError):
@@ -207,12 +207,12 @@ def _expired_row(res, order_type=None):
 
 
 def test_v17_mic_family_filter_fade_suppressed_in_arm_c():
-    """arm-C:fade(E3)的 mic 化身被滤掉;其 bar 化身照常按 bar 语义路由。"""
+    """arm-C:fade(LEVEL_REJECTED)的 mic 化身被滤掉;其 bar 化身照常按 bar 语义路由。"""
     f = _frames_2h({3: [_fade_e3(ts=T0 + 3 * 2 * H, known_index=3)]},
                    {13: [_fade_e3(ts=T0 + 13 * M30, known_index=13, mic=True)]},
                    with_mic=True)
     kw = dict(KW)
-    # arm-C:仅续涨 mic ⇒ 本例 fade mic 全滤,bar E3 路由成 maker 挂单到期
+    # arm-C:仅续涨 mic ⇒ 本例 fade mic 全滤,bar LEVEL_REJECTED 路由成 maker 挂单到期
     rc = run_campaigns({campaign_key("TEST", "2h"): f}, **kw,
                        router_params=_vp16(), router_factory=V16Router,
                        arm=_arm_cfg(), enable_mic=True,
@@ -246,7 +246,7 @@ def test_v17_mic_family_filter_fade_suppressed_in_arm_c():
 
 
 def test_v17_mic_decision_stop_entry_via_arm():
-    """mic 续涨 E1 ⇒ C3 stop-entry 预埋(stop = ev_ref + k_bm·ATR)、
+    """mic 续涨 BREAKOUT_ACCEPTED ⇒ C3 stop-entry 预埋(stop = ev_ref + k_bm·ATR)、
     决策/成交因果严格(trigger 收盘决策,次一 trigger bar 成交)。"""
     f = _frames_2h({}, {9: [_cont_e1(ts=T0 + 9 * M30, known_index=9, mic=True)]},
                    with_mic=True)
@@ -288,10 +288,10 @@ def _broker(equity: float, spec: ContractSpec, *, slippage: float = 0.0):
 
 def _submit_short_open(b: Broker, ref: float, invalid: float, decision_ts=T0):
     b.submit(OrderIntent(kind=OrderKind.OPEN, symbol="TEST", qty_frac=None,
-                         reason="E1|short boundary", ref_price=ref,
+                         reason="BREAKOUT_ACCEPTED|short boundary", ref_price=ref,
                          ts=decision_ts),
              decision_ts=decision_ts, direction=-1, invalid=invalid,
-             target_1=None, event_id="E1", meta={"direction": -1})
+             target_1=None, event_id="BREAKOUT_ACCEPTED", meta={"direction": -1})
     return b.on_bar_open("TEST", decision_ts + H, ref)[0]
 
 

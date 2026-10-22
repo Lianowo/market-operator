@@ -11,11 +11,11 @@ clamp2R(S1 区缘失效/room≥r_min 门/target 钳 2R)的实现自此移除。
 run_backtest_v6.py 及 tests/,对归档实现运行,可复现 A/B 判定)。
 
 当前唯一语义(turtle,docs/v6-protocol.md §2-S2 臂 B 口径):
-- 与 v5(docs/v5-protocol.md)的关系:E1-E7 检测零改动(events.py/
-  structure.py 不动);v5 破位质量路由骨架全保留(E1 市价优先 / E6 质量
-  路由 STRONG 市价、WEAK 登记 episode 待同 episode E7 前缘限价)。
-- **双向**(v6-protocol §3):白名单默认 {(E1,E6,E7) × {short,long}},方向
-  仅作机制桶标签不作挑选;槽位/episode 关联逻辑完全对称(E6|long margin
+- 与 v5(docs/v5-protocol.md)的关系:BREAKOUT_ACCEPTED-FLIP_RETESTED 检测零改动(events.py/
+  structure.py 不动);v5 破位质量路由骨架全保留(BREAKOUT_ACCEPTED 市价优先 / STRUCTURE_BROKEN 质量
+  路由 STRONG 市价、WEAK 登记 episode 待同 episode FLIP_RETESTED 前缘限价)。
+- **双向**(v6-protocol §3):白名单默认 {(BREAKOUT_ACCEPTED,STRUCTURE_BROKEN,FLIP_RETESTED) × {short,long}},方向
+  仅作机制桶标签不作挑选;槽位/episode 关联逻辑完全对称(STRUCTURE_BROKEN|long margin
   = close − ref 镜像)。
 - 失效:invalid = close − direction·turtle_stop_atr·atr(初始防线
   2.0·atr,S2 冻结口径);**无固定目标**(target_1=None,不做 room/r_min
@@ -27,7 +27,7 @@ run_backtest_v6.py 及 tests/,对归档实现运行,可复现 A/B 判定)。
   §8.1/§8.5;§8.6 时间止损关闭(PositionManager(time_stop=False));
   breakeven_on_reduce=True(臂 A 的"减仓后禁保本"约束随臂 A 一并退役)。
 
-explain() 与 counters 语义同 v5;weaker 登记簿/E1 优先级语义同 v5。
+explain() 与 counters 语义同 v5;weaker 登记簿/BREAKOUT_ACCEPTED 优先级语义同 v5。
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from typing import Optional, Sequence
 
 from .broker import OrderIntent, OrderKind
 from .events import (
-    ACCEPT, E1, E2, E3, E4, E5, E6, E7, E8, REJECT, MarketEvent,
+    ACCEPT, BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, TREND_RESUMED, RANGE_ROTATED, STRUCTURE_BROKEN, FLIP_RETESTED, EDGE_RECLAIMED, REJECT, MarketEvent,
     canonical_event_id,
 )
 from .hypothesis import Hypothesis, StructureView, _structural_target
@@ -56,8 +56,8 @@ def _event_provenance(ev: MarketEvent) -> dict:
     表的前提下精确取数。meta 不上账本数值路径,canonical 数值逐位不变。
 
     v16 加性扩展(docs/v16-protocol.md;ev_invalid = attrs["invalid"] 原值拷
-    贝 = §7 结构失效建议价:E1 正缘外侧 / E2/E3 外缘外侧 / E8 刺穿极值外侧
-    / E6 结构 pivot±buf / E7 远端边缘,全部 = 结构∓k_bm·ATR 口径):供 v16
+    贝 = §7 结构失效建议价:BREAKOUT_ACCEPTED 正缘外侧 / BREAKOUT_FAILED/LEVEL_REJECTED 外缘外侧 / EDGE_RECLAIMED 刺穿极值外侧
+    / STRUCTURE_BROKEN 结构 pivot±buf / FLIP_RETESTED 远端边缘,全部 = 结构∓k_bm·ATR 口径):供 v16
     收割婚配路由以结构锚替换 turtle 2·ATR 失效;纯 meta 记录,canonical
     路由/账本数值路径逐位不变(canonical parity 对账钉死)。
     """
@@ -74,22 +74,44 @@ def _event_provenance(ev: MarketEvent) -> dict:
             prov["box_opposite"] = float(zone.box_opposite)
     return prov
 
-ROUTE_E1 = "e1_market"               # E1 (ACCEPT) 市价次开盘
-ROUTE_E3 = "e3_market"               # E3 (REJECT) 拒绝获因后市价次开盘(2026-10-20 放开决议,log#16)
-ROUTE_ACCEPT = ROUTE_E1
-ROUTE_REJECT = ROUTE_E3
-ROUTE_E2 = "e2_market"
-ROUTE_E4 = "e4_market"
-ROUTE_E5 = "e5_market"
-ROUTE_E8 = "e8_market"
-ROUTE_STRONG_E6 = "strong_e6"        # STRONG E6 市价次开盘
-ROUTE_WEAK_E7 = "weak_e7_limit"      # WEAK E6 → 同 episode E7 前缘限价
+ROUTE_BREAKOUT_ACCEPTED = "breakout_accepted_market"
+ROUTE_LEVEL_REJECTED = "level_rejected_market"
+ROUTE_BREAKOUT_FAILED = "breakout_failed_market"
+ROUTE_TREND_RESUMED = "trend_resumed_market"
+ROUTE_RANGE_ROTATED = "range_rotated_market"
+ROUTE_EDGE_RECLAIMED = "edge_reclaimed_market"
+ROUTE_STRUCTURE_BROKEN_STRONG = "structure_broken_strong_market"
+ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT = "structure_broken_weak_limit"
+
+#: 事件 → (路由名, 人话标签, 计数键)。
+#:
+#: 这张表取代旧实现里"由事件标识切片拼路由名/计数键"的写法
+#: (``"e%s_market" % event_id[1]``)。切片把**命名**与**字符串位置**绑死,
+#: 一旦事件标识换成语义名,路由名立刻退化为 ``eR_market`` 这类噪声 ——
+#: 显式表让"哪个事件走哪条通道、记到哪个桶"可被静态检查。
+MARKET_ROUTES = {
+    BREAKOUT_FAILED: (ROUTE_BREAKOUT_FAILED, "失败突破确认",
+                      "breakout_failed_signals"),
+    TREND_RESUMED: (ROUTE_TREND_RESUMED, "趋势恢复", "trend_resumed_signals"),
+    RANGE_ROTATED: (ROUTE_RANGE_ROTATED, "区间回归", "range_rotated_signals"),
+    EDGE_RECLAIMED: (ROUTE_EDGE_RECLAIMED, "边缘收复", "edge_reclaimed_signals"),
+}
+
+#: 各事件族的信号计数键(与路由解耦:同一事件可能因质量分层走不同路由)。
+SIGNAL_COUNTERS = {
+    BREAKOUT_ACCEPTED: "breakout_accepted_signals",
+    LEVEL_REJECTED: "level_rejected_signals",
+    STRUCTURE_BROKEN: "structure_broken_signals",
+    FLIP_RETESTED: "flip_retested_signals",
+}
+SIGNAL_COUNTERS.update({k: v[2] for k, v in MARKET_ROUTES.items()})
 
 WHITELIST_V6 = frozenset(
-    {(E1, -1), (E1, +1), (E6, -1), (E6, +1), (E7, -1), (E7, +1)})
+    {(BREAKOUT_ACCEPTED, -1), (BREAKOUT_ACCEPTED, +1), (STRUCTURE_BROKEN, -1), (STRUCTURE_BROKEN, +1), (FLIP_RETESTED, -1), (FLIP_RETESTED, +1)})
+#: 平衡箱双原语白名单(ACCEPT/REJECT 即突破接受/关键位拒绝,去重后恰 4 项)。
 WHITELIST_BALANCE = frozenset(
-    {(E1, -1), (E1, +1), (E3, -1), (E3, +1),
-     (ACCEPT, -1), (ACCEPT, +1), (REJECT, -1), (REJECT, +1)})
+    {(BREAKOUT_ACCEPTED, -1), (BREAKOUT_ACCEPTED, +1),
+     (LEVEL_REJECTED, -1), (LEVEL_REJECTED, +1)})
 
 
 @dataclass(frozen=True)
@@ -123,7 +145,7 @@ class RouteDecision:
     """路由器输出(执行语义由引擎承担:intent/hyp/限价与路由标签)。"""
 
     kind: str                        # "market" | "limit" | "cancel_entry"
-    route: str                       # ROUTE_*(cancel_entry 亦归属触发路由 E1)
+    route: str                       # ROUTE_*(cancel_entry 亦归属触发路由 BREAKOUT_ACCEPTED)
     intent: Optional[OrderIntent] = None
     hyp: Optional[Hypothesis] = None
     limit_price: Optional[float] = None     # kind="limit":前缘限价
@@ -136,11 +158,11 @@ class RouteDecision:
 
 @dataclass
 class _WeakEpisode:
-    """WEAK-E6 登记:破位未入场(弱),等待同 episode 的 E7(同向)。"""
+    """WEAK-STRUCTURE_BROKEN 登记:破位未入场(弱),等待同 episode 的 FLIP_RETESTED(同向)。"""
 
-    l_star: float                    # E6 attrs["ref"](被破 pivot 价)
-    direction: int                   # 登记方向(同 episode E7 必须同向)
-    bar_index: int                   # E6 事件 bar 索引
+    l_star: float                    # STRUCTURE_BROKEN attrs["ref"](被破 pivot 价)
+    direction: int                   # 登记方向(同 episode FLIP_RETESTED 必须同向)
+    bar_index: int                   # STRUCTURE_BROKEN 事件 bar 索引
     margin: float                    # 登记时的质量量(记录字段)
     impulse: float
 
@@ -171,7 +193,7 @@ class V6Router:
         atr = float(atr)
 
         wl = frozenset((canonical_event_id(eid), int(d)) for eid, d in self.params.whitelist)
-        e1_fires = any(canonical_event_id(e.id) == E1 and (canonical_event_id(e.id), e.direction) in wl
+        e1_fires = any(canonical_event_id(e.id) == BREAKOUT_ACCEPTED and (canonical_event_id(e.id), e.direction) in wl
                        for e in new_events)
         slot_freed = False
         if e1_fires:
@@ -180,14 +202,14 @@ class V6Router:
             for k in dropped:
                 ep = self._pending.pop(k)
                 self._notes.append(
-                    f"e1_priority|{symbol} weak-E6 episode "
-                    f"(dir={ep.direction}) dropped on E1 signal")
+                    f"e1_priority|{symbol} weak-STRUCTURE_BROKEN episode "
+                    f"(dir={ep.direction}) dropped on BREAKOUT_ACCEPTED signal")
                 self._bump("e1_drops_pending")
             if entry_resting and not position_open:
                 decisions.append(RouteDecision(
-                    kind="cancel_entry", route=ROUTE_E1,
-                    meta={"reason": "E1 signal cancels unfilled entry limit "
-                                    "(E1 priority, v6§3 沿用 v5§1)"}))
+                    kind="cancel_entry", route=ROUTE_BREAKOUT_ACCEPTED,
+                    meta={"reason": "BREAKOUT_ACCEPTED signal cancels unfilled entry limit "
+                                    "(BREAKOUT_ACCEPTED priority, v6§3 沿用 v5§1)"}))
                 slot_freed = True
                 self._bump("e1_cancel_orders")
 
@@ -200,39 +222,37 @@ class V6Router:
                 self._notes.append(
                     f"nogo|{symbol} {ev.id}|{side} not in v6 whitelist")
                 continue
-            if cid == E6:
-                self._bump("e6_signals")
-            elif cid == E1:
-                self._bump("e1_signals")
-            elif cid == E7:
-                self._bump("e7_signals")
+            if cid in (STRUCTURE_BROKEN, BREAKOUT_ACCEPTED, FLIP_RETESTED):
+                self._bump(SIGNAL_COUNTERS[cid])
             if holding or armed:
                 self._notes.append(
                     f"dup|{symbol} {ev.id}|{side} slot busy (position or "
                     "resting entry; one position/one order per campaign)")
                 self._bump("dup")
                 continue
-            if cid == E6:
+            if cid == STRUCTURE_BROKEN:
                 decision = self._route_e6(symbol, ev, view, h, l, c, atr,
                                           bar_index)
-            elif cid == E1:
+            elif cid == BREAKOUT_ACCEPTED:
                 decision = self._route_market(
-                    symbol, ev, view, c, atr, ROUTE_E1, "突破接受,永远市价次开盘")
-            elif cid == E3:
-                # E3 (REJECT) 入场于 2026-10-20 所有者放开决议开放(research-log #16):
-                # 拒绝获因明确(区域刺穿/回退都已确认),市价次开盘;同一 F1/room 闸。
+                    symbol, ev, view, c, atr, ROUTE_BREAKOUT_ACCEPTED,
+                    "突破接受,永远市价次开盘")
+            elif cid == LEVEL_REJECTED:
+                # 关键位拒绝入场(2026-10-20 所有者决议开放):拒绝成因已明确
+                # (区域刺穿与回退均已确认),市价次开盘;同一失效距离/空间闸。
                 decision = self._route_market(
-                    symbol, ev, view, c, atr, ROUTE_E3, "拒绝确认,市价次开盘")
-                self._bump("e3_signals")
-            elif cid == E7:
+                    symbol, ev, view, c, atr, ROUTE_LEVEL_REJECTED,
+                    "拒绝确认,市价次开盘")
+                self._bump(SIGNAL_COUNTERS[LEVEL_REJECTED])
+            elif cid == FLIP_RETESTED:
                 decision = self._route_e7(symbol, ev, view, c, atr, bar_index)
-            elif cid in (E2, E4, E5, E8):
-                # 语义路由表(2026-10-20, log#21):无黑白名单,机制按各自
-                # 修正语义上市价路由;失效/target 取 attrs,F1/room 几何闸不变。
-                tag = {E2: "失败突破确认", E4: "趋势恢复", E5: "区间回归", E8: "边缘收复"}[cid]
+            elif cid in MARKET_ROUTES:
+                # 语义路由表(2026-10-20):机制按各自修正语义上市价路由;
+                # 失效价/目标价取事件属性,失效距离与空间几何闸不变。
+                route, label, counter = MARKET_ROUTES[cid]
                 decision = self._route_market(symbol, ev, view, c, atr,
-                                              "e%s_market" % cid[1], tag + ",市价次开盘")
-                self._bump("e%s_signals" % cid[1].lower())
+                                              route, label + ",市价次开盘")
+                self._bump(counter)
             else:
                 self._notes.append(f"unknown_event|{symbol} {ev.id}")
             if decision is not None:
@@ -242,7 +262,7 @@ class V6Router:
             self._notes.append(f"flat|{symbol} no new event")
         return decisions
 
-    # -- E6:质量路由(双向;margin 镜像) -----------------------------------------
+    # -- STRUCTURE_BROKEN:质量路由(双向;margin 镜像) -----------------------------------------
 
     def _route_e6(self, symbol: str, ev: MarketEvent, view: StructureView,
                   h: float, l: float, c: float, atr: float,
@@ -261,17 +281,17 @@ class V6Router:
             self._notes.append(
                 f"weak_e6|{symbol} margin={margin:.4g} < k_dq={self.params.k_dq}"
                 f" or impulse={impulse:.4g} < k_imp={self.params.k_imp} ⇒ "
-                f"不入场,登记 episode(ref={ref:.8g}),待同 episode E7")
+                f"不入场,登记 episode(ref={ref:.8g}),待同 episode FLIP_RETESTED")
             return None
         self._bump("e6_strong_quality")
         self._notes.append(
             f"strong_e6|{symbol} margin={margin:.4g} >= {self.params.k_dq}, "
             f"impulse={impulse:.4g} >= {self.params.k_imp} ⇒ 市价次开盘")
         return self._route_market(
-            symbol, ev, view, c, atr, ROUTE_STRONG_E6,
+            symbol, ev, view, c, atr, ROUTE_STRUCTURE_BROKEN_STRONG,
             "STRONG 破位,市价次开盘")
 
-    # -- 市价入口(E1 / STRONG-E6) ----------------------------------------------
+    # -- 市价入口(BREAKOUT_ACCEPTED / STRONG-STRUCTURE_BROKEN) ----------------------------------------------
 
     def _route_market(self, symbol: str, ev: MarketEvent, view: StructureView,
                       close: float, atr: float, route: str,
@@ -289,7 +309,7 @@ class V6Router:
                                reason=reason, ref_price=float(close), ts=ev.ts),
             hyp=hyp, meta=_event_provenance(ev))
 
-    # -- WEAK-E6 → E7(同 episode 前缘限价,v4 G3 / v5 §1 语义,双向) -------------
+    # -- WEAK-STRUCTURE_BROKEN → FLIP_RETESTED(同 episode 前缘限价,v4 G3 / v5 §1 语义,双向) -------------
 
     def _route_e7(self, symbol: str, ev: MarketEvent, view: StructureView,
                   close: float, atr: float, bar_index: int
@@ -298,37 +318,37 @@ class V6Router:
         if pend is None or pend.direction != ev.direction:
             self._bump("e7_no_episode")
             self._notes.append(
-                f"e7_no_episode|{symbol} E7 without registered same-direction "
-                "weak-E6 episode ⇒ 不交易(v6:E7 仅作弱破位回踩延续入场)")
+                f"e7_no_episode|{symbol} FLIP_RETESTED without registered same-direction "
+                "weak-STRUCTURE_BROKEN episode ⇒ 不交易(v6:FLIP_RETESTED 仅作弱破位回踩延续入场)")
             return None
         ref = float(ev.attrs["ref"])
         if abs(ref - pend.l_star) > _REF_REL_TOL * max(1.0, abs(pend.l_star)):
             self._bump("e7_ref_mismatch")
             self._notes.append(
-                f"e7_ref_mismatch|{symbol} E7 ref={ref:.8g} != pending ref="
+                f"e7_ref_mismatch|{symbol} FLIP_RETESTED ref={ref:.8g} != pending ref="
                 f"{pend.l_star:.8g} ⇒ 非同 episode,登记保留")
             return None
         del self._pending[symbol]                     # 消费一次(zone 至多翻转一次)
         self._bump("e7_matched_episode")
         weak_bars = bar_index - pend.bar_index
         side = "long" if ev.direction > 0 else "short"
-        hyp = self._gates(symbol, ev, view, close, atr, ROUTE_WEAK_E7)
+        hyp = self._gates(symbol, ev, view, close, atr, ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT)
         if hyp is None:
             return None
         zone = ev.attrs.get("zone")
         if zone is None:
-            self._bump(f"no_zone_{ROUTE_WEAK_E7}")
+            self._bump(f"no_zone_{ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT}")
             self._notes.append(
-                f"no_zone|{symbol} E7|{side} limit requires zone front edge (G3)")
+                f"no_zone|{symbol} FLIP_RETESTED|{side} limit requires zone front edge (G3)")
             return None
         limit = float(zone.lo if ev.direction < 0 else zone.hi)
-        reason = (f"E7|{side} {ROUTE_WEAK_E7} weak-E6 同 episode 回踩拒绝入场 "
+        reason = (f"FLIP_RETESTED|{side} {ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT} weak-STRUCTURE_BROKEN 同 episode 回踩拒绝入场 "
                   f"entry_ref={close:.8g} invalid={hyp.invalid:.8g} "
                   f"target_1={hyp.target_1} r_mult={hyp.r_mult} "
                   f"limit_front_edge={limit:.8g} l_star={pend.l_star:.8g} "
                   f"weak_bars={weak_bars}")
         return RouteDecision(
-            kind="limit", route=ROUTE_WEAK_E7,
+            kind="limit", route=ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT,
             intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
                                reason=reason, ref_price=float(close), ts=ev.ts),
             hyp=hyp, limit_price=limit,
@@ -345,9 +365,9 @@ class V6Router:
         cid = canonical_event_id(ev.id)
         invalid = close - ev.direction * p.turtle_stop_atr * atr
         ev_inv = ev.attrs.get("invalid")
-        if cid in (E2, E3, E8) and p.reject_use_struct_stop and ev_inv is not None:
+        if cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED) and p.reject_use_struct_stop and ev_inv is not None:
             invalid = float(ev_inv)
-        elif cid == E1 and p.accept_use_struct_stop and ev_inv is not None:
+        elif cid == BREAKOUT_ACCEPTED and p.accept_use_struct_stop and ev_inv is not None:
             invalid = float(ev_inv)
         # F1(全入口,闸):天然距离不足即笔不存在
         dist = ev.direction * (close - invalid)
@@ -381,7 +401,7 @@ class V6Router:
         if p.min_box_rr > 0.0 and zone is not None:
             opp = getattr(zone, "box_opposite", None)
             if opp is not None and dist > 0.0:
-                if cid in (E2, E3, E8):
+                if cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED):
                     room = ev.direction * (float(opp) - close)
                 else:
                     box_span = abs(float(opp) - (zone.hi if ev.direction > 0 else zone.lo))
@@ -398,7 +418,7 @@ class V6Router:
             self._zone_last_bar[zkey] = self._cur_bar_index
         target_1: Optional[float] = None
         r_mult: Optional[float] = None
-        if cid in (E2, E3, E8) and p.reject_target_mode != "none" and zone is not None:
+        if cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED) and p.reject_target_mode != "none" and zone is not None:
             opp = getattr(zone, "box_opposite", None)
             if opp is not None:
                 opp_f = float(opp)
@@ -434,7 +454,7 @@ class V6Router:
 
 __all__ = [
     "V6Params", "V6Router", "RouteDecision", "WHITELIST_V6", "WHITELIST_BALANCE",
-    "ROUTE_E1", "ROUTE_E3", "ROUTE_ACCEPT", "ROUTE_REJECT",
-    "ROUTE_STRONG_E6", "ROUTE_WEAK_E7",
-    "ROUTE_E2", "ROUTE_E4", "ROUTE_E5", "ROUTE_E8",
+    "ROUTE_BREAKOUT_ACCEPTED", "ROUTE_LEVEL_REJECTED", "ROUTE_BREAKOUT_ACCEPTED", "ROUTE_LEVEL_REJECTED",
+    "ROUTE_STRUCTURE_BROKEN_STRONG", "ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT",
+    "ROUTE_BREAKOUT_FAILED", "ROUTE_TREND_RESUMED", "ROUTE_RANGE_ROTATED", "ROUTE_EDGE_RECLAIMED",
 ]

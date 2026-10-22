@@ -151,7 +151,7 @@ def test_tier_a_requires_q3_and_q4_else_b():
     # 不顺风(RANGE) ⇒ B=0.75
     v2 = _eval(regime=Regime.RANGE)
     assert v2.tradable and v2.tier == "B" and v2.size_mult == 0.75
-    # k=2(=k_*,不成熟) ⇒ B;无 zone(E6 类) ⇒ B;逆 regime ⇒ B
+    # k=2(=k_*,不成熟) ⇒ B;无 zone(STRUCTURE_BROKEN 类) ⇒ B;逆 regime ⇒ B
     assert _eval(zone_touches=2).tier == "B"
     assert _eval(zone_touches=None).tier == "B"
     v3 = _eval(regime=Regime.TREND_UP)     # 空单逆风

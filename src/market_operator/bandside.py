@@ -8,7 +8,7 @@ quality.py Q1:市价路由 = 决策 bar 收盘,限价路由 = 计划限价);但�
 arm 矩阵裁决(log#28)一并弃置,本条款输出仅 过/拒 二值,不触碰
 size_mult/杠杆/容量;拒单以 reason 记录于 router notes/counters
 (band_side_reject_pos),缺一侧 pivot 或带退化 ⇒ 门不可判 ⇒ fail-closed
-拒(同 quality.py Q1/E8 纪律)。
+拒(同 quality.py Q1/EDGE_RECLAIMED 纪律)。
 
 确定性:纯函数 `band_side_check` + 无状态条款;`V15Router` 在
 band_side=None 时逐位同 `V6Router`(条款短路不回读,arm0 回归钉死)。

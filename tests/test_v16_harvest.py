@@ -16,7 +16,7 @@ import pathlib
 import pytest
 
 from market_operator.campaign import ArmConfig
-from market_operator.events import E2, E4, E6, E8, MarketEvent
+from market_operator.events import BREAKOUT_FAILED, TREND_RESUMED, STRUCTURE_BROKEN, EDGE_RECLAIMED, MarketEvent
 from market_operator.harvest import (
     HarvestParams,
     V16Params,
@@ -175,7 +175,7 @@ def test_tier_tailwind_only_q3_is_annotation():
 # 路由:fade 前缘改单 + 结构锚 + 对面缘=收割目标;续涨保留 turtle 语义
 # ---------------------------------------------------------------------------
 
-_WL = frozenset({("E2", -1), ("E2", 1), ("E6", -1), ("E6", 1), ("E8", -1)})
+_WL = frozenset({("BREAKOUT_FAILED", -1), ("BREAKOUT_FAILED", 1), ("STRUCTURE_BROKEN", -1), ("STRUCTURE_BROKEN", 1), ("EDGE_RECLAIMED", -1)})
 
 
 def _bar(close, ts=1_700_000_000_000, o=100.0, h=103.0, l=98.0):
@@ -196,7 +196,7 @@ def _e2_short(zone=None, **extra):
     attrs = {"zone": zone, "ref": zone.hi, "invalid": zone.hi + 0.1 * ATR,
              "puncture_index": 1}
     attrs.update(extra)
-    return MarketEvent(id=E2, direction=-1, ts=1_700_000_000_000,
+    return MarketEvent(id=BREAKOUT_FAILED, direction=-1, ts=1_700_000_000_000,
                        known_index=10, attrs=attrs)
 
 
@@ -222,7 +222,7 @@ def test_fade_market_decision_rewritten_to_front_edge_limit():
     # long 镜像:前缘 = zone.hi(对面缘 95.6 ⇒ room=3.6/2.2>1.5)
     r2 = _fade_router()
     zsup = _sup(90.0, 92.0)
-    ev = MarketEvent(id=E2, direction=1, ts=1_700_000_000_000, known_index=10,
+    ev = MarketEvent(id=BREAKOUT_FAILED, direction=1, ts=1_700_000_000_000, known_index=10,
                      attrs={"zone": zsup, "ref": zsup.lo,
                             "invalid": zsup.lo - 0.1 * ATR})
     zones2 = [zsup, _res(95.6, 97.0)]
@@ -240,20 +240,20 @@ def test_fade_front_edge_helper_bilateral():
 
 def test_e8_fade_uses_structural_sweep_invalid():
     r = _fade_router()
-    ev = MarketEvent(id=E8, direction=-1, ts=1_700_000_000_000, known_index=10,
+    ev = MarketEvent(id=EDGE_RECLAIMED, direction=-1, ts=1_700_000_000_000, known_index=10,
                      attrs={"zone": _res(), "ref": 102.0,
                             "invalid": 103.6})          # 刺穿极值外侧(非区缘)
     zones = [_res(), _sup(90.0, 93.0)]
     ds = r.on_bar("T", _bar(101.0), 10, _view(Regime.RANGE, zones), ATR, [ev],
                   position_open=False, entry_resting=False)
     assert len(ds) == 1
-    assert ds[0].hyp.invalid == pytest.approx(103.6)    # E8 结构锚=刺穿极值
+    assert ds[0].hyp.invalid == pytest.approx(103.6)    # EDGE_RECLAIMED 结构锚=刺穿极值
     assert ds[0].limit_price == 100.0                   # 前缘仍=zone.lo
 
 
 def test_continuation_keeps_turtle_no_target_structural_invalid():
     r = _fade_router()
-    ev = MarketEvent(id=E6, direction=-1, ts=1_700_000_000_000, known_index=10,
+    ev = MarketEvent(id=STRUCTURE_BROKEN, direction=-1, ts=1_700_000_000_000, known_index=10,
                      attrs={"ref": 100.0, "invalid": 100.2})
     zones = [_sup(94.2, 95.2)]
     ds = r.on_bar("T", _bar(98.2), 10, _view(Regime.TREND_DOWN, zones), ATR,
@@ -300,14 +300,14 @@ def test_gate_reject_counters_and_drop():
 
 def test_fade_fail_closed_no_zone_and_no_invalid():
     r = _fade_router()
-    ev = MarketEvent(id=E2, direction=-1, ts=1_700_000_000_000, known_index=10,
+    ev = MarketEvent(id=BREAKOUT_FAILED, direction=-1, ts=1_700_000_000_000, known_index=10,
                      attrs={"ref": 102.0, "invalid": 102.2})   # 缺 zone
     ds = r.on_bar("T", _bar(101.0), 10,
                   _view(Regime.RANGE, [_sup(95.0, 96.4)]), ATR, [ev],
                   position_open=False, entry_resting=False)
     assert ds == [] and r.counters.get("v16_reject_no_zone") == 1
     r = _fade_router()
-    ev2 = MarketEvent(id=E6, direction=-1, ts=1_700_000_000_000,
+    ev2 = MarketEvent(id=STRUCTURE_BROKEN, direction=-1, ts=1_700_000_000_000,
                       known_index=10, attrs={"ref": 100.0})     # 缺 invalid
     ds2 = r.on_bar("T", _bar(98.2), 10,
                    _view(Regime.RANGE, [_sup(94.2, 95.2)]), ATR, [ev2],
@@ -317,7 +317,7 @@ def test_fade_fail_closed_no_zone_and_no_invalid():
 
 def test_arm0_v16_none_passthrough_identical_to_v6():
     evs = [_e2_short(),
-           MarketEvent(id=E6, direction=-1, ts=1_700_000_000_000,
+           MarketEvent(id=STRUCTURE_BROKEN, direction=-1, ts=1_700_000_000_000,
                        known_index=10, attrs={"ref": 100.0, "invalid": 100.2})]
     zones = [_res(), _sup(94.2, 96.4)]
     kw = dict(position_open=False, entry_resting=False)
@@ -352,12 +352,12 @@ def test_router_determinism():
 
 def _pm():
     return PositionManager(allow_add=False, breakeven_on_reduce=True,
-                           time_stop=False, harvest_family=("E2", "E3", "E8"),
+                           time_stop=False, harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"),
                            time_cap_bars=48, cap_mfe_min=0.5)
 
 
 def _open_fade(pm, direction=-1, entry=100.0, invalid=102.2, target=96.4):
-    return pm.open("T", direction, entry, invalid, target, "E2", 0, 0)
+    return pm.open("T", direction, entry, invalid, target, "BREAKOUT_FAILED", 0, 0)
 
 
 def test_harvest_target_full_exit_no_reduce():
@@ -380,7 +380,7 @@ def test_harvest_disables_trail_continuation_keeps_turtle():
     pm.on_bar("T", (1, 100.0, 101.5, 99.5, 100.5, 1.0), ATR, new_pivots=pv)
     assert fade.invalid == pytest.approx(102.2)          # fade:trail 禁用,不动
     pm2 = _pm()
-    cont = pm2.open("T", -1, 100.0, 102.2, None, "E6", 0, 0)
+    cont = pm2.open("T", -1, 100.0, 102.2, None, "STRUCTURE_BROKEN", 0, 0)
     pm2.on_bar("T", (1, 100.0, 101.5, 99.5, 100.5, 1.0), ATR, new_pivots=pv)
     assert cont.invalid == pytest.approx(101.0 + 0.1 * ATR)  # 续涨:trail 收紧
 
@@ -393,7 +393,7 @@ def test_exit_bucket_tags_invalid_vs_trail_vs_choch():
     assert intents[0].reason.startswith("v16|invalid|")
     # trail 桶:续涨防线收紧后破位
     pm = _pm()
-    pos = pm.open("T", -1, 100.0, 102.2, None, "E6", 0, 0)
+    pos = pm.open("T", -1, 100.0, 102.2, None, "STRUCTURE_BROKEN", 0, 0)
     pv = (Pivot(price=100.5, forming_index=1, known_index=1,
                 kind=PivotKind.HIGH),)
     pm.on_bar("T", (1, 100.0, 100.9, 99.6, 100.0, 1.0), ATR, new_pivots=pv)
@@ -403,7 +403,7 @@ def test_exit_bucket_tags_invalid_vs_trail_vs_choch():
     # CHoCH 桶
     pm = _pm()
     _open_fade(pm)
-    ch = MarketEvent(id="E6", direction=1, ts=1, known_index=1,
+    ch = MarketEvent(id="STRUCTURE_BROKEN", direction=1, ts=1, known_index=1,
                      attrs={"ref": 95.0, "invalid": 95.2})
     intents = pm.on_bar("T", (1, 100.0, 100.5, 99.5, 100.0, 1.0), ATR,
                         new_events=[ch])
@@ -412,9 +412,9 @@ def test_exit_bucket_tags_invalid_vs_trail_vs_choch():
 
 def test_time_cap_boundary_mfe_exactly_0p5_holds():
     pm = PositionManager(allow_add=False, breakeven_on_reduce=True,
-                         time_stop=False, harvest_family=("E2",),
+                         time_stop=False, harvest_family=("BREAKOUT_FAILED",),
                          time_cap_bars=2, cap_mfe_min=0.5)
-    pos = pm.open("T", 1, 100.0, 98.0, None, "E6", 0, 0)   # risk=2
+    pos = pm.open("T", 1, 100.0, 98.0, None, "STRUCTURE_BROKEN", 0, 0)   # risk=2
     # bar1:MFE 恰 0.5R(high=101);bar2:bars_held=2 到期 ⇒ 不放逐
     pm.on_bar("T", (1, 100.0, 101.0, 99.5, 100.2, 1.0), ATR)
     assert pos.mfe_r == pytest.approx(0.5)
@@ -422,9 +422,9 @@ def test_time_cap_boundary_mfe_exactly_0p5_holds():
     assert intents == [] and "T" in pm.positions           # MFE≥0.5R 不放逐
     # MFE < 0.5R ⇒ 出
     pm = PositionManager(allow_add=False, breakeven_on_reduce=True,
-                         time_stop=False, harvest_family=("E2",),
+                         time_stop=False, harvest_family=("BREAKOUT_FAILED",),
                          time_cap_bars=2, cap_mfe_min=0.5)
-    pm.open("T", 1, 100.0, 98.0, None, "E6", 0, 0)
+    pm.open("T", 1, 100.0, 98.0, None, "STRUCTURE_BROKEN", 0, 0)
     pm.on_bar("T", (1, 100.0, 100.9, 99.5, 100.2, 1.0), ATR)   # mfe=0.45
     intents = pm.on_bar("T", (2, 100.2, 100.6, 99.6, 100.0, 1.0), ATR)
     assert len(intents) == 1 and intents[0].kind.name == "EXIT"
@@ -432,17 +432,17 @@ def test_time_cap_boundary_mfe_exactly_0p5_holds():
     # 未到期(bars_held<cap)即使 MFE<0.5 也不出
     pm = PositionManager(allow_add=False, breakeven_on_reduce=True,
                          time_stop=False, time_cap_bars=3, cap_mfe_min=0.5)
-    pm.open("T", 1, 100.0, 98.0, None, "E6", 0, 0)
+    pm.open("T", 1, 100.0, 98.0, None, "STRUCTURE_BROKEN", 0, 0)
     pm.on_bar("T", (1, 100.0, 100.4, 99.5, 100.0, 1.0), ATR)
     assert pm.on_bar("T", (2, 100.0, 100.3, 99.6, 100.0, 1.0), ATR) == []
 
 
 def test_no_adds_fade_and_continuation_v16():
     pm = _pm()
-    pos = pm.open("T", 1, 100.0, 96.0, 110.0, "E2", 0, 0)  # fade 多
-    e4 = MarketEvent(id=E4, direction=1, ts=1, known_index=1,
+    pos = pm.open("T", 1, 100.0, 96.0, 110.0, "BREAKOUT_FAILED", 0, 0)  # fade 多
+    e4 = MarketEvent(id=TREND_RESUMED, direction=1, ts=1, known_index=1,
                      attrs={"ref": 101.0, "invalid": 99.5})
-    # 浮盈 ≥1R(MFE=5/4=1.25R)同向 E4:fade 不加仓(协议;allow_add=False 全局)
+    # 浮盈 ≥1R(MFE=5/4=1.25R)同向 TREND_RESUMED:fade 不加仓(协议;allow_add=False 全局)
     intents = pm.on_bar("T", (1, 100.0, 105.0, 99.9, 104.0, 1.0), ATR,
                         new_events=[e4])
     assert all(i.kind.name != "ADD" for i in intents)
@@ -453,7 +453,7 @@ def test_canonical_position_passthrough_untouched():
     # harvest_family/time_cap 全 None ⇒ 逐位 canonical(§8.2 减仓/§8.3/语义无桶签)
     pm = PositionManager(allow_add=False, breakeven_on_reduce=True,
                          time_stop=False)
-    pos = pm.open("T", -1, 100.0, 102.2, 96.4, "E2", 0, 0)
+    pos = pm.open("T", -1, 100.0, 102.2, 96.4, "BREAKOUT_FAILED", 0, 0)
     pv = (Pivot(price=101.0, forming_index=1, known_index=1,
                 kind=PivotKind.HIGH),)
     intents = pm.on_bar("T", (1, 100.0, 101.5, 99.5, 100.5, 1.0), ATR,
@@ -469,8 +469,8 @@ def test_armconfig_v16_fields_default_canonical():
     a = ArmConfig()
     assert a.harvest_family is None and a.time_cap_bars is None
     assert a.cap_mfe_min == 0.5
-    a2 = ArmConfig(harvest_family=("E2", "E3", "E8"), time_cap_bars=48)
-    assert a2.harvest_family == ("E2", "E3", "E8") and a2.time_cap_bars == 48
+    a2 = ArmConfig(harvest_family=("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"), time_cap_bars=48)
+    assert a2.harvest_family == ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED") and a2.time_cap_bars == 48
 
 
 # ---------------------------------------------------------------------------
@@ -493,11 +493,11 @@ def test_config_v16_parent_canonical_and_frozen_priors():
     assert p["tier_a_mult"] == 1.0 and p["tier_b_mult"] == 0.75
     assert p["k_cap_hours"] == 48 and p["cap_mfe_min"] == 0.5
     assert p["stop_wait_tf"] == 12 and p["k_bm"] == 0.1 and p["k_star"] == 2
-    assert p["fade_family"] == ["E2", "E3", "E8"]
-    assert p["stop_family"] == ["E1", "E6", "E7"]
+    assert p["fade_family"] == ["BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED"]
+    assert p["stop_family"] == ["BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED"]
     # HarvestParams 默认值与 config 冻结先验逐项一致(双钉)
     hp = HarvestParams()
     assert (hp.pos_short_min, hp.pos_long_max, hp.k_room_R, hp.k_is,
             hp.k_star, hp.tier_a_mult, hp.tier_b_mult, hp.k_cap_hours,
             hp.cap_mfe_min) == (0.35, 0.65, 1.5, 0.8, 2, 1.0, 0.75, 48, 0.5)
-    assert hp.fade_family == ("E2", "E3", "E8")
+    assert hp.fade_family == ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")

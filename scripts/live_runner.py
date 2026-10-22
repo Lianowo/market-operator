@@ -20,7 +20,7 @@ clientOid 前缀(OID_PREFIX)对账,异己单一律不触碰。
 
 执行语义(canonical 时序的实盘近似,config/live.json meta 同步):
 ① 开仓市价意图 → next 2H 开盘成交(paper 虚拟撮合)/live 检测即下市价单;
-② S4 E3 前缘限价(entry,role=entry,kind=limit)→ GTC,N_fill=12 墙钟小时
+② S4 LEVEL_REJECTED 前缘限价(entry,role=entry,kind=limit)→ GTC,N_fill=12 墙钟小时
   未成交撤单;③ §8.2 目标减仓(role=reduce,kind=limit @ target_1)→
   同窗口,超时转市价(TIMEOUT_TO_TAKER);S2 段落袋等部分 REDUCE 市价;
 ④ EXIT 市价;⑤ 保护止损计划单(loss_plan @ 当前 invalid)只保护不主出,

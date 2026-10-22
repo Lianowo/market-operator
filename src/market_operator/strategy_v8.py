@@ -1,4 +1,4 @@
-"""v8 路由策略 —— E8 EDGE_RECLAIM 边缘收复入场(docs/v8-protocol.md §1,冻结)。
+"""v8 路由策略 —— EDGE_RECLAIMED EDGE_RECLAIM 边缘收复入场(docs/v8-protocol.md §1,冻结)。
 
 规范地位:v8 研究轮(第 11 次 test 曝光,research-log #14 预注册)的策略实现,
 在战役引擎上以 `router_factory=V8Router` 接插(campaign.run_campaigns 缝,
@@ -7,7 +7,7 @@
 
 v8-protocol §1 入场几何(与 canonical turtle 的唯一差异,如实声明):
 - **入场** = 次 1h 开盘市价(单执行风格唯一:market 次开盘,与 v6 桶可比;
-  无限价/无质量路由/无 E1 优先级 —— 白名单只含 E8,这些路径不可达)。
+  无限价/无质量路由/无 BREAKOUT_ACCEPTED 优先级 —— 白名单只含 EDGE_RECLAIMED,这些路径不可达)。
 - **失效** = 事件 attrs["invalid"]:刺穿极值 ∓ k_bm·atr(结构锚,非 turtle
   2·atr;由 events.py 检测器于收复 bar 收盘知时写入,因果)。
 - **F1 闸**(k_is=0.8,全入口,自 v2/v5/v6 同先验):dist =
@@ -30,20 +30,20 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from .broker import OrderIntent, OrderKind
-from .events import E8, MarketEvent
+from .events import EDGE_RECLAIMED, MarketEvent
 from .hypothesis import Hypothesis, StructureView
 from .strategy_v6 import RouteDecision, V6Params
 from .structure import _bar_parts
 
-ROUTE_E8 = "e8_market"               # E8 市价次 1h 开盘(协议§1 单执行风格)
+ROUTE_EDGE_RECLAIMED = "edge_reclaimed_market"               # EDGE_RECLAIMED 市价次 1h 开盘(协议§1 单执行风格)
 
-WHITELIST_V8 = frozenset({(E8, -1), (E8, +1)})
+WHITELIST_V8 = frozenset({(EDGE_RECLAIMED, -1), (EDGE_RECLAIMED, +1)})
 
 
 @dataclass(frozen=True)
 class V8Params(V6Params):
     """v8 路由参数(docs/v8-protocol.md §1;k_is/r_min 冻结先验;whitelist 只含
-    (E8,±1)。k_dq/k_imp/turtle_stop_atr 沿父类默认值但在 v8 路径不可达
+    (EDGE_RECLAIMED,±1)。k_dq/k_imp/turtle_stop_atr 沿父类默认值但在 v8 路径不可达
     (无质量路由、无 turtle 防线 —— 失效取事件结构锚),如实声明。"""
 
     r_min: float = 1.5               # room ≥ r_min·risk(§7 先验,v8 §1 沿用)
@@ -51,7 +51,7 @@ class V8Params(V6Params):
 
 
 class V8Router:
-    """事件 → 路由决策(白名单唯一分支 E8;接口与 V6Router 同构,供
+    """事件 → 路由决策(白名单唯一分支 EDGE_RECLAIMED;接口与 V6Router 同构,供
     campaign.run_campaigns(router_factory=...) 接插)。"""
 
     def __init__(self, params: Optional[V8Params] = None) -> None:
@@ -81,7 +81,7 @@ class V8Router:
             self._bump("e8_signals")
             if holding or armed:
                 self._notes.append(
-                    f"dup|{symbol} E8|{side} slot busy (position or "
+                    f"dup|{symbol} EDGE_RECLAIMED|{side} slot busy (position or "
                     "resting entry; one position/one order per campaign)")
                 self._bump("dup")
                 continue
@@ -93,7 +93,7 @@ class V8Router:
             self._notes.append(f"flat|{symbol} no new event")
         return decisions
 
-    # -- E8:结构失效 + 带缘目标 + room/F1 闸(协议§1) ---------------------------
+    # -- EDGE_RECLAIMED:结构失效 + 带缘目标 + room/F1 闸(协议§1) ---------------------------
 
     def _route_e8(self, symbol: str, ev: MarketEvent, view: StructureView,
                   close: float) -> Optional[RouteDecision]:
@@ -101,7 +101,7 @@ class V8Router:
         side = "long" if ev.direction > 0 else "short"
         a = ev.attrs
         if view is None:
-            raise RuntimeError(f"E8|{side} missing StructureView at "
+            raise RuntimeError(f"EDGE_RECLAIMED|{side} missing StructureView at "
                                f"{symbol} (event bar {ev.known_index})")
         invalid = a.get("invalid")
         band = a.get("band")
@@ -109,7 +109,7 @@ class V8Router:
         if invalid is None or band is None or atr is None or float(atr) <= 0.0:
             self._bump("e8_bad_attrs")
             self._notes.append(
-                f"e8_bad_attrs|{symbol} E8|{side} 缺 invalid/band/atr "
+                f"e8_bad_attrs|{symbol} EDGE_RECLAIMED|{side} 缺 invalid/band/atr "
                 "⇒ 无交易(检测器契约)")
             return None
         invalid = float(invalid)
@@ -118,14 +118,14 @@ class V8Router:
         if risk <= 0.0:
             self._bump("e8_bad_invalid")
             self._notes.append(
-                f"e8_bad_invalid|{symbol} E8|{side} close={close:.8g} 已在 "
+                f"e8_bad_invalid|{symbol} EDGE_RECLAIMED|{side} close={close:.8g} 已在 "
                 f"失效外侧 invalid={invalid:.8g} ⇒ 无交易(结构矛盾)")
             return None
         # F1(闸,协议§1 沿用 k_is=0.8):天然距离不足即笔不存在
         if risk < p.k_is * float(atr):
             self._bump("f1_reject_e8_market")
             self._notes.append(
-                f"f1|{symbol} E8|{side} dist={risk:.4g} < k_is·atr="
+                f"f1|{symbol} EDGE_RECLAIMED|{side} dist={risk:.4g} < k_is·atr="
                 f"{p.k_is * float(atr):.4g} ⇒ 无交易(F1 全入口下限)")
             return None
         target = h_star if ev.direction > 0 else l_star    # §1 对侧结构边缘
@@ -134,7 +134,7 @@ class V8Router:
         if r_mult < p.r_min:
             self._bump("room_reject_e8_market")
             self._notes.append(
-                f"room|{symbol} E8|{side} room={room:.4g} risk={risk:.4g} "
+                f"room|{symbol} EDGE_RECLAIMED|{side} room={room:.4g} risk={risk:.4g} "
                 f"r={r_mult:.4g} < r_min={p.r_min} ⇒ 无交易(对侧带缘空间不足)")
             return None
         self._bump("e8_entries")
@@ -142,13 +142,13 @@ class V8Router:
                          known_index=ev.known_index, entry=float(close),
                          invalid=invalid, target_1=target, r_mult=r_mult,
                          regime=view.regime)
-        reason = (f"E8|{side} {ROUTE_E8} 收复入场(刺穿极值失效/对侧带缘目标) "
+        reason = (f"EDGE_RECLAIMED|{side} {ROUTE_EDGE_RECLAIMED} 收复入场(刺穿极值失效/对侧带缘目标) "
                   f"entry_ref={close:.8g} invalid={invalid:.8g} "
                   f"target_1={target:.8g} r_mult={r_mult:.4g} "
                   f"pos={float(a.get('pos', float('nan'))):.4g} "
                   f"band=({l_star:.8g},{h_star:.8g})")
         return RouteDecision(
-            kind="market", route=ROUTE_E8,
+            kind="market", route=ROUTE_EDGE_RECLAIMED,
             intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
                                reason=reason, ref_price=float(close), ts=ev.ts),
             hyp=hyp,
@@ -166,4 +166,4 @@ class V8Router:
         return "\n".join(self._notes)
 
 
-__all__ = ["V8Params", "V8Router", "ROUTE_E8", "WHITELIST_V8"]
+__all__ = ["V8Params", "V8Router", "ROUTE_EDGE_RECLAIMED", "WHITELIST_V8"]
