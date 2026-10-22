@@ -87,7 +87,9 @@ def test_v21_config_valid_and_loads_balance_detector():
     assert p.use_balance_detector is True
     assert p.balance_quality_min == 0.35
     assert raw["tf_list"] == ["2h", "4h", "12h", "1d"]
-    assert raw["trigger_tf_by_htf"] == {"2h": None, "4h": None, "12h": 7200, "1d": 14400}
+    # 4h 认知已下沉为 2h 触发(结构与 ATR 仍绑定 4h 认知帧),与 12h 同为 2h 触发
+    assert raw["trigger_tf_by_htf"] == {"2h": None, "4h": 7200,
+                                        "12h": 7200, "1d": 14400}
     ed = EventDetector(p)
     assert ed.structure._zones._bal_det is not None
 
