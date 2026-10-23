@@ -1,16 +1,12 @@
-"""实盘 runner(实盘接入件;v21 单一生产链;直接提交,不推不合)。
+"""实盘 runner(实盘接入件;v20/lifecycle;直接提交,不推不合)。
 
 主循环(每 15s 轮询):宇宙发现(24h USDT 名义量 > 3M)→ 每品种认知帧
 (12h 主 + 下级触发 2H,TRIGGER_TF_MAP 精确命中)→ canonical 认知 + 路由
-(MarketRouter + 对侧锁利 PositionManager)→ 订单意图 → broker-live(--mode live
-才发真单)→ Telegram 通知;持仓对账 runner↔exchange 每 2min;断点重启 state.json。
-
-单一生产链(v20/lifecycle 已退役):启动即校验,``cognition.engine`` 出现非 v21
-的值或策略配置 ``use_balance_detector`` 不为 true 都直接拒绝启动 —— 旧链不是
-"回退选项",让它在配置层显式失败,好过静默换一套语义继续下单。
+arm-full(v20 四件全开)→ 订单意图 → broker-live(--mode live 才发真单)
+→ Telegram 通知;持仓对账 runner↔exchange 每 2min;断点重启 state.json。
 
 语义纪律:E 检测/策略语义/历史产物零改动 —— EventDetector/MicTracker/
-MarketRouter/PositionManager 一律 canonical 件;本脚本只做接线、执行近似与
+V20Router/PositionManager 一律 canonical 件;本脚本只做接线、执行近似与
 风控断件。风控档(risk_frac=0.0075、leverage_cap=20、portfolio_cap=0.5、
 日损 -10% 熔断、API 错熔断、每时订单上限)唯一来源 = config/live.json。
 
@@ -24,7 +20,7 @@ clientOid 前缀(OID_PREFIX)对账,异己单一律不触碰。
 
 执行语义(canonical 时序的实盘近似,config/live.json meta 同步):
 ① 开仓市价意图 → next 2H 开盘成交(paper 虚拟撮合)/live 检测即下市价单;
-② S4 LEVEL_REJECTED 前缘限价(entry,role=entry,kind=limit)→ GTC,N_fill=12 墙钟小时
+② S4 E3 前缘限价(entry,role=entry,kind=limit)→ GTC,N_fill=12 墙钟小时
   未成交撤单;③ §8.2 目标减仓(role=reduce,kind=limit @ target_1)→
   同窗口,超时转市价(TIMEOUT_TO_TAKER);S2 段落袋等部分 REDUCE 市价;
 ④ EXIT 市价;⑤ 保护止损计划单(loss_plan @ 当前 invalid)只保护不主出,
@@ -59,21 +55,34 @@ sys.path.insert(0, str(ROOT / "src"))
 from market_operator.bitget_live import (                        # noqa: E402
     BitgetError, BitgetLiveClient)
 from market_operator.broker import (                            # noqa: E402
-    ContractSpec, floor_step)
+    ContractSpec, _floor_step)
 from market_operator.events import EventDetector                # noqa: E402
 from market_operator.hypothesis import StructureView            # noqa: E402
+from market_operator import heartbeat as hb                     # noqa: E402
+from market_operator.heartbeat import HeartbeatGuard            # noqa: E402
+from market_operator.lifecycle import (                         # noqa: E402
+    LifecycleParams, V20Params, V20Router)
+from market_operator.position import Position, PositionManager  # noqa: E402
 from market_operator.position import (                          # noqa: E402
-    Position, PositionManager, fmt_px, lock_is_protective, opp_lock_live_px,
-    opp_lock_px, tighten_lock)
+    fmt_px,
+    lock_is_protective,
+    opp_lock_live_px,
+    opp_lock_px,
+    tighten_lock,
+)
+from market_operator.repairs import (                           # noqa: E402
+    prior_moves_delta, range_quantile)
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
-from market_operator.routing import RouterParams, MarketRouter      # noqa: E402
+from market_operator.strategy_v6 import V6Params, V6Router      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
 from market_operator.tg import TelegramNotifier                 # noqa: E402
+from market_operator.tiered import TieredParams                 # noqa: E402
 from market_operator.trigger import (                           # noqa: E402
     MicTracker, resolve_trigger_tf)
 
 CONFIG_PATH = ROOT / "config" / "live.json"
-STRATEGY_CONFIG = ROOT / "config" / "strategy.json"   # 生产策略配置(唯一)
+CONFIG_V20 = ROOT / "config" / "v20.json"
+CONFIG_V21 = ROOT / "config" / "v21.json"
 
 MS_1H = 3_600_000
 N_FILL_H = 12                                    # canonical N_fill(墙钟小时)
@@ -81,21 +90,13 @@ TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400
 
 
 # ---------------------------------------------------------------------------
-# canonical 参数组(v21 唯一生产链)
+# canonical 参数组(v20 / v21 双模支持)
 # ---------------------------------------------------------------------------
 
 
-def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
-    """加载生产策略参数:平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由。
-
-    与 ``scenario.load_settings`` 同一 fail-closed 纪律:事件来源必须是平衡箱,
-    否则这条链根本没有事件可路由,拿到手的只是一套"看起来在跑"的参数。
-    """
+def load_v21_params(cfg_path: Path = CONFIG_V21) -> tuple:
+    """加载 v21 极简平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由参数。"""
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-    if not bool(raw.get("use_balance_detector", False)):
-        raise ValueError(
-            f"{cfg_path}: 实盘链路要求 use_balance_detector=true"
-            "(v21 之外没有可用的生产事件来源)")
     params = Params.from_json(cfg_path)
     whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
     base_kw = dict(
@@ -107,7 +108,7 @@ def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
         whitelist=whitelist,
     )
     rp_extra = raw.get("router_params") or {}
-    base_rp = dc_replace(RouterParams(**base_kw), **rp_extra)
+    base_rp = dc_replace(V6Params(**base_kw), **rp_extra)
     rp_by_tf = {}
     for tf, tf_ov in (raw.get("router_params_by_tf") or {}).items():
         clean_ov = {("zone_cooldown_bars" if k == "min_zone_cooldown_bars" else k): v
@@ -116,44 +117,57 @@ def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
     return raw, params, base_rp, rp_by_tf
 
 
-def new_position_manager(params: Params, raw: dict) -> PositionManager:
-    """持仓侧接线:唯一生产语义(对侧突破锁利 + Turtle)。
+def load_v20_params() -> tuple:
+    """(raw, Params, V20Params-arm-full);与 scripts/run_v20.py 同一接线。"""
+    raw = json.loads(CONFIG_V20.read_text(encoding="utf-8"))
+    params = Params.from_json(CONFIG_V20)
+    p19, p16 = raw["v19_params"], raw["v16_params"]
+    tp = TieredParams(
+        **{k: p19[k] for k in ("pos_short_min", "pos_long_max", "k_room_R",
+                               "room_lo", "k_is", "k_star", "mult_pos",
+                               "mult_room_mid", "mult_room_lo",
+                               "mult_transition_fade", "mult_rngq_big",
+                               "mult_pmd_adverse")},
+        fade_family=tuple(p16["fade_family"]), fade_front_edge=False)
+    whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
+    rp = V20Params(k_dq=float(raw["k_dq"]), k_imp=float(raw["k_imp"]),
+                   k_is=float(raw["k_is"]),
+                   turtle_stop_atr=float(raw["turtle_stop_atr"]),
+                   k_bm=float(raw["k_bm"]), whitelist=whitelist,
+                   tiered=tp,
+                   v20=LifecycleParams(s1_trail_arm=True, s2_fade_2leg=True,
+                                       s3_transition_fade_ban=True,
+                                       s4_e3_maker=True))
+    return raw, params, rp
 
-    v20 arm-full(harvest/time_cap/trail_arm_gate)已随 ``lifecycle`` 退役;
-    没有平衡箱的配置直接报错,而不是拿旧 chain 的持仓参数顶上 —— 那样会让
-    "换了一套语义"在运行期悄无声息地发生。
-    """
-    if not raw.get("use_balance_detector"):
-        raise ValueError(
-            "new_position_manager: 需要 use_balance_detector=true"
-            "(v21 之外没有可用的生产持仓语义)")
-    arm_cfg = raw.get("arm_config") or {}
+
+def new_position_manager(params: Params, raw: dict) -> PositionManager:
+    """持仓侧接线:兼容 v21(对侧突破锁利 + Turtle)与 v20(arm-full)。"""
+    if raw.get("use_balance_detector"):
+        arm_cfg = raw.get("arm_config") or {}
+        return PositionManager(
+            params,
+            allow_add=False,
+            breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
+            time_stop=False,
+            reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
+            # 行情锚定缓冲(R 倍数);缺省 0 ⇒ 纯计划口径(旧行为)
+            opp_lock_max_giveback_r=float(
+                arm_cfg.get("opp_lock_max_giveback_r", 0.0)),
+        )
+    p16 = raw["v16_params"]
     return PositionManager(
-        params,
-        allow_add=False,
-        breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
-        time_stop=False,
-        reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
-        # 锁利行情锚定:锁利价与决策时现价的距离上限(以 R 为单位)。修
-        # "锁利只在收盘裁决 ⇒ 计划锁利价已被行情走过、不回踩就等于没锁"。
-        # 0 = 关闭,保持纯计划口径(历史 parity)。
-        opp_lock_max_giveback_r=float(arm_cfg.get("opp_lock_max_giveback_r", 0.0)),
-    )
+        params, allow_add=False, breakeven_on_reduce=True, time_stop=False,
+        harvest_family=tuple(p16["fade_family"]),
+        time_cap_bars=int(p16["k_cap_hours"]),
+        cap_mfe_min=float(p16["cap_mfe_min"]),
+        harvest_ladder3=False, early_exit=False,
+        trail_arm_gate=True, harvest_fade_2leg=True)
 
 
 # ---------------------------------------------------------------------------
 # 风控断件(纯函数级;测试钉死)
 # ---------------------------------------------------------------------------
-
-
-def _utc_ms(iso: Optional[str]) -> Optional[int]:
-    """ISO8601(UTC) → epoch ms;解析失败返回 None(不猜测,不兜底)。"""
-    if not iso:
-        return None
-    try:
-        return int(datetime.fromisoformat(str(iso)).timestamp() * 1000)
-    except (TypeError, ValueError):
-        return None
 
 
 class DailyLossBreaker:
@@ -326,6 +340,32 @@ def reconcile_positions(ours: dict, exchange: list) -> list:
     return out
 
 
+def _utc_ms(iso: Optional[str]) -> Optional[int]:
+    """ISO8601(UTC) → epoch ms;解析失败返回 None(不猜测,不兜底)。"""
+    if not iso:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(iso)).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def split_gap_bars(saved_bars: list, bars2h: list,
+                   base_ms: int = 7_200_000) -> tuple[list, list]:
+    """把重启拉到的 2H 序列切成(缺口段, 崩溃前段)。
+
+    判据是**时间轴事实**:崩溃前最后一根已处理 bar 的标签。标签 > 它的 bar
+    必然是停机期间才收盘的 ⇒ 必须重新走一遍 `_advance`(pm.on_bar / 子周期
+    止损 / TP1 减仓),否则这些事实在重启后被静默跳过。
+    """
+    cut = max((int(b[0]) for b in saved_bars), default=None)
+    if cut is None:
+        return [], list(bars2h)
+    gap = [tuple(b) for b in bars2h if int(b[0]) > cut]
+    kept = [b for b in bars2h if int(b[0]) <= cut]
+    return gap, kept
+
+
 # ---------------------------------------------------------------------------
 # 战役状态
 # ---------------------------------------------------------------------------
@@ -362,6 +402,7 @@ class LiveRunner:
                  contract_raw: Optional[dict] = None,
                  state_path: Optional[Path] = None,
                  journal_dir: Optional[Path] = None,
+                 heartbeat_path: Optional[Path] = None,
                  symbols: tuple = (),
                  universe_enabled: bool = True) -> None:
         if mode not in ("live", "paper"):
@@ -370,14 +411,14 @@ class LiveRunner:
         self.risk = cfg["risk"]
         self.loop_cfg = cfg["loop"]
         self.cog_cfg = cfg["cognition"]
-        # 单一生产链:engine 字段已从 config/live.json 删除;这里读取只为了让
-        # 残留旧配置显式失败,而不是悄悄跑成 v21。
-        engine = str(self.cog_cfg.get("engine") or "v21")
-        if engine != "v21":
-            raise RuntimeError(
-                f"cognition.engine={engine!r} 不再支持:实盘只有 v21 一条生产链"
-                "(v20/lifecycle 已退役,见 reports/refactor_20261023/DESIGN.md D9)")
-        self.raw_strat, self.params, self.rp, self.rp_by_tf = load_strategy_params()
+        self.engine_version = str(self.cog_cfg.get("engine") or "v20")
+        if self.engine_version == "v21":
+            self.raw_strat, self.params, self.rp, self.rp_by_tf = load_v21_params()
+            self.raw20 = self.raw_strat
+        else:
+            self.raw20, self.params, self.rp = load_v20_params()
+            self.raw_strat = self.raw20
+            self.rp_by_tf = {}
         self.contracts = contracts or {}
         self.contract_raw = contract_raw or {}     # 交易所原始合约条目(maxLever 等)
         self.leverage_by_sym: dict[str, int] = {}  # 各品种实际生效杠杆
@@ -387,6 +428,20 @@ class LiveRunner:
             ROOT / self.loop_cfg["state_path"]
         # 冷数据同目录:热档 state.json(每步) + 冷档 campaigns.json(变更/60s)
         self.campaigns_path = self.state_path.with_name("campaigns.json")
+        # 心跳路径归属(2026-10-24 缺陷):修前只认 config 里的相对路径,且按 **cwd**
+        # 解析 —— 于是"真配置 + 只把 state/journal 指到 tmp"的测试会在构造那一刻
+        # 覆盖**生产** runtime/live/heartbeat.json,而看护唯一的判活证据就是它。
+        # 更糟的是测试的合成时钟可能在未来(age<0 ⇒ 永久"正常"),真正掉线的
+        # runner 再也不会被拉起 —— 与 2026-10-22 掉线事故同一类失效。
+        # 现在:显式参数 > 显式 state_path 的同一目录(沙盒/测试)> 配置(锚定 ROOT)。
+        if heartbeat_path is not None:
+            self.heartbeat_path = Path(heartbeat_path)
+        elif state_path is not None:
+            self.heartbeat_path = self.state_path.parent / "heartbeat.json"
+        else:
+            hb_rel = self.loop_cfg.get("heartbeat_path")
+            self.heartbeat_path = (ROOT / str(hb_rel) if hb_rel
+                                   else self.state_path.parent / "heartbeat.json")
         self._campaigns_dirty = True
         self._campaigns_saved_at = 0.0
         self.candle_cache_dir = self.state_path.parent / "candles"
@@ -431,7 +486,20 @@ class LiveRunner:
         self._stops_checked_at = 0.0               # 交易所止损单存在性校验 TTL
         self._stops_live_ids: Optional[set] = None
         self._stops_live_rows: Optional[list] = None   # 同上快照的原始行(去重用)
+        # 心跳口径(跨平台看护判活的三个时间事实;见 market_operator.heartbeat)
+        self.started_ms = int(time.time() * 1000)
+        self._loop_ts_ms = 0                       # 主循环最后一次成功走完一步
+        self._step_started_ms = 0                  # 当前步开始时刻
+        self._step_count = 0
         self._load_state()
+        # 起动即落一次心跳:看护立刻看到新 pid + 新 started_ms,不会把上一具
+        # 尸体留下的旧 loop_ts_ms 误判成"卡死"并对新进程动手。
+        try:
+            self._write_json_atomic(
+                self.heartbeat_path,
+                self._heartbeat_payload(int(time.time() * 1000)))
+        except Exception:
+            pass
 
     def _alert_throttled(self, key: str, msg: str, gap_s: float = 1800.0) -> None:
         """同类告警限频(默认 30 分钟一条)。
@@ -475,10 +543,10 @@ class LiveRunner:
         place = int(sp.price_place)
         step = 10.0 ** (-place)
         px = float(price)
-        lo = floor_step(px, step, place)
+        lo = _floor_step(px, step, place)
         if direction > 0:                      # 买/平空:向下(不越过前缘)
             return lo
-        # 卖/平多:向上一个 step 至不小于原触发价(floor_step 对负数返回 0,
+        # 卖/平多:向上一个 step 至不小于原触发价(_floor_step 对负数返回 0,
         # 不能用 -f(-x) 取反)
         return round(lo + step, place) if lo < px - 1e-12 else lo
 
@@ -537,10 +605,9 @@ class LiveRunner:
         if not saved_camps:
             saved_camps = st.get("campaigns") or {}
         # 掉线补做的两个锚点:
-        #   gap_started_ms = 崩溃前的最后心跳(优先用上次未补完的锚,避免二次
+        #   gap_started_ms = 崩溃前的最后心跳(优先沿用上次未补完的锚,避免二次
         #   重启把缺口起点挪到补做中途);缺口 bar = (崩溃末根 bar, 现在]。
-        persisted_gap = (cold_doc.get("gap_bars")
-                         or st.get("gap_bars") or {})
+        persisted_gap = cold_doc.get("gap_bars") or st.get("gap_bars") or {}
         persisted_start = st.get("gap_started_ms")
         self._gap_started_ms = (int(persisted_start) if persisted_start
                                 else _utc_ms(st.get("saved_at_utc")))
@@ -556,14 +623,11 @@ class LiveRunner:
             for sym, saved in saved_camps.items():
                 try:
                     bars2h = prefetched.get(sym) or []
-                    saved_bars = saved.get("trig_bars") or []
-                    cut = max((int(b[0]) for b in saved_bars), default=None)
-                    if cut is not None and bars2h and int(bars2h[-1][0]) > cut:
-                        gap = [tuple(b) for b in bars2h if int(b[0]) > cut]
-                        if gap:
-                            # 已持久化的缺口批次优先(补做中断后重入同一批)
-                            self._gap_bars.setdefault(sym, gap)
-                        bars2h = [b for b in bars2h if int(b[0]) <= cut]
+                    gap, bars2h = split_gap_bars(
+                        saved.get("trig_bars") or [], bars2h)
+                    if gap:
+                        # 已持久化的缺口批次优先(补做中断后重入同一批)
+                        self._gap_bars.setdefault(sym, gap)
                     # 以崩溃时刻为界重建认知:随后的缺口 bar 必须重新走一遍
                     # _advance(否则 _on_sub_bar / pm.on_bar 永远看不到它们,
                     # 移动防线与 TP1 会在重启后静默丢失)。
@@ -592,52 +656,34 @@ class LiveRunner:
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
         if not self._gap_bars:
-            # 没有待补批次 ⇒ 不留缺口锚。锚只为"未补完"的批次存在;
-            # 老锚留着会让下一次重启把几小时前的缺口当成新缺口(实测报 19h)。
+            # 没有待补批次 ⇒ 不留缺口锚。锚只为"未补完"的批次存在;老锚留着
+            # 会让下一次重启把几小时前的缺口当成新缺口(实测报 19h)。
             self._gap_started_ms = None
+        self._campaigns_dirty = True
 
 
     def _write_json_atomic(self, path: Path, payload: str) -> None:
-        """同目录临时文件 + `os.replace` 原子落盘(读者永远看到完整文件)。
+        """同目录唯一临时文件 + `os.replace` 原子落盘(读者永远看到完整文件)。
 
         修前 `write_text` 直接覆盖:进程在写入中途被杀就留下半截 JSON ⇒
         `_load_state` 解析失败 ⇒ 持仓/止损事实全丢,只能靠交易所侧计划单兜底。
         后缀为 `.gz` 时按 gzip 写(内容仍是同一份 JSON 文本,纯密度优化)。
+        临时名带 pid/线程号(见 `heartbeat.write_atomic`):心跳线程与主循环会
+        写同一份心跳,共用一个 `.tmp` 名会互相截断。
         """
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(path.name + ".tmp")
-
-        def _dump(target: Path) -> None:
-            if path.suffix == ".gz":
-                with gzip.open(target, "wt", encoding="utf-8") as fh:
-                    fh.write(payload)
-            else:
-                target.write_text(payload, encoding="utf-8")
-
-        _dump(tmp_path)
-        try:
-            os.replace(tmp_path, path)
-        except OSError:
-            # 读者以独占方式打开(资源管理器预览 / 编辑器)时 replace 会失败。
-            # 宁可短暂失去原子性,也不能把这次落盘整个丢掉。
-            _dump(path)
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+        hb.write_atomic(Path(path), payload)
 
     def _touch_campaigns(self) -> None:
         """标记战役状态已变:下一次落盘必须写 campaigns.json(不等档期)。"""
         self._campaigns_dirty = True
+
 
     def _campaigns_payload(self) -> str:
         """战役状态(冷数据):每品种 **尾部** bar + pm 持仓事实。
 
         为什么只留尾部:`_load_state` 只用它做两件事 —— ① 缺口切分锚
         (`cut = max(ts)`)② 增量拉取的 seed。完整历史在 K 线缓存与交易所,
-        留 720 根纯属浪费(实测 151 品种 × 720 根 = 6.1MB,占 state.json 的
-        99.6%)。尾部 `state_bar_tail` 根足以覆盖任何合理停机窗口,再长的
-        缺口由缓存 + 分页补齐。
+        留 720 根纯属浪费(实测 151 品种 × 720 根 = 6.1MB,占热档 99.6%)。
         """
         tail = max(1, int(self.loop_cfg.get("state_bar_tail", 24)))
         camps = {}
@@ -658,19 +704,100 @@ class LiveRunner:
              .isoformat(timespec="seconds"),
              "bar_tail": tail,
              # 未补完的缺口批次放冷档:长停机时它可达数万根 bar,若放热档会
-             # 让"每步 22KB 的心跳"在补做期间膨胀成 MB 级全量重写。
+             # 让"每步 ~20KB 的心跳"在补做期间膨胀成 MB 级全量重写。
              "gap_bars": self._gap_bars,
              "campaigns": camps}, ensure_ascii=False)
 
-    def _save_state(self) -> None:
+    def _prune_intents(self, now_ms: int) -> None:
+        """热档瘦身:只留"仍在场/近期"的意图;完整审计在 logs/live_*.jsonl。
+
+        修前 open_intents 只增不减(每个信号/管理动作永久留档),热档随运行
+        时间线性膨胀;终态意图对决策已无影响,而账本与交易所各自留证。
+        """
+        keep_h = float(self.loop_cfg.get("intent_keep_hours", 72))
+        horizon = int(now_ms) - int(keep_h * 3_600_000)
+        terminal = {"filled", "canceled", "expired", "error", "void"}
+        for oid, it in list(self.open_intents.items()):
+            if str(it.get("status")) not in terminal:
+                continue
+            if int(it.get("decision_ts") or 0) >= horizon:
+                continue
+            self.open_intents.pop(oid, None)
+
+    def heartbeat_doc(self, now_ms: int, *, status: Optional[str] = None,
+                      guard: Optional[dict] = None) -> dict:
+        """心跳文档(跨平台看护的唯一判活依据;不含任何操作系统进程概念)。
+
+        三个时间事实分开写,看护据此区分三种"没有进展":
+        * `ts_ms`      —— 心跳线程最后一次落盘(进程还活着吗);
+        * `loop_ts_ms` —— 主循环最后一次**成功**走完一步(是不是卡住了);
+        * `step_started_ms` —— 当前步的开始时刻(卡在哪一步)。
+        `positions_detail` 是"进程已经没了"场景的保护快照:看护凭它把止损
+        重新挂回交易所(2026-10-22:进程消失、交易所侧止损成交、本地无感)。
+        """
+        if status is None:
+            if self._gap_replay:
+                status = "recovering"
+            elif self._gap_bars:
+                status = "gap_pending"
+            else:
+                status = "ok"
+        gap_syms = sorted(self._gap_bars)
+        detail = []
+        for sym, pos in list(self.positions.items())[:64]:
+            st = self.stops.get(sym) or {}
+            detail.append({
+                "symbol": sym, "direction": pos.get("direction"),
+                "qty": pos.get("qty"), "invalid": pos.get("invalid"),
+                "mark": pos.get("mark"), "tf": pos.get("tf_label"),
+                "event_id": pos.get("event_id"),
+                "stop": st.get("trigger"), "stop_id": st.get("order_id")})
+        doc = {
+            "schema": hb.SCHEMA,
+            "ts_ms": int(now_ms),
+            "started_ms": int(self.started_ms),
+            "loop_ts_ms": int(self._loop_ts_ms or self.started_ms),
+            "step_started_ms": int(self._step_started_ms or 0),
+            "step_count": int(self._step_count),
+            "saved_at_utc": datetime.fromtimestamp(
+                int(now_ms) / 1000, tz=timezone.utc).isoformat(timespec="seconds"),
+            "pid": os.getpid(),
+            "mode": self.mode,
+            "status": status,
+            "equity": self.equity,
+            "positions": len(self.positions),
+            "stops": len(self.stops),
+            "armed": sum(1 for it in self.open_intents.values()
+                         if it.get("status") == "armed"),
+            "positions_detail": detail,
+            "gap_started_ms": self._gap_started_ms,
+            "gap_symbols_total": len(gap_syms),
+            "gap_symbols": gap_syms[:20],
+            "gap_bars": sum(len(v) for v in self._gap_bars.values()),
+        }
+        if guard:
+            doc["guard"] = guard
+            doc["ts_ms"] = max(int(doc["ts_ms"]), int(guard.get("ts_ms") or 0))
+        return doc
+
+    def _heartbeat_payload(self, now_ms: int) -> str:
+        """兼容入口:心跳文档的 JSON 文本(落盘用)。"""
+        return json.dumps(self.heartbeat_doc(now_ms), ensure_ascii=False)
+
+    def _save_state(self, now_ms: Optional[int] = None) -> None:
         """两档落盘:state.json(热,每步) + campaigns.json(冷,变更或到档期)。
 
-        热档只有持仓/意图/保护单/熔断/心跳(实测 23KB),必须每步写;冷档是
+        热档只有持仓/意图/保护单/熔断/心跳(实测 ~23KB),必须每步写;冷档是
         战役历史(曾被每 15s 全量重写 6.1MB ≈ 425KB/s 持续写盘,并把每步
         阻塞几百毫秒)。拆分后常态写放大降到 ~3.4KB/s,且信息量不减:冷档
         只在 bar 追加 / 防线推进 / 仓位变化时写,外加
-        `loop.campaigns_write_seconds`(默认 120s)兜底。
+        `loop.campaigns_write_seconds`(默认 60s)兜底。
+
+        心跳单独成文件且同一步落盘:看护进程只需读一个小文件即可判断
+        "活着 / 卡死 / 正在补做",不必解析 MB 级冷档。
         """
+        now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+        self._prune_intents(now_ms)
         payload = json.dumps({
             "saved_at_utc": datetime.now(timezone.utc)
             .isoformat(timespec="seconds"),
@@ -685,6 +812,12 @@ class LiveRunner:
                         "tripped": self.breaker.tripped},
         }, ensure_ascii=False)
         self._write_json_atomic(self.state_path, payload)
+        # 心跳每步都写(15s 级):看护进程靠它判活,不能等冷档档期。
+        try:
+            self._write_json_atomic(self.heartbeat_path,
+                                    self._heartbeat_payload(now_ms))
+        except Exception:
+            pass
 
         every = float(self.loop_cfg.get("campaigns_write_seconds", 60))
         now = time.time()
@@ -699,33 +832,27 @@ class LiveRunner:
     # 战役装配(本地磁盘 K 线缓存 + 增量回补 + 并发拉取 + 按周期裁剪认知重放)
     # ------------------------------------------------------------------
 
-    def _candle_cache_path(self, symbol: str, *, gz: bool = True) -> Path:
-        """K 线缓存路径:默认 `.json.gz`(密度高 3~4 倍),`gz=False` 为旧格式。
-
-        缓存是**可再生产物**(交易所随时可补齐),压缩它不损失任何信息:
-        1800 根 × 6 字段的 JSON 纯文本 ~100KB,压后 ~25KB。
-        """
+    def _candle_cache_path(self, symbol: str) -> Path:
         gran = str(self.cog_cfg.get("granularity") or "2H").upper()
-        suffix = ".json.gz" if gz else ".json"
-        return self.candle_cache_dir / f"{symbol}_{gran}{suffix}"
+        # .json.gz:同一份 JSON 文本 gzip 后约为原体积 1/4(实测 151 品种
+        # 131MB → 33MB),读路径仍是一次全量解析,不改任何计算口径。
+        return self.candle_cache_dir / f"{symbol}_{gran}.json.gz"
 
     def _load_cached_bars(self, symbol: str) -> list[tuple]:
-        """读缓存:优先 .json.gz,回落旧 .json(便于无损迁移,不必停机改格式)。"""
-        for gz in (True, False):
-            p = self._candle_cache_path(str(symbol), gz=gz)
-            if not p.exists():
-                continue
-            try:
-                if gz:
-                    with gzip.open(p, "rt", encoding="utf-8") as fh:
-                        raw = json.load(fh)
-                else:
-                    raw = json.loads(p.read_text(encoding="utf-8"))
-                return [(int(r[0]), float(r[1]), float(r[2]),
-                         float(r[3]), float(r[4]), float(r[5])) for r in raw]
-            except Exception:
-                continue
-        return []
+        p = self._candle_cache_path(symbol)
+        legacy = p.with_suffix("")          # 旧格式 *.json(自动迁移)
+        try:
+            if p.exists():
+                raw = json.loads(gzip.decompress(p.read_bytes())
+                                 .decode("utf-8"))
+            elif legacy.exists():
+                raw = json.loads(legacy.read_text(encoding="utf-8"))
+            else:
+                return []
+            return [(int(r[0]), float(r[1]), float(r[2]),
+                     float(r[3]), float(r[4]), float(r[5])) for r in raw]
+        except Exception:
+            return []
 
     def _save_cached_bars(self, symbol: str, bars: list) -> None:
         if not bars:
@@ -733,12 +860,14 @@ class LiveRunner:
         try:
             self.candle_cache_dir.mkdir(parents=True, exist_ok=True)
             want = int(self.cog_cfg.get("warmup_trigger_bars", 3600))
-            p = self._candle_cache_path(str(symbol))
-            payload = json.dumps(bars[-want:], separators=(",", ":"))
-            self._write_json_atomic(p, payload)          # 文本原子写
-            legacy = self._candle_cache_path(str(symbol), gz=False)
-            if legacy.exists():                          # 迁移:旧明文缓存删除
-                legacy.unlink(missing_ok=True)
+            p = self._candle_cache_path(symbol)
+            self._write_json_atomic(p, json.dumps(bars[-want:]))
+            legacy = p.with_suffix("")
+            if legacy.exists():
+                try:
+                    legacy.unlink()
+                except OSError:
+                    pass
         except Exception:
             pass
 
@@ -868,9 +997,13 @@ class LiveRunner:
         detector, tracker = replay_cognition(
             self.params, symbol, cog_bars, replay_trig,
             obs_tf_seconds=obs_s, trigger_tf_seconds=trig_s)
-        rp_tf = self.rp_by_tf.get(tf_label, self.rp)
-        router = MarketRouter(rp_tf)
-        pm = new_position_manager(self.params, self.raw_strat)
+        if self.engine_version == "v21":
+            rp_tf = self.rp_by_tf.get(tf_label, self.rp)
+            router = V6Router(rp_tf)
+            pm = new_position_manager(self.params, self.raw_strat)
+        else:
+            router = V20Router(self.rp)
+            pm = new_position_manager(self.params, self.raw20)
         return CampaignState(symbol=symbol, detector=detector, tracker=tracker,
                              router=router, pm=pm,
                              cog_bars=list(cog_bars),
@@ -888,6 +1021,9 @@ class LiveRunner:
         if bars2h is None:
             bars2h = self._fetch_trigger_bars(symbol, want)
         main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
+        if self.engine_version != "v21":
+            return self._build_campaign(symbol, main_tf, bars2h=bars2h)
+
         tf_list = list(self.cog_cfg.get("tf_list") or [main_tf])
         built: dict[str, CampaignState] = {}
         for tf in tf_list:
@@ -912,7 +1048,7 @@ class LiveRunner:
 
     def _try_unlock_higher_tfs(self, symbol: str, bars2h: list) -> None:
         """新币随 K 线积累达到高周期准入门槛时,自动解锁并挂载对应周期战役。"""
-        if symbol not in self.campaigns:
+        if self.engine_version != "v21" or symbol not in self.campaigns:
             return
         tf_list = list(self.cog_cfg.get("tf_list") or [])
         active_tfs = {self.campaigns[symbol].tf_label} | {
@@ -982,196 +1118,29 @@ class LiveRunner:
         修前缺陷:step 中途抛错 ⇒ _save_state() 不执行 ⇒ state.json 停摆,
         内存里的 armed 意图与持仓事实随之丢失(2026-10-22 40774 事件实证)。
 
-        掉线补做:缺口批次未完成前不推进常规 step(下轮重试),避免"没补完
-        就先按新价管理"造成两套事实并存。
+        掉线补做在本步内一次完成(逐根重放缺口 bar → 对齐交易所 → 重挂保护),
+        与其后的常规 step 共用同一次落盘:补做中途崩溃时缺口批次仍在
+        campaigns.json 里,下一次启动重入同一批(幂等)。
+
+        心跳口径:`_step_started_ms` 在进入时打点、`_loop_ts_ms` 只在**成功**
+        走完后前移。于是"进程活着但卡在某一步"与"进程已死"在看护侧是两种
+        事实(前者心跳新鲜但 loop 年龄增长 → 卡死;后者两者一起停止 → 死亡)。
         """
+        self._step_started_ms = int(now_ms)
         try:
-            if self._gap_bars and not self.recover_gap(now_ms):
-                return
+            if self._gap_bars:
+                self.recover_gap(now_ms)
             self._step_inner(now_ms)
+            self._loop_ts_ms = int(now_ms)
+            self._step_count += 1
         finally:
             try:
-                self._save_state()
+                self._save_state(now_ms)
             except Exception:
                 pass
 
-    # ------------------------------------------------------------------
-    # 掉线补做(gap recovery):缺失时段内的 canonical 持仓管理补执行
-    # ------------------------------------------------------------------
-
-    def recover_gap(self, now_ms: int) -> bool:
-        """把崩溃期间**已收盘**的 bar 逐根补放进 canonical 管理链,再结算。
-
-        为什么必须补:重启时 `_load_state` 拉到的 bar 已包含缺口段,若不
-        显式切分并重放,`_advance` 会把它们当成"已处理"——移动防线、
-        对侧锁利、TP1 减仓全部静默丢失,而价格往往已不再回来。
-
-        语义边界(与 canonical 一致):
-        - 补放只走持仓管理(_on_sub_bar / pm.on_bar)与结构推进;
-          `_gap_replay=True` 时 **不产生新开仓路由**(陈旧信号不得按现价追单)。
-        - 缺口 ≥ gap_recovery.min_gap_seconds 才算"掉线":
-          * 缺口内触及固定止损、交易所仍有仓 → 按 stop_policy 结算;
-          * 防线已被推紧且现价已越过 → 立即市价离场(不挂必然即刻触发的计划单);
-          * TP1 曾触及应减仓 → 按 reduce_policy 结算(默认市价,接受回撤)。
-        - 接口异常:保留缺口批次,返回 False,下一轮重试。
-        """
-        gcfg = dict(self.loop_cfg.get("gap_recovery") or {})
-        gap_s = 0.0 if self._gap_started_ms is None else \
-            max(0.0, (now_ms - self._gap_started_ms) / 1000.0)
-        big = (self.mode == "live" and bool(gcfg.get("enabled", True))
-               and gap_s >= float(gcfg.get("min_gap_seconds", 180)))
-        if self.mode == "live" and not self._pre_gap_sync():
-            return False                     # 交易所事实没读到:不补,不推进
-        if big:
-            self.tg.send_alert(
-                f"检测到掉线缺口 {gap_s / 3600:.2f}h:开始补做持仓管理"
-                f"({len(self._gap_bars)} 个品种,"
-                f"{sum(len(v) for v in self._gap_bars.values())} 根 2H bar);"
-                f"补做期间暂停新开仓")
-        self._gap_replay = True
-        self._gap_stop_hit = {}
-        try:
-            for sym in sorted(self._gap_bars):
-                cs = self.campaigns.get(sym)
-                if cs is None:
-                    continue
-                bars = self._gap_bars[sym]
-                self._advance(cs, now_ms, new_bars=bars)
-                for (s2, _tf), sub in sorted(self.extra_campaigns.items()):
-                    if s2 == sym:
-                        self._advance(sub, now_ms, new_bars=bars,
-                                      run_paper_fills=False)
-        except BitgetError as e:
-            self._api_note(e)
-            self.tg.send_alert(f"掉线补做中断({type(e).__name__});保留缺口批次,"
-                               f"下一轮重试")
-            return False
-        finally:
-            self._gap_replay = False
-        self._gap_bars.clear()
-        self._touch_campaigns()             # 冷档里的待补批次要同步清掉
-        # 追平后必须清锚:锚的语义是"尚未补完的缺口起点",留着会让下一次重启
-        # 把几小时前的老缺口当成新缺口(实测:补完后仍报 19h 缺口,真缺口反而
-        # 被这个假数字淹没)。清空后 _load_state 回落 saved_at_utc = 真实心跳。
-        self._gap_started_ms = None
-        if big:
-            self._gap_settle(now_ms, gap_s)
-        return True
-
-    def _pre_gap_sync(self) -> bool:
-        """补做前的一次性权威同步:数量/标记价以交易所为准,已平仓即清理。
-
-        与 `_reconcile` 的"连续两轮确认"不同:这里刚读过交易所,单次即可
-        判定;否则对已止损离场的品种补放管理会按本地幽灵仓位下单。
-        """
-        try:
-            ex_pos = self.client.positions()
-        except BitgetError as e:
-            self._api_note(e)
-            return False
-        ex_by = {p["symbol"]: p for p in ex_pos}
-        for sym, pos in list(self.positions.items()):
-            p = ex_by.get(sym)
-            if p is None or int(p["direction"]) != int(pos["direction"]):
-                self._journal("gap_closed_elsewhere",
-                              {"symbol": sym, "qty": pos.get("qty")})
-                self._reconcile_closed(sym, pos)
-                continue
-            if abs(float(p["qty"]) - float(pos["qty"])) > max(
-                    1e-9, float(p["qty"]) * 1e-6):
-                self._journal("gap_qty_fix", {"symbol": sym,
-                                              "ours": float(pos["qty"]),
-                                              "exchange": float(p["qty"])})
-                pos["qty"] = float(p["qty"])
-            pos["mark"] = float(p["mark_price"])
-            cs = self._get_cs_for(sym, pos.get("tf_label"))
-            if cs is not None and sym in cs.pm.positions:
-                try:
-                    cs.pm.positions[sym].qty = float(p["qty"])
-                except Exception:
-                    pass
-        return True
-
-    def _gap_settle(self, now_ms: int, gap_s: float) -> None:
-        """缺口补放后的结算:把"本应已发生但错过"的止损补成市价动作。
-
-        两条判据都是**事实**(bar 极值 / 现价 vs 防线),不含主观判断:
-        1. 缺口内 bar 极值已触及固定止损 → canonical 此刻本应离场;交易所
-           仍有仓说明计划单未触发或当时不在场,按 stop_policy 结算。
-        2. 补放把防线推紧后,现价已在防线之外 → 挂计划单必然即刻触发,
-           直接市价离场(避免"挂单 → 立刻以更差价成交"的二次滑点)。
-
-        TP1 减仓不在此重复结算:补放时 `_on_sub_bar → _exec_mgmt` 已按缺口
-        bar 的收盘价把该减的仓位减掉(reduce_policy=market 时走市价)。
-        """
-        gcfg = dict(self.loop_cfg.get("gap_recovery") or {})
-        stop_policy = str(gcfg.get("stop_policy", "market")).lower()
-        marker = f"GAP|gap={gap_s / 3600:.2f}h"
-        acted = 0
-        for sym, hit in sorted(self._gap_stop_hit.items()):
-            pos = self.positions.get(sym)
-            if pos is None:
-                continue
-            mark = float(pos.get("mark") or 0.0)
-            if stop_policy != "market":
-                self._alert_throttled(
-                    f"gapstop:{sym}",
-                    f"{marker} {sym} 缺口内已触及止损 {hit['stop']:.8g}"
-                    f"(bar={hit['ts']}),现价 {mark:.8g};stop_policy="
-                    f"{stop_policy} → 保留仓位并按最新防线重挂止损")
-                continue
-            self._gap_market_exit(sym, pos, now_ms,
-                                  f"{marker}|STOP_MISSED|bar={hit['ts']}"
-                                  f"|stop={hit['stop']:.8g}")
-            self.tg.send_alert(
-                f"{marker} {sym} 缺口内已触及止损 {hit['stop']:.8g}"
-                f",交易所仍有仓(计划单未触发)→ 市价离场(现价 {mark:.8g})")
-            acted += 1
-        for sym, pos in sorted(self.positions.items()):
-            if sym in self._gap_stop_hit:
-                continue
-            mark = float(pos.get("mark") or 0.0)
-            if mark <= 0.0:
-                continue
-            stop = float(pos["invalid"])
-            breached = (mark <= stop) if int(pos["direction"]) > 0 \
-                else (mark >= stop)
-            if not breached:
-                continue
-            self._gap_market_exit(sym, pos, now_ms,
-                                  f"{marker}|STOP_ALREADY_BREACHED"
-                                  f"|stop={stop:.8g}")
-            self.tg.send_alert(
-                f"{marker} {sym} 补放后防线 {stop:.8g} 已被现价 {mark:.8g} "
-                f"越过(移动防线/锁利错过)→ 市价离场,不挂即刻触发的计划单")
-            acted += 1
-        self.counters["gap_recoveries"] = \
-            self.counters.get("gap_recoveries", 0) + 1
-        self._journal("gap_recovery", {
-            "gap_hours": round(gap_s / 3600, 3),
-            "stop_hits": sorted(self._gap_stop_hit),
-            "actions": acted,
-            "stop_policy": stop_policy,
-            "reduce_policy": str(gcfg.get("reduce_policy", "market")),
-        })
-        if acted == 0:
-            self.tg.send_alert(
-                f"{marker} 补做完成:缺口内的防线推进/减仓已按 canonical 重放,"
-                f"无止损越界需追平")
-
-    def _gap_market_exit(self, sym: str, pos: dict, now_ms: int,
-                         reason: str) -> None:
-        """撤掉入场/止损挂单后按现价市价离场(强制,不受速率限制约束)。"""
-        qty = floor_step(float(pos["qty"]), self._spec(sym).size_step,
-                         self._spec(sym).size_place)
-        self._cancel_entry(sym, "gap_exit")
-        self._cancel_stop(sym, "gap_exit")
-        self._arm_close_intent(sym, pos, qty, "market", None, reason,
-                               int(now_ms), role="exit", force=True)
-        self.counters["gap_stop_exits"] = \
-            self.counters.get("gap_stop_exits", 0) + 1
-
     def _step_inner(self, now_ms: int) -> None:
+        known_before = set(self.campaigns)
         if self.mode == "live":
             bal = self.client.balance()
             self.equity = float(bal["equity"])
@@ -1199,10 +1168,11 @@ class LiveRunner:
                     continue
                 if cs is not None:
                     self.campaigns[sym] = cs
-                    self._touch_campaigns()      # 新纳入宇宙的品种要进冷档
                     self._ensure_leverage(sym)
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
+        if set(self.campaigns) != known_before:
+            self._touch_campaigns()     # 新纳入宇宙的品种要进冷档
         if self.mode == "live":
             self._sync_live_fills(now_ms)
         base_ms = 7200 * 1000
@@ -1215,7 +1185,7 @@ class LiveRunner:
                     continue
                 new_bars = self.client.history_candles(
                     sym, self.cog_cfg["granularity"], start_ms=last_ts + 1,
-                    limit=100)
+                    limit=self._bar_limit(last_ts, now_ms))
                 if not new_bars:
                     continue
                 self._advance(cs, now_ms, new_bars=new_bars, run_paper_fills=True)
@@ -1237,6 +1207,186 @@ class LiveRunner:
                 self._reconcile()
         self._daily_tick(now_ms)
         self._api_error_streak = 0          # 本轮无异常:连续错计数复位
+
+    @staticmethod
+    def _bar_limit(last_ts: int, now_ms: int, cap: int = 1000) -> int:
+        """一次增量请求要拉的 bar 条数:覆盖到"现在"为止的缺口(上限 cap)。
+
+        修前固定 100:掉线 10 天 = 120 根 2H bar,补做只回放最近 100 根,更早
+        的止损/TP1 事实被永久跳过,却照样报告"已补做"。这里按时间差算,
+        取不到/正常运行时仍是 100,不改变常态请求量。
+        """
+        if last_ts <= 0:
+            return 100
+        need = int(max(0, now_ms - last_ts) // 7_200_000) + 5
+        return max(100, min(int(cap), need))
+
+    def recover_gap(self, now_ms: int) -> None:
+        """重启/掉线补做:缺口 bar 逐根重放 → 按交易所事实收敛 → 重挂保护。
+
+        为什么必须重放:停机期间收盘的 2H bar 里可能已经发生 §8 破位、Turtle
+        防线推进、TP1 减仓、固定止损触价。修前 `_load_state` 只拿缓存 bars 重建
+        认知帧,`_advance` 因 `bar[0] <= last` 直接跳过这些 bar ⇒ 本地防线永远
+        停在停机前,重启后仍按旧防线挂保护单(实测 2026-10-22 掉线即此形态)。
+
+        纪律:① 重放只走 `_advance`(与常态同一套 canonical 调用),不改策略;
+        ② 重放期间**不新开仓**(停机期信号不能用现在的价格补开);
+        ③ 结束后一切以交易所持仓/成交为准(live),paper 则按缺口极值结算;
+        ④ 未补完的批次持久化在 campaigns.json,重入同一批(幂等)。
+        """
+        batch = self._gap_bars
+        self._gap_bars = {}
+        started = int(self._gap_started_ms or now_ms)
+        self._gap_replay = True
+        self._gap_stop_hit = {}
+        self._gap_started_ms = started
+        self.counters["gap_recoveries"] = \
+            self.counters.get("gap_recoveries", 0) + 1
+        replayed = 0
+        try:
+            # 先对齐交易所事实:停机期间若已止损/被外部平仓,重放不得建立在
+            # "幻影持仓"上(否则会把已离场的仓位当成还在,继续收紧防线)。
+            self._pre_gap_sync()
+            for sym in sorted(batch):
+                bars = [b for b in batch[sym] if b]
+                if not bars:
+                    continue
+                cs = self.campaigns.get(sym)
+                if cs is None:
+                    continue
+                self._advance(cs, now_ms, new_bars=bars,
+                              run_paper_fills=False)
+                for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items()):
+                    if s2 == sym:
+                        self._advance(sub_cs, now_ms, new_bars=bars,
+                                      run_paper_fills=False)
+                self._try_unlock_higher_tfs(sym, cs.trig_bars)
+                self._save_cached_bars(sym, cs.trig_bars)
+                self.counters["gap_bars"] = \
+                    self.counters.get("gap_bars", 0) + len(bars)
+                replayed += len(bars)
+            if self.mode == "live":
+                self._reconcile()
+                if self._missing_streak:
+                    self._reconcile()   # 连续两轮确认:缺口内已被止损
+            self._gap_settle()
+            if self.mode == "live":
+                # 防线可能已在缺口内推进:无条件重核在挂保护单(撤旧换新)
+                self._manage_stops(now_ms, force=True)
+        finally:
+            self._gap_replay = False
+            self._gap_started_ms = None
+            self._gap_stop_hit = {}
+            self._touch_campaigns()
+        hours = max(0.0, (now_ms - started) / 3_600_000.0)
+        exits = int(self.counters.get("gap_stop_exits", 0))
+        naked = int(self.counters.get("gap_stop_unprotected", 0))
+        self._journal("gap_recover", {"hours": round(hours, 2),
+                                      "bars": replayed,
+                                      "symbols": len(batch),
+                                      "stop_exits": exits,
+                                      "unprotected": naked})
+        self.tg.send_alert(
+            f"掉线补做完成:{hours:.2f}h / {replayed} 根 2H bar / "
+            f"{len(batch)} 品种;缺口内止损离场 {exits} 笔,"
+            f"保护失效 {naked} 笔;补做期间未开新仓")
+
+    def _pre_gap_sync(self) -> None:
+        """补做前以交易所为准对齐持仓(不搞两轮确认:停机本身就是最强证据)。"""
+        if self.mode != "live":
+            return
+        try:
+            ex_pos = self.client.positions()
+        except BitgetError as e:
+            self._api_note(e)
+            return
+        ex_by = {(p["symbol"], int(p["direction"])): p for p in ex_pos}
+        for sym in list(self.positions):
+            pos = self.positions[sym]
+            ex = ex_by.get((sym, int(pos["direction"])))
+            if ex is None:
+                # 停机期间保护止损成交 / 外部平仓:本地事实按交易所清理
+                self._reconcile_closed(sym, pos)
+                continue
+            self.positions[sym]["mark"] = float(ex.get("mark_price") or 0.0)
+            if abs(float(ex["qty"]) - float(pos["qty"])) > \
+                    max(1e-9, float(ex["qty"]) * 1e-6):
+                ours = float(pos["qty"])
+                self.positions[sym]["qty"] = float(ex["qty"])
+                cs = self._get_cs_for(sym, pos.get("tf_label"))
+                pos_pm = cs.pm.positions.get(sym) if cs is not None else None
+                if pos_pm is not None:
+                    try:
+                        pos_pm.qty = float(ex["qty"])
+                    except Exception:
+                        pass
+                self.counters["reconcile_fixes"] = \
+                    self.counters.get("reconcile_fixes", 0) + 1
+                self._journal("reconcile_fix", {"symbol": sym, "ours": ours,
+                                                "exchange": float(ex["qty"])})
+
+    def _gap_settle(self) -> None:
+        """缺口结算:缺口内触及固定止损的仓位,其结局按交易所事实归类。"""
+        for sym, hit in sorted(self._gap_stop_hit.items()):
+            if sym not in self.positions:
+                self.counters["gap_stop_exits"] = \
+                    self.counters.get("gap_stop_exits", 0) + 1
+                self._journal("gap_stop_exit", {"symbol": sym,
+                                                "stop": hit["stop"],
+                                                "ts": hit["ts"]})
+                continue
+            # 价格已越过防线、交易所却仍有持仓 ⇒ 保护单大概率缺失:此时挂止损
+            # 只会立刻以更差价成交,直接市价离场(只保护不主出的唯一例外)。
+            pos = self.positions[sym]
+            mark = float(pos.get("mark") or 0.0)
+            invalid = float(pos["invalid"])
+            breached = mark > 0.0 and (
+                mark <= invalid if int(pos["direction"]) > 0
+                else mark >= invalid)
+            self.counters["gap_stop_unprotected"] = \
+                self.counters.get("gap_stop_unprotected", 0) + 1
+            self._journal("gap_stop_unprotected", {
+                "symbol": sym, "stop": hit["stop"], "invalid": invalid,
+                "mark": mark, "breached": breached})
+            if breached:
+                self._gap_market_exit(
+                    sym, pos, f"GAP_STOP_BREACHED|{hit['stop']:.8g}")
+            else:
+                self.tg.send_alert(
+                    f"{sym} 停机期间触及固定止损 {hit['stop']:.8g},"
+                    f"但交易所仍有持仓(现价 {mark:.8g} 未越防线 {invalid:.8g})"
+                    f";已按当前防线重挂保护,人工核查")
+
+    def _gap_market_exit(self, sym: str, pos: dict, why: str) -> None:
+        """缺口内已越过防线且无保护单:立即市价平仓(交易所真相兜底)。"""
+        if self.mode != "live":
+            return
+        spec = self._spec(sym)
+        qty = _floor_step(float(pos["qty"]), spec.size_step, spec.size_place)
+        if qty <= 0.0:
+            return
+        now_ms = int(time.time() * 1000)
+        oid = client_oid_of(self.OID_PREFIX, sym,
+                            str(pos.get("event_id", "GAP")), "gap",
+                            now_ms, role="exit")[:36]
+        try:
+            self.client.place_market_order(
+                sym, side=self.close_side_of(int(pos["direction"])), size=qty,
+                client_oid=oid, trade_side=self.close_trade_side())
+        except BitgetError as e:
+            self._journal("gap_exit_error", {"symbol": sym,
+                                             "why": str(e)[:160]})
+            self.tg.send_alert(f"{sym} 缺口止损兜底市价平仓失败:"
+                               f"{str(e)[:120]}(仓位仍在,人工核查)")
+            return
+        self.counters["orders_placed"] += 1
+        self.counters["gap_market_exits"] = \
+            self.counters.get("gap_market_exits", 0) + 1
+        it = {"oid": oid, "symbol": sym, "role": "exit", "kind": "market",
+              "direction": -int(pos["direction"]), "qty": qty,
+              "route": why, "limit_price": None}
+        self._live_close_filled(it, ref_price=float(
+            pos.get("mark") or pos.get("entry") or 0.0))
 
     def _api_note(self, e: Exception) -> None:
         """API 错计数与熔断(fail-closed)。
@@ -1286,7 +1436,7 @@ class LiveRunner:
         if new_bars is None:
             new_bars = self.client.history_candles(
                 cs.symbol, self.cog_cfg["granularity"], start_ms=last + 1,
-                limit=100)
+                limit=self._bar_limit(last, now_ms))
         base_ms = 7200 * 1000
         trig_ms = max(base_ms, int(cs.trigger_tf_seconds) * 1000)
         obs_ms = max(base_ms, int(cs.obs_tf_seconds) * 1000)
@@ -1307,12 +1457,11 @@ class LiveRunner:
                         self.extra_campaigns[(cs.symbol, cs.tf_label)] = fresh
                     else:
                         self.campaigns[cs.symbol] = fresh
-                    self._touch_campaigns()      # 认知帧重装配:冷档同步
                 return
             if self.mode == "paper" and run_paper_fills:
                 self._paper_fill_pass(cs.symbol, bar)
             cs.trig_bars.append(bar)
-            self._touch_campaigns()          # 新 bar 必须尽快进冷档(缺口切分锚)
+            self._touch_campaigns()         # 新 bar 必须尽快进冷档(缺口切分锚)
             for pos in self.positions.values():    # worst-case mark 就近更新
                 if pos["symbol"] == cs.symbol:
                     pos["mark"] = float(bar[4])
@@ -1372,6 +1521,10 @@ class LiveRunner:
         breached = (l <= stop) if pos_pm.direction > 0 else (h >= stop)
         if breached:
             ref_px = min(o, stop) if pos_pm.direction > 0 else max(o, stop)
+            if self._gap_replay:
+                # 缺口内触价:记下来,补做结束后按交易所事实归类(是否已离场)
+                self._gap_stop_hit[sym] = {"stop": stop, "ts": ts,
+                                           "ref_px": ref_px}
             if self.mode == "paper":
                 self._cancel_entry(sym, "sub_bar_protective_stop")
                 self._cancel_stop(sym, "sub_bar_protective_stop")
@@ -1394,57 +1547,51 @@ class LiveRunner:
                 }
                 self._paper_close_fill(sym, stop_it, float(ref_px), ts)
             else:
-                if self._gap_replay:
-                    # 补放缺口 bar:本进程当时不在场,计划单可能未触发/未挂出。
-                    # 先记账(不在此处平仓,避免与补放中的后续 bar 逻辑交错),
-                    # 补放结束后由 _gap_settle 按 stop_policy 一次性结算。
-                    self._gap_stop_hit[sym] = {"ts": ts, "stop": stop,
-                                               "bar_close": c}
-                else:
-                    # live 模式:交易所已有 loss_plan 计划单,触价即刻触发对账以消除状态延迟
-                    self._reconcile()
+                # live 模式:交易所已有 loss_plan 计划单,触价即刻触发对账以消除状态延迟
+                self._reconcile()
             return
 
         # ② 固定 TP1(target_1)盘中触价/突破同步
+        #    锁利口径与 position.on_bar 完全一致(共用 position.py helper):
+        #      lock = tighten_lock(计划口径, 行情口径) 再经 lock_is_protective
+        #      闸门;闸门不通过 ⇒ 不推进、不置 reduced,保留原结构止损。
         if pos_pm.target_1 is not None and not pos_pm.reduced and not pos_pm.pending_reduce:
             target = float(pos_pm.target_1)
             lock_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
+            giveback_r = float(getattr(cs.pm, "opp_lock_max_giveback_r", 0.0) or 0.0)
             old_inv = float(pos_pm.invalid)
-            # 落位闸门的参考价:取本地收盘 c 与已知 mark 中**更保守**的一侧
-            # (空头取较高价、多头取较低价),避免换单瞬间现价已越过锁利价。
+            # 参考价:逐 bar 口径取子 bar 收盘 c;live 另取 mark 的更保守一侧
+            # (mark 可能比刚收的子 bar 更新,止损落位必须对"当下可见价"成立)。
             ref_px = c
-            _mark = float(pos_dict.get("mark") or 0.0)
-            if _mark > 0.0:
-                ref_px = max(c, _mark) if pos_pm.direction < 0 else min(c, _mark)
+            mark_px = float(pos_dict.get("mark") or 0.0)
+            if self.mode != "paper" and mark_px > 0.0:
+                ref_px = (max(c, mark_px) if pos_pm.direction < 0
+                          else min(c, mark_px))
             if lock_cfg < 0.0:
                 broke = (c < target) if pos_pm.direction < 0 else (c > target)
                 if broke:
                     frac = abs(lock_cfg)
                     plan_px = opp_lock_px(pos_pm.entry, target, frac)
-                    live_px = opp_lock_live_px(
-                        pos_pm.direction, ref_px,
-                        float(getattr(cs.pm, "opp_lock_max_giveback_r", 0.0) or 0.0),
-                        float(getattr(pos_pm, "initial_risk", 0.0) or 0.0))
-                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px)
-                    if not lock_is_protective(pos_pm.direction, lock_px, ref_px):
-                        # 推进价已落到现价盈利侧/身后 ⇒ 不推进(保留原结构止损);
-                        # 否则交易所会把这张"止损"当止盈单立即触发,仓位失保。
+                    live_px = opp_lock_live_px(pos_pm.direction, ref_px,
+                                               giveback_r, pos_pm.initial_risk)
+                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px,
+                                           ref_px, pos_pm.entry)
+                    if lock_px is None or not lock_is_protective(
+                            pos_pm.direction, lock_px, ref_px):
+                        # 落位闸门:可用候选为空(锁利价已在现价盈利侧/身后,
+                        # 或落到 entry 亏损侧)⇒ 推进它等于把唯一保护单变成
+                        # "挂单即成交"的止盈单 / 亏损锁。
                         pos_pm.log.append(
                             f"v21|sub_bar_opp_break_lock_reject|子周期收盘突破对侧缘 "
                             f"target={target:.8g} 锁利({frac:.0%}) 算得 "
-                            f"{(lock_px if lock_px is not None else float('nan')):.8g} "
-                            f"不在现价 {ref_px:.8g} 保护侧 ⇒ 保持原防线 "
-                            f"invalid={old_inv:.8g}")
-                        self._journal("lock_reject",
-                                      {"symbol": sym, "why": "wrong_side",
-                                       "target": target, "lock_px": lock_px,
-                                       "ref_px": ref_px, "invalid": old_inv,
-                                       "direction": int(pos_pm.direction)})
-                        self._alert_throttled(
-                            f"lock:{sym}",
-                            f"{sym} 锁利推进被闸门拦下:算得 {lock_px} 不在现价 "
-                            f"{ref_px} 保护侧(空头须高于现价/多头须低于现价)"
-                            f",保留原止损 {old_inv}")
+                            f"{fmt_px(lock_px)} 不在现价 {ref_px:.8g} 保护侧 "
+                            f"⇒ 保持原防线 invalid={pos_pm.invalid:.8g}")
+                        self._journal("lock_reject", {
+                            "symbol": sym, "tf": cs.tf_label,
+                            "why": "sub_bar_opp_break_lock",
+                            "direction": pos_pm.direction,
+                            "target": target, "lock": lock_px,
+                            "ref": ref_px, "invalid": pos_pm.invalid})
                     else:
                         pos_pm.reduced = True
                         pos_pm.invalid = (min(pos_pm.invalid, lock_px)
@@ -1462,39 +1609,34 @@ class LiveRunner:
                     broke_through = (c < target) if pos_pm.direction < 0 else (c > target)
                     frac = lock_cfg if broke_through else min(0.10, lock_cfg)
                     plan_px = opp_lock_px(pos_pm.entry, target, frac)
-                    live_px = opp_lock_live_px(
-                        pos_pm.direction, ref_px,
-                        float(getattr(cs.pm, "opp_lock_max_giveback_r", 0.0) or 0.0),
-                        float(getattr(pos_pm, "initial_risk", 0.0) or 0.0))
-                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px)
-                    if not lock_is_protective(pos_pm.direction, lock_px, ref_px):
-                        # 仅影线触及分支:极值刺到目标后收盘已反抽回建仓价附近,
-                        # 推 10% 保本垫只会把止损变成贴着建仓价的止盈单 ⇒ 拦下。
+                    live_px = opp_lock_live_px(pos_pm.direction, ref_px,
+                                               giveback_r, pos_pm.initial_risk)
+                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px,
+                                           ref_px, pos_pm.entry)
+                    if lock_px is None or not lock_is_protective(
+                            pos_pm.direction, lock_px, ref_px):
+                        # 仅影线触及分支最易踩到"锁利价回落到现价盈利侧"。
                         pos_pm.log.append(
                             f"v21|sub_bar_opp_lock_reject|子周期触及对侧缘 "
                             f"target={target:.8g} 锁利({frac:.0%}) 算得 "
-                            f"{(lock_px if lock_px is not None else float('nan')):.8g} "
-                            f"不在现价 {ref_px:.8g} 保护侧 ⇒ 保持原防线 "
-                            f"invalid={old_inv:.8g}")
-                        self._journal("lock_reject",
-                                      {"symbol": sym, "why": "wrong_side_wick",
-                                       "target": target, "lock_px": lock_px,
-                                       "ref_px": ref_px, "invalid": old_inv,
-                                       "direction": int(pos_pm.direction)})
-                        self._alert_throttled(
-                            f"lock:{sym}",
-                            f"{sym} 锁利推进被闸门拦下:算得 {lock_px} 不在现价 "
-                            f"{ref_px} 保护侧(空头须高于现价/多头须低于现价)"
-                            f",保留原止损 {old_inv}")
+                            f"{fmt_px(lock_px)} 不在现价 {ref_px:.8g} 保护侧 "
+                            f"⇒ 保持原防线 invalid={pos_pm.invalid:.8g}")
+                        self._journal("lock_reject", {
+                            "symbol": sym, "tf": cs.tf_label,
+                            "why": "sub_bar_opp_lock",
+                            "direction": pos_pm.direction,
+                            "target": target, "lock": lock_px,
+                            "ref": ref_px, "invalid": pos_pm.invalid})
                     else:
                         pos_pm.reduced = True
                         pos_pm.invalid = (min(pos_pm.invalid, lock_px)
                                           if pos_pm.direction < 0
                                           else max(pos_pm.invalid, lock_px))
                         pos_pm.log.append(
-                            f"v21|sub_bar_opp_lock|子周期触及对侧缘 target={target:.8g} "
-                            f"锁利({frac:.0%}) 计划={fmt_px(plan_px)} "
-                            f"行情={fmt_px(live_px)} ref={ref_px:.8g} "
+                            f"v21|sub_bar_opp_lock|子周期触及对侧缘 "
+                            f"target={target:.8g} 锁利({frac:.0%}) "
+                            f"计划={fmt_px(plan_px)} 行情={fmt_px(live_px)} "
+                            f"ref={ref_px:.8g} "
                             f"invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
             else:
                 # 传统 §8.2 target_1 触及减仓 50%
@@ -1506,7 +1648,7 @@ class LiveRunner:
 
             if abs(float(pos_pm.invalid) - old_inv) > 1e-12:
                 pos_dict["invalid"] = float(pos_pm.invalid)
-                self._touch_campaigns()      # 防线推进:冷档必须留住
+                self._touch_campaigns()     # 防线推进:冷档必须留住
                 last_log = pos_pm.log[-1] if pos_pm.log else "子周期防线锁利"
                 self.tg.send_fill(
                     sym, f"止损推进({self.mode})",
@@ -1515,13 +1657,14 @@ class LiveRunner:
                     note=f"{old_inv:.6g} -> {pos_pm.invalid:.6g} ({last_log[:48]})",
                     tf_label=cs.tf_label,
                     direction=pos_pm.direction,
-                    entry_price=float(pos_dict["entry"]),
-                    price_label="参考价(子周期收盘)",
                     stop_price=float(pos_pm.invalid),
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo"),
                     box_hi=pos_dict.get("box_hi"),
                     bars=cs.trig_bars[-45:] if cs.trig_bars else cs.cog_bars[-45:],
+                    # 图上 ENTRY 必须是建仓均价(不是本次事件价 c):否则止损
+                    # 推进通知会把 ENTRY 画在事件价上,相对关系整体错位。
+                    entry_price=float(pos_pm.entry),
                 )
 
     def _close_cognition(self, cs: CampaignState, cog_bar) -> None:
@@ -1548,9 +1691,9 @@ class LiveRunner:
             mgmt = cs.pm.on_bar(sym, cog_bar, atr, new_pivots, emitted or [])
             if abs(float(pos_pm.invalid) - old_inv) > 1e-12:
                 pos_dict = self.positions.get(sym)
-                self._touch_campaigns()      # 防线推进:冷档必须留住
                 if pos_dict is not None:
                     pos_dict["invalid"] = float(pos_pm.invalid)
+                self._touch_campaigns()     # 防线推进:冷档必须留住
                 last_log = pos_pm.log[-1] if pos_pm.log else "防线收紧"
                 self.tg.send_fill(
                     sym, f"止损推进({self.mode})",
@@ -1559,8 +1702,6 @@ class LiveRunner:
                     note=f"{old_inv:.6g} -> {pos_pm.invalid:.6g} ({last_log[:48]})",
                     tf_label=cs.tf_label,
                     direction=pos_pm.direction,
-                    entry_price=(float(pos_dict["entry"]) if pos_dict else None),
-                    price_label="参考价(认知帧收盘)",
                     stop_price=float(pos_pm.invalid),
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo") if pos_dict else None,
@@ -1577,14 +1718,30 @@ class LiveRunner:
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
                     *, mic: bool) -> None:
-        """canonical 决策:MarketRouter → 意图(v21 唯一链)。"""
+        """canonical 决策:支持 v20(ctx18)与 v21(V6Router) → 路由 → 意图。"""
         sym = cs.symbol
+        if self._gap_replay:
+            # 补做期间只做持仓管理,不产生新风险:停机期的信号已经过期,
+            # 用它们按"现在的价格"补开等于凭空造单。
+            self.counters["gap_entry_skips"] = \
+                self.counters.get("gap_entry_skips", 0) + 1
+            self._journal("gap_entry_skip", {"symbol": sym, "n_events": len(events),
+                                             "mic": mic})
+            return
         if mic:
-            bars, bar = cs.trig_bars, cs.trig_bars[-1]
+            rngq_bars, ri = cs.trig_bars, len(cs.trig_bars) - 1
+            bar = cs.trig_bars[-1]
         else:
-            bars, bar = cs.cog_bars, cs.cog_bars[-1]
+            rngq_bars, ri = cs.cog_bars, len(cs.cog_bars) - 1
+            bar = cs.cog_bars[-1]
+        if hasattr(cs.router, "ctx18_windows") and hasattr(cs.router, "set_ctx18"):
+            wq, wp = cs.router.ctx18_windows()
+            cs.router.set_ctx18({
+                "rngq": range_quantile(rngq_bars, ri, wq),
+                "pmd": prior_moves_delta(cs.cog_bars, len(cs.cog_bars) - 1, wp),
+                "mic": mic})
         decisions = cs.router.on_bar(
-            sym, bar, len(bars) - 1, view, atr, events,
+            sym, bar, ri, view, atr, events,
             position_open=sym in self.positions,
             entry_resting=self._entry_resting(sym))
         t = int(bar[0])
@@ -1592,16 +1749,6 @@ class LiveRunner:
             if d.kind == "cancel_entry":
                 self._cancel_entry(sym, str(d.meta.get("reason", "")))
             elif d.kind in ("market", "limit"):
-                if self._gap_replay:
-                    # 掉线补做:补放出的历史信号不得按现价追单。canonical 里它们
-                    # 当时会立刻成交;现在补做只会在价格已经走开之后追高/追低,
-                    # 属于凭空新增风险(也不是"恢复"任何既有事实)。
-                    self.counters["gap_entry_skips"] = \
-                        self.counters.get("gap_entry_skips", 0) + 1
-                    self._journal("gap_entry_skip", {
-                        "symbol": sym, "ts": int(bar[0]),
-                        "event": getattr(d.hyp, "event_id", None)})
-                    continue
                 self._submit_open(cs, d, t, mic=mic)
             else:
                 raise RuntimeError(f"unknown decision {d.kind}")
@@ -1649,7 +1796,7 @@ class LiveRunner:
         eff_lev = float(self.leverage_by_sym.get(sym)
                         or self.risk.get("leverage_cap") or 20)
         qty = min(qty, eff_lev * equity / entry_ref)
-        qty = floor_step(qty, spec.size_step, spec.size_place)
+        qty = _floor_step(qty, spec.size_step, spec.size_place)
         # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
         outstanding = sum(
             worst_case_of_position(p["direction"], p["qty"],
@@ -1793,7 +1940,6 @@ class LiveRunner:
             "target_1": it["target_1"], "event_id": it["event_id"],
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "opened_ts": ts, "mark": price}
-        self._touch_campaigns()              # 新仓:冷档里的 pm 事实必须同步
         if cs is not None:
             risk = it["direction"] * (price - it["invalid"])
             if risk > 0.0:
@@ -1804,6 +1950,7 @@ class LiveRunner:
                 except ValueError as e:
                     self.tg.send_alert(f"{sym} pm 建仓拒绝:{e}")
         self.counters["fills"] += 1
+        self._touch_campaigns()             # 新仓:冷档里的 pm 事实必须同步
         chart_bars = (cs.trig_bars[-45:] if (cs and it.get("mic") and cs.trig_bars)
                       else (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None)))
         self.tg.send_fill(
@@ -1830,6 +1977,16 @@ class LiveRunner:
             return
         kind = intent.kind.value
         t = int(cog_bar[0])
+        if self._gap_replay and self.mode == "live":
+            # 补做期间的管理意图按历史 bar 生成,限价/市价都带着过期价格:
+            # 本地 pm 事实照常推进(canonical 状态一致),但不在交易所补单;
+            # 补做后的保护单重挂只看当前 invalid,已经足够兜底。
+            self.counters["gap_mgmt_deferred"] = \
+                self.counters.get("gap_mgmt_deferred", 0) + 1
+            self._journal("gap_mgmt_defer", {"symbol": sym, "kind": kind,
+                                             "reason": str(intent.reason)[:80],
+                                             "ts": t})
+            return
         self.counters["mgmt_execs"] += 1
         if kind == "EXIT":
             self._cancel_entry(sym, "position_exit")
@@ -1837,31 +1994,23 @@ class LiveRunner:
             spec = self._spec(sym)         # 全平数量同样按合约精度取整
             self._arm_close_intent(
                 sym, pos,
-                floor_step(float(pos["qty"]), spec.size_step, spec.size_place),
-                "market", None, intent.reason, t, role="exit",
-                force=self._gap_replay)
+                _floor_step(float(pos["qty"]), spec.size_step, spec.size_place),
+                "market", None, intent.reason, t, role="exit")
         elif kind == "REDUCE":
-            qty = floor_step(float(intent.qty_frac or 0.0) * pos["qty"],
-                             self._spec(sym).size_step,
-                             self._spec(sym).size_place)
+            qty = _floor_step(float(intent.qty_frac or 0.0) * pos["qty"],
+                              self._spec(sym).size_step,
+                              self._spec(sym).size_place)
             if qty <= 0.0:
                 return
             target = pos_pm.target_1 if pos_pm is not None else None
             partial_market = str(intent.reason).startswith(
                 "v16|target_partial|")           # S2 段落袋市价(canonical)
-            # 掉线补做:缺口 bar 的限价单已无意义(价格早走开/可能一直不成交),
-            # 按 reduce_policy 用市价把该减的仓位减掉,接受回撤换确定性。
-            gap_market = self._gap_replay and str(
-                (self.loop_cfg.get("gap_recovery") or {})
-                .get("reduce_policy", "market")).lower() == "market"
-            if target is not None and not partial_market and not gap_market:
+            if target is not None and not partial_market:
                 self._arm_close_intent(sym, pos, qty, "limit", float(target),
-                                       intent.reason, t, role="reduce",
-                                       force=gap_market)
+                                       intent.reason, t, role="reduce")
             else:
                 self._arm_close_intent(sym, pos, qty, "market", None,
-                                       intent.reason, t, role="reduce",
-                                       force=gap_market)
+                                       intent.reason, t, role="reduce")
 
     def _arm_close_intent(self, sym: str, pos: dict, qty: float, kind: str,
                           limit_price: Optional[float], reason: str, t: int,
@@ -1870,12 +2019,14 @@ class LiveRunner:
         side = self.close_side_of(pos["direction"])
         oid = client_oid_of(self.OID_PREFIX, sym, str(reason)[:16], side, t,
                             role=role)[:36]
-        if self.open_intents.get(oid, {}).get("status") in (
-                "armed", "filled", "error"):
+        existing = self.open_intents.get(oid, {}).get("status")
+        if existing in ("armed", "filled"):
             return
-        # force=True 走风控离场(止损追平/掉线补做):不受每小时下单数限制,
-        # 否则限频会把"该跑的止损"静默吞掉(rate_skips 只许影响新增风险)。
-        if not force and not self.rate.allow():
+        if existing == "error" and not force:
+            # 失败意图同号不重试(崩溃/接口抖动会每轮刷同一单),除非本次是
+            # 兜底路径(force:保护失效且已越防线)明确要求重下。
+            return
+        if not self.rate.allow():
             self.counters["rate_skips"] += 1
             return
         it = {"oid": oid, "symbol": sym, "role": role, "kind": kind,
@@ -1928,6 +2079,7 @@ class LiveRunner:
         fee = qty * float(ref_price) * self.risk["taker_fee"]
         pos["qty"] = round(pos["qty"] - qty, 10)
         it["status"] = "filled"
+        self._touch_campaigns()             # 平仓/减仓:pm 数量已变
         self.counters["reduce_fills" if it["role"] == "reduce" else "exits"] += 1
         cs = self._get_cs_for(it["symbol"], pos.get("tf_label")) or self.campaigns.get(it["symbol"])
         chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
@@ -1937,7 +2089,6 @@ class LiveRunner:
             note=str(it["route"])[:60],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
             direction=-pos["direction"],
-            entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),
             box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
@@ -1946,7 +2097,6 @@ class LiveRunner:
                                      "qty": qty, "role": it["role"]})
         if it["role"] == "exit" or pos["qty"] <= 1e-9:
             self.positions.pop(it["symbol"], None)
-        self._touch_campaigns()              # 平仓/减仓:pm 数量已变
 
     # ------------------------------------------------------------------
     # live:限价成交同步 / 保护止损 / 撤单 / 过期与超时转市价 / 对账 / 日结
@@ -1977,17 +2127,18 @@ class LiveRunner:
             else:
                 self._live_close_filled(it, ref_price=price)
 
-    def _pending_stop_ids(self, now_ms: int) -> Optional[set]:
-        """交易所在挂计划单 orderId 集合(TTL 缓存;取不到返回 None ≡ 不判定)。
+    def _pending_stop_ids(self, now_ms: int,
+                          *, force: bool = False) -> Optional[set]:
+        """交易所在挂计划单 orderId 集合(TTL 缓存;取不到返回上次结果)。
 
-        用途:本地 `stops` 只证明"我们挂过",不证明"现在还挂着"。计划单被交易所
-        撤掉/触发/风控清理后本地无从得知,表现就是**永久无保护**(2026-10-22
-        掉线期间正是这种盲区)。取不到就返回上次结果,避免把"接口抖动"当成
-        "保护丢了"而反复撤单重挂。
+        本地 `stops` 只证明"我们挂过",不证明"现在还挂着":计划单被交易所
+        触发/撤销/风控清理后本地无从得知,表现就是**永久无保护**(2026-10-22
+        掉线期间正是这种盲区)。取不到记 API 错并沿用上次快照,避免把接口
+        抖动当成"保护丢了"而反复撤单重挂。
         """
         ttl_ms = int(float((self.loop_cfg.get("gap_recovery") or {})
                            .get("stop_check_seconds", 120)) * 1000)
-        if self._stops_live_ids is not None \
+        if not force and self._stops_live_ids is not None \
                 and now_ms - self._stops_checked_at < ttl_ms:
             return self._stops_live_ids
         try:
@@ -1998,19 +2149,18 @@ class LiveRunner:
             return self._stops_live_ids
         rows = raw.get("entrustedList") if isinstance(raw, dict) else raw
         rows = [r for r in (rows or []) if r.get("orderId")]
-        ids = {str(r.get("orderId")) for r in rows}
-        self._stops_live_ids, self._stops_live_rows = ids, rows
+        self._stops_live_ids = {str(r.get("orderId")) for r in rows}
+        self._stops_live_rows = rows
         self._stops_checked_at = now_ms
-        return ids
+        return self._stops_live_ids
 
     def _dedupe_stops(self, now_ms: int) -> None:
-        """每个持仓只留一张保护计划单:清理重复/遗留挂单。
+        """每个持仓只留一张自有保护计划单:清理重复/遗留挂单。
 
-        为什么需要:掉线补做、本地记录丢失后重挂、旧进程残留,都可能在同一
+        为什么需要:掉线补做、本地记录丢失后重挂、旧进程残留,都可能在同一个
         symbol 上留下多张同向 close 计划单。它们各自按整仓 size 触发,第一张
         成交后其余成为无仓可平的废单;而 `stops` 只记得其中一张 ⇒ 对账看不见
-        另一张,撤旧换新时也会漏撤(2026-10-22 掉线事件里的隐性风险)。
-        只处理自有 clientOid 前缀的挂单,异己单一律不碰。
+        另一张,撤旧换新时也会漏撤。只处理自有 clientOid 前缀,异己单不碰。
         """
         rows = self._stops_live_rows
         if not rows:
@@ -2024,7 +2174,7 @@ class LiveRunner:
             cur = self.stops.get(sym)
             keep = str(cur.get("order_id") or "") if cur else ""
             if not keep or sym not in self.positions:
-                continue                  # 无本地记录/无持仓:留给 _manage_stops 处置
+                continue                  # 无本地记录/无持仓:留给 _manage_stops
             for r in items:
                 oid = str(r.get("orderId"))
                 if oid == keep:
@@ -2044,55 +2194,54 @@ class LiveRunner:
                 self._stops_live_ids, self._stops_live_rows = None, None
                 self._stops_checked_at = 0.0
 
-    def _manage_stops(self, now_ms: int) -> None:
+    def _manage_stops(self, now_ms: int, *, force: bool = False) -> None:
         """保护止损计划单(loss_plan @ 当前 invalid;invalid/数量变动撤旧换新)。
 
-        只保护不主出:结构出场一律经 §8/canonical 路径。另外每轮(带 TTL)核对
-        计划单是否仍在交易所;本地有记录而交易所没有 = 保护失效,必须重挂,
-        若价格已越过防线则直接市价离场(挂单只会立刻以更差价成交)。
+        只保护不主出:结构出场一律经 §8/canonical 路径。另外每轮(带 TTL)
+        核对计划单是否仍在交易所:本地有记录而交易所没有 = 保护失效,必须重挂;
+        若同时价格已越过防线,则直接市价离场(此时挂单只会以更差价成交)。
+        孤儿单(本地无持仓却仍在挂)一律撤掉,防止反向开仓被旧单误平。
         """
-        live_ids = self._pending_stop_ids(now_ms) if self.mode == "live" else None
+        live_ids = (self._pending_stop_ids(now_ms, force=force)
+                    if self.mode == "live" else None)
         for sym, pos in list(self.positions.items()):
             want = self.fit_price(sym, float(pos["invalid"]), pos["direction"])
             cur = self.stops.get(sym)
             # 数量必须按合约精度取整:精度不符会被交易所直接拒单
             # (实测 40808 size checkScale),导致保护永远挂不上
             spec = self._spec(sym)
-            stop_qty = floor_step(float(pos["qty"]), spec.size_step,
-                                  spec.size_place)
+            stop_qty = _floor_step(float(pos["qty"]), spec.size_step,
+                                   spec.size_place)
             missing = bool(cur and cur.get("order_id") and live_ids is not None
                            and str(cur["order_id"]) not in live_ids)
             if missing:
                 self.counters["stop_missing"] = \
                     self.counters.get("stop_missing", 0) + 1
                 self._journal("stop_missing", {"symbol": sym,
-                                               "order_id": cur.get("order_id"),
-                                               "trigger": cur.get("trigger")})
+                                               "order_id": cur["order_id"],
+                                               "trigger": cur["trigger"]})
                 mark = float(pos.get("mark") or 0.0)
                 breached = mark > 0.0 and (
-                    (int(pos["direction"]) > 0 and mark <= want)
-                    or (int(pos["direction"]) < 0 and mark >= want))
+                    mark <= want if int(pos["direction"]) > 0
+                    else mark >= want)
                 if breached:
-                    self._cancel_entry(sym, "stop_missing_breached")
-                    self.stops.pop(sym, None)
                     self._arm_close_intent(
                         sym, pos, stop_qty, "market", None,
                         f"STOP_MISSING_BREACHED|{want:.8g}", int(now_ms),
                         role="exit", force=True)
                     self.tg.send_alert(
                         f"{sym} 保护止损单已不在交易所(被撤/被触发/被清理)"
-                        f",且现价 {mark:.8g} 已越过防线 {want:.8g} → 市价离场")
+                        f",现价 {mark:.8g} 已越过防线 {want:.8g} → 市价离场")
                     continue
-                cur = None      # 无保护单:落到下面重挂
+                cur = None                     # 无保护单:落到下面重挂
             if cur is not None and abs(cur["trigger"] - want) < 1e-12 \
                     and abs(cur["qty"] - stop_qty) < 1e-12:
                 continue
             try:
                 if cur is not None and cur.get("order_id"):
-                    # 撤旧单失败**不得**阻断新单:旧单可能已成交或已被交易所
-                    # 撤销(cancel 返回 order does not exist)。修前该异常跳到
-                    # 外层 except ⇒ 不挂新单,而下一轮会因同一原因再失败 ——
-                    # 仓位在无人察觉的情况下持续失保。
+                    # 撤旧单失败**不得**阻断新单:旧单可能已成交或被交易所
+                    # 撤销(cancel 报 order does not exist)。修前该异常跳到
+                    # 外层 except ⇒ 不挂新单,下一轮同样失败 = 持续失保。
                     try:
                         self.client.cancel_plan_order(sym, cur["order_id"])
                     except BitgetError as e:
@@ -2111,8 +2260,8 @@ class LiveRunner:
                         "stop", int(now_ms), role="stop"))
                 self.stops[sym] = {"trigger": want, "qty": stop_qty,
                                    "order_id": str(resp.get("orderId") or "")}
-                # 刚换过单:缓存里的在挂集合已过期,置空强制下轮重读,
-                # 否则新 order_id 不在旧快照里会被判"保护丢失"→ 反复撤挂。
+                # 刚换过单:在挂快照已过期,置空强制下轮重读,否则新 order_id
+                # 不在旧快照里会被判"保护丢失"→ 反复撤挂。
                 self._stops_live_ids, self._stops_live_rows = None, None
                 self._stops_checked_at = 0.0
                 self._journal("stop", {"symbol": sym, "trigger": want,
@@ -2127,9 +2276,24 @@ class LiveRunner:
                     f"stop:{sym}",
                     f"{sym} 保护止损计划失败:{str(e)[:120]}"
                     f"(当前无触发保护,人工介入;同类告警 30 分钟内不重复)")
-        if live_ids is not None:
-            # 快照有效才去重(刚换过单时快照已作废,留待下轮 TTL 重读)
-            self._dedupe_stops(now_ms)
+        if self.mode == "live" and live_ids is not None:
+            # 孤儿保护单:本地已无持仓(停机期间离场/手动平仓)却还留着的
+            # 自有计划单 → 撤销,否则下一次反向开仓会被它立刻误平。
+            for sym in list(self.stops):
+                if sym in self.positions:
+                    continue
+                oid = str(self.stops[sym].get("order_id") or "")
+                if oid and oid in live_ids:
+                    try:
+                        self.client.cancel_plan_order(sym, oid)
+                    except BitgetError:
+                        continue
+                    self.counters["stop_orphans"] = \
+                        self.counters.get("stop_orphans", 0) + 1
+                    self._journal("stop_orphan_cancel",
+                                  {"symbol": sym, "order_id": oid})
+                self.stops.pop(sym, None)
+            self._dedupe_stops(now_ms)      # 快照有效才去重
 
     def _cancel_stop(self, sym: str, why: str) -> None:
         cur = self.stops.pop(sym, None)
@@ -2226,7 +2390,6 @@ class LiveRunner:
         self.stops.pop(sym, None)
         self.positions.pop(sym, None)
         self._missing_streak.pop(sym, None)
-        self._touch_campaigns()              # 交易所已无此仓:冷档 pm 事实要清
         px = self._last_fill_price(sym)
         pnl = None
         if px is not None:
@@ -2245,7 +2408,6 @@ class LiveRunner:
             pnl=pnl,
             note="保护止损触发或外部平仓;本地持仓事实已按交易所为准清理",
             tf_label=pos.get("tf_label"), direction=int(pos["direction"]),
-            entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=float(pos["invalid"]), target_price=pos.get("target_1"),
             box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"))
 
@@ -2398,7 +2560,6 @@ class LiveRunner:
             pnl=gross - fee, note=str(it["route"])[:60],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
             direction=-pos["direction"],
-            entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),
             box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
@@ -2409,7 +2570,6 @@ class LiveRunner:
         pos["qty"] = round(pos["qty"] - qty, 10)
         if it["role"] == "exit" or pos["qty"] <= 1e-9:
             self.positions.pop(sym, None)
-        self._touch_campaigns()              # paper 平仓/减仓同样进冷档
 
 
 # ---------------------------------------------------------------------------
@@ -2451,6 +2611,13 @@ def main(argv=None) -> None:
             pass
     args = parse_args(argv)
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    # 单实例锁(fail-closed):两个 runner 同时跑 = 两份持仓认知互相覆盖、
+    # 重复下单。文件锁在进程死亡时由内核释放,不存在 pid 残留的毒锁。
+    run_lock = hb.SingletonLock(ROOT / "runtime" / "live" / "live_runner.lock")
+    if not run_lock.acquire():
+        print("[live_runner] 已有实盘实例在运行(单实例锁被占用),本次退出",
+              flush=True)
+        return
     cred_src = cfg.get("credentials_source")
     cred_path = (ROOT / cred_src) if cred_src and (ROOT / cred_src).exists() else None
     secrets = load_secrets(cred_path, config_overrides=cfg.get("credentials"))
@@ -2483,52 +2650,41 @@ def main(argv=None) -> None:
           f"{r['portfolio_cap_frac']} 日损熔断 {r['max_daily_loss_frac']} "
           f"每时单限 {r['orders_per_hour']};宇宙 >= "
           f"{cfg['universe']['min_usdt_volume_24h']:.0f} USDT)", flush=True)
+    # 心跳看护线程:与主循环同进程但独立调度(主循环卡死时它仍是活的)。
+    # 平台无关 —— 判活只读 heartbeat.json 的时间事实,不看进程表/端口/任务计划。
+    hb_cfg = dict(cfg.get("heartbeat") or {})
+    guard = None
+    if hb_cfg.get("enabled", True):
+        guard = HeartbeatGuard(
+            runner, path=runner.heartbeat_path,
+            poll_s=float(hb_cfg.get("write_seconds", 15)),
+            stall_s=float(hb_cfg.get("stall_seconds", 180)),
+            self_fence_s=(float(hb_cfg.get("self_fence_seconds", 900))
+                          if args.mode == "live" else 0.0),
+            secrets=secrets,
+            protect_on_stall=bool(hb_cfg.get("protect_on_stall", True)))
+        guard.start()                      # daemon:进程退出即随主进程消失
+        print(f"[live_runner] 心跳看护起动:每 {guard.poll_s:.0f}s 落盘 / "
+              f"停摆阈值 {guard.stall_s:.0f}s / 自我熔断 "
+              f"{guard.self_fence_s:.0f}s(0=关) / {runner.heartbeat_path}",
+              flush=True)
     tg.send_alert(f"live_runner 起动(mode={args.mode});信号/成交/日结/告警"
-                  f"通道就绪")
-    print(f"[live_runner] gap_started={runner._gap_started_ms} "
-          f"gap_symbols={sorted(runner._gap_bars)} "
-          f"gap_bars={sum(len(v) for v in runner._gap_bars.values())}",
-          flush=True)
-    if runner._gap_bars:
-        tg.send_alert(
-            f"live_runner 起动:检测到上次断点后存在缺口("
-            f"{len(runner._gap_bars)} 品种/"
-            f"{sum(len(v) for v in runner._gap_bars.values())} 根 2H bar),"
-            f"将先补做持仓管理再恢复常规循环")
-    # 连续失败上限:超过即退出交给看门狗(CLI 与计划任务都能拉起)。
-    # 修前缺陷:任何非 BitgetError 异常都会让进程直接消失且没有任何告警
-    # (2026-10-22 17:12 起的静默停摆)。
-    max_consec = int(cfg["loop"].get("max_consecutive_errors", 20))
-    consec = 0
+                  f"通道就绪;心跳看护={'on' if guard else 'off'}")
     while True:
         now_ms = int(time.time() * 1000)
         try:
             runner.step(now_ms)
-            consec = 0
         except BitgetError as e:
-            consec += 1
-            print(f"[live_runner] api error({consec}): {e}", flush=True)
+            print(f"[live_runner] api error: {e}", flush=True)
+            try:      # 调用点栈:API 错常被上层吞成一行,排障需要位置
+                runner._journal("step_api_error", {
+                    "why": str(e)[:200],
+                    "tb": traceback.format_exc(limit=4)[-800:]})
+            except OSError:
+                pass
         except SecretsError as e:
             print(f"[live_runner] secrets error: {e}", flush=True)
             raise
-        except Exception as e:
-            consec += 1
-            traceback.print_exc()
-            try:
-                runner._journal("crash", {
-                    "err": f"{type(e).__name__}: {e}"[:300],
-                    "consec": consec})
-                if consec == 1:
-                    tg.send_alert(
-                        f"live_runner 未预期异常({type(e).__name__}):"
-                        f"{str(e)[:160]}(进程保活;连续 {max_consec} 次即退出,"
-                        f"由看门狗重启)")
-            except Exception:
-                pass
-            if consec >= max_consec:
-                raise
-            time.sleep(poll)
-            continue
         time.sleep(poll)
 
 

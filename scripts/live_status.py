@@ -1,7 +1,8 @@
-"""实盘只读体检(不下单、不撤单、不改杠杆、不写 state.json)。
+﻿"""实盘只读体检(不下单、不撤单、不改杠杆、不写 state.json)。
 
 回答三个运维问题:
-① 心跳是否新鲜(state.json 的 saved_at_utc 年龄);
+① 心跳是否新鲜(`runtime/live/heartbeat.json` 的 `ts_ms` / `loop_ts_ms` 年龄;
+   跨平台判活,不看进程表);
 ② 仓位与保护是否一致(本地 positions/stops ↔ 交易所持仓 ↔ 在挂计划单);
 ③ 重启会发生什么(缺口段已收盘 2H bar 是否已越过当前防线,即补做是否会
    触发市价离场)。
@@ -14,8 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -26,9 +25,20 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from market_operator.bitget_live import BitgetLiveClient, BitgetError   # noqa: E402
+from market_operator import heartbeat as hb                             # noqa: E402
 from market_operator.secrets_loader import load_secrets                 # noqa: E402
 
 import live_runner as lr                                                # noqa: E402
+
+
+def _utc_ms(iso):
+    """ISO8601(UTC) → epoch ms。main 的 live_runner 没有这个辅助函数,故本地实现。"""
+    if not iso:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(iso)).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
 
 CONFIG_PATH = ROOT / "config" / "live.json"
 
@@ -52,7 +62,7 @@ def _print_state(state_path: Path, now_ms: int) -> tuple[dict, int]:
         print(f"缺失: {state_path}")
         return {}, 2
     st = json.loads(state_path.read_text(encoding="utf-8"))
-    saved_ms = lr._utc_ms(st.get("saved_at_utc"))
+    saved_ms = _utc_ms(st.get("saved_at_utc"))
     print(f"path        : {state_path}")
     print(f"saved_at    : {st.get('saved_at_utc')}  "
           f"(age {_age_h(saved_ms, now_ms)})")
@@ -181,7 +191,7 @@ def _print_gap(client, cfg: dict, st: dict, positions: dict, now_ms: int,
     print("      不代表当时真挂着那张单 —— 以日志 gap_stop_hit 为准。")
     print("=" * 78)
     loop_cfg = cfg.get("loop") or {}
-    anchor = st.get("gap_started_ms") or lr._utc_ms(st.get("saved_at_utc"))
+    anchor = st.get("gap_started_ms") or _utc_ms(st.get("saved_at_utc"))
     if not anchor:
         print("无缺口锚点(state 缺 saved_at_utc/gap_started_ms)")
         return
@@ -220,20 +230,52 @@ def _print_gap(client, cfg: dict, st: dict, positions: dict, now_ms: int,
                   f"l={b[3]:.8g} c={b[4]:.8g}")
 
 
-def _runner_pids() -> list[str]:
-    """实际列出在跑的 live_runner 进程(修前这里只打印了命令字符串)。"""
-    if os.name == "nt":
-        cmd = ["powershell", "-NoProfile", "-Command",
-               "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\""
-               " | Where-Object { $_.CommandLine -match 'live_runner' }"
-               " | ForEach-Object { \"{0} ({1})\" -f $_.ProcessId, $_.Name }"]
-    else:
-        cmd = ["pgrep", "-af", "live_runner"]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as e:
-        return [f"查询失败: {e}"]
-    return [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+def _print_heartbeat(state_path: Path, now_ms: int) -> tuple[dict, str]:
+    """心跳体检:唯一判活依据(不看进程表/端口/计划任务)。
+
+    修前这里读 `state.json` 的 `saved_at_utc` 充当"心跳",并用 PowerShell /
+    pgrep 列进程 —— 前者会被冷档写入拖慢、后者换系统就失效(2026-10-22
+    事故里正是这两点让人误判"还活着")。
+    """
+    print()
+    print("=" * 78)
+    print("心跳(判活唯一依据)")
+    print("=" * 78)
+    path = state_path.with_name("heartbeat.json")
+    if not path.exists():
+        print(f"缺失: {path} → runner 未在运行(看护应拉起)")
+        return {}, hb.MISSING
+    doc = hb.read_heartbeat(path)
+    age = hb.beat_age_seconds(doc, at_ms=now_ms)
+    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
+        if CONFIG_PATH.exists() else {}
+    sup = dict(cfg.get("supervisor") or {})
+    kind = hb.classify(age, doc.get("status"),
+                       ok_s=float(sup.get("ok_seconds", 120)),
+                       stale_s=float(sup.get("stale_seconds", 300)),
+                       recover_max_s=float(sup.get("recover_max_seconds", 2700)))
+    loop_ms = int(doc.get("loop_ts_ms") or 0)
+    step_ms = int(doc.get("step_started_ms") or 0)
+    print(f"path        : {path}")
+    print(f"落盘时间    : {doc.get('saved_at_utc')}  "
+          f"(heartbeat age {_age_s(age)})")
+    print(f"主循环      : 最后成功 {_fmt_ts(loop_ms)} "
+          f"(age {_age_s((now_ms - loop_ms) / 1000.0 if loop_ms else None)})"
+          f"  steps={doc.get('step_count')}")
+    if step_ms:
+        print(f"当前步起点  : {_fmt_ts(step_ms)}  "
+              f"(已持续 {_age_s((now_ms - step_ms) / 1000.0)})")
+    print(f"判定        : {kind}  status={doc.get('status')}  "
+          f"mode={doc.get('mode')}  pid={doc.get('pid')}")
+    if age is not None and age > 180:
+        print(f"  ! 心跳超 180s:进程可能已死或卡死(看护会重启)")
+    return doc, kind
+
+
+def _age_s(age) -> str:
+    if age is None:
+        return "?"
+    return f"{age:.0f}s" if age < 600 else f"{age / 60.0:.1f}min"
 
 
 def main(argv=None) -> int:
@@ -262,13 +304,11 @@ def main(argv=None) -> int:
 
     print()
     print("=" * 78)
-    saved_ms = lr._utc_ms(st.get("saved_at_utc")) if st else None
-    stale = bool(saved_ms and now_ms - saved_ms > 180_000)
-    print(f"心跳年龄 : {_age_h(saved_ms, now_ms)}"
-          f"{' → 超过 3min,进程疑似停摆' if stale else ''}")
-    pids = _runner_pids()
-    print("进程列表 : " + (", ".join(pids) if pids
-                           else "未发现运行中的 live_runner(检查计划任务)"))
+    hb_doc, hb_kind = _print_heartbeat(state_path, now_ms)
+    if hb_kind in (hb.MISSING, hb.STALLED):
+        issues.append(f"心跳异常:{hb_kind}(看护应重启 runner)")
+    print()
+    print(f"判活结论 : {hb_kind}")
     print()
     if issues:
         print("可疑项:")

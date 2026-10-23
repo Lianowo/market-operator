@@ -99,6 +99,79 @@ python research/rounds/v5/run_backtest_v5.py
 python research/rounds/v6/run_backtest_v6.py   # v6 A/B 双臂(复现判选)
 ```
 
+## 实盘运维(看护与存储治理)
+
+判活口径只有一条:**`runtime/live/heartbeat.json` 里的时间事实**。不看进程名、
+不看端口、不看计划任务的"上次运行结果"(2026-10-22 的掉线事故,根因正是这些
+间接证据在换机器/换系统后全部失效,而交易所侧止损已被打掉、本地仍在按旧状态记账)。
+
+| 心跳事实 | 结论 | 看护动作 |
+|----------|------|----------|
+| 文件不存在 | 没在跑 | 拉起(受重启预算约束) |
+| `age <= supervisor.ok_seconds` | 正常 | 无 |
+| `ok < age <= stale` | 迟到 | 只记录(宁可漏杀,不可错杀) |
+| `status=recovering` 且 `age <= recover_max` | 掉线补做中 | 等(补做要重放几千根 bar) |
+| `age > stale` | 卡死 / 进程没了 | 终止残留 → 拉起 |
+| 重启预算耗尽 | 需人工 | 只告警,不再拉起 |
+
+```bash
+python scripts/live_supervisor.py --status    # 体检:心跳年龄/判定/重启预算
+python scripts/live_supervisor.py             # 常驻看护(runner 由它拉起,自带每日存储治理)
+python scripts/live_supervisor.py --once       # 单次判定(交给计划任务每 5 分钟触发)
+python scripts/live_supervisor.py --once --no-start   # 演练:只告警不拉起
+python scripts/live_status.py                 # 人读快照:持仓/挂单/缺口/心跳
+python scripts/storage_gc.py                  # 只读盘点 + 增长预测
+python scripts/storage_gc.py --enforce        # 执行安全清理 + 预算闸门(0/1/2)
+python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文件
+```
+
+进程内还有一条独立的保护线(`src/market_operator/heartbeat.py: HeartbeatGuard`):
+主循环停摆超过 `heartbeat.stall_seconds` 后,心跳线程仍按 `write_seconds` 落盘并
+**只保护不主出** —— 核对交易所计划单,缺失则按本地防线补挂;停摆超过
+`self_fence_seconds` 且仍有持仓,则以退出码 3 自我熔断,由看护拉起并走掉线补做
+(交易所侧止损是最后一道墙,带病运行只会持续错过止盈/止损)。runner 与看护各自的
+单实例锁是内核文件锁:进程死亡即释放,崩溃不会留下毒锁,也不会出现两个进程同时下单。
+
+**心跳文件归属(2026-10-24 修复)**:runner 的心跳路径决议为
+`heartbeat_path` 显式参数 > 显式 `state_path` 的同目录 > `loop.heartbeat_path`(锚定仓库根)。
+修前只认配置里的相对串、且按 cwd 解析:在仓库根跑一次测试,测试构造的 runner 就会把
+**生产** `runtime/live/heartbeat.json` 覆盖成 `paper`/初始资金/0 仓位;看护只认这一个文件,
+而测试合成时钟可能在未来(`age < 0` ⇒ 恒判"正常"),真正掉线的 runner 便永不重启。
+**所以测试/沙盒必须传 `state_path`(或 `heartbeat_path`)**,`runtime/live/` 只许唯一的实盘进程写。
+详见 `reports/heartbeat_path_leak.md`。
+
+存储治理同样只"删字节不删信息":审计 JSONL 只做明文 → `.gz`(`--log-days 3`),
+`.gz` 默认永不删除(`--log-max-days 0`),控制台日志先整份 gzip 归档并校验通过才
+截断(尾部 4MB 留作即时排障),备份目录打成 zip 后才删;`data/raw`、`config/`、
+热档(`runtime/live/*.json`)、研究冻结产物一律不动。增长预测只按
+`logs/ runtime/ data/` 的写入速率外推(一次性研究产物混进来会把"还能跑多久"估得
+离谱),结果落 `reports/_storage_growth.json`。
+
+计划任务:`\MarketOperator\MarketOperatorLive`(每 3 分钟重复、忽略重叠)与
+`\MarketOperator\MarketOperatorStorageGC`(每日 04:10),动作都是
+`C:\Windows\System32\cmd.exe /c tools\schedule\<入口>.cmd`、工作目录 = 仓库根。
+三条踩过的坑(都是"任务看起来跑过,但什么都没发生"):
+
+1. **执行体写绝对路径**。计划任务的解析环境未必有 `PATH`,写 `cmd.exe`/`python`
+   会解析不到而静默失败;解释器由 .cmd 内部调用(必要时设 `PYTHONUTF8=1`)。
+2. **入口脚本里不要做重定向**。正在运行的实例会独占自己的日志句柄,3 分钟后的
+   下一次触发再 `>>` 同一个文件,会让 `cmd` 在**打开文件阶段**就失败:退出码 0、
+   日志一个字都写不出来。所以常驻看护自己把 console 行镜像进
+   `logs/supervisor.log`(异常记为 `kind=crash`),.cmd 只负责 `cd` 到仓库根再调
+   python;`live_runner.cmd` / `storage_gc.cmd` 仍重定向,但写的是**无人长期持有**
+   的 `logs/live_runner_console.log`、`logs/storage_gc.log`。
+3. **重复触发靠单实例锁变成"没跑就拉起"**。第二次触发的新实例抢不到
+   `runtime/live/supervisor.lock` 就打印一行并 `exit 0`,既不影响在跑的实例,
+   也不需要 `IgnoreNew`/上次结果之类的巧妙判断。
+
+```bat
+C:\Windows\System32\cmd.exe /c tools\schedule\live_supervisor.cmd
+C:\Windows\System32\cmd.exe /c tools\schedule\storage_gc.cmd
+```
+
+人工排障直接带参数调入口(此时不写日志、直接打屏):
+`tools\schedule\live_supervisor.cmd --status --no-notify`。
+
 数据固定证据：`data/manifest.json`（每批原始数据 sha256, 2024-10-15 → 2026-10-19, 0 缺口）；合约规格离线缓存强制（`data/contracts.json` 逐条 sha256)。
 
 ## 研究演进与结论快照（详见 `docs/acceptance.md` 与 `docs/v21-protocol.md`)

@@ -71,6 +71,10 @@
   - `tighten_lock(direction, plan_px, live_px)`：空头取更小、多头取更大（更贴近现价 = 更紧），仍须通过落位闸门。
   该口径只改变"锁利价已在现价身后"的情形（首次触及时两种口径几乎重合），`giveback_r = 0` 时逐位回到历史行为。
    - **落位闸门 `lock_is_protective(direction, lock_px, ref_px)`（2026-10-23 GOOGLUSDT 事故修复）**：锁利/保本推进价必须仍在**当下参考价的保护侧**（空头 `> ref_px`、多头 `< ref_px`，`ref_px` 取当时收盘价或更保守的 `mark`）。闸门不通过 ⇒ **不推进**（`pos.log` 记 `v21|opp_break_lock_reject` / `v21|opp_lock_reject`，实盘另记 `lock_reject` 台账 + 限流告警），保留原结构止损，且**不置 `reduced`** 以便后续 bar 重新判定。修前该边界缺陷会把唯一的保护单挂到现价盈利侧：挂单瞬间即按市价成交（GOOGLUSDT 空头：锁利 323.34 于现价 321.33 挂出，46 分钟后按 324.01 成交，比离场时市价差 0.62%），仓位等于裸奔。
+   - **盈利侧闸门 `lock_is_profitable(direction, lock_px, entry)`**：候选锁利价还必须落在 **entry 的盈利侧**。退化行程（建仓价已在箱体内侧/越过对侧）下 `opp_lock_px` 可能把锁利价算到 entry 亏损侧，把它当止损推进等于**凭空收紧亏损容忍度**（一分钱没落袋，只增加被扫概率），不属于 §8.2 锁利语义。
+   - **证据**：`reports/opp_lock_ab.md`（生产口径 A/B，3 币 × 4 TF）。同一锁利事件下，计划口径的落地价距现价 **+1.31R**（只锁到 0.36R），`0.25R` 锚定把它压到 **+0.25R**、锁到 **0.66R**。锁利事件在回测样本里只有个位数，净利差异由容量路径主导，**不据此调参**。
+   - **覆盖缺口**：早期 `_diag_v21_backtest.py` 未设置 `reject_target_mode`，其 M3c 回放里 `target_1` 恒为 `None` ⇒ §8.2 锁利在历史回测中**从未被触发**（实盘缺陷因此逃过回测）。生产口径现统一由 `scenario.py` 按 per-TF `reject_target_mode="opposite"` 装配。
+
    - **通知图 ENTRY 口径**：`tg.send_fill(..., entry_price=<建仓均价>, price_label=<本次事件价名称>)`。修前图上一律用"本次事件价"画 ENTRY 线，止损推进/平仓通知会把 ENTRY 画在事件价上（例如用 2h 收盘 321.33 顶替建仓价 324.02），图上止损/目标相对 ENTRY 的关系整体错位，读图会把"空头锁利"误读成"止损跑到止盈侧"。
    - **保护性止损全天候生效**：修复 `broker.py` 中同向挂单覆盖保护性止损的边界缺陷，确保从成交下一根细 bar 起 `PROTECTIVE_STOP` 100% 在场。
 3. **各周期独立风险容量池（`tf_cap_by_tf`）**：

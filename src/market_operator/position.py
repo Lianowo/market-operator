@@ -174,6 +174,19 @@ def lock_is_protective(direction: int, lock_px: Optional[float],
         float(min_buf) + 1e-12
 
 
+def lock_is_profitable(direction: int, lock_px: Optional[float],
+                       entry_px: float) -> bool:
+    """锁利价必须在 entry 的**盈利侧**(否则只是"收紧亏损止损",不叫锁利)。
+
+    退化行程(d·(target−entry) ≤ 0,建仓价已在箱体内侧/越过对侧)下,
+    `opp_lock_px` 算出的位置可能落在 entry 亏损侧:把它当止损推进等于凭空收紧
+    亏损容忍度,纯增加被扫概率(一分钱没落袋),不属于 §8.2 锁利语义。
+    """
+    if lock_px is None:
+        return False
+    return float(direction) * (float(lock_px) - float(entry_px)) > 1e-12
+
+
 def opp_lock_live_px(direction: int, ref_px: float, giveback_r: float,
                      risk_px: float) -> Optional[float]:
     """**行情口径**锁利价:锚在现价,只允许回吐 `giveback_r` 个 R。
@@ -443,7 +456,9 @@ class PositionManager:
                                                self.opp_lock_max_giveback_r,
                                                pos.initial_risk)
                     lock_px = tighten_lock(pos.direction, plan_px, live_px)
-                    if not lock_is_protective(pos.direction, lock_px, c):
+                    if not (lock_is_protective(pos.direction, lock_px, c)
+                            and lock_is_profitable(pos.direction, lock_px,
+                                                   pos.entry)):
                         # 落位闸门(1):算出的锁利价已落到现价盈利侧/身后
                         # (收盘虽破对侧,行情早已走远或已回抽越过锁利价)。
                         # 推进它等于把唯一保护单变成"止盈单",交易所立即触发
@@ -475,7 +490,9 @@ class PositionManager:
                                                    self.opp_lock_max_giveback_r,
                                                    pos.initial_risk)
                         lock_px = tighten_lock(pos.direction, plan_px, live_px)
-                        if not lock_is_protective(pos.direction, lock_px, c):
+                        if not (lock_is_protective(pos.direction, lock_px, c)
+                                and lock_is_profitable(pos.direction, lock_px,
+                                                       pos.entry)):
                             # 落位闸门(2):仅影线触及分支最易踩到"锁利价回落
                             # 到现价盈利侧"—— 极值刺到目标后收盘已反抽回 near
                             # entry,把防线推到 frac(<10%) 位只是把止损变成贴着

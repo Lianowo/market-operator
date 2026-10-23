@@ -78,3 +78,35 @@
 - **出口与风控升级(`position.py` / `campaign.py` / `broker.py`)**:修复保护性止损在同向减仓单下的全天候在场;`REJECT` 采用箱体外缘结构止损 + 触及对侧缘不减仓直锁 50% 利润(`reject_opp_lock_frac=-0.50`) + Turtle 确认 pivot 移动防线;新增各周期独立风险容量池(`tf_cap_by_tf`)与阶梯动态复利(`dynamic_risk_tiers`)。
 - **实盘多周期并发与双 Bot 黑白 K 线图(`scripts/live_runner.py` / `src/market_operator/tg.py` / `config/live.json`)**:支持 104 USDT / 20x 阶梯动态复利(4%→3%→2%→1%)、2h/4h/12h/1d 四周期独立容量池并发运行、信号/交易双 Telegram 机器人分流及纯 Python 高清黑白 K 线+平衡箱体 PNG 渲染配图直发;605 tests 全绿。
 
+## [v2.2.0] - 2026-10-23 — 跨平台实盘监督与存储治理
+
+- **心跳即判活(`src/market_operator/heartbeat.py`)**:`runtime/live/heartbeat.json`
+  由 runner 内独立心跳线程每 15s 落盘,同时带 `ts_ms`(进程还活着)、`loop_ts_ms`
+  (主循环最后一次成功走完一步)、`step_started_ms`(卡在哪一步)与
+  `positions_detail`(进程消失后重挂止损所需的持仓快照);`beat_age_seconds` 取
+  `max(loop_ts_ms, started_ms)`,刚重启不会被上一具尸体的旧时间戳误判成卡死。
+- **进程内保护线(`HeartbeatGuard`)**:主循环停摆后仍持续心跳并**只保护不主出**
+  (核对/补挂交易所止损),停摆超 `self_fence_seconds` 且有持仓则以退出码 3 自我
+  熔断;`classify`/`decide` 五档判定表(缺失/正常/迟到/补做中/停摆)为纯函数。
+- **外部看护(`scripts/live_supervisor.py`)**:只读心跳判活(不读进程表/端口/计划
+  任务结果),缺失→拉起、迟到→只记录、补做中→等(受 `recover_max_seconds` 约束)、
+  停摆→终止+拉起,重启预算(6 次/小时)与启动宽限(180s)防崩溃循环,预算耗尽只
+  告警交人工;常驻模式顺带按 `gc_hours` 调用存储治理。
+- **单实例锁(`SingletonLock`)**:runner / supervisor 各持一把内核文件锁
+  (`msvcrt.locking` / `flock`),进程死亡即释放,不存在 pid 毒锁,也不会双开下单。
+- **存储治理(`scripts/storage_gc.py`)**:盘点 → 可逆压缩(manifest + sha256 +
+  `--restore`)→ 保留期清理 → 增长预测 → 预算闸门(35GB 硬 / 30GB 软,退出码
+  0/1/2);审计日志只压缩不删除,控制台日志先归档校验再截断留 4MB 尾巴;增长预测
+  只按 `logs/ runtime/ data/` 速率外推,落 `reports/_storage_growth.json`。
+- **计划任务入口**:`\MarketOperator\MarketOperatorLive`(每 3 分钟重复、忽略重叠)
+  与 `\MarketOperator\MarketOperatorStorageGC`(每日 04:10),动作为
+  `C:\Windows\System32\cmd.exe /c tools\schedule\<入口>.cmd`(绝对执行体 + 仓库根
+  工作目录)。**入口脚本内一律不加重定向**:在跑的实例独占自己的日志句柄,下一次触发
+  再 `>>` 同一文件会让 cmd 在打开阶段失败(退出码 0、日志全空);改为常驻看护自己把
+  console 行镜像进 `logs/supervisor.log`、异常记 `kind=crash`,重复触发靠单实例锁
+  变成"没跑就拉起"。移除 OS 专用 `scripts/live_watchdog.ps1`。新增
+  `tests/test_live_supervision.py`(23 项:判定
+  五档、单实例锁跨进程、看护动作、启动宽限、压缩无损与预算闸门、console 自重定向),
+  全量 605 passed(未计入 `test_v13_cascade`)。
+  注:实盘运行时行情刷新会改写 `data/raw/*` 与 `data/manifest.json`,
+  `test_v13_cascade` 的哈希锁定用例此时必然失败(环境时序,非回归),复跑前需停 runner。

@@ -1,18 +1,22 @@
-"""存储治理:盘点 → 可逆压缩 → 保留期清理 → 预算闸门。
+"""存储治理:盘点 → 可逆压缩 → 保留期清理 → 增长预测 → 预算闸门。
 
 设计原则(与"信息量不降、密度提升"对齐):
 ① **只自动清理可再生产物**(日志、备份副本、`__pycache__`、`.pytest_cache`、
-   临时文件、已有 `.gz` 孪生体的原文件)。源数据(`data/raw`)、配置、
-   研究冻结产物一律不动;
+   临时文件、已有 `.gz` 孪生体的原文件)。源数据(`data/raw`)、配置、正在被
+   runner 使用的热档(`runtime/live/*.json`)、研究冻结产物一律不动;
 ② 大文件压缩是**可逆**的:写 `reports/_storage_manifest.jsonl`(原名/大小/
    sha256/mtime),`--restore` 可原样还原;压缩后立即校验解压尺寸,不一致即放弃;
-③ 被代码引用的文件不压缩(扫 `*.py` 里的 basename)——避免打断
-   `tools/replay_acceptance.py` 这类读固定路径的闸门;
-④ 预算默认 35GB(软 30GB),超出即非零退出,便于计划任务/监控接警。
+③ **删字节不删信息**:控制台日志超限时先整份 gzip 归档(`logs/*.log.gz`)再截断,
+   归档校验通过才截断;审计 JSONL 只做"明文 → .gz",`.gz` 默认**永不删除**
+   (`--log-max-days 0`),一年审计日志压缩后通常只有几十 MB;
+④ 被代码引用或 git 跟踪的文件不压缩(避免打断 `tools/replay_acceptance.py`
+   这类读固定路径的闸门,也避免冻结证据变成巨大的 git 变更);
+⑤ 预算默认 35GB(软 30GB),超出即非零退出;`--enforce` 供看护进程每日调用。
 
 用法:
-    python scripts/storage_gc.py                    # 只读盘点 + 计划
+    python scripts/storage_gc.py                    # 只读盘点 + 计划 + 增长预测
     python scripts/storage_gc.py --apply            # 执行安全清理
+    python scripts/storage_gc.py --enforce           # 执行 + 预算闸门(看护每日调用)
     python scripts/storage_gc.py --apply --compress-cold   # 另压冷研究产物
     python scripts/storage_gc.py --restore          # 按 manifest 还原
 """
@@ -214,6 +218,118 @@ def print_report(inv: dict, budget_gb: float, soft_gb: float) -> float:
     return gb
 
 
+# 热档白名单:runner 正在读写,任何"压缩/截断/删除"都会让它读到半截数据
+HOT_FILES = ("runtime/live/state.json", "runtime/live/campaigns.json",
+             "runtime/live/heartbeat.json", "runtime/live/supervisor.json",
+             "runtime/live/live_runner.lock", "runtime/live/supervisor.lock")
+
+
+def is_hot(rel: str) -> bool:
+    rel = rel.replace("\\", "/")
+    return rel in HOT_FILES or rel.endswith(".lock")
+
+
+OPS_PREFIXES = ("logs/", "runtime/", "data/")
+
+
+def growth_stats(days: float = 7.0) -> dict:
+    """近 N 天的写入速率(按顶层目录),用于"这条曲线还能跑多久"的预测。
+
+    口径:`mtime` 落在窗口内的文件大小求和 / 窗口天数。不复用 `inventory()`
+    (那是总量,不是速率)。窗口内被 GC 压掉的字节不再计入 —— 预测因此偏保守。
+
+    预测只用**运维目录**(`logs/` `runtime/` `data/`)的速率:研究报告
+    (`reports/`)是一次性产物,混进来会把"实盘还能跑多久"估得离谱。
+    """
+    now = time.time()
+    horizon = now - max(1.0, days) * 86400.0
+    per: dict[str, dict] = {}
+    total = ops_total = 0
+    for p in ROOT.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(ROOT).as_posix()
+        if rel.startswith(".git/"):
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_mtime < horizon:
+            continue
+        parts = rel.split("/")
+        key = "/".join(parts[:2]) if len(parts) > 1 else parts[0]
+        slot = per.setdefault(key, {"bytes": 0, "files": 0})
+        slot["bytes"] += st.st_size
+        slot["files"] += 1
+        total += st.st_size
+        if rel.startswith(OPS_PREFIXES):
+            ops_total += st.st_size
+    span = max(1.0, days)
+    inv = inventory()
+    size_gb = sum(v[0] for v in inv.values()) / (1 << 30)
+    ops_rate = ops_total / span
+    return {"days": days, "window_bytes": total, "bytes_per_day": total / span,
+            "ops_bytes_per_day": ops_rate, "size_gb": size_gb,
+            "per_bucket": per,
+            "projected_30d_gb": size_gb + ops_rate * 30 / (1 << 30)}
+
+
+def print_growth(stats: dict, budget_gb: float) -> None:
+    rate = stats["ops_bytes_per_day"]
+    print()
+    print(f"增长(近 {stats['days']:.0f} 天写入窗口):运维目录 {human(rate)}/天"
+          f"(全仓 {human(stats['bytes_per_day'])}/天,含一次性研究产物);"
+          f"当前 {stats['size_gb']:.2f}GB → "
+          f"30 天后约 {stats['projected_30d_gb']:.2f}GB")
+    if rate > 0:
+        left = max(0.0, budget_gb - stats["size_gb"]) * (1 << 30)
+        print(f"按运维写入速率距硬预算 {budget_gb}GB 还有 {left / rate:.0f} 天")
+    else:
+        print("窗口内几乎没有运维写入(或刚做过治理)")
+
+
+def archive_and_truncate(path: Path, keep_bytes: int, dry: bool) -> tuple[bool, str]:
+    """控制台日志:整份 gzip 归档 → 校验 → 截断为尾部 `keep_bytes`。
+
+    直接截断会永久丢掉故障现场;先归档就变成"省空间但不丢信息":
+    `logs/live_stdout_20261022_031500.log.gz` 里是完整历史,当前文件留尾巴
+    供 `tail`/排障即时查看。归档失败即放弃截断(宁可不省空间)。
+    """
+    size = path.stat().st_size
+    if size <= keep_bytes:
+        return False, f"{path.name} 无需处理"
+    if dry:
+        return True, f"[dry] {path.name} {human(size)} → 归档 + 尾部 {human(keep_bytes)}"
+    gz = path.with_name(f"{path.stem}_{time.strftime('%Y%m%d_%H%M%S')}"
+                        f"{path.suffix}.gz")
+    try:
+        with path.open("rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+        n = 0
+        with gzip.open(gz, "rb") as fh:
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    break
+                n += len(chunk)
+        if n != size:
+            gz.unlink(missing_ok=True)
+            return False, f"{path.name} 归档校验失败({n} != {size}),未截断"
+        with path.open("rb") as fh:
+            fh.seek(max(0, size - keep_bytes))
+            tail = fh.read()
+        with path.open("wb") as fh:
+            fh.write(f"[storage_gc] 已归档至 {gz.name} 后截断;"
+                     f"此处保留尾部 {human(len(tail))}\n".encode())
+            fh.write(tail)
+        return True, (f"{path.name} {human(size)} → 归档 {gz.name} + "
+                      f"尾部 {human(len(tail))}")
+    except OSError as e:
+        gz.unlink(missing_ok=True)
+        return False, f"{path.name} 归档失败:{e}"
+
+
 
 def gzip_keep(path: Path, dry: bool, *, manifest: bool = True) -> tuple[bool, str]:
     """压缩为 .gz 并删除原文件;压缩后校验解压尺寸,不符则保留原文件。
@@ -286,33 +402,31 @@ def apply_safe(dry: bool, args) -> list[str]:
     acts: list[str] = []
     now = time.time()
 
-    # ① 日志:jsonl 过保留期 → gz;.gz 过上限 → 删
+    # ① 日志:jsonl 过保留期 → gz(无损);.gz 默认永不删除(0 = 永久保留)
     for p in sorted((ROOT / "logs").glob("*.jsonl")):
+        rel = p.relative_to(ROOT).as_posix()
+        if is_hot(rel):
+            continue
         if (now - p.stat().st_mtime) / 86400 > args.log_days:
             ok, msg = gzip_keep(p, dry)
             acts.append(("✔ " if ok else "· ") + msg)
-    for p in sorted((ROOT / "logs").glob("*.gz")):
-        if (now - p.stat().st_mtime) / 86400 > args.log_max_days:
-            if not dry:
-                p.unlink()
-            acts.append(f"✔ 删除过期日志归档 {p.name}")
+    if args.log_max_days > 0:
+        for p in sorted((ROOT / "logs").glob("*.gz")):
+            if (now - p.stat().st_mtime) / 86400 > args.log_max_days:
+                if not dry:
+                    p.unlink()
+                acts.append(f"✔ 删除过期日志归档 {p.name}")
 
-    # ② 控制台日志超大时截断(保留尾部,避免一次故障日志吃满磁盘)
+    # ② 控制台日志超大时:先整份归档,校验通过才截断(尾部 4MB 留作即时排障)
     cap = args.log_max_mb << 20
+    keep = 4 << 20
     for name in ("live_stdout.log", "live_stderr.log", "watchdog.log",
-                 "storage_gc.log"):
+                 "storage_gc.log", "supervisor.log"):
         p = ROOT / "logs" / name
         if not p.exists() or p.stat().st_size <= cap:
             continue
-        keep = 4 << 20
-        with p.open("rb") as fh:
-            fh.seek(max(0, p.stat().st_size - keep))
-            tail = fh.read()
-        if not dry:
-            with p.open("wb") as fh:
-                fh.write("[storage_gc] 超大日志已截断,仅保留尾部 4MB\n".encode())
-                fh.write(tail)
-        acts.append(f"✔ 截断 {name}(>{args.log_max_mb}MB → 尾部 4MB)")
+        ok, msg = archive_and_truncate(p, keep, dry)
+        acts.append(("✔ " if ok else "· ") + msg)
 
     # ③ 旧备份目录:打成 zip 后删除目录(可还原);归档本身也有上限
     arch = ROOT / "runtime" / "_archive"
@@ -321,12 +435,22 @@ def apply_safe(dry: bool, args) -> list[str]:
             if not dry:
                 z.unlink()
             acts.append(f"✔ 删除过期备份归档 {z.name}")
-    for d in sorted((ROOT / "runtime").glob("**/*_backup_*")):
+    backup_dirs = sorted((ROOT / "runtime").glob("**/*_backup_*"))
+    # 单实例锁上线后 runner 会用 `_pre_<ts>/` 拍快照;与 *_backup_* 同等待遇
+    backup_dirs += sorted((ROOT / "runtime").glob("**/_pre_*"))
+    for d in backup_dirs:
         if not d.is_dir():
+            continue
+        if is_hot(d.relative_to(ROOT).as_posix()):
             continue
         if (now - d.stat().st_mtime) / 86400 < args.backup_days:
             continue
         zip_path = arch / (d.name + ".zip")
+        if zip_path.exists():
+            if not dry:
+                shutil.rmtree(d)
+            acts.append(f"✔ 删除已归档的备份目录 {d.name}(zip 已存在)")
+            continue
         if dry:
             acts.append(f"[dry] {d.relative_to(ROOT)} → {zip_path.name}")
             continue
@@ -440,10 +564,14 @@ def main(argv=None) -> int:
                     help="压缩冷研究产物(>cold-mb 且 >cold-days 且未被代码引用)")
     ap.add_argument("--restore", action="store_true",
                     help="按 reports/_storage_manifest.jsonl 还原被压缩文件")
-    ap.add_argument("--log-days", type=float, default=14.0,
-                    help="审计日志保留天数(超过即 gz),默认 14")
-    ap.add_argument("--log-max-days", type=float, default=180.0,
-                    help="日志 .gz 归档上限天数,默认 180")
+    ap.add_argument("--enforce", action="store_true",
+                    help="执行安全清理 + 增长预测 + 预算闸门(看护每日调用)")
+    ap.add_argument("--growth-days", type=float, default=7.0,
+                    help="增长预测的观察窗口天数,默认 7")
+    ap.add_argument("--log-days", type=float, default=3.0,
+                    help="审计日志转 .gz 的天数阈值(只压缩不删除),默认 3")
+    ap.add_argument("--log-max-days", type=float, default=0.0,
+                    help="日志 .gz 归档上限天数;0 = 永久保留(默认)")
     ap.add_argument("--log-max-mb", type=int, default=32,
                     help="控制台日志截断阈值 MB,默认 32")
     ap.add_argument("--backup-days", type=float, default=7.0,
@@ -466,24 +594,66 @@ def main(argv=None) -> int:
         restore_from_manifest(dry=not args.apply)
         return 0
 
+    enforce = args.enforce
     inv = inventory()
     gb_before = print_report(inv, args.budget_gb, args.soft_gb)
-    if not (args.apply or args.dry_run):
-        print("\n(只读模式;加 --apply 执行上述安全清理)")
+    stats = growth_stats(args.growth_days)
+    print_growth(stats, args.budget_gb)
+    _write_growth_report(stats, inv, args.budget_gb, args.soft_gb, gb_before)
+    if not (args.apply or args.dry_run or enforce):
+        print("\n(只读模式;加 --apply 执行上述安全清理,"
+              "加 --enforce 执行并做预算闸门)")
         return 0 if gb_before <= args.budget_gb else 1
 
     print()
     print("=" * 74)
-    print("执行" + ("(dry-run)" if not args.apply else ""))
+    print("执行" + ("" if (args.apply or enforce) else "(dry-run)"))
     print("=" * 74)
-    for a in apply_safe(dry=not args.apply, args=args):
+    for a in apply_safe(dry=not (args.apply or enforce), args=args):
         print("  " + a)
-    if not args.apply:
+    if not (args.apply or enforce):
         return 0
 
     gb_after = print_report(inventory(), args.budget_gb, args.soft_gb)
     print(f"本轮释放 {human(max(0.0, gb_before - gb_after) * (1 << 30))}")
+    if enforce:
+        return _gate(gb_after, stats, args.budget_gb)
     return 0 if gb_after <= args.budget_gb else 1
+
+
+def _write_growth_report(stats: dict, inv: dict, budget_gb: float,
+                         soft_gb: float, gb: float) -> None:
+    """把这次盘点的结论落成 JSON(给看护/人看曲线,不必重跑扫描)。"""
+    doc = {"ts_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "size_gb": round(gb, 3), "budget_gb": budget_gb,
+           "soft_gb": soft_gb,
+           "bytes_per_day": int(stats["bytes_per_day"]),
+           "ops_bytes_per_day": int(stats["ops_bytes_per_day"]),
+           "projected_30d_gb": round(stats["projected_30d_gb"], 3),
+           "per_bucket": {k: {"bytes": v["bytes"], "files": v["files"]}
+                          for k, v in sorted(stats["per_bucket"].items())},
+           "inventory": {k: [v[0], v[1]] for k, v in inv.items()}}
+    try:
+        path = ROOT / "reports" / "_storage_growth.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+    except OSError as e:
+        print(f"  ! 增长报告落盘失败:{e}")
+
+
+def _gate(gb_after: float, stats: dict, budget_gb: float) -> int:
+    """预算闸门:超过硬预算 → 退出码 2;预测 30 天内越线 → 1;否则 0。"""
+    if gb_after > budget_gb:
+        print(f"闸门:已用 {gb_after:.2f}GB > 硬预算 {budget_gb}GB → 需人工扩容/迁移")
+        return 2
+    if stats["projected_30d_gb"] > budget_gb:
+        print(f"闸门:30 天预测 {stats['projected_30d_gb']:.2f}GB 将越线"
+              f"({budget_gb}GB)→ 建议先跑 --compress-cold")
+        return 1
+    print(f"闸门:通过({gb_after:.2f}GB / {budget_gb}GB;"
+          f"30 天预测 {stats['projected_30d_gb']:.2f}GB)")
+    return 0
 
 
 if __name__ == "__main__":
