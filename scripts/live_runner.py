@@ -402,6 +402,7 @@ class LiveRunner:
                  contract_raw: Optional[dict] = None,
                  state_path: Optional[Path] = None,
                  journal_dir: Optional[Path] = None,
+                 heartbeat_path: Optional[Path] = None,
                  symbols: tuple = (),
                  universe_enabled: bool = True) -> None:
         if mode not in ("live", "paper"):
@@ -427,9 +428,20 @@ class LiveRunner:
             ROOT / self.loop_cfg["state_path"]
         # 冷数据同目录:热档 state.json(每步) + 冷档 campaigns.json(变更/60s)
         self.campaigns_path = self.state_path.with_name("campaigns.json")
-        self.heartbeat_path = Path(
-            self.loop_cfg.get("heartbeat_path")
-            or (self.state_path.parent / "heartbeat.json"))
+        # 心跳路径归属(2026-10-24 缺陷):修前只认 config 里的相对路径,且按 **cwd**
+        # 解析 —— 于是"真配置 + 只把 state/journal 指到 tmp"的测试会在构造那一刻
+        # 覆盖**生产** runtime/live/heartbeat.json,而看护唯一的判活证据就是它。
+        # 更糟的是测试的合成时钟可能在未来(age<0 ⇒ 永久"正常"),真正掉线的
+        # runner 再也不会被拉起 —— 与 2026-10-22 掉线事故同一类失效。
+        # 现在:显式参数 > 显式 state_path 的同一目录(沙盒/测试)> 配置(锚定 ROOT)。
+        if heartbeat_path is not None:
+            self.heartbeat_path = Path(heartbeat_path)
+        elif state_path is not None:
+            self.heartbeat_path = self.state_path.parent / "heartbeat.json"
+        else:
+            hb_rel = self.loop_cfg.get("heartbeat_path")
+            self.heartbeat_path = (ROOT / str(hb_rel) if hb_rel
+                                   else self.state_path.parent / "heartbeat.json")
         self._campaigns_dirty = True
         self._campaigns_saved_at = 0.0
         self.candle_cache_dir = self.state_path.parent / "candles"

@@ -394,3 +394,52 @@ def test_log_line_survives_unwritable_mirror(tmp_path, monkeypatch, capsys):
     assert (logs / "supervisor.jsonl").exists()
 
 
+
+
+# ---------------------------------------------------------------------------
+# 心跳路径归属:测试/沙盒一律不得写生产 runtime/live/heartbeat.json
+#
+# 2026-10-24 缺陷:runner 起动即落一次心跳,而心跳路径只认 config 的相对串
+# (`loop.heartbeat_path`),既不跟 `state_path` 同目录、也不锚定仓库根(按 cwd
+# 解析)。于是"真配置 + 只把 state/journal 指到 tmp"的测试会覆盖生产心跳:
+# 看护唯一的判活证据被写成 paper/初始资金/0 仓位,且测试合成时钟常在未来
+# (`age < 0` ⇒ 恒判"正常")—— 真正掉线的 runner 永不重启。修前在本仓库
+# 根目录跑一次 pytest 就能复现(runtime/live/heartbeat.json 变成 paper)。
+# ---------------------------------------------------------------------------
+def _live_cfg():
+    return json.loads((ROOT / "config" / "live.json").read_text(encoding="utf-8"))
+
+
+class _Tg:
+    def __getattr__(self, _name):
+        return lambda *a, **k: True
+
+
+def _quiet_runner(monkeypatch, **kw):
+    """只验路径决议:不读生产 state、不落任何心跳文件。"""
+    import live_runner as lr
+    monkeypatch.setattr(lr.LiveRunner, "_load_state", lambda self: None)
+    monkeypatch.setattr(lr.LiveRunner, "_write_json_atomic", lambda *a, **k: None)
+    return lr.LiveRunner("paper", _live_cfg(), object(), _Tg(),
+                         universe_enabled=False, **kw)
+
+
+def test_runner_heartbeat_follows_explicit_state_path(monkeypatch, tmp_path):
+    runner = _quiet_runner(monkeypatch, state_path=tmp_path / "state.json",
+                           journal_dir=tmp_path / "logs")
+    assert runner.heartbeat_path == tmp_path / "heartbeat.json"
+    assert runner.heartbeat_path != ROOT / "runtime" / "live" / "heartbeat.json"
+
+
+def test_runner_heartbeat_explicit_arg_wins(monkeypatch, tmp_path):
+    explicit = tmp_path / "hb" / "beat.json"
+    runner = _quiet_runner(monkeypatch, state_path=tmp_path / "state.json",
+                           heartbeat_path=explicit)
+    assert runner.heartbeat_path == explicit
+
+
+def test_runner_heartbeat_default_is_root_anchored(monkeypatch):
+    """生产口径(不传 state_path)仍落在 runtime/live,且不依赖 cwd。"""
+    runner = _quiet_runner(monkeypatch)
+    assert runner.heartbeat_path == ROOT / "runtime" / "live" / "heartbeat.json"
+

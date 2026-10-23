@@ -123,6 +123,14 @@ python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文
 (交易所侧止损是最后一道墙,带病运行只会持续错过止盈/止损)。runner 与看护各自的
 单实例锁是内核文件锁:进程死亡即释放,崩溃不会留下毒锁,也不会出现两个进程同时下单。
 
+**心跳文件归属(2026-10-24 修复)**:runner 的心跳路径决议为
+`heartbeat_path` 显式参数 > 显式 `state_path` 的同目录 > `loop.heartbeat_path`(锚定仓库根)。
+修前只认配置里的相对串、且按 cwd 解析:在仓库根跑一次测试,测试构造的 runner 就会把
+**生产** `runtime/live/heartbeat.json` 覆盖成 `paper`/初始资金/0 仓位;看护只认这一个文件,
+而测试合成时钟可能在未来(`age < 0` ⇒ 恒判"正常"),真正掉线的 runner 便永不重启。
+**所以测试/沙盒必须传 `state_path`(或 `heartbeat_path`)**,`runtime/live/` 只许唯一的实盘进程写。
+详见 `reports/heartbeat_path_leak.md`。
+
 存储治理同样只"删字节不删信息":审计 JSONL 只做明文 → `.gz`(`--log-days 3`),
 `.gz` 默认永不删除(`--log-max-days 0`),控制台日志先整份 gzip 归档并校验通过才
 截断(尾部 4MB 留作即时排障),备份目录打成 zip 后才删;`data/raw`、`config/`、
