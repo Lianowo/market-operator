@@ -45,6 +45,10 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
 }
 
 #: 逐笔摘要字段(顺序固定 = 摘要可复现)。
+#:
+#: 警告:摘要对**命名**敏感 —— ``event_id``/``route``/``reason_exit`` 里任何
+#: 一个改了字符串,基线摘要就会永久失配,即使数字一个没变(净值、笔数、品类
+#: 全部相同)。词表改名必须显式重抓基线(``--capture``),不能当成"逐笔变了"。
 TRADE_DIGEST_FIELDS = (
     "symbol", "tf", "event_id", "direction", "route", "entry_mode",
     "open_decision_ts", "open_ts", "entry", "exit_ts", "exit_price",
@@ -238,8 +242,10 @@ def main() -> int:
 
     if args.capture:
         payload = {
-            "schema": 1,
+            "schema": 2,
             "note": "同场景同品类回放基线:新实现净收益不得低于此表",
+            "note_digest": ("digest 对 event_id/route/reason_exit 的字符串命名敏感;"
+                            "词表改名后必须整体重抓,否则逐笔摘要永久失配"),
             "scenarios": current,
         }
         BASELINE_PATH.parent.mkdir(parents=True, exist_ok=True)
