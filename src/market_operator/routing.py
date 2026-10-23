@@ -138,6 +138,7 @@ class RouterParams:
     reject_target_mode: str = "none" # "none" | "opposite" | "mid" (REJECT 的 target_1 锚点)
     reject_use_struct_stop: bool = False  # True 时 REJECT 使用箱体外缘结构止损(替代 2.0*ATR)
     accept_use_struct_stop: bool = False  # True 时 ACCEPT 使用箱体正缘结构止损(替代 2.0*ATR)
+    max_target_r: Optional[float] = None  # C1:目标 R 上限(None = 不截断,现行行为)
 
 
 @dataclass(frozen=True)
@@ -432,6 +433,16 @@ class MarketRouter:
                 if ev.direction * (cand_t - close) > 0.0:
                     target_1 = cand_t
                     r_mult = ev.direction * (cand_t - close) / dist if dist > 0 else None
+                    # C1:目标 R 上限。截断只改目标锚点(部分减仓/对面收割),不改
+                    # 止损与入场,故风险分母恒定,左右尾可比。缺口来源:2h 的
+                    # 箱体对面目标常在 6–12R,回放里从未触及 ⇒ 该目标对盈亏无贡献,
+                    # 只污染 r_mult 的分布。
+                    cap_r = p.max_target_r
+                    if (cap_r is not None and r_mult is not None
+                            and r_mult > float(cap_r) and dist > 0.0):
+                        target_1 = float(close) + ev.direction * float(cap_r) * dist
+                        r_mult = float(cap_r)
+                        self._bump("target_r_clamped")
         hyp = Hypothesis(event_id=ev.id, direction=ev.direction, ts=ev.ts,
                          known_index=ev.known_index, entry=float(close),
                          invalid=float(invalid), target_1=target_1,

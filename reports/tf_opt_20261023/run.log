@@ -1,0 +1,50 @@
+[prep] BTCUSDT 认知+细帧就绪 (23.9s)
+[prep] ETHUSDT 认知+细帧就绪 (16.0s)
+[prep] SOLUSDT 认知+细帧就绪 (11.8s)
+[prep] DOGEUSDT 认知+细帧就绪 (10.8s)
+[prep] 数据就绪 ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'DOGEUSDT'] (62.4s)
+[prep] frames ready (82s, 16 campaigns)
+[2h] base dev N=413 E[R]=0.0606 WR=0.4116 pay=1.6398
+[2h] R1 20/48 best=+0.020
+[2h] R1 40/48 best=+0.081
+[2h] R1 done best=+0.081 ({'min_box_rotations': 3, 'min_box_quality': 0.35, 'min_bar_impulse_atr': 1.2, 'zone_cooldown_bars': 3})
+[2h] R2 done best=+0.081 ({'min_box_rotations': 3, 'min_box_quality': 0.3, 'min_bar_impulse_atr': 1.2, 'zone_cooldown_bars': 3})
+[2h] R3 20/54 best=+0.052
+[2h] R3 40/54 best=+0.081
+[2h] R3 done best=+0.104 ({'min_box_rotations': 3, 'min_box_quality': 0.3, 'min_bar_impulse_atr': 1.2, 'zone_cooldown_bars': 3, 'k_is': 1.2, 'turtle_stop_atr': 2.0, 'reject_target_mode': 'opposite', 'reject_use_struct_stop': True})
+[2h] best {'min_box_rotations': 3, 'min_box_quality': 0.3, 'min_bar_impulse_atr': 1.2, 'zone_cooldown_bars': 3, 'k_is': 1.2, 'turtle_stop_atr': 2.0, 'reject_target_mode': 'opposite', 'reject_use_struct_stop': True} -> dev=+0.104 test=+0.001 full=+0.068 (119 cells, 116s)
+[4h] base dev N=222 E[R]=0.0699 WR=0.3919 pay=1.8274
+[4h] R1 20/48 best=+0.151
+[4h] R1 40/48 best=+0.151
+[4h] R1 done best=+0.152 ({'min_box_rotations': 3, 'min_box_quality': 0.45, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0})
+[4h] R2 done best=+0.282 ({'min_box_rotations': 4, 'min_box_quality': 0.45, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0})
+[4h] R3 20/54 best=+0.295
+[4h] R3 40/54 best=+0.295
+[4h] R3 done best=+0.295 ({'min_box_rotations': 4, 'min_box_quality': 0.45, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0, 'k_is': 0.5, 'turtle_stop_atr': 2.5, 'reject_target_mode': 'none', 'reject_use_struct_stop': True})
+[4h] best {'min_box_rotations': 4, 'min_box_quality': 0.45, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0, 'k_is': 0.5, 'turtle_stop_atr': 2.5, 'reject_target_mode': 'none', 'reject_use_struct_stop': True} -> dev=+0.295 test=+0.055 full=+0.208 (119 cells, 102s)
+[12h] base dev N=251 E[R]=0.077 WR=0.3307 pay=2.3208
+[12h] R1 20/48 best=+0.077
+[12h] R1 40/48 best=+0.077
+[12h] R1 done best=+0.077 ({'min_box_rotations': 0, 'min_box_quality': 0.35, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0})
+[12h] R2 done best=+0.077 ({'min_box_rotations': 1, 'min_box_quality': 0.35, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0})
+[12h] R3 20/54 best=+0.141
+[12h] R3 40/54 best=+0.141
+[12h] R3 done best=+0.141 ({'min_box_rotations': 1, 'min_box_quality': 0.35, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0, 'k_is': 0.5, 'turtle_stop_atr': 1.5, 'reject_target_mode': 'none', 'reject_use_struct_stop': False})
+[12h] best {'min_box_rotations': 1, 'min_box_quality': 0.35, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0, 'k_is': 0.5, 'turtle_stop_atr': 1.5, 'reject_target_mode': 'none', 'reject_use_struct_stop': False} -> dev=+0.141 test=+0.201 full=+0.135 (119 cells, 64s)
+[1d] base dev N=91 E[R]=0.1665 WR=0.3956 pay=2.0483
+[1d] R1 20/48 best=+0.251
+[1d] R1 40/48 best=+0.251
+[1d] R1 done best=+0.251 ({'min_box_rotations': 0, 'min_box_quality': 0.55, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0})
+[1d] R2 done best=+0.252 ({'min_box_rotations': 0, 'min_box_quality': 0.6, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0})
+[1d] R3 20/54 best=+0.274
+[1d] R3 40/54 best=+0.274
+[1d] R3 done best=+0.274 ({'min_box_rotations': 0, 'min_box_quality': 0.6, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0, 'k_is': 0.5, 'turtle_stop_atr': 2.5, 'reject_target_mode': 'mid', 'reject_use_struct_stop': False})
+[1d] best {'min_box_rotations': 0, 'min_box_quality': 0.6, 'min_bar_impulse_atr': 0.0, 'zone_cooldown_bars': 0, 'k_is': 0.5, 'turtle_stop_atr': 2.5, 'reject_target_mode': 'mid', 'reject_use_struct_stop': False} -> dev=+0.274 test=+0.136 full=+0.167 (119 cells, 55s)
+[combo] picks = {"2h": {"min_box_rotations": 3, "min_box_quality": 0.3, "min_bar_impulse_atr": 1.2, "zone_cooldown_bars": 3, "k_is": 1.2, "turtle_stop_atr": 2.0, "reject_target_mode": "opposite", "reject_use_struct_stop": true}, "4h": {"min_box_rotations": 4, "min_box_quality": 0.45, "min_bar_impulse_atr": 0.0, "zone_cooldown_bars": 0, "k_is": 0.5, "turtle_stop_atr": 2.5, "reject_target_mode": "none", "reject_use_struct_stop": true}, "12h": {"min_box_rotations": 1, "min_box_quality": 0.35, "min_bar_impulse_atr": 0.0, "zone_cooldown_bars": 0, "k_is": 0.5, "turtle_stop_atr": 1.5, "reject_target_mode": "none", "reject_use_struct_stop": false}, "1d": {"min_box_rotations": 0, "min_box_quality": 0.6, "min_bar_impulse_atr": 0.0, "zone_cooldown_bars": 0, "k_is": 0.5, "turtle_stop_atr": 2.5, "reject_target_mode": "mid", "reject_use_struct_stop": false}}
+[combo] a0               full@1 n=1440 net=  +380.1 ER=+0.087 WR=0.372 pay=2.0132 DD=32.9% | 12h=0.097 1d=0.034 2h=0.036 4h=0.198
+[combo] best_all         full@1 n=1493 net=  +492.5 ER=+0.083 WR=0.363 pay=2.0841 DD=34.1% | 12h=0.104 1d=0.084 2h=0.03 4h=0.152
+[combo] best_2h4h        full@1 n=1446 net=  +515.1 ER=+0.093 WR=0.355 pay=2.1735 DD=37.8% | 12h=0.14 1d=0.011 2h=0.044 4h=0.162
+[combo] best_all_no12h   full@1 n=1137 net=  +410.0 ER=+0.090 WR=0.384 pay=1.9346 DD=30.8% | 1d=0.104 2h=0.034 4h=0.176
+[combo] best_all_cap_B   full@1 n=1158 net=  +411.9 ER=+0.092 WR=0.388 pay=1.9183 DD=29.4% | 1d=0.121 2h=0.039 4h=0.161
+
+[out] D:\LiAn\Web3Code\market-operator\reports\tf_opt_20261023  (497s total)

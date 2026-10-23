@@ -65,6 +65,13 @@ def timeframe_of(symbol: Optional[str]) -> Optional[str]:
     return None
 
 
+def symbol_root(symbol: Optional[str]) -> Optional[str]:
+    """``BTCUSDT@4h`` → ``BTCUSDT``(标的池 B1 的键);无后缀时原样返回。"""
+    if symbol and "@" in symbol:
+        return symbol.rsplit("@", 1)[0]
+    return symbol
+
+
 @dataclass(frozen=True)
 class Exposure:
     """最坏情景的拆解:止损亏损 + 平仓侧成本。"""
@@ -102,6 +109,7 @@ class RiskBudget:
 
     portfolio_frac: Optional[float] = None
     per_timeframe_frac: Mapping[str, float] = field(default_factory=dict)
+    symbol_frac: Mapping[str, float] = field(default_factory=dict)
     mode: str = ADMISSION_FULL_COST
 
     def __post_init__(self) -> None:
@@ -110,6 +118,8 @@ class RiskBudget:
         checks = [("portfolio_frac", self.portfolio_frac)]
         checks += [(f"per_timeframe_frac[{tf}]", frac)
                    for tf, frac in self.per_timeframe_frac.items()]
+        checks += [(f"symbol_frac[{sym}]", frac)
+                   for sym, frac in self.symbol_frac.items()]
         for label, frac in checks:
             if frac is None:
                 continue
@@ -118,35 +128,47 @@ class RiskBudget:
         object.__setattr__(self, "per_timeframe_frac",
                            {str(k): float(v)
                             for k, v in self.per_timeframe_frac.items()})
+        object.__setattr__(self, "symbol_frac",
+                           {str(k): float(v)
+                            for k, v in self.symbol_frac.items()})
 
     @property
     def is_active(self) -> bool:
-        return self.portfolio_frac is not None or bool(self.per_timeframe_frac)
+        return (self.portfolio_frac is not None
+                or bool(self.per_timeframe_frac) or bool(self.symbol_frac))
 
     def pools(self, timeframe: Optional[str], *,
-              moment: str) -> tuple[tuple[str, float, Optional[str]], ...]:
-        """该时刻生效的池:``(池名, 上限占比, 约束的周期范围)``。
+              moment: str,
+              symbol: Optional[str] = None
+              ) -> tuple[tuple[str, float, Optional[str]], ...]:
+        """该时刻生效的池:``(池名, 上限占比, 约束范围)``。
 
-        账户池的范围是 None(全部仓位),周期池的范围是自己。
-        ``admission_full_cost`` 的决策时刻只返回周期池 —— 这是现行行为(周期池
-        存在时账户池不参与准入判断,而 v21 的 4×2.25% < 账户池 12%,所以账户池
-        实际上从不生效;``full_cost``/``stop_risk`` 下它才真正参与)。
+        范围 ``None`` = 全部仓位;``"4h"`` = 该周期后缀;``"sym:BTCUSDT"`` =
+        单个标的(跨周期合并,见 §B1:同一标的 2h/4h/12h/1d 同时持仓时,
+        真正的相关风险是**标的级**的,BTC 一根 4% 阴线会同时打掉 4 个止损)。
+        ``admission_full_cost`` 的决策时刻只返回周期池 + 标的池 —— 这是现行
+        行为(周期池存在时账户池不参与准入判断,而 v21 的 4×2.25% < 账户池
+        12%,所以账户池实际上从不生效;``full_cost``/``stop_risk`` 下它才真正
+        参与)。
         """
         if moment not in MOMENTS:
             raise ValueError(f"moment 必须是 {MOMENTS},收到 {moment!r}")
         tf_frac = self.per_timeframe_frac.get(timeframe) if timeframe else None
+        sym_frac = self.symbol_frac.get(symbol) if symbol else None
+        sym_pools = ((("symbol", float(sym_frac), f"sym:{symbol}"),)
+                     if sym_frac is not None else ())
         if self.mode == ADMISSION_FULL_COST and moment == DECISION:
             if tf_frac is not None:
-                return (("tf", float(tf_frac), timeframe),)
+                return (("tf", float(tf_frac), timeframe),) + sym_pools
             if self.portfolio_frac is not None:
-                return (("portfolio", float(self.portfolio_frac), None),)
-            return ()
+                return (("portfolio", float(self.portfolio_frac), None),) + sym_pools
+            return sym_pools
         pools: list[tuple[str, float, Optional[str]]] = []
         if tf_frac is not None:
             pools.append(("tf", float(tf_frac), timeframe))
         if self.portfolio_frac is not None:
             pools.append(("portfolio", float(self.portfolio_frac), None))
-        return tuple(pools)
+        return tuple(pools) + sym_pools
 
     def includes_costs(self, moment: str) -> bool:
         """该时刻的预算是否计入平仓侧成本。
@@ -184,14 +206,31 @@ def position_exposure(qty: float, direction: int, mark: float,
                     exit_cost=qty * mark * (taker_fee + slippage))
 
 
+def _scope_matches(symbol: str, scope: Optional[str],
+                   timeframe: Optional[str]) -> bool:
+    """池范围过滤:``None`` = 全部;``"sym:BTCUSDT"`` = 单标的;``"4h"`` = 周期后缀。"""
+    if scope:
+        if scope.startswith("sym:"):
+            return symbol_root(symbol) == scope[4:]
+        return symbol.endswith(f"@{scope}")
+    if timeframe:
+        return symbol.endswith(f"@{timeframe}")
+    return True
+
+
 def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *,
-                         timeframe: Optional[str] = None, taker_fee: float = 0.0,
+                         timeframe: Optional[str] = None,
+                         scope: Optional[str] = None,
+                         taker_fee: float = 0.0,
                          slippage: float = 0.0) -> Exposure:
-    """全部未平仓仓位的最坏情景;``timeframe`` 非 None 时只算该周期后缀。"""
-    suffix = f"@{timeframe}" if timeframe else None
+    """全部未平仓仓位的最坏情景;``scope``/``timeframe`` 非 None 时只算该范围。
+
+    ``scope="sym:BTCUSDT"`` 用于标的池(B1):同一标的的不同周期仓位合并计入,
+    因为它们的止损被同一根价格路径触发,相关风险是标的级的而非周期级的。
+    """
     total = Exposure()
     for symbol, pos in positions.items():
-        if suffix and not symbol.endswith(suffix):
+        if not _scope_matches(symbol, scope, timeframe):
             continue
         mark = marks.get(symbol, pos.entry)
         total = total + position_exposure(
@@ -237,10 +276,19 @@ def qty_for_budget(headroom: float, price: float, risk_per_unit: float, *,
 def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: float,
                     positions: Mapping[str, Any], marks: Mapping[str, float], *,
                     taker_fee: float, slippage: float,
-                    include_costs: bool) -> tuple[float, str, float]:
+                    include_costs: bool,
+                    reserve_by_tf: Optional[Mapping[str, float]] = None,
+                    candidate_timeframe: Optional[str] = None
+                    ) -> tuple[float, str, float]:
     """各池剩余额度的最小值;返回 ``(剩余额度, 最紧池名, 该池上限占比)``。
 
     无生效池 ⇒ ``(inf, "", 0.0)``(不限容量)。仓位止损缺失时该池剩余为 0。
+
+    ``reserve_by_tf``(B2 慢周期保留额度):给 ``{tf: frac}`` 里的周期各留一份
+    **专属**额度,任何不在该表里的周期(如 2h)在准入时要把这些预留里尚未被
+    占用的部分先扣掉。语义 = "慢周期的位置不会被快周期先到先得挤没",这正是
+    跨周期容量争议里唯一值得保留的诉求(实测并非 slot 竞争,而是权益相关性;
+    见 reports/tf_opt_20261023/OPTPATH.md §5.5)。
     """
     if not pools:
         return math.inf, "", 0.0
@@ -248,13 +296,24 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
     best_name = ""
     best_frac = 0.0
     for name, frac, scope in pools:
-        used = outstanding_exposure(positions, marks, timeframe=scope,
+        used = outstanding_exposure(positions, marks, scope=scope,
                                     taker_fee=taker_fee,
                                     slippage=slippage).measure(
                                         include_costs=include_costs)
         headroom = frac * equity - used
         if headroom < best_headroom:
             best_headroom, best_name, best_frac = headroom, name, frac
+    if reserve_by_tf and candidate_timeframe not in reserve_by_tf:
+        reserved = 0.0
+        for tf, frac in reserve_by_tf.items():
+            used = outstanding_exposure(positions, marks, timeframe=tf,
+                                        taker_fee=taker_fee,
+                                        slippage=slippage).measure(
+                                            include_costs=include_costs)
+            reserved += max(0.0, float(frac) * equity - used)
+        if reserved > 0.0 and math.isfinite(best_headroom):
+            best_headroom = max(0.0, best_headroom - reserved)
+            best_name = f"{best_name}+reserve" if best_name else "reserve"
     return best_headroom, best_name, best_frac
 
 
@@ -262,7 +321,8 @@ __all__ = [
     "ADMISSION_FULL_COST", "DECISION", "FILL", "FULL_COST", "MODES",
     "MOMENTS", "STOP_RISK", "Exposure", "RiskBudget", "budget_headroom",
     "candidate_exposure", "delta_exposure", "outstanding_exposure",
-    "position_exposure", "qty_for_budget", "stop_distance", "timeframe_of",
+    "position_exposure", "qty_for_budget", "stop_distance", "symbol_root",
+    "timeframe_of",
 ]
 
 

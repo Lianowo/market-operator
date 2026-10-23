@@ -1,0 +1,224 @@
+{
+ "2h": {
+  "tf": "2h",
+  "n_cells": 119,
+  "score_key": "score",
+  "best_knobs": {
+   "min_box_rotations": 3,
+   "min_box_quality": 0.3,
+   "min_bar_impulse_atr": 1.2,
+   "zone_cooldown_bars": 3,
+   "k_is": 1.2,
+   "turtle_stop_atr": 2.0,
+   "reject_target_mode": "opposite",
+   "reject_use_struct_stop": true
+  },
+  "best_score": 0.1043,
+  "best_net": 107.0278,
+  "best_n": 396,
+  "plateau_n": 2,
+  "plateau_share": 0.0168,
+  "neighbors_n": 5,
+  "neighbor_median": 0.0836,
+  "neighbor_ratio": 0.8015,
+  "er_pos_share": 0.7479,
+  "er_iqr": 0.0609,
+  "neighbor_detail": [
+   {
+    "knob": "k_is",
+    "value": 0.8,
+    "er_net": 0.0806,
+    "n": 418
+   },
+   {
+    "knob": "reject_target_mode",
+    "value": "none",
+    "er_net": 0.0862,
+    "n": 377
+   },
+   {
+    "knob": "reject_use_struct_stop",
+    "value": false,
+    "er_net": 0.0401,
+    "n": 444
+   },
+   {
+    "knob": "turtle_stop_atr",
+    "value": 1.5,
+    "er_net": 0.0836,
+    "n": 400
+   },
+   {
+    "knob": "turtle_stop_atr",
+    "value": 2.5,
+    "er_net": 0.0976,
+    "n": 399
+   }
+  ]
+ },
+ "4h": {
+  "tf": "4h",
+  "n_cells": 119,
+  "score_key": "score",
+  "best_knobs": {
+   "min_box_rotations": 4,
+   "min_box_quality": 0.45,
+   "min_bar_impulse_atr": 0.0,
+   "zone_cooldown_bars": 0,
+   "k_is": 0.5,
+   "turtle_stop_atr": 2.5,
+   "reject_target_mode": "none",
+   "reject_use_struct_stop": true
+  },
+  "best_score": 0.2948,
+  "best_net": 189.5865,
+  "best_n": 248,
+  "plateau_n": 7,
+  "plateau_share": 0.0588,
+  "neighbors_n": 5,
+  "neighbor_median": 0.2378,
+  "neighbor_ratio": 0.8066,
+  "er_pos_share": 0.9496,
+  "er_iqr": 0.0925,
+  "neighbor_detail": [
+   {
+    "knob": "k_is",
+    "value": 0.8,
+    "er_net": 0.2378,
+    "n": 227
+   },
+   {
+    "knob": "reject_target_mode",
+    "value": "mid",
+    "er_net": 0.1659,
+    "n": 269
+   },
+   {
+    "knob": "reject_target_mode",
+    "value": "opposite",
+    "er_net": 0.2828,
+    "n": 259
+   },
+   {
+    "knob": "reject_use_struct_stop",
+    "value": false,
+    "er_net": 0.077,
+    "n": 230
+   },
+   {
+    "knob": "turtle_stop_atr",
+    "value": 2.0,
+    "er_net": 0.2879,
+    "n": 250
+   }
+  ]
+ },
+ "12h": {
+  "tf": "12h",
+  "n_cells": 119,
+  "score_key": "score",
+  "best_knobs": {
+   "min_box_rotations": 1,
+   "min_box_quality": 0.35,
+   "min_bar_impulse_atr": 0.0,
+   "zone_cooldown_bars": 0,
+   "k_is": 0.5,
+   "turtle_stop_atr": 1.5,
+   "reject_target_mode": "none",
+   "reject_use_struct_stop": false
+  },
+  "best_score": 0.1408,
+  "best_net": 76.4016,
+  "best_n": 247,
+  "plateau_n": 3,
+  "plateau_share": 0.0252,
+  "neighbors_n": 5,
+  "neighbor_median": 0.0212,
+  "neighbor_ratio": 0.1506,
+  "er_pos_share": 0.5126,
+  "er_iqr": 0.0865,
+  "neighbor_detail": [
+   {
+    "knob": "k_is",
+    "value": 0.8,
+    "er_net": 0.1408,
+    "n": 247
+   },
+   {
+    "knob": "reject_target_mode",
+    "value": "mid",
+    "er_net": 0.0212,
+    "n": 295
+   },
+   {
+    "knob": "reject_target_mode",
+    "value": "opposite",
+    "er_net": -0.0059,
+    "n": 275
+   },
+   {
+    "knob": "reject_use_struct_stop",
+    "value": true,
+    "er_net": -0.0381,
+    "n": 266
+   },
+   {
+    "knob": "turtle_stop_atr",
+    "value": 2.0,
+    "er_net": 0.0712,
+    "n": 232
+   }
+  ]
+ },
+ "1d": {
+  "tf": "1d",
+  "n_cells": 119,
+  "score_key": "score",
+  "best_knobs": {
+   "min_box_rotations": 0,
+   "min_box_quality": 0.6,
+   "min_bar_impulse_atr": 0.0,
+   "zone_cooldown_bars": 0,
+   "k_is": 0.5,
+   "turtle_stop_atr": 2.5,
+   "reject_target_mode": "mid",
+   "reject_use_struct_stop": false
+  },
+  "best_score": 0.2738,
+  "best_net": 53.1878,
+  "best_n": 86,
+  "plateau_n": 12,
+  "plateau_share": 0.1008,
+  "neighbors_n": 4,
+  "neighbor_median": 0.22535,
+  "neighbor_ratio": 0.823,
+  "er_pos_share": 0.7563,
+  "er_iqr": 0.1526,
+  "neighbor_detail": [
+   {
+    "knob": "k_is",
+    "value": 0.8,
+    "er_net": 0.2738,
+    "n": 86
+   },
+   {
+    "knob": "reject_target_mode",
+    "value": "none",
+    "er_net": 0.2727,
+    "n": 68
+   },
+   {
+    "knob": "reject_use_struct_stop",
+    "value": true,
+    "er_net": 0.0931,
+    "n": 148
+   },
+   {
+    "knob": "turtle_stop_atr",
+    "value": 2.0,
+    "er_net": 0.178,
+    "n": 105
+   }
+  ]
+ }
+}

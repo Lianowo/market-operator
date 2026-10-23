@@ -1,0 +1,45 @@
+{
+  "mode": "first_run_registration",
+  "status": "REGISTERED",
+  "manifest_sha256": "a989d885aad56ef86ecfad91af8879985abd0ae8c4f74966b4808cc2d56d1aa6",
+  "config_sha256": "17bdabc97025f612dfc0ce184d54ce057e4375362ca7e67934a51b0b41d9e11b",
+  "cells": [
+    {
+      "arm_id": "a0",
+      "segment": "dev",
+      "cost_mult": 1.0,
+      "net_pnl": 38.04071810947304
+    },
+    {
+      "arm_id": "a0",
+      "segment": "dev",
+      "cost_mult": 1.5,
+      "net_pnl": -3.2095946887137696
+    },
+    {
+      "arm_id": "a0",
+      "segment": "test",
+      "cost_mult": 1.0,
+      "net_pnl": 195.1862752005489
+    },
+    {
+      "arm_id": "a0",
+      "segment": "test",
+      "cost_mult": 1.5,
+      "net_pnl": 119.56028933417433
+    },
+    {
+      "arm_id": "a0",
+      "segment": "full",
+      "cost_mult": 1.0,
+      "net_pnl": 280.80624736015454
+    }
+  ],
+  "sanity_reference": {
+    "dev@1.0x": "+360.8 USDT (PF 1.48)",
+    "dev@1.5x": "+321.4 USDT (PF 1.41)",
+    "test@1.0x": "+214.5 USDT (PF 1.59)",
+    "test@1.5x": "+193.2 USDT (PF 1.51)",
+    "full@1.0x": "+575.3 USDT (gR +0.351, WR 52.8%)"
+  }
+}

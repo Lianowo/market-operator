@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -54,6 +54,37 @@ TRIGGER_GRANULARITY_BY_SECONDS: dict[int, str] = {
     1800: "30m", 3600: "1h", 7200: "2h", 14400: "4h",
 }
 
+#: 真实资金费率表目录(scripts/fetch_funding.py 落地,manifest 记 sha256)。
+FUNDING_DIR = REPO_ROOT / "data" / "raw" / "funding"
+
+
+def load_funding_rates(symbols: Sequence[str],
+                       directory: Path = FUNDING_DIR
+                       ) -> dict[str, tuple[tuple[int, float], ...]]:
+    """读取 ``{SYM}.csv`` → ``{symbol: ((ts, rate), ...)}``。
+
+    缺失标的不静默跳过:资金费口径一旦切换就必须覆盖全部回放标的,否则不同
+    标的会同时跑在真实/常数两种口径下,净 E[R] 不可比。缺文件直接抛错。
+    """
+    table: dict[str, tuple[tuple[int, float], ...]] = {}
+    for symbol in symbols:
+        path = directory / f"{symbol}.csv"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"funding_source=history 需要 {path};先跑 "
+                f"`python scripts/fetch_funding.py`")
+        rows: list[tuple[int, float]] = []
+        with path.open(encoding="utf-8") as fh:
+            next(fh)
+            for line in fh:
+                if not line.strip():
+                    continue
+                ts, rate = line.split(",")
+                rows.append((int(ts), float(rate)))
+        rows.sort()
+        table[symbol] = tuple(rows)
+    return table
+
 
 # ---------------------------------------------------------------------------
 # 场景与配置
@@ -77,21 +108,37 @@ class ScenarioSpec:
 
 @dataclass(frozen=True)
 class ExecutionCosts:
-    """撮合侧成本口径(每笔全额计入,不做免佣假设)。"""
+    """撮合侧成本口径(每笔全额计入,不做免佣假设)。
+
+    ``funding_rates``(A1)非空时,资金费按交易所**真实结算表**逐点计提(有符号,
+    空头可收费);为空则沿用 ``funding_per_8h`` 常数近似(现行行为,逐位不变)。
+    ``slippage_by_symbol``(E1)按标的分档;缺省标的用 ``slippage_per_side``。
+    """
 
     taker_fee: float
     maker_fee: float
     slippage_per_side: float
     funding_per_8h: float
+    funding_rates: Optional[Mapping[str, Sequence[Sequence[float]]]] = None
+    slippage_by_symbol: Optional[Mapping[str, float]] = None
 
     def scaled(self, multiplier: float) -> "ExecutionCosts":
         """成本压力测试:同比例放大手续费/滑点/资金费,几何不变。"""
+        table = (None if self.funding_rates is None else
+                 {sym: tuple((int(ts), float(rate) * multiplier)
+                             for ts, rate in rows)
+                  for sym, rows in self.funding_rates.items()})
+        per_sym = (None if self.slippage_by_symbol is None else
+                   {sym: float(v) * multiplier
+                    for sym, v in self.slippage_by_symbol.items()})
         return replace(
             self,
             taker_fee=self.taker_fee * multiplier,
             maker_fee=self.maker_fee * multiplier,
             slippage_per_side=self.slippage_per_side * multiplier,
             funding_per_8h=self.funding_per_8h * multiplier,
+            funding_rates=table,
+            slippage_by_symbol=per_sym,
         )
 
 
@@ -113,6 +160,24 @@ class ScenarioSettings:
     leverage_cap: float
     dev_frac: float
     n_fill: int
+
+
+def arm_config_from(raw: Mapping[str, Any], path: Path = PRODUCTION_CONFIG) -> ArmConfig:
+    """``arm_config`` → ``ArmConfig``,忽略仅供实盘使用的键。
+
+    ``config/strategy.json`` 被回放与实盘**共用**,里面带若干只被
+    ``scripts/live_runner.py`` 读取的键(如 ``opp_lock_max_giveback_r``:
+    子周期早锁的行情锚定上限,回放链没有子周期裁决)。若不认识的键直接塞进
+    ``ArmConfig(**...)``,整份生产配置会加载失败 —— 宁可显式列出未知键并忽略,
+    也不能让配置与链路互锁。未知键在此打印一次,便于发现拼写错误。
+    """
+    known = {f.name for f in fields(ArmConfig)}
+    arm = dict(raw.get("arm_config", {}))
+    unknown = sorted(set(arm) - known)
+    if unknown:
+        print(f"[config] {path.name}: arm_config 忽略回放链不用的键 {unknown}",
+              flush=True)
+    return ArmConfig(**{k: v for k, v in arm.items() if k in known})
 
 
 def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
@@ -150,17 +215,28 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
         for tf, seconds in raw.get("trigger_tf_by_htf",
                                    DEFAULT_TRIGGER_SECONDS).items()
     }
+    funding_source = str(raw.get("funding_source", "const"))
+    if funding_source == "const":
+        funding_rates = None
+    elif funding_source == "history":
+        funding_rates = load_funding_rates(tuple(raw["symbols"]))
+    else:
+        raise ValueError(f"funding_source 必须是 const|history,收到 "
+                         f"{funding_source!r}")
     return ScenarioSettings(
         raw=raw,
         structure=structure,
         router=router,
         router_by_timeframe=router_by_timeframe,
-        arm=ArmConfig(**raw.get("arm_config", {})),
+        arm=arm_config_from(raw, config_path),
         costs=ExecutionCosts(
             taker_fee=float(raw["taker_fee"]),
             maker_fee=float(raw["maker_fee"]),
             slippage_per_side=float(raw["slippage_per_side"]),
             funding_per_8h=float(raw["funding_per_8h_per_side"]),
+            funding_rates=funding_rates,
+            slippage_by_symbol=(dict(raw["slippage_by_symbol"])
+                                if raw.get("slippage_by_symbol") else None),
         ),
         trigger_seconds_by_timeframe=trigger,
         tf_cap_by_timeframe=dict(raw.get("tf_cap_by_tf", {})),
@@ -331,6 +407,8 @@ class ScenarioRunner:
             slippage_per_side=costs.slippage_per_side,
             funding_per_8h=costs.funding_per_8h,
             cost_multiplier=cost_multiplier,
+            funding_rates=costs.funding_rates,
+            slippage_by_symbol=costs.slippage_by_symbol,
             contracts=self.contracts,
             params=settings.structure,
             n_fill=settings.n_fill,
@@ -359,6 +437,7 @@ __all__ = [
     "COGNITION_TIMEFRAMES", "CONTRACTS_PATH", "DEFAULT_TRIGGER_SECONDS",
     "PRODUCTION_CONFIG", "REPO_ROOT", "TRIGGER_GRANULARITY_BY_SECONDS",
     "ExecutionCosts", "MarketData", "ScenarioOutcome", "ScenarioRunner",
-    "ScenarioSettings", "ScenarioSpec", "build_frames", "load_contract_specs",
+    "ScenarioSettings", "ScenarioSpec", "arm_config_from", "build_frames",
+    "load_contract_specs",
     "load_market_data", "load_settings",
 ]

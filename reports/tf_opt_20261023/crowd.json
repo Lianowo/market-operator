@@ -1,0 +1,320 @@
+{
+  "coexist": {
+    "n": 1440,
+    "er": 0.0875,
+    "net": 380.07,
+    "gross": 678.7571,
+    "cost": 367.3466,
+    "cap_skips": {
+      "TF_CAP": 811
+    },
+    "portfolio_cap_skips": 811,
+    "min_size_skips": 53,
+    "by_tf": {
+      "12h": {
+        "n": 351,
+        "net": 95.9511,
+        "risk": 991.7905463383012,
+        "er": 0.0967
+      },
+      "1d": {
+        "n": 128,
+        "net": 12.7019,
+        "risk": 376.3144562768704,
+        "er": 0.0338
+      },
+      "2h": {
+        "n": 628,
+        "net": 70.3769,
+        "risk": 1960.1514036958326,
+        "er": 0.0359
+      },
+      "4h": {
+        "n": 333,
+        "net": 201.045,
+        "risk": 1013.868514006559,
+        "er": 0.1983
+      }
+    }
+  },
+  "loose": {
+    "n": 1643,
+    "er": 0.0726,
+    "net": 334.73,
+    "gross": 643.3909,
+    "cost": 378.7082,
+    "cap_skips": {},
+    "portfolio_cap_skips": 0,
+    "min_size_skips": 38,
+    "by_tf": {
+      "12h": {
+        "n": 450,
+        "net": -3.8536,
+        "risk": 1204.8596524605127,
+        "er": -0.0032
+      },
+      "1d": {
+        "n": 164,
+        "net": 12.1614,
+        "risk": 452.4120685743798,
+        "er": 0.0269
+      },
+      "2h": {
+        "n": 677,
+        "net": 129.2053,
+        "risk": 1960.5692014730398,
+        "er": 0.0659
+      },
+      "4h": {
+        "n": 352,
+        "net": 197.2215,
+        "risk": 995.3065335625109,
+        "er": 0.1982
+      }
+    }
+  },
+  "single": {
+    "2h": {
+      "n": 629,
+      "er": 0.0445,
+      "net": 68.66,
+      "gross": 182.5803,
+      "cost": 146.137,
+      "cap_skips": {
+        "TF_CAP": 62
+      },
+      "portfolio_cap_skips": 62,
+      "min_size_skips": 8,
+      "by_tf": {
+        "2h": {
+          "n": 629,
+          "net": 68.6595,
+          "risk": 1543.266142747403,
+          "er": 0.0445
+        }
+      }
+    },
+    "4h": {
+      "n": 331,
+      "er": 0.2088,
+      "net": 160.04,
+      "gross": 209.2559,
+      "cost": 60.9004,
+      "cap_skips": {
+        "TF_CAP": 36
+      },
+      "portfolio_cap_skips": 36,
+      "min_size_skips": 6,
+      "by_tf": {
+        "4h": {
+          "n": 331,
+          "net": 160.0417,
+          "risk": 766.5144511629251,
+          "er": 0.2088
+        }
+      }
+    },
+    "12h": {
+      "n": 348,
+      "er": 0.1505,
+      "net": 108.01,
+      "gross": 153.6737,
+      "cost": 52.7365,
+      "cap_skips": {
+        "TF_CAP": 574
+      },
+      "portfolio_cap_skips": 574,
+      "min_size_skips": 44,
+      "by_tf": {
+        "12h": {
+          "n": 348,
+          "net": 108.0071,
+          "risk": 717.6257090803696,
+          "er": 0.1505
+        }
+      }
+    },
+    "1d": {
+      "n": 128,
+      "er": 0.1771,
+      "net": 45.05,
+      "gross": 63.9352,
+      "cost": 20.6646,
+      "cap_skips": {
+        "TF_CAP": 129
+      },
+      "portfolio_cap_skips": 129,
+      "min_size_skips": 43,
+      "by_tf": {
+        "1d": {
+          "n": 128,
+          "net": 45.0511,
+          "risk": 254.42633016597986,
+          "er": 0.1771
+        }
+      }
+    }
+  },
+  "delta": {
+    "2h": {
+      "n_solo": 629,
+      "n_coexist": 628,
+      "only_solo": 5,
+      "only_coexist": 4,
+      "common": 624,
+      "risk_dev_pct": 27.38,
+      "er_solo": 0.0445,
+      "er_coexist": 0.0359,
+      "same_ids": false
+    },
+    "4h": {
+      "n_solo": 331,
+      "n_coexist": 333,
+      "only_solo": 2,
+      "only_coexist": 4,
+      "common": 329,
+      "risk_dev_pct": 32.24,
+      "er_solo": 0.2088,
+      "er_coexist": 0.1983,
+      "same_ids": false
+    },
+    "12h": {
+      "n_solo": 348,
+      "n_coexist": 351,
+      "only_solo": 107,
+      "only_coexist": 110,
+      "common": 240,
+      "risk_dev_pct": 40.37,
+      "er_solo": 0.1505,
+      "er_coexist": 0.0967,
+      "same_ids": false
+    },
+    "1d": {
+      "n_solo": 128,
+      "n_coexist": 128,
+      "only_solo": 35,
+      "only_coexist": 35,
+      "common": 93,
+      "risk_dev_pct": 50.23,
+      "er_solo": 0.1771,
+      "er_coexist": 0.0338,
+      "same_ids": false
+    }
+  },
+  "concurrency": {
+    "coexist_all": {
+      "ALL": 13
+    },
+    "coexist_by_tf": {
+      "2h": 4,
+      "4h": 4,
+      "12h": 4,
+      "1d": 4
+    },
+    "loose_all": {
+      "ALL": 15
+    },
+    "single_all": {
+      "2h": {
+        "ALL": 4
+      },
+      "4h": {
+        "ALL": 4
+      },
+      "12h": {
+        "ALL": 4
+      },
+      "1d": {
+        "ALL": 4
+      }
+    }
+  },
+  "overlap": {
+    "coexist": {
+      "overlap_h": 56037.0,
+      "trade_hours": 104316.0,
+      "overlap_share": 0.537,
+      "pairs": 1696
+    },
+    "loose": {
+      "overlap_h": 78268.0,
+      "trade_hours": 122962.0,
+      "overlap_share": 0.637,
+      "pairs": 2263
+    }
+  },
+  "best_coexist": {
+    "n": 1493,
+    "er": 0.0834,
+    "net": 492.54,
+    "gross": 894.6741,
+    "cost": 494.9107,
+    "cap_skips": {
+      "TF_CAP": 970
+    },
+    "portfolio_cap_skips": 970,
+    "min_size_skips": 202,
+    "by_tf": {
+      "12h": {
+        "n": 355,
+        "net": 136.4015,
+        "risk": 1305.5019702134098,
+        "er": 0.1045
+      },
+      "1d": {
+        "n": 174,
+        "net": 56.5321,
+        "risk": 675.002569155338,
+        "er": 0.0838
+      },
+      "2h": {
+        "n": 597,
+        "net": 73.4205,
+        "risk": 2440.161568655147,
+        "er": 0.0301
+      },
+      "4h": {
+        "n": 367,
+        "net": 226.1883,
+        "risk": 1488.6488437065,
+        "er": 0.1519
+      }
+    }
+  },
+  "best_coexist_loose": {
+    "n": 1679,
+    "er": 0.0877,
+    "net": 572.15,
+    "gross": 1012.695,
+    "cost": 540.7861,
+    "cap_skips": {},
+    "portfolio_cap_skips": 0,
+    "min_size_skips": 237,
+    "by_tf": {
+      "12h": {
+        "n": 467,
+        "net": 53.96,
+        "risk": 1697.5357692570599,
+        "er": 0.0318
+      },
+      "1d": {
+        "n": 175,
+        "net": 64.8364,
+        "risk": 679.2272920021668,
+        "er": 0.0955
+      },
+      "2h": {
+        "n": 636,
+        "net": 201.3448,
+        "risk": 2545.4979964131307,
+        "er": 0.0791
+      },
+      "4h": {
+        "n": 401,
+        "net": 252.004,
+        "risk": 1603.0491741001388,
+        "er": 0.1572
+      }
+    }
+  }
+}

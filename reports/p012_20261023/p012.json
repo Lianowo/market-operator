@@ -1,0 +1,882 @@
+{
+ "segment": "full",
+ "symbols": [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "DOGEUSDT"
+ ],
+ "prep_s": 63.3,
+ "arms": {
+  "base_const": {
+   "n": 1440,
+   "gross": 678.7571,
+   "cost": 367.3466,
+   "net": 380.075,
+   "eq": 680.075,
+   "wr": 0.4097,
+   "pf": 1.3771,
+   "dd_pct": 32.9138,
+   "e_r": 0.0875,
+   "by_tf": {
+    "2h": {
+     "n": 628,
+     "net": 70.38,
+     "e_r": 0.0359,
+     "funding": 21.97
+    },
+    "4h": {
+     "n": 333,
+     "net": 201.04,
+     "e_r": 0.1983,
+     "funding": 18.63
+    },
+    "12h": {
+     "n": 351,
+     "net": 95.95,
+     "e_r": 0.0967,
+     "funding": 32.9
+    },
+    "1d": {
+     "n": 128,
+     "net": 12.7,
+     "e_r": 0.0338,
+     "funding": 19.2
+    }
+   },
+   "funding_total": 92.69,
+   "fees_total": 205.99,
+   "tail": {
+    "mfe_r_mean": 1.4386,
+    "mae_r_mean": -0.6689,
+    "give_back_r_mean": 1.3243,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.7181,
+    "hold_bars_mean": 9.974,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1440,
+    "gross": 678.7571,
+    "cost": 298.6822,
+    "risk": 4342.1249,
+    "by_multiplier": {
+     "1x": {
+      "net": 380.075,
+      "e_r": 0.087532,
+      "net_per_trade": 0.263941
+     },
+     "1.5x": {
+      "net": 230.7339,
+      "e_r": 0.053138,
+      "net_per_trade": 0.160232
+     },
+     "2x": {
+      "net": 81.3928,
+      "e_r": 0.018745,
+      "net_per_trade": 0.056523
+     },
+     "3x": {
+      "net": -217.2893,
+      "e_r": -0.050042,
+      "net_per_trade": -0.150895
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 811
+   },
+   "run_s": 3.4
+  },
+  "base_hist": {
+   "n": 1434,
+   "gross": 844.9942,
+   "cost": 328.4708,
+   "net": 594.4476,
+   "eq": 894.4476,
+   "wr": 0.4135,
+   "pf": 1.4216,
+   "dd_pct": 28.9726,
+   "e_r": 0.1228,
+   "by_tf": {
+    "2h": {
+     "n": 627,
+     "net": 94.44,
+     "e_r": 0.0429,
+     "funding": 3.96
+    },
+    "4h": {
+     "n": 334,
+     "net": 268.61,
+     "e_r": 0.2361,
+     "funding": 4.98
+    },
+    "12h": {
+     "n": 346,
+     "net": 201.11,
+     "e_r": 0.1862,
+     "funding": 5.07
+    },
+    "1d": {
+     "n": 127,
+     "net": 30.29,
+     "e_r": 0.0719,
+     "funding": 2.77
+    }
+   },
+   "funding_total": 16.77,
+   "fees_total": 233.77,
+   "tail": {
+    "mfe_r_mean": 1.4575,
+    "mae_r_mean": -0.6673,
+    "give_back_r_mean": 1.3108,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.5725,
+    "hold_bars_mean": 10.02,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1434,
+    "gross": 844.9942,
+    "cost": 250.5466,
+    "risk": 4838.8171,
+    "by_multiplier": {
+     "1x": {
+      "net": 594.4476,
+      "e_r": 0.12285,
+      "net_per_trade": 0.414538
+     },
+     "1.5x": {
+      "net": 469.1743,
+      "e_r": 0.096961,
+      "net_per_trade": 0.327179
+     },
+     "2x": {
+      "net": 343.901,
+      "e_r": 0.071071,
+      "net_per_trade": 0.239819
+     },
+     "3x": {
+      "net": 93.3544,
+      "e_r": 0.019293,
+      "net_per_trade": 0.065101
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 798
+   },
+   "run_s": 4.0
+  },
+  "B1_sym3": {
+   "n": 1071,
+   "gross": 525.617,
+   "cost": 197.534,
+   "net": 374.621,
+   "eq": 674.621,
+   "wr": 0.4136,
+   "pf": 1.4124,
+   "dd_pct": 23.3735,
+   "e_r": 0.1212,
+   "by_tf": {
+    "2h": {
+     "n": 407,
+     "net": 16.01,
+     "e_r": 0.0132,
+     "funding": 2.77
+    },
+    "4h": {
+     "n": 204,
+     "net": 138.02,
+     "e_r": 0.2282,
+     "funding": 3.06
+    },
+    "12h": {
+     "n": 335,
+     "net": 150.55,
+     "e_r": 0.1638,
+     "funding": 4.47
+    },
+    "1d": {
+     "n": 125,
+     "net": 70.04,
+     "e_r": 0.1988,
+     "funding": 1.08
+    }
+   },
+   "funding_total": 11.38,
+   "fees_total": 139.61,
+   "tail": {
+    "mfe_r_mean": 1.4646,
+    "mae_r_mean": -0.6605,
+    "give_back_r_mean": 1.3212,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.6086,
+    "hold_bars_mean": 10.072,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1071,
+    "gross": 525.617,
+    "cost": 150.996,
+    "risk": 3091.5709,
+    "by_multiplier": {
+     "1x": {
+      "net": 374.621,
+      "e_r": 0.121175,
+      "net_per_trade": 0.349786
+     },
+     "1.5x": {
+      "net": 299.1229,
+      "e_r": 0.096754,
+      "net_per_trade": 0.279293
+     },
+     "2x": {
+      "net": 223.6249,
+      "e_r": 0.072334,
+      "net_per_trade": 0.2088
+     },
+     "3x": {
+      "net": 72.6289,
+      "e_r": 0.023493,
+      "net_per_trade": 0.067814
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 1398
+   },
+   "run_s": 3.6
+  },
+  "B1_sym45": {
+   "n": 1403,
+   "gross": 824.0053,
+   "cost": 322.9394,
+   "net": 577.6128,
+   "eq": 877.6128,
+   "wr": 0.4091,
+   "pf": 1.4119,
+   "dd_pct": 28.4218,
+   "e_r": 0.1212,
+   "by_tf": {
+    "2h": {
+     "n": 607,
+     "net": 97.42,
+     "e_r": 0.0454,
+     "funding": 3.87
+    },
+    "4h": {
+     "n": 324,
+     "net": 261.15,
+     "e_r": 0.2355,
+     "funding": 4.9
+    },
+    "12h": {
+     "n": 344,
+     "net": 206.48,
+     "e_r": 0.1896,
+     "funding": 5.48
+    },
+    "1d": {
+     "n": 128,
+     "net": 12.56,
+     "e_r": 0.0296,
+     "funding": 2.49
+    }
+   },
+   "funding_total": 16.75,
+   "fees_total": 229.64,
+   "tail": {
+    "mfe_r_mean": 1.4604,
+    "mae_r_mean": -0.6678,
+    "give_back_r_mean": 1.3128,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.5846,
+    "hold_bars_mean": 9.939,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1403,
+    "gross": 824.0053,
+    "cost": 246.3925,
+    "risk": 4766.6036,
+    "by_multiplier": {
+     "1x": {
+      "net": 577.6128,
+      "e_r": 0.121179,
+      "net_per_trade": 0.411698
+     },
+     "1.5x": {
+      "net": 454.4165,
+      "e_r": 0.095333,
+      "net_per_trade": 0.323889
+     },
+     "2x": {
+      "net": 331.2203,
+      "e_r": 0.069488,
+      "net_per_trade": 0.23608
+     },
+     "3x": {
+      "net": 84.8278,
+      "e_r": 0.017796,
+      "net_per_trade": 0.060462
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 865
+   },
+   "run_s": 3.7
+  },
+  "B2_reserve_slow": {
+   "n": 565,
+   "gross": 177.0957,
+   "cost": 60.1241,
+   "net": 130.729,
+   "eq": 430.729,
+   "wr": 0.3504,
+   "pf": 1.2972,
+   "dd_pct": 20.3766,
+   "e_r": 0.1057,
+   "by_tf": {
+    "2h": {
+     "n": 42,
+     "net": -1.9,
+     "e_r": -0.0179,
+     "funding": -0.0
+    },
+    "4h": {
+     "n": 36,
+     "net": 8.09,
+     "e_r": 0.0924,
+     "funding": -0.05
+    },
+    "12h": {
+     "n": 354,
+     "net": 76.94,
+     "e_r": 0.1017,
+     "funding": 3.58
+    },
+    "1d": {
+     "n": 133,
+     "net": 47.6,
+     "e_r": 0.166,
+     "funding": 1.57
+    }
+   },
+   "funding_total": 5.09,
+   "fees_total": 41.27,
+   "tail": {
+    "mfe_r_mean": 1.5667,
+    "mae_r_mean": -0.7274,
+    "give_back_r_mean": 1.4624,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.1299,
+    "hold_bars_mean": 10.006,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 565,
+    "gross": 177.0957,
+    "cost": 46.3667,
+    "risk": 1236.5096,
+    "by_multiplier": {
+     "1x": {
+      "net": 130.729,
+      "e_r": 0.105724,
+      "net_per_trade": 0.231379
+     },
+     "1.5x": {
+      "net": 107.5457,
+      "e_r": 0.086975,
+      "net_per_trade": 0.190346
+     },
+     "2x": {
+      "net": 84.3624,
+      "e_r": 0.068226,
+      "net_per_trade": 0.149314
+     },
+     "3x": {
+      "net": 37.9957,
+      "e_r": 0.030728,
+      "net_per_trade": 0.067249
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 1969
+   },
+   "run_s": 2.7
+  },
+  "B2_reserve_15": {
+   "n": 797,
+   "gross": 190.7967,
+   "cost": 111.8566,
+   "net": 105.1476,
+   "eq": 405.1476,
+   "wr": 0.3676,
+   "pf": 1.2188,
+   "dd_pct": 28.1939,
+   "e_r": 0.0545,
+   "by_tf": {
+    "2h": {
+     "n": 210,
+     "net": -27.24,
+     "e_r": -0.0504,
+     "funding": 0.77
+    },
+    "4h": {
+     "n": 106,
+     "net": 47.15,
+     "e_r": 0.1795,
+     "funding": 1.17
+    },
+    "12h": {
+     "n": 350,
+     "net": 56.93,
+     "e_r": 0.0693,
+     "funding": 3.49
+    },
+    "1d": {
+     "n": 131,
+     "net": 28.31,
+     "e_r": 0.0928,
+     "funding": 1.59
+    }
+   },
+   "funding_total": 7.03,
+   "fees_total": 78.62,
+   "tail": {
+    "mfe_r_mean": 1.4445,
+    "mae_r_mean": -0.7034,
+    "give_back_r_mean": 1.3703,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.6716,
+    "hold_bars_mean": 9.942,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 797,
+    "gross": 190.7967,
+    "cost": 85.6491,
+    "risk": 1928.7894,
+    "by_multiplier": {
+     "1x": {
+      "net": 105.1476,
+      "e_r": 0.054515,
+      "net_per_trade": 0.131929
+     },
+     "1.5x": {
+      "net": 62.3231,
+      "e_r": 0.032312,
+      "net_per_trade": 0.078197
+     },
+     "2x": {
+      "net": 19.4985,
+      "e_r": 0.010109,
+      "net_per_trade": 0.024465
+     },
+     "3x": {
+      "net": -66.1506,
+      "e_r": -0.034296,
+      "net_per_trade": -0.082999
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 1661
+   },
+   "run_s": 3.0
+  },
+  "B2_reserve_075": {
+   "n": 1217,
+   "gross": 326.3249,
+   "cost": 189.29,
+   "net": 181.862,
+   "eq": 481.862,
+   "wr": 0.4043,
+   "pf": 1.2678,
+   "dd_pct": 27.2003,
+   "e_r": 0.0633,
+   "by_tf": {
+    "2h": {
+     "n": 465,
+     "net": 12.17,
+     "e_r": 0.0106,
+     "funding": 2.18
+    },
+    "4h": {
+     "n": 265,
+     "net": 119.04,
+     "e_r": 0.1874,
+     "funding": 2.0
+    },
+    "12h": {
+     "n": 354,
+     "net": 41.94,
+     "e_r": 0.0527,
+     "funding": 3.77
+    },
+    "1d": {
+     "n": 133,
+     "net": 8.72,
+     "e_r": 0.0295,
+     "funding": 2.04
+    }
+   },
+   "funding_total": 9.98,
+   "fees_total": 134.48,
+   "tail": {
+    "mfe_r_mean": 1.3989,
+    "mae_r_mean": -0.6755,
+    "give_back_r_mean": 1.3191,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.9495,
+    "hold_bars_mean": 9.568,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1217,
+    "gross": 326.3249,
+    "cost": 144.4629,
+    "risk": 2874.4689,
+    "by_multiplier": {
+     "1x": {
+      "net": 181.862,
+      "e_r": 0.063268,
+      "net_per_trade": 0.149435
+     },
+     "1.5x": {
+      "net": 109.6306,
+      "e_r": 0.038139,
+      "net_per_trade": 0.090083
+     },
+     "2x": {
+      "net": 37.3991,
+      "e_r": 0.013011,
+      "net_per_trade": 0.030731
+     },
+     "3x": {
+      "net": -107.0637,
+      "e_r": -0.037246,
+      "net_per_trade": -0.087973
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 1061
+   },
+   "run_s": 3.4
+  },
+  "C1_target4r": {
+   "n": 1450,
+   "gross": 664.2809,
+   "cost": 307.0522,
+   "net": 430.2383,
+   "eq": 730.2383,
+   "wr": 0.4048,
+   "pf": 1.3419,
+   "dd_pct": 33.9508,
+   "e_r": 0.0932,
+   "by_tf": {
+    "2h": {
+     "n": 627,
+     "net": 89.47,
+     "e_r": 0.0434,
+     "funding": 3.74
+    },
+    "4h": {
+     "n": 334,
+     "net": 228.4,
+     "e_r": 0.2129,
+     "funding": 4.55
+    },
+    "12h": {
+     "n": 357,
+     "net": 117.08,
+     "e_r": 0.1098,
+     "funding": 5.07
+    },
+    "1d": {
+     "n": 132,
+     "net": -4.72,
+     "e_r": -0.0113,
+     "funding": 1.65
+    }
+   },
+   "funding_total": 15.01,
+   "fees_total": 219.03,
+   "tail": {
+    "mfe_r_mean": 1.4296,
+    "mae_r_mean": -0.6713,
+    "give_back_r_mean": 1.3076,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.6592,
+    "hold_bars_mean": 9.931,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1450,
+    "gross": 664.2809,
+    "cost": 234.0426,
+    "risk": 4617.5008,
+    "by_multiplier": {
+     "1x": {
+      "net": 430.2383,
+      "e_r": 0.093176,
+      "net_per_trade": 0.296716
+     },
+     "1.5x": {
+      "net": 313.217,
+      "e_r": 0.067833,
+      "net_per_trade": 0.216012
+     },
+     "2x": {
+      "net": 196.1956,
+      "e_r": 0.04249,
+      "net_per_trade": 0.135307
+     },
+     "3x": {
+      "net": -37.847,
+      "e_r": -0.008196,
+      "net_per_trade": -0.026101
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 738,
+    "target_r_clamped": 182
+   },
+   "run_s": 3.7
+  },
+  "C1_target8r": {
+   "n": 1434,
+   "gross": 844.9942,
+   "cost": 328.4708,
+   "net": 594.4476,
+   "eq": 894.4476,
+   "wr": 0.4135,
+   "pf": 1.4216,
+   "dd_pct": 28.9726,
+   "e_r": 0.1228,
+   "by_tf": {
+    "2h": {
+     "n": 627,
+     "net": 94.44,
+     "e_r": 0.0429,
+     "funding": 3.96
+    },
+    "4h": {
+     "n": 334,
+     "net": 268.61,
+     "e_r": 0.2361,
+     "funding": 4.98
+    },
+    "12h": {
+     "n": 346,
+     "net": 201.11,
+     "e_r": 0.1862,
+     "funding": 5.07
+    },
+    "1d": {
+     "n": 127,
+     "net": 30.29,
+     "e_r": 0.0719,
+     "funding": 2.77
+    }
+   },
+   "funding_total": 16.77,
+   "fees_total": 233.77,
+   "tail": {
+    "mfe_r_mean": 1.4575,
+    "mae_r_mean": -0.6673,
+    "give_back_r_mean": 1.3108,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.5725,
+    "hold_bars_mean": 10.02,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1434,
+    "gross": 844.9942,
+    "cost": 250.5466,
+    "risk": 4838.8171,
+    "by_multiplier": {
+     "1x": {
+      "net": 594.4476,
+      "e_r": 0.12285,
+      "net_per_trade": 0.414538
+     },
+     "1.5x": {
+      "net": 469.1743,
+      "e_r": 0.096961,
+      "net_per_trade": 0.327179
+     },
+     "2x": {
+      "net": 343.901,
+      "e_r": 0.071071,
+      "net_per_trade": 0.239819
+     },
+     "3x": {
+      "net": 93.3544,
+      "e_r": 0.019293,
+      "net_per_trade": 0.065101
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 798,
+    "target_r_clamped": 31
+   },
+   "run_s": 3.8
+  },
+  "C3_no12h_const": {
+   "n": 1090,
+   "gross": 525.6765,
+   "cost": 288.8378,
+   "net": 294.4829,
+   "eq": 594.4829,
+   "wr": 0.4358,
+   "pf": 1.408,
+   "dd_pct": 26.8154,
+   "e_r": 0.0903,
+   "by_tf": {
+    "2h": {
+     "n": 628,
+     "net": 74.88,
+     "e_r": 0.0392,
+     "funding": 21.54
+    },
+    "4h": {
+     "n": 332,
+     "net": 195.83,
+     "e_r": 0.1985,
+     "funding": 18.04
+    },
+    "1d": {
+     "n": 130,
+     "net": 23.77,
+     "e_r": 0.0656,
+     "funding": 18.68
+    }
+   },
+   "funding_total": 58.26,
+   "fees_total": 172.93,
+   "tail": {
+    "mfe_r_mean": 1.3967,
+    "mae_r_mean": -0.6486,
+    "give_back_r_mean": 1.2753,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.8502,
+    "hold_bars_mean": 9.967,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1090,
+    "gross": 525.6765,
+    "cost": 231.1937,
+    "risk": 3260.0,
+    "by_multiplier": {
+     "1x": {
+      "net": 294.4829,
+      "e_r": 0.090332,
+      "net_per_trade": 0.270168
+     },
+     "1.5x": {
+      "net": 178.886,
+      "e_r": 0.054873,
+      "net_per_trade": 0.164116
+     },
+     "2x": {
+      "net": 63.2892,
+      "e_r": 0.019414,
+      "net_per_trade": 0.058064
+     },
+     "3x": {
+      "net": -167.9044,
+      "e_r": -0.051504,
+      "net_per_trade": -0.154041
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 196
+   },
+   "run_s": 2.5
+  },
+  "C3_no12h_hist": {
+   "n": 1088,
+   "gross": 573.6424,
+   "cost": 254.2107,
+   "net": 380.3939,
+   "eq": 680.3939,
+   "wr": 0.4357,
+   "pf": 1.4227,
+   "dd_pct": 26.112,
+   "e_r": 0.1111,
+   "by_tf": {
+    "2h": {
+     "n": 627,
+     "net": 108.67,
+     "e_r": 0.0543,
+     "funding": 3.69
+    },
+    "4h": {
+     "n": 334,
+     "net": 227.67,
+     "e_r": 0.2178,
+     "funding": 4.32
+    },
+    "1d": {
+     "n": 127,
+     "net": 44.05,
+     "e_r": 0.1166,
+     "funding": 2.35
+    }
+   },
+   "funding_total": 10.36,
+   "fees_total": 182.89,
+   "tail": {
+    "mfe_r_mean": 1.4042,
+    "mae_r_mean": -0.6474,
+    "give_back_r_mean": 1.2612,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 0.7288,
+    "hold_bars_mean": 9.975,
+    "partial_legs": 0
+   },
+   "counterfactual": {
+    "n": 1088,
+    "gross": 573.6424,
+    "cost": 193.2485,
+    "risk": 3424.58,
+    "by_multiplier": {
+     "1x": {
+      "net": 380.3939,
+      "e_r": 0.111078,
+      "net_per_trade": 0.349627
+     },
+     "1.5x": {
+      "net": 283.7696,
+      "e_r": 0.082863,
+      "net_per_trade": 0.260818
+     },
+     "2x": {
+      "net": 187.1453,
+      "e_r": 0.054648,
+      "net_per_trade": 0.172009
+     },
+     "3x": {
+      "net": -6.1032,
+      "e_r": -0.001782,
+      "net_per_trade": -0.00561
+     }
+    }
+   },
+   "counters": {
+    "portfolio_cap_skips": 212
+   },
+   "run_s": 2.6
+  }
+ }
+}

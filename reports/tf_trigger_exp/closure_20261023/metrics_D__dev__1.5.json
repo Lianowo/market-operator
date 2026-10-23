@@ -1,0 +1,185 @@
+{
+  "n": 826,
+  "gross": 159.6096,
+  "cost": 194.8171,
+  "net": 1.2652,
+  "eq": 301.2652,
+  "wr": 0.4044,
+  "pf": 1.237,
+  "dd_pct": 31.8214,
+  "limit_entries": 0,
+  "by_tf": {
+    "2h": {
+      "n": 335,
+      "net": 18.2183
+    },
+    "4h": {
+      "n": 182,
+      "net": 27.9816
+    },
+    "12h": {
+      "n": 237,
+      "net": -38.0095
+    },
+    "1d": {
+      "n": 72,
+      "net": -6.9253
+    }
+  },
+  "by_event_regime": {
+    "E1×RANGE": {
+      "n": 13,
+      "net": -4.5792
+    },
+    "E1×TRANSITION": {
+      "n": 78,
+      "net": -12.7194
+    },
+    "E1×TREND_DOWN": {
+      "n": 59,
+      "net": 14.1196
+    },
+    "E1×TREND_UP": {
+      "n": 63,
+      "net": 19.2208
+    },
+    "E3×RANGE": {
+      "n": 60,
+      "net": -24.9044
+    },
+    "E3×TRANSITION": {
+      "n": 285,
+      "net": -114.6971
+    },
+    "E3×TREND_DOWN": {
+      "n": 123,
+      "net": 107.5007
+    },
+    "E3×TREND_UP": {
+      "n": 145,
+      "net": 17.3241
+    }
+  },
+  "counters": {
+    "open_intents": 959,
+    "opens_filled": 826,
+    "min_size_skips": 130,
+    "portfolio_cap_skips": 108,
+    "protective_stop_fills": 809,
+    "f1_reject_e3_market": 5011,
+    "e3_signals": 15190,
+    "e1_signals": 7044,
+    "dup": 7736,
+    "restraint_quality_reject": 6339,
+    "restraint_rotations_reject": 6056,
+    "restraint_cooldown_reject": 31,
+    "restraint_impulse_reject": 1738,
+    "campaigns": {
+      "BTCUSDT@12h": {
+        "f1_reject_e3_market": 113,
+        "e3_signals": 261,
+        "e1_signals": 257,
+        "dup": 864,
+        "restraint_quality_reject": 103
+      },
+      "BTCUSDT@1d": {
+        "restraint_rotations_reject": 45,
+        "e3_signals": 177,
+        "f1_reject_e3_market": 80,
+        "e1_signals": 123,
+        "dup": 352,
+        "restraint_quality_reject": 70,
+        "restraint_cooldown_reject": 1
+      },
+      "BTCUSDT@2h": {
+        "f1_reject_e3_market": 743,
+        "e3_signals": 2538,
+        "restraint_impulse_reject": 333,
+        "restraint_rotations_reject": 1088,
+        "restraint_quality_reject": 1076,
+        "e1_signals": 993,
+        "dup": 665
+      },
+      "BTCUSDT@4h": {
+        "f1_reject_e3_market": 750,
+        "e3_signals": 2105,
+        "e1_signals": 970,
+        "restraint_rotations_reject": 837,
+        "restraint_quality_reject": 907,
+        "restraint_impulse_reject": 269,
+        "dup": 835,
+        "restraint_cooldown_reject": 8
+      },
+      "ETHUSDT@12h": {
+        "e1_signals": 262,
+        "dup": 743,
+        "f1_reject_e3_market": 130,
+        "e3_signals": 317,
+        "restraint_quality_reject": 127
+      },
+      "ETHUSDT@1d": {
+        "f1_reject_e3_market": 115,
+        "e3_signals": 229,
+        "restraint_rotations_reject": 61,
+        "e1_signals": 132,
+        "dup": 203,
+        "restraint_quality_reject": 77,
+        "restraint_cooldown_reject": 7
+      },
+      "ETHUSDT@2h": {
+        "f1_reject_e3_market": 615,
+        "e3_signals": 2330,
+        "restraint_impulse_reject": 317,
+        "restraint_rotations_reject": 1015,
+        "e1_signals": 975,
+        "restraint_quality_reject": 957,
+        "dup": 960
+      },
+      "ETHUSDT@4h": {
+        "f1_reject_e3_market": 731,
+        "e3_signals": 2088,
+        "restraint_rotations_reject": 855,
+        "restraint_impulse_reject": 297,
+        "dup": 744,
+        "e1_signals": 926,
+        "restraint_quality_reject": 826,
+        "restraint_cooldown_reject": 2
+      },
+      "SOLUSDT@12h": {
+        "e3_signals": 279,
+        "f1_reject_e3_market": 130,
+        "dup": 841,
+        "e1_signals": 281,
+        "restraint_quality_reject": 122
+      },
+      "SOLUSDT@1d": {
+        "restraint_rotations_reject": 69,
+        "e3_signals": 223,
+        "f1_reject_e3_market": 94,
+        "e1_signals": 136,
+        "restraint_quality_reject": 77,
+        "dup": 278,
+        "restraint_cooldown_reject": 11
+      },
+      "SOLUSDT@2h": {
+        "f1_reject_e3_market": 751,
+        "e3_signals": 2587,
+        "restraint_rotations_reject": 1186,
+        "restraint_quality_reject": 1120,
+        "e1_signals": 1048,
+        "restraint_impulse_reject": 294,
+        "dup": 645
+      },
+      "SOLUSDT@4h": {
+        "restraint_rotations_reject": 900,
+        "e3_signals": 2056,
+        "restraint_quality_reject": 877,
+        "e1_signals": 941,
+        "f1_reject_e3_market": 759,
+        "dup": 606,
+        "restraint_impulse_reject": 228,
+        "restraint_cooldown_reject": 2
+      }
+    }
+  }
+}

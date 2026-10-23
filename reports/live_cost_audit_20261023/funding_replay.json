@@ -1,0 +1,42 @@
+{
+ "2h": {
+  "n": 481,
+  "model_fund_R": 0.0121,
+  "actual_fund_R": 0.0021,
+  "net_R": 0.0821,
+  "net_R_actual_funding": 0.0921,
+  "adverse": 236,
+  "income": 162,
+  "zero": 83
+ },
+ "4h": {
+  "n": 256,
+  "model_fund_R": 0.0193,
+  "actual_fund_R": 0.0039,
+  "net_R": 0.2786,
+  "net_R_actual_funding": 0.294,
+  "adverse": 135,
+  "income": 101,
+  "zero": 20
+ },
+ "12h": {
+  "n": 309,
+  "model_fund_R": 0.034,
+  "actual_fund_R": 0.0063,
+  "net_R": -0.0071,
+  "net_R_actual_funding": 0.0206,
+  "adverse": 163,
+  "income": 137,
+  "zero": 9
+ },
+ "1d": {
+  "n": 107,
+  "model_fund_R": 0.0572,
+  "actual_fund_R": 0.0075,
+  "net_R": 0.1483,
+  "net_R_actual_funding": 0.198,
+  "adverse": 61,
+  "income": 45,
+  "zero": 1
+ }
+}

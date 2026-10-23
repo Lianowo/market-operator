@@ -1,0 +1,212 @@
+{
+ "days": 30,
+ "cfg": {
+  "taker_fee": 0.0006,
+  "maker_fee": 0.0002,
+  "slippage_per_side": 0.0002,
+  "funding_per_8h_per_side": 0.0001
+ },
+ "n_fills": 59,
+ "fee_bps_weighted": 5.9505,
+ "fee_bps_by_scope": {
+  "maker": 2.0,
+  "taker": 6.0
+ },
+ "sched_taker_bps": [
+  6.0
+ ],
+ "sched_maker_bps": [
+  2.0
+ ],
+ "fee_usdt": 2.438654,
+ "notional_usdt": 4098.27,
+ "bill_fee_usdt": 2.438654,
+ "funding_usdt": -0.024425,
+ "funding_bps_8h": -0.0476,
+ "model_fee_usdt": 3.2786,
+ "model_funding_usdt": 0.512647,
+ "round_trips": [
+  {
+   "symbol": "GUSDT",
+   "open_ts": 1791125164616,
+   "close_ts": 1791157159047,
+   "notional": 40.2272,
+   "hours": 8.8873
+  },
+  {
+   "symbol": "1000CATUSDT",
+   "open_ts": 1791622213240,
+   "close_ts": 1791828916443,
+   "notional": 5.0007,
+   "hours": 57.4176
+  },
+  {
+   "symbol": "AMZUUSDT",
+   "open_ts": 1791826266012,
+   "close_ts": 1791877342000,
+   "notional": 6.6024,
+   "hours": 14.1878
+  },
+  {
+   "symbol": "BABAUSDT",
+   "open_ts": 1791907537428,
+   "close_ts": 1791909035826,
+   "notional": 5.538,
+   "hours": 0.4162
+  },
+  {
+   "symbol": "BLURUSDT",
+   "open_ts": 1791972703447,
+   "close_ts": 1792054443635,
+   "notional": 6.166,
+   "hours": 22.7056
+  },
+  {
+   "symbol": "AAVEUSDT",
+   "open_ts": 1792612809840,
+   "close_ts": 1792634755762,
+   "notional": 110.369,
+   "hours": 6.0961
+  },
+  {
+   "symbol": "ADAUSDT",
+   "open_ts": 1792612810154,
+   "close_ts": 1792634801150,
+   "notional": 155.3361,
+   "hours": 6.1086
+  },
+  {
+   "symbol": "ARIAUSDT",
+   "open_ts": 1792612811859,
+   "close_ts": 1792737492364,
+   "notional": 32.8929,
+   "hours": 34.6335
+  },
+  {
+   "symbol": "CLUSDT",
+   "open_ts": 1792612816292,
+   "close_ts": 1792737492364,
+   "notional": 91.8878,
+   "hours": 34.6322
+  },
+  {
+   "symbol": "JCTUSDT",
+   "open_ts": 1792612823667,
+   "close_ts": 1792737492364,
+   "notional": 17.6483,
+   "hours": 34.6302
+  },
+  {
+   "symbol": "WUSDT",
+   "open_ts": 1792612835526,
+   "close_ts": 1792737492364,
+   "notional": 48.5563,
+   "hours": 34.6269
+  },
+  {
+   "symbol": "ARBUSDT",
+   "open_ts": 1792620156825,
+   "close_ts": 1792737492364,
+   "notional": 60.4956,
+   "hours": 32.5932
+  },
+  {
+   "symbol": "AMZNUSDT",
+   "open_ts": 1792627440020,
+   "close_ts": 1792737492364,
+   "notional": 154.6952,
+   "hours": 30.5701
+  },
+  {
+   "symbol": "PAXGUSDT",
+   "open_ts": 1792627458835,
+   "close_ts": 1792737492364,
+   "notional": 573.5365,
+   "hours": 30.5649
+  },
+  {
+   "symbol": "TIAUSDT",
+   "open_ts": 1792641690515,
+   "close_ts": 1792737492364,
+   "notional": 61.1843,
+   "hours": 26.6116
+  },
+  {
+   "symbol": "UNIUSDT",
+   "open_ts": 1792641693856,
+   "close_ts": 1792737492364,
+   "notional": 58.04,
+   "hours": 26.6107
+  },
+  {
+   "symbol": "MINIMAXUSDT",
+   "open_ts": 1792656026824,
+   "close_ts": 1792719438804,
+   "notional": 106.3348,
+   "hours": 17.6144
+  },
+  {
+   "symbol": "BABAUSDT",
+   "open_ts": 1792735231036,
+   "close_ts": 1792737492364,
+   "notional": 91.0182,
+   "hours": 0.6281
+  },
+  {
+   "symbol": "AAVEUSDT",
+   "open_ts": 1792742404823,
+   "close_ts": null,
+   "notional": 59.832,
+   "hours": 4.3184
+  },
+  {
+   "symbol": "ARKMUSDT",
+   "open_ts": 1792742408159,
+   "close_ts": null,
+   "notional": 36.3216,
+   "hours": 4.3175
+  },
+  {
+   "symbol": "ARMUSDT",
+   "open_ts": 1792742408792,
+   "close_ts": null,
+   "notional": 70.6299,
+   "hours": 4.3173
+  },
+  {
+   "symbol": "BABAUSDT",
+   "open_ts": 1792742411286,
+   "close_ts": null,
+   "notional": 90.3952,
+   "hours": 4.3166
+  },
+  {
+   "symbol": "CSOPSK2LHKDUSDT",
+   "open_ts": 1792742415729,
+   "close_ts": null,
+   "notional": 29.6629,
+   "hours": 4.3154
+  },
+  {
+   "symbol": "GOOGLUSDT",
+   "open_ts": 1792749615933,
+   "close_ts": null,
+   "notional": 518.592,
+   "hours": 2.3153
+  },
+  {
+   "symbol": "MOONSHOTUSDT",
+   "open_ts": 1792749620520,
+   "close_ts": null,
+   "notional": 50.1501,
+   "hours": 2.314
+  },
+  {
+   "symbol": "MAGMAUSDT",
+   "open_ts": 1792756824494,
+   "close_ts": null,
+   "notional": 21.0192,
+   "hours": 0.3129
+  }
+ ]
+}

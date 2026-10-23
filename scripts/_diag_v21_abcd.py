@@ -45,6 +45,7 @@ from market_operator.campaign import (                             # noqa: E402
     run_campaigns,
 )
 from market_operator.events import canonical_event_id                # noqa: E402
+from market_operator.replay import counterfactual_summary            # noqa: E402
 from market_operator.broker import Broker                          # noqa: E402
 from market_operator.structure import Params, Regime               # noqa: E402
 from market_operator.routing import (                          # noqa: E402
@@ -53,6 +54,7 @@ from market_operator.routing import (                          # noqa: E402
     MarketRouter,
 )
 from market_operator.trigger import prepare_mic_cognition          # noqa: E402
+from market_operator.scenario import arm_config_from               # noqa: E402
 
 CONFIG = ROOT / "config" / "strategy.json"
 OUTDIR = ROOT / "reports" / "tf_trigger_exp" / "abcd_20261022"
@@ -259,7 +261,7 @@ class Ctx:
         self.rp_by_tf = {
             tf_k: dc_replace(self.base_rp, **ovr)
             for tf_k, ovr in cfg["router_params_by_tf"].items()}
-        self.arm = ArmConfig(**cfg["arm_config"])
+        self.arm = arm_config_from(cfg, CONFIG)
         self.frames = self._frames()
 
     def _mic_for(self, sym, tf, trig_sec):
@@ -357,6 +359,9 @@ def metrics(res, equity0: float = 300.0) -> dict:
         "by_event_regime": {k: {"n": v["n"], "net": round(v["net"], 4)}
                             for k, v in sorted(by_route.items())},
         "counters": {k: v for k, v in getattr(res, "counters", {}).items() if v},
+        # A5:同一组交易的纯成本弹性(net(m)=gross−m·cost)。与 net 的差值来自
+        # **交易选择**变化,两者分开看才能回答"换成本口径后还剩多少"。
+        "counterfactual": counterfactual_summary(c),
         "trades": c,
     }
 

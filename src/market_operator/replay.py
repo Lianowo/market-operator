@@ -23,6 +23,7 @@ decision_ts = bar 标签),任何成交严格晚于决策(assert_fill_after_decis
 
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -391,10 +392,102 @@ def compute_metrics(res: BacktestResult) -> dict:
     }
 
 
+def annotate_excursions(trades: list, frames: dict) -> None:
+    """A2:补 ``mfe_r/mae_r/hold_bars/n_partial_legs``(原地,幂等)。
+
+    为什么必需:所有出场类改动(收割/时间帽/trail/maker 减仓)的收益都来自
+    **右尾**,而 ``net_pnl`` 只有一个标量 —— 一笔"少赚 2R"和"多亏 0.2R"在净
+    收益上同号,无法区分"出场太早"与"入场太差"。MFE/MAE 是把右尾成本变成
+    可观测量度:``mfe_r`` = 持仓期内最大有利偏移 / 初始风险,``mae_r`` = 最大
+    不利偏移(≤0)/ 初始风险。
+
+    口径:
+    - 只用**持仓区间内**的执行细 bar(1h),``open_ts < ts <= exit_ts``;未平仓
+      交易算到最后一根可用 bar。
+    - 用 bar 的 high/low(而非收盘),避免低估触碰;方向已按多空翻转。
+    - 分母 = ``risk_usdt``(准入时冻结的最坏情景),与 ``r_multiple`` 同分母,
+      故 ``mfe_r >= r_multiple`` 恒成立(除费用外)—— 该恒等式在测试里钉死。
+    - ``hold_bars`` 以**战役周期**计(``hold_hours / tf_hours``),与
+      ``time_cap_bars`` 等参数同单位。
+    """
+    for t in trades:
+        key = t.get("campaign") or t.get("symbol")
+        frame = frames.get(key)
+        if frame is None or t.get("entry") is None:
+            continue
+        risk = float(t.get("risk_usdt") or 0.0)
+        qty = float(t.get("qty") or 0.0)
+        d = 1 if (t.get("direction") or 0) > 0 else -1
+        lo_ts = int(t["open_ts"])
+        hi_ts = int(t["exit_ts"]) if t.get("exit_ts") else None
+        labels = frame.exec_labels
+        i = bisect.bisect_right(labels, lo_ts)
+        entry = float(t["entry"])
+        best = 0.0
+        worst = 0.0
+        n_bars = 0
+        while i < len(labels):
+            ts = labels[i]
+            if hi_ts is not None and ts > hi_ts:
+                break
+            bar = frame.exec_bars[ts]
+            high, low = float(bar[2]), float(bar[3])
+            fav = d * (high - entry) if d > 0 else d * (low - entry)
+            adv = d * (low - entry) if d > 0 else d * (high - entry)
+            best = max(best, fav)
+            worst = min(worst, adv)
+            n_bars += 1
+            i += 1
+        if risk > 0 and qty > 0:
+            t["mfe_r"] = best * qty / risk
+            t["mae_r"] = worst * qty / risk
+        else:
+            t["mfe_r"] = None
+            t["mae_r"] = None
+        t["excursion_bars"] = n_bars
+        tf_hours = float(getattr(frame, "tf_hours", 0.0) or 0.0)
+        hold = t.get("hold_hours")
+        t["hold_bars"] = (round(hold / tf_hours, 3)
+                          if hold is not None and tf_hours else None)
+        t["n_partial_legs"] = len(t.get("reasons_reduce") or ())
+
+
+def counterfactual_summary(trades: list, *,
+                          multipliers: Sequence[float] = (1.0, 1.5, 2.0, 3.0)
+                          ) -> dict:
+    """A5:同一组交易的"成本倍数"反事实 ``net(m) = gross − m·cost``。
+
+    为什么必需:换成本口径(实时滑点/真实资金费/分标的档)时,**交易集合**通常
+    也会变(准入变严/变松),净收益差里混着"选择效应",无法回答"同样的交易,
+    换成本后还剩多少"。本函数只对**已成交的同一组交易**按倍数缩放成本,给出
+    纯成本弹性:``E[R](m) = Σ(gross − m·cost) / Σrisk``。
+
+    成本定义与 ``reconstruct_trades_v4`` 一致:``fees + funding``(滑点已含在
+    成交价里,不再重复计)。``slippage_cost`` 仅作参考字段输出。
+    """
+    closed = [t for t in trades if t.get("closed") and t.get("in_segment_open")]
+    risk_total = sum(float(t.get("risk_usdt") or 0.0) for t in closed)
+    gross_total = sum(float(t.get("gross_pnl") or 0.0) for t in closed)
+    cost_total = sum(float(t.get("fees") or 0.0) + float(t.get("funding") or 0.0)
+                     for t in closed)
+    out: dict = {"n": len(closed), "gross": round(gross_total, 4),
+                 "cost": round(cost_total, 4),
+                 "risk": round(risk_total, 4), "by_multiplier": {}}
+    for m in multipliers:
+        net = gross_total - float(m) * cost_total
+        out["by_multiplier"][f"{m:g}x"] = {
+            "net": round(net, 4),
+            "e_r": round(net / risk_total, 6) if risk_total > 0 else None,
+            "net_per_trade": round(net / len(closed), 6) if closed else None,
+        }
+    return out
+
+
 __all__ = [
     "MS_PER_HOUR", "MS_PER_DAY", "MS_15M", "MS_1H", "N_FINE_PER_COARSE",
     "BOUNDARY_1H_INDEX_FROZEN",
     "SymbolCognition", "prepare_cognition", "BacktestResult",
     "assert_fill_after_decision", "assert_aligned", "alignment_issues_ci",
+    "annotate_excursions", "counterfactual_summary",
     "reconstruct_trades_v4", "reconstruct_trades_v5", "compute_metrics",
 ]

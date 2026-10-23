@@ -1,0 +1,84 @@
+{
+ "f3": {
+  "2h": {
+   "n_cells": 119,
+   "observed_max_er": 0.1043,
+   "mean_er": 0.02455,
+   "sd_er": 0.040188,
+   "expected_max_z": 2.525,
+   "z_of_max": 1.984,
+   "p_max_at_least": 0.941731,
+   "top_share": 0.0084
+  },
+  "4h": {
+   "n_cells": 119,
+   "observed_max_er": 0.2948,
+   "mean_er": 0.118888,
+   "sd_er": 0.077718,
+   "expected_max_z": 2.525,
+   "z_of_max": 2.263,
+   "p_max_at_least": 0.756576,
+   "top_share": 0.0084
+  },
+  "12h": {
+   "n_cells": 119,
+   "observed_max_er": 0.1408,
+   "mean_er": -0.000865,
+   "sd_er": 0.060729,
+   "expected_max_z": 2.525,
+   "z_of_max": 2.333,
+   "p_max_at_least": 0.691391,
+   "top_share": 0.0252
+  },
+  "1d": {
+   "n_cells": 119,
+   "observed_max_er": 0.4991,
+   "mean_er": 0.06381,
+   "sd_er": 0.14141,
+   "expected_max_z": 2.525,
+   "z_of_max": 3.078,
+   "p_max_at_least": 0.116595,
+   "top_share": 0.0084
+  },
+  "_ledger": {
+   "cells_scored": 476,
+   "families": 4,
+   "alpha_per_cell_bonferroni": 0.000105,
+   "note": "同一数据集上反复打分;任何 single-cell 结论都必须先通过 F5 平台检验,再做 F4 区间"
+  }
+ },
+ "f4": {
+  "base_hist": {
+   "days": 564,
+   "trades": 1434,
+   "point_net": 594.45,
+   "ci90_net": [
+    -76.4801,
+    1434.0933
+   ],
+   "ci90_e_r": [
+    -0.0158,
+    0.2964
+   ],
+   "p_net_le_0": 0.083,
+   "block_days": 5,
+   "n_boot": 2000
+  },
+  "base_const": {
+   "days": 565,
+   "trades": 1440,
+   "point_net": 380.07,
+   "ci90_net": [
+    -177.0485,
+    1072.4965
+   ],
+   "ci90_e_r": [
+    -0.0408,
+    0.247
+   ],
+   "p_net_le_0": 0.1545,
+   "block_days": 5,
+   "n_boot": 2000
+  }
+ }
+}

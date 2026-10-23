@@ -1,0 +1,866 @@
+{
+  "12h": {
+    "dev": {
+      "n": 236,
+      "actual": {
+        "er": -0.1506,
+        "wr": 0.2712,
+        "payoff": 2.0016
+      },
+      "sim_tp0.5_full": {
+        "er": -0.1801,
+        "wr": 0.5381,
+        "payoff": 0.4789,
+        "trigger": 0.534
+      },
+      "sim_tp0.75_full": {
+        "er": -0.1839,
+        "wr": 0.4449,
+        "payoff": 0.7686,
+        "trigger": 0.441
+      },
+      "sim_tp1_full": {
+        "er": -0.1646,
+        "wr": 0.3941,
+        "payoff": 1.0503,
+        "trigger": 0.386
+      },
+      "sim_tp1.5_full": {
+        "er": -0.1638,
+        "wr": 0.322,
+        "payoff": 1.4861,
+        "trigger": 0.271
+      },
+      "sim_tp2_full": {
+        "er": -0.1397,
+        "wr": 0.2966,
+        "payoff": 1.7976,
+        "trigger": 0.216
+      },
+      "sim_tp0.75_half_be": {
+        "er": -0.1371,
+        "wr": 0.4449,
+        "payoff": 0.8904,
+        "trigger": 0.441
+      },
+      "sim_tp1_half_be": {
+        "er": -0.1362,
+        "wr": 0.3941,
+        "payoff": 1.1344,
+        "trigger": 0.386
+      },
+      "sim_tp1.5_half_be": {
+        "er": -0.1464,
+        "wr": 0.322,
+        "payoff": 1.552,
+        "trigger": 0.271
+      },
+      "sim_be1_full": {
+        "er": -0.1078,
+        "wr": 0.2627,
+        "payoff": 2.2366,
+        "trigger": 0.386
+      },
+      "sim_trail05_after1": {
+        "er": -0.0825,
+        "wr": 0.3898,
+        "payoff": 1.3169,
+        "trigger": 0.386
+      },
+      "sim_tc3": {
+        "er": -0.1235,
+        "wr": 0.3941,
+        "payoff": 1.048,
+        "trigger": 0.695
+      },
+      "sim_tc6": {
+        "er": -0.0889,
+        "wr": 0.3814,
+        "payoff": 1.3164,
+        "trigger": 0.5
+      },
+      "sim_tc12": {
+        "er": -0.142,
+        "wr": 0.3093,
+        "payoff": 1.6629,
+        "trigger": 0.242
+      },
+      "sim_tl3": {
+        "er": -0.1304,
+        "wr": 0.2881,
+        "payoff": 1.7823,
+        "trigger": 0.695
+      },
+      "sim_tl6": {
+        "er": -0.1777,
+        "wr": 0.2627,
+        "payoff": 1.9171,
+        "trigger": 0.5
+      },
+      "sim_tl12": {
+        "er": -0.1556,
+        "wr": 0.2712,
+        "payoff": 1.9665,
+        "trigger": 0.242
+      }
+    },
+    "test": {
+      "n": 83,
+      "actual": {
+        "er": 0.3165,
+        "wr": 0.4217,
+        "payoff": 2.3439
+      },
+      "sim_tp0.5_full": {
+        "er": -0.0766,
+        "wr": 0.6265,
+        "payoff": 0.4571,
+        "trigger": 0.627
+      },
+      "sim_tp0.75_full": {
+        "er": -0.0452,
+        "wr": 0.5542,
+        "payoff": 0.7064,
+        "trigger": 0.506
+      },
+      "sim_tp1_full": {
+        "er": -0.0679,
+        "wr": 0.4699,
+        "payoff": 0.944,
+        "trigger": 0.386
+      },
+      "sim_tp1.5_full": {
+        "er": -0.0268,
+        "wr": 0.4337,
+        "payoff": 1.225,
+        "trigger": 0.277
+      },
+      "sim_tp2_full": {
+        "er": 0.0526,
+        "wr": 0.4337,
+        "payoff": 1.4634,
+        "trigger": 0.229
+      },
+      "sim_tp0.75_half_be": {
+        "er": 0.021,
+        "wr": 0.5422,
+        "payoff": 0.892,
+        "trigger": 0.506
+      },
+      "sim_tp1_half_be": {
+        "er": 0.0467,
+        "wr": 0.4699,
+        "payoff": 1.2549,
+        "trigger": 0.386
+      },
+      "sim_tp1.5_half_be": {
+        "er": 0.1447,
+        "wr": 0.4337,
+        "payoff": 1.74,
+        "trigger": 0.277
+      },
+      "sim_be1_full": {
+        "er": 0.1612,
+        "wr": 0.3735,
+        "payoff": 2.2916,
+        "trigger": 0.386
+      },
+      "sim_trail05_after1": {
+        "er": -0.0247,
+        "wr": 0.4699,
+        "payoff": 1.0611,
+        "trigger": 0.386
+      },
+      "sim_tc3": {
+        "er": -0.1178,
+        "wr": 0.4217,
+        "payoff": 0.8989,
+        "trigger": 0.747
+      },
+      "sim_tc6": {
+        "er": -0.1476,
+        "wr": 0.3855,
+        "payoff": 1.0491,
+        "trigger": 0.494
+      },
+      "sim_tc12": {
+        "er": 0.0105,
+        "wr": 0.4458,
+        "payoff": 1.2736,
+        "trigger": 0.337
+      },
+      "sim_tc24": {
+        "er": 0.193,
+        "wr": 0.4217,
+        "payoff": 1.9663,
+        "trigger": 0.145
+      },
+      "sim_tl3": {
+        "er": -0.1248,
+        "wr": 0.3494,
+        "payoff": 1.2592,
+        "trigger": 0.747
+      },
+      "sim_tl6": {
+        "er": 0.0838,
+        "wr": 0.3494,
+        "payoff": 2.2024,
+        "trigger": 0.494
+      },
+      "sim_tl12": {
+        "er": 0.3346,
+        "wr": 0.4458,
+        "payoff": 2.209,
+        "trigger": 0.337
+      }
+    }
+  },
+  "1d": {
+    "dev": {
+      "n": 70,
+      "actual": {
+        "er": 0.0827,
+        "wr": 0.3714,
+        "payoff": 1.9471
+      },
+      "sim_tp0.5_full": {
+        "er": -0.1589,
+        "wr": 0.6,
+        "payoff": 0.4021,
+        "trigger": 0.6
+      },
+      "sim_tp0.75_full": {
+        "er": -0.0831,
+        "wr": 0.5429,
+        "payoff": 0.6814,
+        "trigger": 0.543
+      },
+      "sim_tp1_full": {
+        "er": -0.0123,
+        "wr": 0.5143,
+        "payoff": 0.9187,
+        "trigger": 0.486
+      },
+      "sim_tp1.5_full": {
+        "er": -0.0713,
+        "wr": 0.4143,
+        "payoff": 1.2184,
+        "trigger": 0.314
+      },
+      "sim_tp2_full": {
+        "er": -0.0821,
+        "wr": 0.3857,
+        "payoff": 1.3485,
+        "trigger": 0.229
+      },
+      "sim_tp0.75_half_be": {
+        "er": -0.0489,
+        "wr": 0.5429,
+        "payoff": 0.7476,
+        "trigger": 0.543
+      },
+      "sim_tp1_half_be": {
+        "er": 0.0692,
+        "wr": 0.5143,
+        "payoff": 1.0894,
+        "trigger": 0.486
+      },
+      "sim_tp1.5_half_be": {
+        "er": 0.0204,
+        "wr": 0.4143,
+        "payoff": 1.4696,
+        "trigger": 0.314
+      },
+      "sim_be1_full": {
+        "er": 0.1508,
+        "wr": 0.3429,
+        "payoff": 2.5374,
+        "trigger": 0.486
+      },
+      "sim_trail05_after1": {
+        "er": 0.1381,
+        "wr": 0.5143,
+        "payoff": 1.2336,
+        "trigger": 0.486
+      },
+      "sim_tc3": {
+        "er": -0.1851,
+        "wr": 0.4286,
+        "payoff": 0.7166,
+        "trigger": 0.686
+      },
+      "sim_tc6": {
+        "er": -0.0764,
+        "wr": 0.4429,
+        "payoff": 1.0526,
+        "trigger": 0.514
+      },
+      "sim_tc12": {
+        "er": -0.0732,
+        "wr": 0.4,
+        "payoff": 1.2873,
+        "trigger": 0.271
+      },
+      "sim_tc24": {
+        "er": 0.019,
+        "wr": 0.3714,
+        "payoff": 1.7507,
+        "trigger": 0.1
+      },
+      "sim_tl3": {
+        "er": -0.0369,
+        "wr": 0.2857,
+        "payoff": 2.321,
+        "trigger": 0.686
+      },
+      "sim_tl6": {
+        "er": -0.0175,
+        "wr": 0.3429,
+        "payoff": 1.8546,
+        "trigger": 0.514
+      },
+      "sim_tl12": {
+        "er": 0.0874,
+        "wr": 0.3714,
+        "payoff": 1.9638,
+        "trigger": 0.271
+      }
+    },
+    "test": {
+      "n": 36,
+      "actual": {
+        "er": 0.387,
+        "wr": 0.3611,
+        "payoff": 3.109
+      },
+      "sim_tp0.5_full": {
+        "er": -0.1373,
+        "wr": 0.6111,
+        "payoff": 0.3878,
+        "trigger": 0.583
+      },
+      "sim_tp0.75_full": {
+        "er": -0.1161,
+        "wr": 0.5278,
+        "payoff": 0.6396,
+        "trigger": 0.472
+      },
+      "sim_tp1_full": {
+        "er": -0.1166,
+        "wr": 0.4444,
+        "payoff": 0.9248,
+        "trigger": 0.389
+      },
+      "sim_tp1.5_full": {
+        "er": -0.1019,
+        "wr": 0.4167,
+        "payoff": 1.0976,
+        "trigger": 0.25
+      },
+      "sim_tp2_full": {
+        "er": -0.044,
+        "wr": 0.3889,
+        "payoff": 1.4297,
+        "trigger": 0.222
+      },
+      "sim_tp0.75_half_be": {
+        "er": -0.0479,
+        "wr": 0.5278,
+        "payoff": 0.7894,
+        "trigger": 0.472
+      },
+      "sim_tp1_half_be": {
+        "er": -0.0658,
+        "wr": 0.4444,
+        "payoff": 1.0664,
+        "trigger": 0.389
+      },
+      "sim_tp1.5_half_be": {
+        "er": 0.1581,
+        "wr": 0.4167,
+        "payoff": 1.8694,
+        "trigger": 0.25
+      },
+      "sim_be1_full": {
+        "er": -0.015,
+        "wr": 0.2778,
+        "payoff": 2.5189,
+        "trigger": 0.389
+      },
+      "sim_trail05_after1": {
+        "er": -0.1381,
+        "wr": 0.4444,
+        "payoff": 0.8648,
+        "trigger": 0.389
+      },
+      "sim_tc3": {
+        "er": -0.1118,
+        "wr": 0.4722,
+        "payoff": 0.7055,
+        "trigger": 0.778
+      },
+      "sim_tc6": {
+        "er": -0.0333,
+        "wr": 0.4167,
+        "payoff": 1.2708,
+        "trigger": 0.611
+      },
+      "sim_tc12": {
+        "er": -0.1401,
+        "wr": 0.4444,
+        "payoff": 0.8856,
+        "trigger": 0.361
+      },
+      "sim_tc24": {
+        "er": 0.4811,
+        "wr": 0.3611,
+        "payoff": 3.4352,
+        "trigger": 0.139
+      },
+      "sim_tl3": {
+        "er": 0.2409,
+        "wr": 0.3333,
+        "payoff": 3.2081,
+        "trigger": 0.778
+      },
+      "sim_tl6": {
+        "er": 0.4295,
+        "wr": 0.3056,
+        "payoff": 4.4608,
+        "trigger": 0.611
+      },
+      "sim_tl12": {
+        "er": 0.4002,
+        "wr": 0.3889,
+        "payoff": 2.8314,
+        "trigger": 0.361
+      }
+    }
+  },
+  "2h": {
+    "dev": {
+      "n": 328,
+      "actual": {
+        "er": 0.1007,
+        "wr": 0.4238,
+        "payoff": 1.7184
+      },
+      "sim_tp0.5_full": {
+        "er": -0.0952,
+        "wr": 0.5488,
+        "payoff": 0.574,
+        "trigger": 0.515
+      },
+      "sim_tp0.75_full": {
+        "er": -0.0527,
+        "wr": 0.497,
+        "payoff": 0.8556,
+        "trigger": 0.421
+      },
+      "sim_tp1_full": {
+        "er": -0.0216,
+        "wr": 0.4726,
+        "payoff": 1.0487,
+        "trigger": 0.348
+      },
+      "sim_tp1.5_full": {
+        "er": -0.0,
+        "wr": 0.4421,
+        "payoff": 1.262,
+        "trigger": 0.226
+      },
+      "sim_tp2_full": {
+        "er": 0.0361,
+        "wr": 0.4299,
+        "payoff": 1.4525,
+        "trigger": 0.171
+      },
+      "sim_tp0.75_half_be": {
+        "er": -0.0189,
+        "wr": 0.4909,
+        "payoff": 0.9797,
+        "trigger": 0.421
+      },
+      "sim_tp1_half_be": {
+        "er": 0.027,
+        "wr": 0.4726,
+        "payoff": 1.2002,
+        "trigger": 0.348
+      },
+      "sim_tp1.5_half_be": {
+        "er": 0.0439,
+        "wr": 0.4421,
+        "payoff": 1.4108,
+        "trigger": 0.226
+      },
+      "sim_be1_full": {
+        "er": 0.0756,
+        "wr": 0.3689,
+        "payoff": 2.062,
+        "trigger": 0.348
+      },
+      "sim_trail05_after1": {
+        "er": 0.1204,
+        "wr": 0.4665,
+        "payoff": 1.5273,
+        "trigger": 0.348
+      },
+      "sim_tc3": {
+        "er": -0.019,
+        "wr": 0.439,
+        "payoff": 1.194,
+        "trigger": 0.729
+      },
+      "sim_tc6": {
+        "er": 0.0329,
+        "wr": 0.4604,
+        "payoff": 1.2882,
+        "trigger": 0.543
+      },
+      "sim_tc12": {
+        "er": 0.075,
+        "wr": 0.4299,
+        "payoff": 1.6009,
+        "trigger": 0.271
+      },
+      "sim_tl3": {
+        "er": 0.0278,
+        "wr": 0.3994,
+        "payoff": 1.634,
+        "trigger": 0.729
+      },
+      "sim_tl6": {
+        "er": 0.0759,
+        "wr": 0.4238,
+        "payoff": 1.652,
+        "trigger": 0.543
+      },
+      "sim_tl12": {
+        "er": 0.1055,
+        "wr": 0.4207,
+        "payoff": 1.7722,
+        "trigger": 0.271
+      }
+    },
+    "test": {
+      "n": 153,
+      "actual": {
+        "er": 0.0421,
+        "wr": 0.3333,
+        "payoff": 2.1715
+      },
+      "sim_tp0.5_full": {
+        "er": -0.1867,
+        "wr": 0.5163,
+        "payoff": 0.479,
+        "trigger": 0.484
+      },
+      "sim_tp0.75_full": {
+        "er": -0.1569,
+        "wr": 0.4575,
+        "payoff": 0.7322,
+        "trigger": 0.379
+      },
+      "sim_tp1_full": {
+        "er": -0.1644,
+        "wr": 0.3987,
+        "payoff": 0.9667,
+        "trigger": 0.314
+      },
+      "sim_tp1.5_full": {
+        "er": -0.1885,
+        "wr": 0.3464,
+        "payoff": 1.1464,
+        "trigger": 0.183
+      },
+      "sim_tp2_full": {
+        "er": -0.1391,
+        "wr": 0.3464,
+        "payoff": 1.3401,
+        "trigger": 0.144
+      },
+      "sim_tp0.75_half_be": {
+        "er": -0.1127,
+        "wr": 0.451,
+        "payoff": 0.884,
+        "trigger": 0.379
+      },
+      "sim_tp1_half_be": {
+        "er": -0.0657,
+        "wr": 0.3987,
+        "payoff": 1.2918,
+        "trigger": 0.314
+      },
+      "sim_tp1.5_half_be": {
+        "er": -0.071,
+        "wr": 0.3464,
+        "payoff": 1.6078,
+        "trigger": 0.183
+      },
+      "sim_be1_full": {
+        "er": 0.033,
+        "wr": 0.3007,
+        "payoff": 2.4905,
+        "trigger": 0.314
+      },
+      "sim_trail05_after1": {
+        "er": -0.0201,
+        "wr": 0.3922,
+        "payoff": 1.4819,
+        "trigger": 0.314
+      },
+      "sim_tc3": {
+        "er": -0.1362,
+        "wr": 0.3922,
+        "payoff": 0.9457,
+        "trigger": 0.686
+      },
+      "sim_tc6": {
+        "er": -0.1197,
+        "wr": 0.4183,
+        "payoff": 0.9734,
+        "trigger": 0.529
+      },
+      "sim_tc12": {
+        "er": -0.0559,
+        "wr": 0.3725,
+        "payoff": 1.4828,
+        "trigger": 0.261
+      },
+      "sim_tl3": {
+        "er": -0.0579,
+        "wr": 0.3464,
+        "payoff": 1.6056,
+        "trigger": 0.686
+      },
+      "sim_tl6": {
+        "er": -0.0236,
+        "wr": 0.3725,
+        "payoff": 1.5941,
+        "trigger": 0.529
+      },
+      "sim_tl12": {
+        "er": 0.0584,
+        "wr": 0.3464,
+        "payoff": 2.1163,
+        "trigger": 0.261
+      }
+    }
+  },
+  "4h": {
+    "dev": {
+      "n": 182,
+      "actual": {
+        "er": 0.106,
+        "wr": 0.3791,
+        "payoff": 2.076
+      },
+      "sim_tp0.5_full": {
+        "er": -0.0778,
+        "wr": 0.5714,
+        "payoff": 0.5622,
+        "trigger": 0.533
+      },
+      "sim_tp0.75_full": {
+        "er": -0.0471,
+        "wr": 0.5055,
+        "payoff": 0.8425,
+        "trigger": 0.423
+      },
+      "sim_tp1_full": {
+        "er": -0.0345,
+        "wr": 0.456,
+        "payoff": 1.0784,
+        "trigger": 0.341
+      },
+      "sim_tp1.5_full": {
+        "er": -0.0675,
+        "wr": 0.3901,
+        "payoff": 1.2967,
+        "trigger": 0.214
+      },
+      "sim_tp2_full": {
+        "er": -0.0383,
+        "wr": 0.3791,
+        "payoff": 1.4792,
+        "trigger": 0.159
+      },
+      "sim_tp0.75_half_be": {
+        "er": 0.0339,
+        "wr": 0.5055,
+        "payoff": 1.076,
+        "trigger": 0.423
+      },
+      "sim_tp1_half_be": {
+        "er": 0.0485,
+        "wr": 0.456,
+        "payoff": 1.3537,
+        "trigger": 0.341
+      },
+      "sim_tp1.5_half_be": {
+        "er": 0.0184,
+        "wr": 0.3901,
+        "payoff": 1.6362,
+        "trigger": 0.214
+      },
+      "sim_be1_full": {
+        "er": 0.1315,
+        "wr": 0.3571,
+        "payoff": 2.4419,
+        "trigger": 0.341
+      },
+      "sim_trail05_after1": {
+        "er": 0.1192,
+        "wr": 0.456,
+        "payoff": 1.5882,
+        "trigger": 0.341
+      },
+      "sim_tc3": {
+        "er": -0.072,
+        "wr": 0.4396,
+        "payoff": 0.9575,
+        "trigger": 0.725
+      },
+      "sim_tc6": {
+        "er": -0.0078,
+        "wr": 0.4725,
+        "payoff": 1.0901,
+        "trigger": 0.522
+      },
+      "sim_tc12": {
+        "er": 0.064,
+        "wr": 0.4011,
+        "payoff": 1.7528,
+        "trigger": 0.286
+      },
+      "sim_tl3": {
+        "er": 0.0255,
+        "wr": 0.3736,
+        "payoff": 1.8043,
+        "trigger": 0.725
+      },
+      "sim_tl6": {
+        "er": 0.0723,
+        "wr": 0.4176,
+        "payoff": 1.6683,
+        "trigger": 0.522
+      },
+      "sim_tl12": {
+        "er": 0.0986,
+        "wr": 0.3736,
+        "payoff": 2.1016,
+        "trigger": 0.286
+      }
+    },
+    "test": {
+      "n": 74,
+      "actual": {
+        "er": 0.6957,
+        "wr": 0.4324,
+        "payoff": 3.6993
+      },
+      "sim_tp0.5_full": {
+        "er": -0.0334,
+        "wr": 0.6081,
+        "payoff": 0.5618,
+        "trigger": 0.568
+      },
+      "sim_tp0.75_full": {
+        "er": -0.0622,
+        "wr": 0.5,
+        "payoff": 0.8263,
+        "trigger": 0.459
+      },
+      "sim_tp1_full": {
+        "er": -0.0367,
+        "wr": 0.4595,
+        "payoff": 1.0609,
+        "trigger": 0.365
+      },
+      "sim_tp1.5_full": {
+        "er": -0.0215,
+        "wr": 0.4324,
+        "payoff": 1.2388,
+        "trigger": 0.23
+      },
+      "sim_tp2_full": {
+        "er": 0.0292,
+        "wr": 0.4324,
+        "payoff": 1.4126,
+        "trigger": 0.189
+      },
+      "sim_tp0.75_half_be": {
+        "er": 0.0793,
+        "wr": 0.473,
+        "payoff": 1.3587,
+        "trigger": 0.459
+      },
+      "sim_tp1_half_be": {
+        "er": 0.3332,
+        "wr": 0.4595,
+        "payoff": 2.2262,
+        "trigger": 0.365
+      },
+      "sim_tp1.5_half_be": {
+        "er": 0.3371,
+        "wr": 0.4324,
+        "payoff": 2.4691,
+        "trigger": 0.23
+      },
+      "sim_be1_full": {
+        "er": 0.7031,
+        "wr": 0.4324,
+        "payoff": 3.7724,
+        "trigger": 0.365
+      },
+      "sim_trail05_after1": {
+        "er": 0.118,
+        "wr": 0.4595,
+        "payoff": 1.5482,
+        "trigger": 0.365
+      },
+      "sim_tc3": {
+        "er": -0.0078,
+        "wr": 0.5405,
+        "payoff": 0.8238,
+        "trigger": 0.73
+      },
+      "sim_tc6": {
+        "er": 0.1028,
+        "wr": 0.5,
+        "payoff": 1.3405,
+        "trigger": 0.608
+      },
+      "sim_tc12": {
+        "er": 0.1739,
+        "wr": 0.4865,
+        "payoff": 1.6142,
+        "trigger": 0.324
+      },
+      "sim_tc24": {
+        "er": 0.637,
+        "wr": 0.4324,
+        "payoff": 3.498,
+        "trigger": 0.122
+      },
+      "sim_tl3": {
+        "er": 0.7043,
+        "wr": 0.5,
+        "payoff": 3.4579,
+        "trigger": 0.73
+      },
+      "sim_tl6": {
+        "er": 0.7148,
+        "wr": 0.4865,
+        "payoff": 3.354,
+        "trigger": 0.608
+      },
+      "sim_tl12": {
+        "er": 0.7296,
+        "wr": 0.4595,
+        "payoff": 3.6133,
+        "trigger": 0.324
+      }
+    }
+  }
+}

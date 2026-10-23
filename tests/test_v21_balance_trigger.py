@@ -380,6 +380,11 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     runner._register_position("BTCUSDT", it, 100.0, open_ts)
     assert runner.positions["BTCUSDT"]["invalid"] == 95.0
 
+    # 本测试钉的是"早锁 = 计划口径 50% 行程"这条 parity 语义 ⇒ 显式关闭
+    # 行情锚定(生产 strategy.json 默认 0.25R;该口径由
+    # test_live_sub_bar_lock_uses_market_anchor_when_enabled 覆盖)。
+    cs_12h.pm.opp_lock_max_giveback_r = 0.0
+
     # 下一根 2H bar(k=396,非 12h 收盘时刻):收盘 111.0 突破 target_1(110.0)
     # 应由 _on_sub_bar 立即将 invalid 推进至 100 + 0.5*(110-100) = 105.0
     t_sub1 = t0 + 396 * step2
@@ -403,5 +408,305 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     assert any("平仓(paper,exit)" in f[1] and abs(f[3] - 105.0) < 1e-9 for f in fills)
 
 
+def test_opp_lock_helpers_and_googl_short_lock_repro():
+    """2026-10-23 GOOGLUSDT(live,2h)事件复现 + 锁利口径量化。
+
+    实盘事实:空头 entry 324.02 / 结构止损 326.88 / 结构目标 322.66;2h 收盘
+    321.33 真突破对侧缘 ⇒ 把交易所止损单从 326.87 换成 323.34
+    (= entry + 0.5·(target − entry)),随后该单在 324.01 成交 —— 价格到过
+    目标却按建仓价附近"止盈"离场。
+
+    本测试钉住三件事:
+    1) 锁利价公式 = entry→target 行程中点(逐位复现 323.34);
+    2) 该价位在**建仓价的盈利侧**(空头 323.34 < 324.02),量级只有 0.68
+       (0.21%),即"锁住 0.24R" —— 交易所/看盘软件视角它就是一张止盈单;
+    3) 但它此刻仍在现价(321.33)的保护侧(空头须高于现价),所以当时严格
+       说并非"无单裸奔";风险在于它紧贴建仓价(回抽 0.62% 即成交),且修前
+       没有任何闸门保证推进价永远落在保护侧。
+    """
+    from market_operator.position import (
+        PositionManager, lock_is_protective, opp_lock_px, stop_protect_dist,
+    )
+
+    entry, invalid0, target, close = 324.02, 326.88, 322.66, 321.33
+    lock_px = opp_lock_px(entry, target, 0.5)
+    assert abs(lock_px - 323.34) < 1e-9
+
+    # 保护侧有向距离:空头止损必须在现价之上(>0 才是有效止损)
+    assert stop_protect_dist(-1, lock_px, close) > 0.0
+    assert lock_is_protective(-1, lock_px, close)
+    # 同一价位对多头必然是"反侧"(多头止损须低于现价)⇒ 闸门方向正确
+    assert stop_protect_dist(1, lock_px, close) < 0.0
+    assert not lock_is_protective(1, lock_px, close)
+
+    # 但它是建仓价盈利侧价位:距建仓价只有 0.68(0.21%)
+    assert lock_px < entry
+    assert abs((entry - lock_px) - 0.68) < 1e-9
+    # 初始风险 R = |324.02 − 326.88| = 2.86 ⇒ 0.68/2.86 ≈ 0.238R;
+    # 而当日最大有利行程 324.02 − 320.93 = 3.09 ≈ 1.08R ⇒ 只锁住 22% 行程
+    assert abs((entry - lock_px) / (invalid0 - entry) - 0.68 / 2.86) < 1e-9
+
+    # canonical §8.2 路径逐位复现:326.88 -> 323.34,不减仓、不触发出场
+    pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
+                         time_stop=False, reject_opp_lock_frac=-0.50)
+    pos = pm.open("GOOGLUSDT", -1, entry, invalid0, target, LEVEL_REJECTED,
+                  1792742400000, 0)
+    intents = pm.on_bar("GOOGLUSDT",
+                        (1792749600000, 323.98, 324.22, 320.93, close, 1.0), 2.0)
+    assert intents == []
+    assert abs(pos.invalid - 323.34) < 1e-9
+    assert pos.reduced is True
+    assert any("opp_break_lock" in s for s in pos.log)
 
 
+def test_opp_lock_guard_keeps_structural_stop_when_lock_lands_wrong_side():
+    """锁利落位闸门:算出的锁利价一旦落到现价的盈利侧/身后,必须拒绝推进。
+
+    只有 `reject_opp_lock_frac > 0` 的"仅影线触及"分支会算出差价极小的
+    保本垫(≤10% 行程):极值刺穿对侧缘后收盘已反抽回建仓价附近时,这个
+    价位落在现价**错误一侧** —— 挂到交易所就是一张立刻成交的止盈单,
+    而原结构止损已撤掉,仓位等于裸奔。闸门不通过 ⇒ 保留原结构防线。
+    """
+    from market_operator.position import PositionManager
+
+    pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
+                         time_stop=False, reject_opp_lock_frac=0.50)
+    pos = pm.open("GOOGLUSDT", -1, 324.02, 326.88, 322.66, LEVEL_REJECTED, 1000, 0)
+
+    # 影线刺穿对侧缘(l=322.0)但收盘反抽回 325.0:锁利价 323.884 已在现价
+    # 下方(空头止损必须高于现价)⇒ 闸门拦下,原结构止损 326.88 一分不动。
+    intents = pm.on_bar("GOOGLUSDT", (2000, 324.0, 325.5, 322.0, 325.0, 1.0), 2.0)
+    assert intents == []
+    assert pos.invalid == 326.88
+    assert pos.reduced is False           # 未消费锁利/减仓额度,后续可再判
+    assert any("opp_lock_reject" in s for s in pos.log)
+
+    # 下一根真收在对侧缘之外(收盘 322.0):锁利 50% 行程 = 323.34 > 现价
+    # ⇒ 通过闸门,正常推进(闸门只拦"错误一侧",不改协议价位)。
+    intents2 = pm.on_bar("GOOGLUSDT", (3000, 324.0, 324.5, 321.5, 322.0, 1.0), 2.0)
+    assert intents2 == []
+    assert abs(pos.invalid - 323.34) < 1e-9
+    assert pos.reduced is True
+
+
+def test_opp_lock_live_anchor_fixes_stale_plan_lock():
+    """锁利"行情锚定":锁利只在收盘裁决 ⇒ 计划锁利价可能已被行情走过。
+
+    实盘口径缺陷(2026-10-23 GOOGLUSDT):2h 收盘 321.33 时才裁决,按
+    entry→target 行程算出的 323.34 已在现价**身后 2.01(0.63%)**:
+      - 不回踩 ⇒ 止损永不触发,等于没锁;
+      - 回踩触发 ⇒ 已把 1.08R 的行程回吐到 0.24R(实际成交 324.01)。
+    行情口径(`opp_lock_max_giveback_r = 0.25R`)把锁利价锚在现价 ± 0.25R
+    上,只允许回吐该缓冲;`tighten_lock` 取两口径中更紧者,故:
+      - 关闭(0)⇒ 逐位回到计划口径(历史 parity);
+      - 打开 ⇒ 锁住的利润随行情推进,不再依赖"价格回踩到旧位置"。
+    """
+    from market_operator.position import (
+        PositionManager, lock_is_protective, opp_lock_live_px, tighten_lock,
+    )
+
+    entry, invalid0, target, close = 324.02, 326.88, 322.66, 321.33
+    plan = entry + 0.5 * (target - entry)
+    assert abs(plan - 323.34) < 1e-9
+    # 计划锁利价在现价上方 2.01 —— 行情不回踩到 323.34 就永远不生效
+    assert abs((plan - close) - 2.01) < 1e-9
+
+    live = opp_lock_live_px(-1, close, 0.25, invalid0 - entry)   # 空头 +0.25R
+    assert abs(live - (close + 0.25 * 2.86)) < 1e-9
+    assert live < plan                                  # 更贴近现价 = 更紧
+    assert tighten_lock(-1, plan, live) == live
+    assert tighten_lock(-1, plan, None) == plan         # 关闭 ⇒ 计划口径
+    assert tighten_lock(-1, None, live) == live
+    # 多头镜像:plan 102.5 比 行情 104.5 更松 ⇒ 取更大(更贴近现价)者
+    assert abs(tighten_lock(1, 102.5,
+                            opp_lock_live_px(1, 105.0, 0.25, 2.0)) - 104.5) < 1e-9
+
+    pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
+                         time_stop=False, reject_opp_lock_frac=-0.50,
+                         opp_lock_max_giveback_r=0.25)
+    pos = pm.open("GOOGLUSDT", -1, entry, invalid0, target, LEVEL_REJECTED,
+                  1792742400000, 0)
+    intents = pm.on_bar("GOOGLUSDT",
+                        (1792749600000, 323.98, 324.22, 320.93, close, 1.0), 2.0)
+    assert intents == []
+    assert abs(pos.invalid - live) < 1e-9
+    # 锁住 (324.02 − 322.045) / 2.86 ≈ 0.69R,计划口径只有 0.238R;
+    # 相对现价只让出 0.25R(计划口径让出 0.65R)。
+    assert abs(pos.direction * (pos.invalid - pos.entry) / pos.initial_risk
+               - (entry - live) / pos.initial_risk) < 1e-9
+    assert abs((pos.invalid - close) - 0.25 * pos.initial_risk) < 1e-9
+    assert any("opp_break_lock" in s and "行情=" in s for s in pos.log)
+
+    # 闸门照旧:多头的行情锁利价必须低于现价(保护侧),缓冲只向保护侧让
+    long_live = opp_lock_live_px(1, 321.33, 0.25, 2.86)
+    assert long_live < 321.33
+    assert lock_is_protective(1, long_live, 321.33)
+
+
+
+def test_live_sub_bar_lock_uses_market_anchor_when_enabled(tmp_path):
+    """实盘 `_on_sub_bar`:开启 `opp_lock_max_giveback_r` 后,锁利价锚在实时价上。
+
+    对照上一测试(关闭 ⇒ 323.34,距现价 2.01):开启后 ref=321.40,
+    锁利 = ref + 0.25R = 322.115 —— 只允许回吐 0.25R,不再依赖"价格回踩
+    到 323.34 才生效",且仍在现价保护侧(空头止损须高于现价)。
+    """
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "scripts"))
+    import live_runner as lr
+
+    # 配置接线:生产 strategy.json 必须携带该开关,且从 arm_config 读到 pm
+    strat = json.loads((root / "config" / "strategy.json").read_text("utf-8"))
+    pm_prod = lr.new_position_manager(Params(), strat)
+    assert abs(pm_prod.opp_lock_max_giveback_r - 0.25) < 1e-12
+    pm_cfg = lr.new_position_manager(
+        Params(),
+        {"use_balance_detector": True,
+         "arm_config": {"reject_opp_lock_frac": -0.50,
+                        "opp_lock_max_giveback_r": 0.25}})
+    assert abs(pm_cfg.opp_lock_max_giveback_r - 0.25) < 1e-12
+
+    cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    step2 = 7_200_000
+    t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+
+    class DummyClient:
+        def history_candles(self, symbol, granularity="2H", *, start_ms=None,
+                            end_ms=None, limit=200):
+            if start_ms is not None:
+                return [b for b in bars if b[0] >= start_ms][:limit]
+            out = [b for b in bars if end_ms is None or b[0] < end_ms]
+            return out[-limit:]
+
+        def universe(self, min_vol):
+            return ["BTCUSDT"]
+
+    class DummyTg:
+        def send_fill(self, symbol, action, qty, price, **kw):
+            return True
+
+        def __getattr__(self, name):
+            return lambda *a, **k: True
+
+    runner = lr.LiveRunner("paper", cfg, DummyClient(), DummyTg(),
+                           equity0=1000.0,
+                           state_path=tmp_path / "state.json",
+                           journal_dir=tmp_path / "logs",
+                           symbols=("BTCUSDT",),
+                           universe_enabled=False)
+    runner.step(bars[-1][0] + 1)
+    cs = runner.campaigns["BTCUSDT"]
+    it = {
+        "oid": "mo21googlshort2", "symbol": "BTCUSDT", "tf_label": "12h",
+        "direction": -1, "qty": 1.0, "invalid": 326.88, "target_1": 322.66,
+        "event_id": "LEVEL_REJECTED", "route": "e3_market",
+        "box_lo": 322.66, "box_hi": 326.67,
+    }
+    runner._register_position("BTCUSDT", it, 324.02, bars[-1][0])
+    cs.pm.opp_lock_max_giveback_r = 0.25              # 打开行情锚定(0.25R)
+
+    t1 = t0 + 396 * step2
+    runner._advance(cs, t1 + step2,
+                    new_bars=[(t1, 323.98, 324.22, 320.93, 321.33, 15.0)],
+                    run_paper_fills=True)
+    # `_advance` 先把 mark 同步为 bar 收盘(321.33)⇒ ref=321.33,R=2.86;
+    # 计划口径会推到 323.34(距现价 2.01),行情口径只让出 0.25R。
+    exp = 321.33 + 0.25 * 2.86
+    assert abs(cs.pm.positions["BTCUSDT"].invalid - exp) < 1e-9
+    assert abs(runner.positions["BTCUSDT"]["invalid"] - exp) < 1e-9
+    assert cs.pm.positions["BTCUSDT"].invalid > 321.33     # 仍在保护侧
+
+
+def test_live_sub_bar_lock_guard_and_entry_price_in_chart(tmp_path):
+    """实盘 `_on_sub_bar`:①推报价必须在现价保护侧才推进;②通知图的 ENTRY 必须
+    是真实建仓均价(修前误用子周期收盘价 ⇒ 图上止损/目标相对 ENTRY 全错位)。"""
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "scripts"))
+    import live_runner as lr
+
+    cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    step2 = 7_200_000
+    t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+
+    class DummyClient:
+        def history_candles(self, symbol, granularity="2H", *, start_ms=None,
+                            end_ms=None, limit=200):
+            if start_ms is not None:
+                return [b for b in bars if b[0] >= start_ms][:limit]
+            out = [b for b in bars if end_ms is None or b[0] < end_ms]
+            return out[-limit:]
+
+        def universe(self, min_vol):
+            return ["BTCUSDT"]
+
+    fills = []
+
+    class DummyTg:
+        def send_fill(self, symbol, action, qty, price, **kw):
+            fills.append((symbol, action, qty, price, kw))
+            return True
+
+        def __getattr__(self, name):
+            return lambda *a, **k: True
+
+    runner = lr.LiveRunner("paper", cfg, DummyClient(), DummyTg(),
+                           equity0=1000.0,
+                           state_path=tmp_path / "state.json",
+                           journal_dir=tmp_path / "logs",
+                           symbols=("BTCUSDT",),
+                           universe_enabled=False)
+    runner.step(bars[-1][0] + 1)
+    cs = runner.campaigns["BTCUSDT"]
+    assert cs.tf_label == "12h"
+
+    # 空头 REJECT:entry 324.02 / invalid 326.88 / target_1 322.66(箱体对侧缘)
+    it = {
+        "oid": "mo21googlshort", "symbol": "BTCUSDT", "tf_label": "12h",
+        "direction": -1, "qty": 1.0, "invalid": 326.88, "target_1": 322.66,
+        "event_id": "LEVEL_REJECTED", "route": "e3_market",
+        "box_lo": 322.66, "box_hi": 326.67,
+    }
+    runner._register_position("BTCUSDT", it, 324.02, bars[-1][0])
+    assert runner.positions["BTCUSDT"]["invalid"] == 326.88
+    # 本测试钉"计划口径 + 落位闸门 + 图 ENTRY":显式关闭行情锚定
+    # (生产 strategy.json 默认 0.25R,见 market_anchor 专项测试)。
+    cs.pm.opp_lock_max_giveback_r = 0.0
+
+    # 子周期收盘 321.33 真突破对侧缘 ⇒ 锁利 50% 推进至 323.34(高于现价,合法)
+    t1 = t0 + 396 * step2
+    assert (t1 + step2) % (43200 * 1000) != 0        # 确认非 12h 收盘点
+    runner._advance(cs, t1 + step2,
+                    new_bars=[(t1, 323.98, 324.22, 320.93, 321.33, 15.0)],
+                    run_paper_fills=True)
+    assert abs(runner.positions["BTCUSDT"]["invalid"] - 323.34) < 1e-9
+    assert abs(cs.pm.positions["BTCUSDT"].invalid - 323.34) < 1e-9
+    adv = [f for f in fills if "止损推进" in f[1]]
+    assert len(adv) == 1
+    assert abs(adv[0][3] - 321.33) < 1e-9                    # 参考价=子周期收盘
+    assert abs(adv[0][4]["entry_price"] - 324.02) < 1e-9     # 图 ENTRY=真实建仓价
+    assert adv[0][4]["price_label"] == "参考价(子周期收盘)"
+    assert abs(adv[0][4]["stop_price"] - 323.34) < 1e-9
+
+    # 闸门:切到"仅影线触及"(10% 保本垫)后,收盘反抽回建仓价上方时算出的
+    # 323.884 落在现价盈利侧 ⇒ 不推进、保留原结构止损、留 lock_reject 台账
+    runner.positions["BTCUSDT"]["invalid"] = 326.88
+    cs.pm.positions["BTCUSDT"].invalid = 326.88
+    cs.pm.positions["BTCUSDT"].reduced = False
+    cs.pm.reject_opp_lock_frac = 0.50
+    fills.clear()
+    t2 = t1 + step2
+    runner._advance(cs, t2 + step2,
+                    new_bars=[(t2, 324.0, 325.5, 322.0, 325.0, 20.0)],
+                    run_paper_fills=True)
+    assert runner.positions["BTCUSDT"]["invalid"] == 326.88
+    assert cs.pm.positions["BTCUSDT"].invalid == 326.88
+    assert cs.pm.positions["BTCUSDT"].reduced is False
+    assert not [f for f in fills if "止损推进" in f[1]]
+    journal = "".join(p.read_text("utf-8")
+                      for p in (tmp_path / "logs").glob("*.jsonl"))
+    assert '"kind": "lock_reject"' in journal
+    assert '"why": "wrong_side_wick"' in journal

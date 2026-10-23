@@ -65,6 +65,7 @@ from .replay import (
     SymbolCognition,
     assert_aligned,
     assert_fill_after_decision,
+    annotate_excursions,
     reconstruct_trades_v5,
 )
 from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, floor_step
@@ -331,6 +332,10 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   tf_cap_by_tf: Optional[dict] = None,
                   dynamic_risk_tiers: Optional[list] = None,
                   capacity_mode: str = capacity.ADMISSION_FULL_COST,
+                  funding_rates: Optional[dict] = None,
+                  slippage_by_symbol: Optional[dict] = None,
+                  symbol_stop_risk_frac: Optional[dict] = None,
+                  reserve_by_tf: Optional[dict] = None,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
     docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 routing docstring)。
@@ -446,7 +451,11 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     portfolio_stop_risk_frac=portfolio_cap_frac,
                     tf_stop_risk_frac_by_tf=tf_cap_by_tf,
                     dynamic_risk_tiers=dynamic_risk_tiers,
-                    capacity_mode=capacity_mode)
+                    capacity_mode=capacity_mode,
+                    funding_rates=funding_rates,
+                    slippage_by_symbol=slippage_by_symbol,
+                    symbol_stop_risk_frac=symbol_stop_risk_frac,
+                    reserve_by_tf=reserve_by_tf)
     equity_rows: list = []
     cap_skips: list = []
     # go_events/mic_go_events 的口径见 _count_go(送入路由的次数,非去重后事件数)
@@ -536,11 +545,13 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 b = {**b, "ts_hi": b["ts_hi"] + frames[key].tf_hours * MS_1H
                      - mic.trigger_tf_seconds * 1000}
             attr_bounds[key] = b
+    trades = _reconstruct_trades(broker.ledger, attr_bounds)
+    # A2:右尾量度(mfe_r/mae_r/hold_bars/n_partial_legs);纯增量,不改账目
+    annotate_excursions(trades, frames)
     res = BacktestResult(segment=segment, cost_multiplier=cost_multiplier,
                          equity0=equity0, ledger=list(broker.ledger),
                          equity_rows=equity_rows,
-                         trades=_reconstruct_trades(broker.ledger,
-                                                       attr_bounds),
+                         trades=trades,
                          counters=counters, seg_bounds=seg_bounds,
                          contracts={s: vars(c) for s, c in contracts.items()},
                          cap_skips=cap_skips,

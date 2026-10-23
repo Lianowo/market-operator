@@ -388,7 +388,18 @@ class TelegramNotifier:
                   target_price: Optional[float] = None,
                   box_lo: Optional[float] = None,
                   box_hi: Optional[float] = None,
-                  bars: Optional[Sequence[tuple]] = None) -> bool:
+                  bars: Optional[Sequence[tuple]] = None,
+                  entry_price: Optional[float] = None,
+                  price_label: str = "成交价格") -> bool:
+        """成交通知(附黑白 K 线证据图)。
+
+        `price` = **本次事件价**(成交价 / 止损推进时的参考价);
+        `entry_price` = 该仓的真实建仓均价 —— 修前图上一律用 `price` 画
+        ENTRY 线,止损推进/平仓通知会把 ENTRY 画在"本次事件价"上(例如
+        2h 收盘价 321.33 顶替建仓价 324.02),图上止损/目标相对 ENTRY 的
+        关系整个错位,读图会把"空头锁利"误读成"止损跑到止盈侧"。
+        `price_label` 供非成交类事件改写金额行文案(如"参考价")。
+        """
         lines = [
             f"⚡ 交易执行: {symbol}",
             f"🏷️ 动作类型: {fill_kind}",
@@ -397,8 +408,10 @@ class TelegramNotifier:
             lines.append(f"⏱️ 所属周期: {tf_label}")
         lines.extend([
             f"📦 成交数量: {qty:.8g}",
-            f"💵 成交价格: {price:.8g}",
+            f"💵 {price_label}: {price:.8g}",
         ])
+        if entry_price is not None:
+            lines.append(f"🎯 建仓均价: {entry_price:.8g}")
         if stop_price is not None:
             lines.append(f"🛡️ 当前止损: {stop_price:.8g}")
         if target_price is not None:
@@ -419,7 +432,8 @@ class TelegramNotifier:
                 bars, symbol=symbol, tf_label=tf_label,
                 title_tag=f"TRADE {fill_kind}",
                 box_lo=box_lo, box_hi=box_hi,
-                entry_price=price, stop_price=stop_price,
+                entry_price=(price if entry_price is None else float(entry_price)),
+                stop_price=stop_price,
                 target_price=target_price, direction=direction)
         return self.send("fill", "\n".join(lines), use_trade_bot=True, png_bytes=png)
 

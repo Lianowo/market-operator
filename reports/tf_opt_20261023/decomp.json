@@ -1,0 +1,326 @@
+{
+  "cost": {
+    "2h": {
+      "base": {
+        "n": 629,
+        "gross_er": 0.1183,
+        "cost_er": 0.0738,
+        "net_er": 0.0445,
+        "fees_er": 0.0626,
+        "funding_er": 0.0112,
+        "slip_er": 0.0209,
+        "notional_over_risk": 52.19,
+        "hold_h": 19.1,
+        "cost_share": 0.6239
+      },
+      "best": {
+        "n": 595,
+        "gross_er": 0.1355,
+        "cost_er": 0.068,
+        "net_er": 0.0675,
+        "fees_er": 0.057,
+        "funding_er": 0.011,
+        "slip_er": 0.019,
+        "notional_over_risk": 47.53,
+        "hold_h": 20.1,
+        "cost_share": 0.5017
+      }
+    },
+    "4h": {
+      "base": {
+        "n": 331,
+        "gross_er": 0.273,
+        "cost_er": 0.0642,
+        "net_er": 0.2088,
+        "fees_er": 0.0457,
+        "funding_er": 0.0185,
+        "slip_er": 0.0152,
+        "notional_over_risk": 38.05,
+        "hold_h": 39.4,
+        "cost_share": 0.2352
+      },
+      "best": {
+        "n": 366,
+        "gross_er": 0.297,
+        "cost_er": 0.0894,
+        "net_er": 0.2076,
+        "fees_er": 0.0659,
+        "funding_er": 0.0235,
+        "slip_er": 0.022,
+        "notional_over_risk": 54.85,
+        "hold_h": 38.6,
+        "cost_share": 0.3011
+      }
+    },
+    "12h": {
+      "base": {
+        "n": 348,
+        "gross_er": 0.2141,
+        "cost_er": 0.0636,
+        "net_er": 0.1505,
+        "fees_er": 0.0296,
+        "funding_er": 0.0341,
+        "slip_er": 0.0099,
+        "notional_over_risk": 24.58,
+        "hold_h": 119.3,
+        "cost_share": 0.2972
+      },
+      "best": {
+        "n": 354,
+        "gross_er": 0.1939,
+        "cost_er": 0.0591,
+        "net_er": 0.1349,
+        "fees_er": 0.0251,
+        "funding_er": 0.0339,
+        "slip_er": 0.0084,
+        "notional_over_risk": 20.91,
+        "hold_h": 132.0,
+        "cost_share": 0.3046
+      }
+    },
+    "1d": {
+      "base": {
+        "n": 128,
+        "gross_er": 0.2513,
+        "cost_er": 0.0742,
+        "net_er": 0.1771,
+        "fees_er": 0.021,
+        "funding_er": 0.0532,
+        "slip_er": 0.007,
+        "notional_over_risk": 17.55,
+        "hold_h": 258.3,
+        "cost_share": 0.2954
+      },
+      "best": {
+        "n": 147,
+        "gross_er": 0.2063,
+        "cost_er": 0.0394,
+        "net_er": 0.1669,
+        "fees_er": 0.0107,
+        "funding_er": 0.0287,
+        "slip_er": 0.0036,
+        "notional_over_risk": 8.88,
+        "hold_h": 269.5,
+        "cost_share": 0.191
+      }
+    }
+  },
+  "same_set": {
+    "2h": {
+      "base": {
+        "n_1": 629,
+        "n_15": 626,
+        "n_common": 617,
+        "overlap_pct": 98.1,
+        "gross_er_common": 0.1187
+      },
+      "best": {
+        "n_1": 595,
+        "n_15": 595,
+        "n_common": 588,
+        "overlap_pct": 98.8,
+        "gross_er_common": 0.1304
+      },
+      "delta": {
+        "d_gross": 0.0172,
+        "d_cost": -0.0058,
+        "m_star": -2.956,
+        "same_set_1x": 0.023,
+        "same_set_15x": 0.026,
+        "observed_15x": 0.0119
+      }
+    },
+    "4h": {
+      "base": {
+        "n_1": 331,
+        "n_15": 330,
+        "n_common": 330,
+        "overlap_pct": 99.7,
+        "gross_er_common": 0.2768
+      },
+      "best": {
+        "n_1": 366,
+        "n_15": 363,
+        "n_common": 355,
+        "overlap_pct": 97.0,
+        "gross_er_common": 0.2981
+      },
+      "delta": {
+        "d_gross": 0.024,
+        "d_cost": 0.0252,
+        "m_star": 0.952,
+        "same_set_1x": -0.0012,
+        "same_set_15x": -0.0138,
+        "observed_15x": -0.014
+      }
+    },
+    "12h": {
+      "base": {
+        "n_1": 348,
+        "n_15": 340,
+        "n_common": 290,
+        "overlap_pct": 83.3,
+        "gross_er_common": 0.1948
+      },
+      "best": {
+        "n_1": 354,
+        "n_15": 349,
+        "n_common": 304,
+        "overlap_pct": 85.9,
+        "gross_er_common": 0.1932
+      },
+      "delta": {
+        "d_gross": -0.0202,
+        "d_cost": -0.0046,
+        "m_star": 4.419,
+        "same_set_1x": -0.0157,
+        "same_set_15x": -0.0134,
+        "observed_15x": -0.0292
+      }
+    },
+    "1d": {
+      "base": {
+        "n_1": 128,
+        "n_15": 134,
+        "n_common": 117,
+        "overlap_pct": 91.4,
+        "gross_er_common": 0.0524
+      },
+      "best": {
+        "n_1": 147,
+        "n_15": 145,
+        "n_common": 143,
+        "overlap_pct": 97.3,
+        "gross_er_common": 0.2196
+      },
+      "delta": {
+        "d_gross": -0.045,
+        "d_cost": -0.0348,
+        "m_star": 1.291,
+        "same_set_1x": -0.0101,
+        "same_set_15x": 0.0073,
+        "observed_15x": 0.1709
+      }
+    }
+  },
+  "combo_add": {
+    "a0": {
+      "er": 0.1494,
+      "n": 462,
+      "by_tf": {
+        "12h": {
+          "n": 95,
+          "net": 50.24,
+          "risk": 199.01,
+          "weight": 0.19,
+          "er": 0.2524
+        },
+        "1d": {
+          "n": 43,
+          "net": -1.4,
+          "risk": 93.19,
+          "weight": 0.089,
+          "er": -0.015
+        },
+        "2h": {
+          "n": 214,
+          "net": 7.54,
+          "risk": 500.03,
+          "weight": 0.4775,
+          "er": 0.0151
+        },
+        "4h": {
+          "n": 110,
+          "net": 100.09,
+          "risk": 254.94,
+          "weight": 0.2435,
+          "er": 0.3926
+        }
+      }
+    },
+    "best_all": {
+      "er": 0.0015,
+      "n": 486,
+      "by_tf": {
+        "12h": {
+          "n": 109,
+          "net": 15.65,
+          "risk": 201.12,
+          "weight": 0.2135,
+          "er": 0.0778
+        },
+        "1d": {
+          "n": 57,
+          "net": -7.55,
+          "risk": 103.97,
+          "weight": 0.1104,
+          "er": -0.0726
+        },
+        "2h": {
+          "n": 202,
+          "net": -9.33,
+          "risk": 400.19,
+          "weight": 0.4248,
+          "er": -0.0233
+        },
+        "4h": {
+          "n": 118,
+          "net": 2.65,
+          "risk": 236.73,
+          "weight": 0.2513,
+          "er": 0.0112
+        }
+      },
+      "predicted_delta": -0.1495,
+      "actual_delta": -0.1479,
+      "contrib": {
+        "12h": -0.0332,
+        "1d": -0.0051,
+        "2h": -0.0183,
+        "4h": -0.0929
+      }
+    },
+    "best_2h4h": {
+      "er": 0.0473,
+      "n": 456,
+      "by_tf": {
+        "12h": {
+          "n": 98,
+          "net": 38.35,
+          "risk": 194.89,
+          "weight": 0.2039,
+          "er": 0.1968
+        },
+        "1d": {
+          "n": 42,
+          "net": 0.56,
+          "risk": 84.06,
+          "weight": 0.088,
+          "er": 0.0067
+        },
+        "2h": {
+          "n": 198,
+          "net": 1.43,
+          "risk": 420.37,
+          "weight": 0.4399,
+          "er": 0.0034
+        },
+        "4h": {
+          "n": 118,
+          "net": 4.88,
+          "risk": 256.32,
+          "weight": 0.2682,
+          "er": 0.019
+        }
+      },
+      "predicted_delta": -0.1052,
+      "actual_delta": -0.1021,
+      "contrib": {
+        "12h": -0.0106,
+        "1d": 0.0019,
+        "2h": -0.0056,
+        "4h": -0.091
+      }
+    }
+  }
+}

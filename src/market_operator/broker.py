@@ -72,6 +72,7 @@ v4 增量(docs/v4-protocol.md §1-G3,执行路径细化;不改变任何既有市
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import math
@@ -284,6 +285,22 @@ class _AcctPosition:
     decision_ts: int = 0       # OPEN 决策 bar 标签(保护性止损的因果锚,< fill ts)
 
 
+def _normalize_funding_table(table: Optional[dict]) -> Optional[dict]:
+    """``{sym: [(ts, rate), ...]}`` → ``{sym: (times, rates)}``(升序,供二分)。
+
+    A1 接插缝:表里缺某标的 ⇒ 该标的回落到常数近似(不静默改变口径,见
+    :meth:`Broker._accrue_funding`)。
+    """
+    if not table:
+        return None
+    out: dict = {}
+    for sym, rows in table.items():
+        items = sorted((int(ts), float(rate)) for ts, rate in rows)
+        out[str(sym)] = (tuple(ts for ts, _ in items),
+                         tuple(rate for _, rate in items))
+    return out
+
+
 class Broker:
     """多品种共享同一权益的模拟经纪商(合并时间轴回放,见 backtest.py)。"""
 
@@ -295,7 +312,11 @@ class Broker:
                  portfolio_stop_risk_frac: Optional[float] = None,
                  tf_stop_risk_frac_by_tf: Optional[dict] = None,
                  dynamic_risk_tiers: Optional[list] = None,
-                 capacity_mode: str = capacity.ADMISSION_FULL_COST) -> None:
+                 capacity_mode: str = capacity.ADMISSION_FULL_COST,
+                 funding_rates: Optional[dict] = None,
+                 slippage_by_symbol: Optional[dict] = None,
+                 symbol_stop_risk_frac: Optional[dict] = None,
+                 reserve_by_tf: Optional[dict] = None) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
         self.initial_equity = float(equity)
@@ -323,10 +344,22 @@ class Broker:
             if dynamic_risk_tiers else None
         )
         # 风险预算的唯一口径(见 capacity 模块):决策门与成交裁剪共用
+        # B1 标的池 / B2 慢周期保留额度:缺省空 ⇒ 逐位旧行为
+        self.reserve_by_tf = ({str(k): float(v) for k, v in reserve_by_tf.items()}
+                              if reserve_by_tf else None)
         self.risk_budget = capacity.RiskBudget(
             portfolio_frac=portfolio_stop_risk_frac,
             per_timeframe_frac=self.tf_stop_risk_frac_by_tf or {},
+            symbol_frac=({str(k): float(v)
+                          for k, v in symbol_stop_risk_frac.items()}
+                         if symbol_stop_risk_frac else {}),
             mode=capacity_mode)
+        # A1 真实资金费率表:{symbol: [(ts, rate), ...]};None ⇒ 常数近似
+        self.funding_rates = _normalize_funding_table(funding_rates)
+        # E1 分标的滑点:{symbol: 每边比例};缺省 = 全局 slippage
+        self.slippage_by_symbol = ({str(k): float(v) * cost_multiplier
+                                    for k, v in slippage_by_symbol.items()}
+                                   if slippage_by_symbol else {})
 
         self.positions: dict[str, _AcctPosition] = {}
         self.pending: dict[str, list[_Pending]] = {}
@@ -560,10 +593,13 @@ class Broker:
                          moment: str) -> tuple[float, str, float]:
         """各生效池剩余额度的最小值:``(剩余, 最紧池名, 该池上限占比)``。"""
         headroom, name, frac = capacity.budget_headroom(
-            self.risk_budget.pools(capacity.timeframe_of(symbol), moment=moment),
+            self.risk_budget.pools(capacity.timeframe_of(symbol), moment=moment,
+                                   symbol=capacity.symbol_root(symbol)),
             equity, self.positions, self.last_mark,
             taker_fee=self.taker_fee, slippage=self.slippage,
-            include_costs=self.risk_budget.includes_costs(moment))
+            include_costs=self.risk_budget.includes_costs(moment),
+            reserve_by_tf=self.reserve_by_tf,
+            candidate_timeframe=capacity.timeframe_of(symbol))
         if math.isfinite(headroom):
             headroom = max(0.0, headroom)
         return headroom, name, frac
@@ -828,17 +864,27 @@ class Broker:
             self.ledger.append(row)
         return rows
 
-    def _slipped(self, price: float, side: str) -> float:
+    def _slip_for(self, symbol: Optional[str]) -> float:
+        """该标的每边滑点(E1):分标的表 > 全局 ``slippage``。"""
+        if symbol and self.slippage_by_symbol:
+            root = capacity.symbol_root(symbol)
+            if root in self.slippage_by_symbol:
+                return self.slippage_by_symbol[root]
+        return self.slippage
+
+    def _slipped(self, price: float, side: str,
+                 symbol: Optional[str] = None) -> float:
         """对成交方向不利的滑点(买入更贵,卖出更廉)。"""
-        return price * (1.0 + self.slippage) if side == "buy" \
-            else price * (1.0 - self.slippage)
+        slip = self._slip_for(symbol)
+        return price * (1.0 + slip) if side == "buy" \
+            else price * (1.0 - slip)
 
     def _fill_open(self, po: _Pending, ts: int, o: float) -> dict:
         sym = po.intent.symbol
         spec = self.contracts[sym]
         d = po.direction
         side = "buy" if d > 0 else "sell"
-        price = self._slipped(o, side)
+        price = self._slipped(o, side, sym)
 
         if sym in self.positions:
             return self._skip_row(po, ts, "DUP_POSITION",
@@ -908,7 +954,7 @@ class Broker:
             return self._skip_row(po, ts, "NO_POSITION",
                                   f"no open position for {sym}")
         side = "buy" if pos.direction > 0 else "sell"
-        price = self._slipped(o, side)
+        price = self._slipped(o, side, sym)
         spec = self.contracts[sym]
         requested = (po.intent.qty_frac or 0.0) * pos.open_qty
         equity = self.equity_mtm()
@@ -968,7 +1014,7 @@ class Broker:
                    ts: int, o: float, full: bool) -> dict:
         sym = pos.symbol
         side = "sell" if pos.direction > 0 else "buy"
-        price = self._slipped(o, side)
+        price = self._slipped(o, side, sym)
         # 资金费计提至本笔成交刻(精确到毫秒比例),再决定是否结算
         self._accrue_funding(pos, price, ts)
         pnl = pos.direction * (price - pos.entry) * qty
@@ -1051,10 +1097,35 @@ class Broker:
                 self.pending.setdefault(sym, []).append(po)
 
     def _accrue_funding(self, pos: _AcctPosition, price: float, ts: int) -> None:
-        """按持仓时长精确到毫秒比例计提资金费(方向无关,恒为成本)。"""
+        """资金费计提:有真实费率表按**结算点**逐笔有符号计提,否则按常数近似。
+
+        常数口径(现行,``funding_per_8h``):方向无关、恒为成本、按持仓时长
+        线性摊。实测该假设在 4 个标的上高估 5.4 倍,且约 1/4 的结算点方向
+        相反(空头收费)→ 见 reports/live_cost_audit_20261023/FUNDING_REPLAY.md。
+
+        真实口径(``funding_rates``):对每个落在 ``(last_funding_ts, ts]`` 的
+        结算点 ``k``,成本 = ``qty × price × rate_k × direction``。用当根 bar 的
+        成交价作为名义价值近似(结算价是 mark price,与 bar 收盘的偏差在 2h 以上
+        周期上远小于费率本身的量级;该近似在报告中如实写明)。
+        """
         dt = ts - pos.last_funding_ts
         if dt <= 0:
             return
+        table = self.funding_rates
+        if table:
+            root = capacity.symbol_root(pos.symbol)
+            entry = table.get(root)
+            if entry is not None:
+                times, rates = entry
+                lo = bisect.bisect_right(times, pos.last_funding_ts)
+                hi = bisect.bisect_right(times, ts)
+                if hi > lo:
+                    total = 0.0
+                    for k in range(lo, hi):
+                        total += rates[k]
+                    pos.funding_acc += pos.qty * price * total * pos.direction
+                pos.last_funding_ts = ts      # 无结算点也必须推进,否则重复扫描
+                return
         pos.funding_acc += pos.qty * price * self.funding_8h * (dt / MS_8H)
         pos.last_funding_ts = ts
 

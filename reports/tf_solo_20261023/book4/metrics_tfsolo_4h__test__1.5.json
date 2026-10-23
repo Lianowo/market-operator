@@ -1,0 +1,83 @@
+{
+  "n": 108,
+  "gross": 128.4343,
+  "cost": 34.2826,
+  "net": 100.4982,
+  "eq": 400.4982,
+  "wr_net": 0.3981,
+  "pf_net": 1.9912,
+  "payoff_net": 3.01,
+  "wr_gross": 0.4907,
+  "pf_gross": 2.455,
+  "payoff_gross": 2.5476,
+  "er_net": 0.4123,
+  "er_gross": 0.5269,
+  "cost_R": 0.1407,
+  "dd_pct": 12.1338,
+  "max_concurrent": 3,
+  "avg_hold_h": 43.71,
+  "avg_risk_usdt": 2.2569,
+  "limit_entries": 0,
+  "counters": {
+    "open_intents": 108,
+    "opens_filled": 108,
+    "portfolio_cap_skips": 23,
+    "protective_stop_fills": 106,
+    "level_rejected_signals": 3822,
+    "dup": 1448,
+    "breakout_accepted_signals": 1413,
+    "restraint_quality_reject": 1410,
+    "restraint_impulse_reject": 525,
+    "restraint_rotations_reject": 1518,
+    "f1_reject_level_rejected_market": 1285,
+    "restraint_cooldown_reject": 6
+  },
+  "breakdown": {
+    "event": {
+      "BREAKOUT_ACCEPTED": {
+        "n": 20,
+        "net": -9.0542
+      },
+      "LEVEL_REJECTED": {
+        "n": 88,
+        "net": 109.5524
+      }
+    },
+    "regime": {
+      "TREND_UP": {
+        "n": 24,
+        "net": 48.941
+      },
+      "RANGE": {
+        "n": 10,
+        "net": 25.8835
+      },
+      "TRANSITION": {
+        "n": 52,
+        "net": 4.3644
+      },
+      "TREND_DOWN": {
+        "n": 22,
+        "net": 21.3093
+      }
+    },
+    "symbol": {
+      "DOGEUSDT": {
+        "n": 36,
+        "net": 1.8682
+      },
+      "BTCUSDT": {
+        "n": 26,
+        "net": 66.8766
+      },
+      "SOLUSDT": {
+        "n": 20,
+        "net": 18.2779
+      },
+      "ETHUSDT": {
+        "n": 26,
+        "net": 13.4755
+      }
+    }
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "n": 405,
+  "gross": 91.3932,
+  "cost": 59.7286,
+  "net": 42.7231,
+  "eq": 342.7231,
+  "wr": 0.4123,
+  "pf": 1.2241,
+  "dd_pct": 31.7176,
+  "limit_entries": 0,
+  "by_tf": {
+    "2h": {
+      "n": 173,
+      "net": 26.7506
+    },
+    "4h": {
+      "n": 84,
+      "net": 6.4596
+    },
+    "12h": {
+      "n": 105,
+      "net": 16.98
+    },
+    "1d": {
+      "n": 43,
+      "net": -7.4672
+    }
+  },
+  "by_event_regime": {
+    "E1×RANGE": {
+      "n": 8,
+      "net": -7.4329
+    },
+    "E1×TRANSITION": {
+      "n": 31,
+      "net": -14.8118
+    },
+    "E1×TREND_DOWN": {
+      "n": 28,
+      "net": 2.3106
+    },
+    "E1×TREND_UP": {
+      "n": 34,
+      "net": -11.8943
+    },
+    "E3×RANGE": {
+      "n": 36,
+      "net": 32.7171
+    },
+    "E3×TRANSITION": {
+      "n": 152,
+      "net": 12.4819
+    },
+    "E3×TREND_DOWN": {
+      "n": 58,
+      "net": 22.8334
+    },
+    "E3×TREND_UP": {
+      "n": 58,
+      "net": 6.519
+    }
+  },
+  "counters": {
+    "open_intents": 410,
+    "opens_filled": 407,
+    "protective_stop_fills": 389,
+    "e3_signals": 7092,
+    "dup": 3880,
+    "f1_reject_e3_market": 2196,
+    "restraint_quality_reject": 2783,
+    "e1_signals": 3055,
+    "restraint_rotations_reject": 2972,
+    "restraint_cooldown_reject": 6,
+    "restraint_impulse_reject": 904,
+    "campaigns": {
+      "DOGEUSDT@12h": {
+        "e3_signals": 245,
+        "dup": 1300,
+        "f1_reject_e3_market": 93,
+        "restraint_quality_reject": 131,
+        "e1_signals": 359
+      },
+      "DOGEUSDT@1d": {
+        "restraint_rotations_reject": 47,
+        "e3_signals": 173,
+        "e1_signals": 151,
+        "f1_reject_e3_market": 54,
+        "restraint_quality_reject": 82,
+        "dup": 513,
+        "restraint_cooldown_reject": 2
+      },
+      "DOGEUSDT@2h": {
+        "f1_reject_e3_market": 989,
+        "e3_signals": 3575,
+        "restraint_quality_reject": 1437,
+        "e1_signals": 1336,
+        "restraint_impulse_reject": 510,
+        "restraint_rotations_reject": 1524,
+        "dup": 1127
+      },
+      "DOGEUSDT@4h": {
+        "restraint_rotations_reject": 1401,
+        "e3_signals": 3099,
+        "restraint_quality_reject": 1133,
+        "e1_signals": 1209,
+        "restraint_impulse_reject": 394,
+        "dup": 940,
+        "f1_reject_e3_market": 1060,
+        "restraint_cooldown_reject": 4
+      }
+    }
+  }
+}

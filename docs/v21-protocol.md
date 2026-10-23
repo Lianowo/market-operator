@@ -63,7 +63,15 @@
    - `reject_use_struct_stop=True`：REJECT 使用箱体外缘结构止损（拒绝刺穿极值外侧，天然窄止损、高盈亏比），`reject_target_mode="opposite"` 将 `target_1` 锚定在箱体对侧缘 `box_opposite`。
    - `accept_use_struct_stop=False`：ACCEPT 保持 2.0·ATR Turtle 宽止损与无上限移动防线。
 2. **REJECT 对侧突破不减仓、直接锁利 50%（`PositionManager.reject_opp_lock_frac = -0.50`）**：
-   - 当 REJECT 仓位触及或突破箱体对侧缘 `target_1` 时，**不执行平半仓**（避免截断大级别反转趋势），而是将防线 `invalid` 直接推进至锁住箱体跨度 50% 利润的位置（若仅影线触及未收盘突破则先锁 10% 保本垫），剩余全程交由 §8.3 确认 pivot 移动防线收割。
+   - 当 REJECT 仓位触及或突破箱体对侧缘 `target_1` 时，**不执行平半仓**（避免截断大级别反转趋势），而是将防线 `invalid` 直接推进至锁住 **`entry→target_1` 行程 50%** 的位置（若仅影线触及未收盘突破则先锁 10% 保本垫），剩余全程交由 §8.3 确认 pivot 移动防线收割。
+   - **锁利价唯一口径**：`position.opp_lock_px(entry, target_1, frac) = entry + |frac|·(target_1 − entry)`，`position.py` 与 `live_runner.py`（`_on_sub_bar` 子周期早锁）共用同一函数，禁止各自重算。注意它是"行程比例"而非"箱体跨度比例"：只有建仓价恰在箱体边缘（canonical REJECT）时二者等价；建仓价深入箱体时行程远窄于箱体，锁利价会明显更靠近建仓价。
+- **行情锚定 `opp_lock_max_giveback_r`（2026-10-23 复盘追加；默认 `0.25`，0 = 关闭）**：锁利只在**收盘**裁决，收盘价往往已经走过了计划口径算出的位置 ⇒ 计划锁利价退化为"价格得先回踩到那里才生效"的止盈单。GOOGLUSDT 样本：计划口径 323.34 落在 2h 收盘 321.33 **身后 2.01（0.63%）**，不回踩等于没锁，回踩触发时已把 1.08R 行程回吐到 0.24R（实际成交 324.01）。故锁利价取两口径**更贴近现价者**：
+  - 计划口径 `opp_lock_px(...)`：至少锁到 `entry→target_1` 行程的 `|frac|`；
+  - 行情口径 `opp_lock_live_px(direction, ref_px, giveback_r, R) = ref_px ∓ giveback_r·R`：只允许回吐 `giveback_r` 个 R（以 R 为单位，2h/12h/不同币种同尺度，不依赖 ATR 管线）；
+  - `tighten_lock(direction, plan_px, live_px)`：空头取更小、多头取更大（更贴近现价 = 更紧），仍须通过落位闸门。
+  该口径只改变"锁利价已在现价身后"的情形（首次触及时两种口径几乎重合），`giveback_r = 0` 时逐位回到历史行为。
+   - **落位闸门 `lock_is_protective(direction, lock_px, ref_px)`（2026-10-23 GOOGLUSDT 事故修复）**：锁利/保本推进价必须仍在**当下参考价的保护侧**（空头 `> ref_px`、多头 `< ref_px`，`ref_px` 取当时收盘价或更保守的 `mark`）。闸门不通过 ⇒ **不推进**（`pos.log` 记 `v21|opp_break_lock_reject` / `v21|opp_lock_reject`，实盘另记 `lock_reject` 台账 + 限流告警），保留原结构止损，且**不置 `reduced`** 以便后续 bar 重新判定。修前该边界缺陷会把唯一的保护单挂到现价盈利侧：挂单瞬间即按市价成交（GOOGLUSDT 空头：锁利 323.34 于现价 321.33 挂出，46 分钟后按 324.01 成交，比离场时市价差 0.62%），仓位等于裸奔。
+   - **通知图 ENTRY 口径**：`tg.send_fill(..., entry_price=<建仓均价>, price_label=<本次事件价名称>)`。修前图上一律用"本次事件价"画 ENTRY 线，止损推进/平仓通知会把 ENTRY 画在事件价上（例如用 2h 收盘 321.33 顶替建仓价 324.02），图上止损/目标相对 ENTRY 的关系整体错位，读图会把"空头锁利"误读成"止损跑到止盈侧"。
    - **保护性止损全天候生效**：修复 `broker.py` 中同向挂单覆盖保护性止损的边界缺陷，确保从成交下一根细 bar 起 `PROTECTIVE_STOP` 100% 在场。
 3. **各周期独立风险容量池（`tf_cap_by_tf`）**：
    - `campaign.py` 与 `live_runner.py` 支持按周期独立分配风险上限（回测基线每 TF `2.25%` / 总 `12%`；小资金实盘复利每 TF `12%` / 总 `50%`），彻底解决 2h/4h 持仓占满容量导致 12h/1d 高胜率大单被 `cap_skip` 挤出的问题。
