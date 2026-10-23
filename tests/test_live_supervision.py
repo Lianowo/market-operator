@@ -8,7 +8,9 @@
 ④ `SingletonLock` 跨进程互斥、进程退出即内核释放(无 pid 毒锁);
 ⑤ `Supervisor.judge/run_once`:缺失、停摆、补做中、启动宽限、演练不拉起;
 ⑥ 存储治理:`gzip_keep` / `archive_and_truncate` 无损(可解压、留尾巴)、
-   `_gate` 三档退出码、增长预测只按运维目录口径。
+   `_gate` 三档退出码、增长预测只按运维目录口径;
+⑦ 常驻自重定向:`log_line` 只在常驻模式镜像 `logs/supervisor.log`,镜像失败
+   不得带走看护(cmd `>>` 撞独占句柄 → 退出码 0 零日志的静默故障回归锁)。
 """
 
 from __future__ import annotations
@@ -353,4 +355,42 @@ def test_growth_stats_projects_from_ops_traffic_only(tmp_path, monkeypatch):
     assert st["bytes_per_day"] == pytest.approx(9_000_000, rel=0.01)
     assert st["projected_30d_gb"] == pytest.approx(
         (1_000_000 + 30 * 1_000_000) / (1 << 30), rel=0.01)
+
+
+# ---------------------------------------------------------------------------
+# ⑦ 常驻自重定向:console 行自己落盘,不靠 cmd `>>`
+#    (入口脚本一旦 redirect,第二次触发会撞上在跑实例的独占句柄,
+#     cmd 在打开文件阶段就失败,退出码 0 + 零日志 —— 静默不启动的真因。)
+# ---------------------------------------------------------------------------
+
+
+def test_log_line_mirrors_console_log_when_daemon(tmp_path, monkeypatch):
+    logs = tmp_path / "logs"
+    mirror = logs / "supervisor.log"
+    monkeypatch.setattr(supv, "LOG_DIR", logs)
+    monkeypatch.setattr(supv, "MIRROR", None)
+
+    supv.log_line("daemon_up", {"poll_s": 30.0})
+    assert not mirror.exists()            # 交互模式(--status/--once)不写文件
+
+    monkeypatch.setattr(supv, "MIRROR", mirror)
+    supv.log_line("alert", {"reason": "心跳缺失"})
+
+    text = mirror.read_text(encoding="utf-8")
+    assert text.count("\n") == 1
+    assert "[supervisor]" in text and "alert" in text and "心跳缺失" in text
+    rows = [json.loads(x) for x
+            in (logs / "supervisor.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["kind"] for r in rows] == ["daemon_up", "alert"]   # jsonl 仍全量
+
+
+def test_log_line_survives_unwritable_mirror(tmp_path, monkeypatch, capsys):
+    """镜像失败绝不能带走看护:落盘异常只吞掉,console 行照打。"""
+    logs = tmp_path / "logs"
+    monkeypatch.setattr(supv, "LOG_DIR", logs)
+    monkeypatch.setattr(supv, "MIRROR", logs / "nope" / "supervisor.log")  # 目录不存在
+    supv.log_line("daemon_up", {"poll_s": 30.0})
+    assert "daemon_up" in capsys.readouterr().out
+    assert (logs / "supervisor.jsonl").exists()
+
 

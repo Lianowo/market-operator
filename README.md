@@ -130,20 +130,30 @@ python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文
 `logs/ runtime/ data/` 的写入速率外推(一次性研究产物混进来会把"还能跑多久"估得
 离谱),结果落 `reports/_storage_growth.json`。
 
-计划任务(`\MarketOperator\MarketOperatorLive` 每 3 分钟重复、
-`\MarketOperator\MarketOperatorStorageGC` 每日 04:10)**直接用解释器绝对路径**
-调用脚本,不经 `cmd.exe`:计划任务的运行环境里 `python` 未必在 `PATH`,而
-`cmd.exe /c *.cmd` 一旦解析失败会静默退出(退出码 0、无日志,反而掩盖故障)。
-已在运行时重复触发的新实例会被单实例锁挡掉并立刻退出,等价于"没跑就拉起"。
+计划任务:`\MarketOperator\MarketOperatorLive`(每 3 分钟重复、忽略重叠)与
+`\MarketOperator\MarketOperatorStorageGC`(每日 04:10),动作都是
+`C:\Windows\System32\cmd.exe /c tools\schedule\<入口>.cmd`、工作目录 = 仓库根。
+三条踩过的坑(都是"任务看起来跑过,但什么都没发生"):
+
+1. **执行体写绝对路径**。计划任务的解析环境未必有 `PATH`,写 `cmd.exe`/`python`
+   会解析不到而静默失败;解释器由 .cmd 内部调用(必要时设 `PYTHONUTF8=1`)。
+2. **入口脚本里不要做重定向**。正在运行的实例会独占自己的日志句柄,3 分钟后的
+   下一次触发再 `>>` 同一个文件,会让 `cmd` 在**打开文件阶段**就失败:退出码 0、
+   日志一个字都写不出来。所以常驻看护自己把 console 行镜像进
+   `logs/supervisor.log`(异常记为 `kind=crash`),.cmd 只负责 `cd` 到仓库根再调
+   python;`live_runner.cmd` / `storage_gc.cmd` 仍重定向,但写的是**无人长期持有**
+   的 `logs/live_runner_console.log`、`logs/storage_gc.log`。
+3. **重复触发靠单实例锁变成"没跑就拉起"**。第二次触发的新实例抢不到
+   `runtime/live/supervisor.lock` 就打印一行并 `exit 0`,既不影响在跑的实例,
+   也不需要 `IgnoreNew`/上次结果之类的巧妙判断。
 
 ```bat
-D:\LiAn\Tools\Python\python.exe scripts\live_supervisor.py
-D:\LiAn\Tools\Python\python.exe scripts\storage_gc.py --enforce
+C:\Windows\System32\cmd.exe /c tools\schedule\live_supervisor.cmd
+C:\Windows\System32\cmd.exe /c tools\schedule\storage_gc.cmd
 ```
 
-`tools/schedule/live_supervisor.cmd` / `storage_gc.cmd` / `live_runner.cmd` 保留给
-人工、双击或非计划任务场景(它们额外把控制台输出重定向到
-`logs/supervisor.log`、`logs/storage_gc.log`、`logs/live_stdout.log`)。
+人工排障直接带参数调入口(此时不写日志、直接打屏):
+`tools\schedule\live_supervisor.cmd --status --no-notify`。
 
 数据固定证据：`data/manifest.json`（每批原始数据 sha256, 2024-10-15 → 2026-10-19, 0 缺口）；合约规格离线缓存强制（`data/contracts.json` 逐条 sha256)。
 

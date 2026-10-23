@@ -35,6 +35,7 @@ import json
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -51,10 +52,18 @@ LOCK_PATH = ROOT / "runtime" / "live" / "supervisor.lock"
 LOG_DIR = ROOT / "logs"
 RUNNER_LOG = LOG_DIR / "live_stdout.log"
 RUNNER_ERR = LOG_DIR / "live_stderr.log"
+CONSOLE_LOG = LOG_DIR / "supervisor.log"
+MIRROR: Path | None = None       # 常驻模式下由 main() 指向 logs/supervisor.log
 
 
 def log_line(kind: str, rec: dict) -> None:
-    """结构化时间线(唯一事实归档;不受 log_max_mb 截断影响)。"""
+    """结构化时间线(唯一事实归档;不受 log_max_mb 截断影响)。
+
+    常驻模式下同时把同一行追加到 `logs/supervisor.log`:计划任务/无控制台场景
+    没人做重定向,自己写才不会丢;自己写也避免了 `cmd.exe ... >> supervisor.log`
+    与上一实例的**独占句柄**抢占(那会让 cmd 在打开文件时直接失败,退出码 0、
+    日志全空 —— 2026-10-23 排查了半天的「静默不启动」)。
+    """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     now = hb.now_ms()
     row = {"ts": now, "ts_utc": hb.iso_utc(now), "actor": "supervisor",
@@ -64,8 +73,15 @@ def log_line(kind: str, rec: dict) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass
-    print(f"[supervisor] {row['ts_utc']} {kind} "
-          f"{rec.get('reason') or rec.get('why') or ''}", flush=True)
+    line = (f"[supervisor] {row['ts_utc']} {kind} "
+            f"{rec.get('reason') or rec.get('why') or ''}")
+    if MIRROR is not None:
+        try:
+            with open(MIRROR, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+    print(line, flush=True)
 
 
 class Supervisor:
@@ -300,8 +316,13 @@ def main(argv=None) -> int:
         print("[supervisor] 已有看护实例在运行(单实例锁被占用),本次退出",
               flush=True)
         return 0
+    global MIRROR
+    MIRROR = CONSOLE_LOG          # 常驻模式:console 行同时落 logs/supervisor.log
     try:
         sup.run_daemon()
+    except BaseException:                       # 无控制台时 stderr 会丢,自己留证
+        log_line("crash", {"why": traceback.format_exc()[-1500:]})
+        raise
     finally:
         lock.release()
     return 0
