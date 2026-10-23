@@ -14,7 +14,7 @@ from market_operator.broker import (
     ContractSpec,
     Broker,
     RestingLimitOrder,
-    _floor_step,
+    floor_step,
     fetch_contract_specs,
 )
 from market_operator.broker import OrderIntent, OrderKind
@@ -125,9 +125,9 @@ def test_dup_position_rejected():
 
 
 def test_floor_step_rounds_down():
-    assert _floor_step(2.209999, 0.01, 2) == 2.20
-    assert _floor_step(0.00015, 0.0001, 4) == 0.0001
-    assert _floor_step(0.000099, 0.0001, 4) == 0.0
+    assert floor_step(2.209999, 0.01, 2) == 2.20
+    assert floor_step(0.00015, 0.0001, 4) == 0.0001
+    assert floor_step(0.000099, 0.0001, 4) == 0.0
 
 
 def test_fill_after_decision_assertion():

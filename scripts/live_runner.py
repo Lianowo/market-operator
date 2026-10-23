@@ -1,12 +1,16 @@
-"""实盘 runner(实盘接入件;v20/lifecycle;直接提交,不推不合)。
+"""实盘 runner(实盘接入件;v21 单一生产链;直接提交,不推不合)。
 
 主循环(每 15s 轮询):宇宙发现(24h USDT 名义量 > 3M)→ 每品种认知帧
 (12h 主 + 下级触发 2H,TRIGGER_TF_MAP 精确命中)→ canonical 认知 + 路由
-arm-full(v20 四件全开)→ 订单意图 → broker-live(--mode live 才发真单)
-→ Telegram 通知;持仓对账 runner↔exchange 每 2min;断点重启 state.json。
+(MarketRouter + 对侧锁利 PositionManager)→ 订单意图 → broker-live(--mode live
+才发真单)→ Telegram 通知;持仓对账 runner↔exchange 每 2min;断点重启 state.json。
+
+单一生产链(v20/lifecycle 已退役):启动即校验,``cognition.engine`` 出现非 v21
+的值或策略配置 ``use_balance_detector`` 不为 true 都直接拒绝启动 —— 旧链不是
+"回退选项",让它在配置层显式失败,好过静默换一套语义继续下单。
 
 语义纪律:E 检测/策略语义/历史产物零改动 —— EventDetector/MicTracker/
-V20Router/PositionManager 一律 canonical 件;本脚本只做接线、执行近似与
+MarketRouter/PositionManager 一律 canonical 件;本脚本只做接线、执行近似与
 风控断件。风控档(risk_frac=0.0075、leverage_cap=20、portfolio_cap=0.5、
 日损 -10% 熔断、API 错熔断、每时订单上限)唯一来源 = config/live.json。
 
@@ -55,24 +59,18 @@ sys.path.insert(0, str(ROOT / "src"))
 from market_operator.bitget_live import (                        # noqa: E402
     BitgetError, BitgetLiveClient)
 from market_operator.broker import (                            # noqa: E402
-    ContractSpec, _floor_step)
+    ContractSpec, floor_step)
 from market_operator.events import EventDetector                # noqa: E402
 from market_operator.hypothesis import StructureView            # noqa: E402
-from market_operator.lifecycle import (                         # noqa: E402
-    LifecycleParams, V20Params, V20Router)
 from market_operator.position import Position, PositionManager  # noqa: E402
-from market_operator.repairs import (                           # noqa: E402
-    prior_moves_delta, range_quantile)
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
 from market_operator.routing import RouterParams, MarketRouter      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
 from market_operator.tg import TelegramNotifier                 # noqa: E402
-from market_operator.tiered import TieredParams                 # noqa: E402
 from market_operator.trigger import (                           # noqa: E402
     MicTracker, resolve_trigger_tf)
 
 CONFIG_PATH = ROOT / "config" / "live.json"
-CONFIG_V20 = ROOT / "config" / "v20.json"
 STRATEGY_CONFIG = ROOT / "config" / "strategy.json"   # 生产策略配置(唯一)
 
 MS_1H = 3_600_000
@@ -81,13 +79,21 @@ TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400
 
 
 # ---------------------------------------------------------------------------
-# canonical 参数组(v20 / v21 双模支持)
+# canonical 参数组(v21 唯一生产链)
 # ---------------------------------------------------------------------------
 
 
 def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
-    """加载生产策略参数:平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由。"""
+    """加载生产策略参数:平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由。
+
+    与 ``scenario.load_settings`` 同一 fail-closed 纪律:事件来源必须是平衡箱,
+    否则这条链根本没有事件可路由,拿到手的只是一套"看起来在跑"的参数。
+    """
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    if not bool(raw.get("use_balance_detector", False)):
+        raise ValueError(
+            f"{cfg_path}: 实盘链路要求 use_balance_detector=true"
+            "(v21 之外没有可用的生产事件来源)")
     params = Params.from_json(cfg_path)
     whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
     base_kw = dict(
@@ -108,49 +114,25 @@ def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
     return raw, params, base_rp, rp_by_tf
 
 
-def load_v20_params() -> tuple:
-    """(raw, Params, V20Params-arm-full);与 scripts/run_v20.py 同一接线。"""
-    raw = json.loads(CONFIG_V20.read_text(encoding="utf-8"))
-    params = Params.from_json(CONFIG_V20)
-    p19, p16 = raw["v19_params"], raw["v16_params"]
-    tp = TieredParams(
-        **{k: p19[k] for k in ("pos_short_min", "pos_long_max", "k_room_R",
-                               "room_lo", "k_is", "k_star", "mult_pos",
-                               "mult_room_mid", "mult_room_lo",
-                               "mult_transition_fade", "mult_rngq_big",
-                               "mult_pmd_adverse")},
-        fade_family=tuple(p16["fade_family"]), fade_front_edge=False)
-    whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
-    rp = V20Params(k_dq=float(raw["k_dq"]), k_imp=float(raw["k_imp"]),
-                   k_is=float(raw["k_is"]),
-                   turtle_stop_atr=float(raw["turtle_stop_atr"]),
-                   k_bm=float(raw["k_bm"]), whitelist=whitelist,
-                   tiered=tp,
-                   v20=LifecycleParams(s1_trail_arm=True, s2_fade_2leg=True,
-                                       s3_transition_fade_ban=True,
-                                       s4_e3_maker=True))
-    return raw, params, rp
-
-
 def new_position_manager(params: Params, raw: dict) -> PositionManager:
-    """持仓侧接线:兼容 v21(对侧突破锁利 + Turtle)与 v20(arm-full)。"""
-    if raw.get("use_balance_detector"):
-        arm_cfg = raw.get("arm_config") or {}
-        return PositionManager(
-            params,
-            allow_add=False,
-            breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
-            time_stop=False,
-            reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
-        )
-    p16 = raw["v16_params"]
+    """持仓侧接线:唯一生产语义(对侧突破锁利 + Turtle)。
+
+    v20 arm-full(harvest/time_cap/trail_arm_gate)已随 ``lifecycle`` 退役;
+    没有平衡箱的配置直接报错,而不是拿旧 chain 的持仓参数顶上 —— 那样会让
+    "换了一套语义"在运行期悄无声息地发生。
+    """
+    if not raw.get("use_balance_detector"):
+        raise ValueError(
+            "new_position_manager: 需要 use_balance_detector=true"
+            "(v21 之外没有可用的生产持仓语义)")
+    arm_cfg = raw.get("arm_config") or {}
     return PositionManager(
-        params, allow_add=False, breakeven_on_reduce=True, time_stop=False,
-        harvest_family=tuple(p16["fade_family"]),
-        time_cap_bars=int(p16["k_cap_hours"]),
-        cap_mfe_min=float(p16["cap_mfe_min"]),
-        harvest_ladder3=False, early_exit=False,
-        trail_arm_gate=True, harvest_fade_2leg=True)
+        params,
+        allow_add=False,
+        breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
+        time_stop=False,
+        reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -382,14 +364,14 @@ class LiveRunner:
         self.risk = cfg["risk"]
         self.loop_cfg = cfg["loop"]
         self.cog_cfg = cfg["cognition"]
-        self.engine_version = str(self.cog_cfg.get("engine") or "v20")
-        if self.engine_version == "v21":
-            self.raw_strat, self.params, self.rp, self.rp_by_tf = load_strategy_params()
-            self.raw20 = self.raw_strat
-        else:
-            self.raw20, self.params, self.rp = load_v20_params()
-            self.raw_strat = self.raw20
-            self.rp_by_tf = {}
+        # 单一生产链:engine 字段已从 config/live.json 删除;这里读取只为了让
+        # 残留旧配置显式失败,而不是悄悄跑成 v21。
+        engine = str(self.cog_cfg.get("engine") or "v21")
+        if engine != "v21":
+            raise RuntimeError(
+                f"cognition.engine={engine!r} 不再支持:实盘只有 v21 一条生产链"
+                "(v20/lifecycle 已退役,见 reports/refactor_20261023/DESIGN.md D9)")
+        self.raw_strat, self.params, self.rp, self.rp_by_tf = load_strategy_params()
         self.contracts = contracts or {}
         self.contract_raw = contract_raw or {}     # 交易所原始合约条目(maxLever 等)
         self.leverage_by_sym: dict[str, int] = {}  # 各品种实际生效杠杆
@@ -487,10 +469,10 @@ class LiveRunner:
         place = int(sp.price_place)
         step = 10.0 ** (-place)
         px = float(price)
-        lo = _floor_step(px, step, place)
+        lo = floor_step(px, step, place)
         if direction > 0:                      # 买/平空:向下(不越过前缘)
             return lo
-        # 卖/平多:向上一个 step 至不小于原触发价(_floor_step 对负数返回 0,
+        # 卖/平多:向上一个 step 至不小于原触发价(floor_step 对负数返回 0,
         # 不能用 -f(-x) 取反)
         return round(lo + step, place) if lo < px - 1e-12 else lo
 
@@ -880,13 +862,9 @@ class LiveRunner:
         detector, tracker = replay_cognition(
             self.params, symbol, cog_bars, replay_trig,
             obs_tf_seconds=obs_s, trigger_tf_seconds=trig_s)
-        if self.engine_version == "v21":
-            rp_tf = self.rp_by_tf.get(tf_label, self.rp)
-            router = MarketRouter(rp_tf)
-            pm = new_position_manager(self.params, self.raw_strat)
-        else:
-            router = V20Router(self.rp)
-            pm = new_position_manager(self.params, self.raw20)
+        rp_tf = self.rp_by_tf.get(tf_label, self.rp)
+        router = MarketRouter(rp_tf)
+        pm = new_position_manager(self.params, self.raw_strat)
         return CampaignState(symbol=symbol, detector=detector, tracker=tracker,
                              router=router, pm=pm,
                              cog_bars=list(cog_bars),
@@ -904,9 +882,6 @@ class LiveRunner:
         if bars2h is None:
             bars2h = self._fetch_trigger_bars(symbol, want)
         main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
-        if self.engine_version != "v21":
-            return self._build_campaign(symbol, main_tf, bars2h=bars2h)
-
         tf_list = list(self.cog_cfg.get("tf_list") or [main_tf])
         built: dict[str, CampaignState] = {}
         for tf in tf_list:
@@ -931,7 +906,7 @@ class LiveRunner:
 
     def _try_unlock_higher_tfs(self, symbol: str, bars2h: list) -> None:
         """新币随 K 线积累达到高周期准入门槛时,自动解锁并挂载对应周期战役。"""
-        if self.engine_version != "v21" or symbol not in self.campaigns:
+        if symbol not in self.campaigns:
             return
         tf_list = list(self.cog_cfg.get("tf_list") or [])
         active_tfs = {self.campaigns[symbol].tf_label} | {
@@ -1181,8 +1156,8 @@ class LiveRunner:
     def _gap_market_exit(self, sym: str, pos: dict, now_ms: int,
                          reason: str) -> None:
         """撤掉入场/止损挂单后按现价市价离场(强制,不受速率限制约束)。"""
-        qty = _floor_step(float(pos["qty"]), self._spec(sym).size_step,
-                          self._spec(sym).size_place)
+        qty = floor_step(float(pos["qty"]), self._spec(sym).size_step,
+                         self._spec(sym).size_place)
         self._cancel_entry(sym, "gap_exit")
         self._cancel_stop(sym, "gap_exit")
         self._arm_close_intent(sym, pos, qty, "market", None, reason,
@@ -1531,22 +1506,14 @@ class LiveRunner:
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
                     *, mic: bool) -> None:
-        """canonical 决策:支持 v20(ctx18)与 v21(MarketRouter) → 路由 → 意图。"""
+        """canonical 决策:MarketRouter → 意图(v21 唯一链)。"""
         sym = cs.symbol
         if mic:
-            rngq_bars, ri = cs.trig_bars, len(cs.trig_bars) - 1
-            bar = cs.trig_bars[-1]
+            bars, bar = cs.trig_bars, cs.trig_bars[-1]
         else:
-            rngq_bars, ri = cs.cog_bars, len(cs.cog_bars) - 1
-            bar = cs.cog_bars[-1]
-        if hasattr(cs.router, "ctx18_windows") and hasattr(cs.router, "set_ctx18"):
-            wq, wp = cs.router.ctx18_windows()
-            cs.router.set_ctx18({
-                "rngq": range_quantile(rngq_bars, ri, wq),
-                "pmd": prior_moves_delta(cs.cog_bars, len(cs.cog_bars) - 1, wp),
-                "mic": mic})
+            bars, bar = cs.cog_bars, cs.cog_bars[-1]
         decisions = cs.router.on_bar(
-            sym, bar, ri, view, atr, events,
+            sym, bar, len(bars) - 1, view, atr, events,
             position_open=sym in self.positions,
             entry_resting=self._entry_resting(sym))
         t = int(bar[0])
@@ -1611,7 +1578,7 @@ class LiveRunner:
         eff_lev = float(self.leverage_by_sym.get(sym)
                         or self.risk.get("leverage_cap") or 20)
         qty = min(qty, eff_lev * equity / entry_ref)
-        qty = _floor_step(qty, spec.size_step, spec.size_place)
+        qty = floor_step(qty, spec.size_step, spec.size_place)
         # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
         outstanding = sum(
             worst_case_of_position(p["direction"], p["qty"],
@@ -1799,13 +1766,13 @@ class LiveRunner:
             spec = self._spec(sym)         # 全平数量同样按合约精度取整
             self._arm_close_intent(
                 sym, pos,
-                _floor_step(float(pos["qty"]), spec.size_step, spec.size_place),
+                floor_step(float(pos["qty"]), spec.size_step, spec.size_place),
                 "market", None, intent.reason, t, role="exit",
                 force=self._gap_replay)
         elif kind == "REDUCE":
-            qty = _floor_step(float(intent.qty_frac or 0.0) * pos["qty"],
-                              self._spec(sym).size_step,
-                              self._spec(sym).size_place)
+            qty = floor_step(float(intent.qty_frac or 0.0) * pos["qty"],
+                             self._spec(sym).size_step,
+                             self._spec(sym).size_place)
             if qty <= 0.0:
                 return
             target = pos_pm.target_1 if pos_pm is not None else None
@@ -2019,8 +1986,8 @@ class LiveRunner:
             # 数量必须按合约精度取整:精度不符会被交易所直接拒单
             # (实测 40808 size checkScale),导致保护永远挂不上
             spec = self._spec(sym)
-            stop_qty = _floor_step(float(pos["qty"]), spec.size_step,
-                                   spec.size_place)
+            stop_qty = floor_step(float(pos["qty"]), spec.size_step,
+                                  spec.size_place)
             missing = bool(cur and cur.get("order_id") and live_ids is not None
                            and str(cur["order_id"]) not in live_ids)
             if missing:

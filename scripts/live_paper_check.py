@@ -205,7 +205,7 @@ def main(argv=None) -> None:
 
     print("== [5/5] tg 连接测试(真实一条) ==")
     tgr = TelegramNotifier(secrets)
-    ok = tgr.send_alert("PAPER 端到端冒烟完成(market-operator v20/lifecycle):"
+    ok = tgr.send_alert("PAPER 端到端冒烟完成(market-operator v21 单链):"
                         "30 根 bar 复放通过;tg 通道真实样例。")
     print(f"   tg configured={tgr.configured} send_alert -> {ok}")
     assert ok, "tg 真实发送失败"

@@ -43,7 +43,7 @@ aggregate(多 TF 聚合) ◄─────────────────�
   `reports/backtest_v6.json/.md` 冻结产物）,**臂切换与臂 A clamp2R 实现
   已移除**,双臂实现冻结于 `research/rounds/v6/`。
 - **生产闭包**:`data`、`aggregate`、`structure`、`balance_detect`、`events`、`hypothesis`、
-  `position`、`broker`、`capacity`、`campaign`、`routing`、`replay`、`trigger`、`scenario`、`bitget_live`、`tg`、`secrets_loader`、`research`(另有 `harvest`/`quality`/`repairs`/`lifecycle`/`tiered` 由生产路径传递引用)。
+  `position`、`broker`、`campaign`、`routing`、`replay`、`split`、`trigger`、`scenario`、`bitget_live`、`tg`、`secrets_loader`(另有 `harvest`/`quality`/`repairs` 由 `campaign` 传递 import —— v18 决策语境钩子仍供历史路由复用;研究方法学 `research` 已不在闭包内)。
 - **退役实验件**:`strategy_v8`、`zonebio`、`quattro`、`aggtape`、`bandside`、`balance`、`flow_features`、`flow_study`、`tape_features` —— 只被各自的研究脚本与历史测试引用。`tests/test_layering.py` 把这条边界变成断言:生产闭包不得 import 退役模块,生产模块名不得含版本号,退役清单不得出现无人引用的孤儿。
 
 
@@ -70,7 +70,7 @@ v1-v5 各轮与 v6 双臂 A/B 快照、PR#9/#10 前向设施已按轮次归档�
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest -q                       # 475 passed(全量回归 + 各轮历史测试)
+python -m pytest -q                       # 524 passed / 1 skipped(全量回归 + 各轮历史测试)
 
 # v21 平衡箱与多周期混合触发回测诊断
 python scripts/_diag_v21_backtest.py

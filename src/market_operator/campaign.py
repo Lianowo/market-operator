@@ -67,10 +67,10 @@ from .replay import (
     assert_fill_after_decision,
     reconstruct_trades_v5,
 )
-from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, _floor_step
+from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, floor_step
 from .position import PositionManager
 from .repairs import prior_moves_delta, range_quantile
-from .research import split_boundary
+from .split import split_boundary
 from .routing import RouterParams, MarketRouter
 from .structure import Params
 
@@ -988,7 +988,7 @@ def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
     if pos_acct is None or target is None:
         return False
     spec = broker.contracts[key]
-    qty = _floor_step(float(intent.qty_frac or 0.0) * pos_acct.open_qty,
+    qty = floor_step(float(intent.qty_frac or 0.0) * pos_acct.open_qty,
                       spec.size_step, spec.size_place)
     if qty <= 0.0:
         return False

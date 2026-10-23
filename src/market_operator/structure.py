@@ -81,6 +81,9 @@ class Params:
     use_balance_recognition: bool = False  # v21:仅"失败延伸"pivot 造区(替代 每个pivot)
     use_balance_detector: bool = False   # v21.3:用 BalanceDetector 箱上下沿替换 pivot 造区
     balance_quality_min: float = 0.25    # v21.3:BalanceDetector 质量门槛
+    box_min_rotations: int = 1           # 箱沿采纳下限(顶底来回次数;1=至少一次反转)
+    box_keep_broken_bars: int = 12       # 非 ACTIVE 边缘保留根数(破位后供回踩确认)
+    box_keep_active_bars: int = 24       # ACTIVE 边缘保留根数(未破位但久未变化)
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "Params":
@@ -109,7 +112,9 @@ class Params:
             wanted[name] = raw[hits[0]]
         if "e4_depth_atr" in wanted:
             wanted["e4_depth_atr"] = tuple(wanted["e4_depth_atr"])
-        for k in ("atr_n", "n_a", "n_f", "n_time", "range_max_pivots"):
+        for k in ("atr_n", "n_a", "n_f", "n_time", "range_max_pivots",
+                  "box_min_rotations", "box_keep_broken_bars",
+                  "box_keep_active_bars"):
             if k in wanted:
                 wanted[k] = int(wanted[k])
         return cls(**wanted)
@@ -462,20 +467,27 @@ class ZoneBook:
                             l: float, c: float, v: float, atr_val: float) -> None:
         """v21.3:将 BalanceDetector 识别出的平衡箱上下沿映射为 R/S 区域。
 
-        只有高质量平衡箱(rotations >= 2: 顶底至少经过两次来回验证,排除单次反转假箱)
-        的上下两条边作为场内 ACTIVE 支撑/阻力区:
-        - 上沿 [hi_ext - w, hi_ext] → RESISTANCE
-        - 下沿 [lo_ext, lo_ext + w] → SUPPORT
-        若与场内已有 ACTIVE 区匹配(距离 ≤ tol)则原位保留(不打断存活 episode);
-        已破位的边缘保留至多 60 bars 供 BREAKOUT_ACCEPTED 破位接受确认与回踩,未破位的活跃边缘保留
-        至多 120 bars(当市场由平衡进入趋势迁移时,刚离开的平衡箱上下沿仍是最近的结构阶梯)。
+        采纳下限与保留窗口**全部取自 ``Params``**——不在注释里写死数字。写死的
+        数字曾经与代码漂移(注释说 rotations≥2 / 60·120 bars,代码是 1 / 12·24),
+        于是任何"为什么这个箱被采纳"的推理都建立在错的前提上:
+
+        - ``box_min_rotations``:顶底来回次数下限,用于排除单次反转的假箱;
+        - ``box_keep_broken_bars``:已破位边缘保留根数(供 BREAKOUT_ACCEPTED
+          破位接受确认与回踩);
+        - ``box_keep_active_bars``:未破位但久未变化的 ACTIVE 边缘保留根数
+          (市场由平衡转入趋势时,刚离开的箱沿仍是最近的结构阶梯)。
+
+        映射:上沿 ``[hi_ext - w, hi_ext]`` → RESISTANCE,
+        下沿 ``[lo_ext, lo_ext + w]`` → SUPPORT;若与场内已有 ACTIVE 区匹配
+        (距离 ≤ tol)则原位保留(不打断存活 episode)。
         """
         self._bal_det.push((ts, o, h, l, c, v), atr_val)
         if atr_val <= 0.0:
             return
         w = self.p.k_zw * atr_val
         tol = max(self.p.tol_atr * atr_val, 0.5 * atr_val)
-        boxes = [b for b in self._bal_det.score() if b.rotations >= 1]
+        boxes = [b for b in self._bal_det.score()
+                 if b.rotations >= self.p.box_min_rotations]
         if boxes:
             alive_ids: set[int] = set()
             for box in boxes:
@@ -514,8 +526,10 @@ class ZoneBook:
             self.zones = [
                 z for z in self.zones
                 if id(z) in alive_ids
-                or (z.state is not ZoneState.ACTIVE and index - z.last_change_known <= 12)
-                or (z.state is ZoneState.ACTIVE and index - z.last_change_known <= 24)
+                or (z.state is not ZoneState.ACTIVE
+                    and index - z.last_change_known <= self.p.box_keep_broken_bars)
+                or (z.state is ZoneState.ACTIVE
+                    and index - z.last_change_known <= self.p.box_keep_active_bars)
             ]
 
 

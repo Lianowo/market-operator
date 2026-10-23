@@ -1116,8 +1116,16 @@ class Broker:
         }
 
 
-def _floor_step(qty: float, step: float, place: int) -> float:
-    """向下取整至 size step(防二进制浮点尾数误吃一个 step)。"""
+def floor_step(qty: float, step: float, place: int) -> float:
+    """向下取整至 size step(防二进制浮点尾数误吃一个 step)。
+
+    公开 API:``campaign`` 与实盘 runner 都要按合约步长取量,跨模块使用私有名
+    是封装漏缝。历史轮次脚本仍可继续 import ``_floor_step``(下方兼容别名)。
+    """
     if qty <= 0.0 or step <= 0.0:
         return 0.0
     return round(math.floor(qty / step + 1e-9) * step, place)
+
+
+#: 兼容别名:research/rounds 与 v8-v20 历史脚本按旧私有名取用。
+_floor_step = floor_step

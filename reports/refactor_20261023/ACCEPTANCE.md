@@ -80,3 +80,43 @@ git checkout main && git merge --no-ff refactor/domain-model
 
 合并时注意:`data/raw/` 新增 8 个 DOGE CSV(约 19 MB),与既有 32 个 CSV
 同一策略入库;`.gitattributes` 的 `data/raw/*.csv text eol=lf` 保证跨机字节一致。
+
+## §6 增量批次(2026-10-23):单链路收敛 D3 / D9 / D13 / D15
+
+在 §1 的 Δ=0 基线上继续收口,只做**不改数字**的项(设计与逐项状态见
+`reports/refactor_20261023/DESIGN.md` §11)。
+
+| 改动 | 语义后果 | 证据 |
+|---|---|---|
+| `live_runner` 删 v20 分支;`cognition.engine` 改为守卫 | 旧链从"可选回退"变成"启动失败" | `tests/test_live_runtime.py` 4 条新断言:配置无引擎开关、必须有平衡箱、拒绝非 v21 持仓管理器、拒绝退役引擎 |
+| `split_boundary` 移入 `split.py` | 生产闭包不再 import 555 行研究方法学 | `tests/test_layering.py`:闭包含 `split`、不含 `research` |
+| 平衡箱三窗口参数化 | 注释与实现不再漂移 | `tests/test_structure.py`:默认 (1,12,24)、rotations 门限、破位边缘过期 |
+| `floor_step` 公开 | 回放与实盘同名 | `tests/test_broker.py` |
+
+复核(本机,同一冻结数据):
+
+```
+python -m pytest -q            → 524 passed, 1 skipped in 25.05s
+python tools/replay_acceptance.py --quiet-prep
+   explore|dev  n= 816  +38.0407   Δ +0.0000   逐笔一致
+   explore|test n= 346  +195.3545  Δ +0.0000   逐笔一致
+   explore|full n=1153  +281.0042  Δ +0.0000   逐笔一致
+   book4  |dev  n= 976  +176.3601  Δ +0.0000   逐笔一致
+   book4  |test n= 462  +156.4641  Δ +0.0000   逐笔一致
+   book4  |full n=1440  +380.0750  Δ +0.0000   逐笔一致
+   [PASS] 全部场景与品类净收益 ≥ 基线
+```
+
+24 个「场景 × 段 × 周期」子行同样全部 Δ = +0.0000。
+
+**未闭项**(不阻塞合并,但不要当成已完成):D1 容量统一(改数字)、D2/D5 计数口径
+(`go_events` 在 `ACCEPT/REJECT` 配置下恒 0,修它会改冻结 counters)、D4/D6/D7/D8
+退役批次、D10 改名、D14 脚本归档。顺序建议见 DESIGN §11。
+
+**实盘动作**:合并后首次启动仍按 §4.1 先 `--mode paper`;单链路化的行为等价性
+来自"启动即校验 + 只有一条实现",不是回放证据。冒烟:
+
+```bash
+python scripts/live_paper_check.py
+python scripts/live_runner.py --mode paper
+```

@@ -4,8 +4,8 @@
 ------------------
 仓库里同时住着两类代码:在跑的策略,和为了某一轮 A/B 而写、跑完就该冻结的
 实验件。它们混在同一个包里,靠人记;于是"这个模块还活着吗"要靠翻 import
-才发现——而 v14-v20 的臂里,有的确实还在实盘 runner 里(`lifecycle`/`tiered`),
-有的只在研究脚本里(`strategy_v8`/`zonebio`/`aggtape`…)。靠记忆区分必然出错,
+才发现——v14-v20 的臂现在只由研究脚本与历史测试引用(`lifecycle`/`tiered`),
+另有一些从未进过生产(`strategy_v8`/`zonebio`/`aggtape`…)。靠记忆区分必然出错,
 所以把它变成断言:
 
 1. 生产闭包(回放入口 ``scenario`` + 实盘入口 ``scripts/live_runner.py`` 的传递
@@ -31,11 +31,15 @@ PRODUCTION_ENTRY_POINTS = (
 # 已退役:只被研究脚本与各自的历史测试引用,不参与任何生产路径。
 # 判定依据是 import 反向依赖(见提交说明),不是"看起来像旧版本"。
 #
-# 特别注意两个**看着像退役、实际仍在生产路径上**的模块:
-# `lifecycle` 与 `tiered` 由 scripts/live_runner.py(实盘入口)直接 import,
-# `harvest`/`quality`/`repairs` 由 campaign 传递 import —— 它们不是历史包袱,
-# 是当前策略的组成部分,所以**不在此清单**。
+# 两条边界值得说清楚:
+# - `lifecycle`/`tiered` 原先由 scripts/live_runner.py(实盘入口)直接 import;
+#   v21 单链化之后实盘只剩 MarketRouter + 对侧锁利 PositionManager,它们退回
+#   scripts/run_v19.py / run_v20.py 与历史测试。
+# - `harvest`/`quality`/`repairs` 仍由 campaign 传递 import(v18 决策语境钩子供
+#   历史路由复用),属于当前代码的组成部分,所以**不在此清单**。
 RETIRED = frozenset({
+    "lifecycle",     # scripts/run_v20.py + tests/test_v20_lifecycle.py
+    "tiered",        # scripts/run_v19.py / run_v20.py + tests/test_v19_tiered.py
     "strategy_v8",   # scripts/run_backtest_v8.py + tests/test_v8.py
     "zonebio",       # scripts/run_zonebio.py + tests/test_zonebio.py
     "quattro",       # tests/test_quattro.py(v7 逐字复刻对照,只留历史断言)
@@ -106,6 +110,19 @@ def test_production_module_names_carry_no_version():
     """生产模块以规则命名;版本号留在协议文档与 docstring 里。"""
     bad = sorted(m for m in _production_closure() if _VERSION_IN_NAME.search(m))
     assert not bad, f"生产模块名含版本号: {bad}"
+
+
+def test_research_methodology_is_not_in_production_closure():
+    """research.py 是研究方法学(事件研究 / GO-NO-GO),不是生产依赖。
+
+    `split_boundary` 是回放与战役共用的判分契约,已上收到 `split.py`;若有人图
+    省事又写回 `from .research import ...`,这条断言会立刻失败。研究模块可以
+    随轮次归档,但"哪段 bar 算 dev"不能跟着归档。
+    """
+    closure = _production_closure()
+    assert "research" not in closure, (
+        f"研究方法学进了生产闭包: {sorted(closure)}")
+    assert "split" in closure, "生产闭包必须直接依赖 split.py(判分契约)"
 
 
 def test_retired_list_has_no_orphans():

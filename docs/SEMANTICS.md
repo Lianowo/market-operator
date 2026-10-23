@@ -3,9 +3,12 @@
 > 本页定义**当前(规范链)系统说什么语言**。凡代码、报告、讨论中出现的下列
 > 术语,以此页为准。历史轮次的差异语义(臂 A clamp2R、v1-v5 入口/出口口径)
 > 只在文末表中列入,不在规范链内使用。
-> 规范链:`data → structure → events(E1-E7) → hypothesis → strategy_v6
+> 规范链:`data → structure → events(E1-E7) → hypothesis → routing
 > (turtle 唯一语义) → position(§8) → broker → campaign`,回放核心
-> `backtest_v6`,入口 `scripts/run_backtest_v6.py`,配置 `config/canonical.json`。
+> `replay`,入口 `scripts/run_backtest_v6.py`,配置 `config/canonical.json`。
+> 生产实盘链路 = **同一套引擎**,只是配置换成 `config/strategy.json`(平衡箱
+> 双原语 ACCEPT/REJECT、按周期参数、趋势损益),不存在第二套路由/持仓实现;
+> 旧 v20 链(`lifecycle`/`tiered`/`repairs`)已退役,启动即校验而非回退。
 
 ## 1. 认知帧与时间
 
@@ -50,7 +53,7 @@ invalid(失效价)、target_1(结构目标或 None)、r_mult(或 None)、regime�
 F1 闸(k_is=0.8):`direction·(close − invalid) ≥ k_is·atr` —— 天然距离
 不足即笔不存在,禁止人工加宽。
 
-## 5. 交易计划(strategy_v6,turtle 唯一语义)
+## 5. 交易计划(routing,turtle 唯一语义)
 
 事件 → **路由决策**(RouteDecision):`market` / `limit` / `cancel_entry`,
 附路由标签。路由 = v5 质量路由,双向白名单 {(E1,E6,E7) × {short,long}}

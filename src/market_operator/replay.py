@@ -32,7 +32,7 @@ import pandas as pd
 
 from .events import EventDetector
 from .hypothesis import StructureView
-from .research import split_boundary
+from .split import split_boundary
 from .structure import Params
 
 MS_PER_HOUR = 3_600_000

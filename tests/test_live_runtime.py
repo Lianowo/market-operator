@@ -1,4 +1,4 @@
-"""实盘接入件测试(v20/lifecycle;任务书 ≥8 条):
+"""实盘接入件测试(v21 单一生产链;任务书 ≥8 条):
 
 ① secret loader 不泄(缺失异常只含键名;别名;EDGE_SECRETS_PATH 覆写;
   防泄闸);② 客户端签名(HMAC-SHA256 确定性与 urlencode query 入签名);
@@ -264,7 +264,7 @@ def test_replay_cognition_parity_prepare_cognition():
             .itertuples(index=False)]
     for a, b in zip(trig, trig[1:]):
         assert b[0] - a[0] == 7_200_000, "在册 2h 帧网格"
-    raw20, params, _rp = lr.load_v20_params()
+    _raw, params, _rp, _rp_by_tf = lr.load_strategy_params()
     cog = lr.aggregate_12h(trig)
     det, trk = lr.replay_cognition(params, "BTCUSDT", cog, trig,
                                    obs_tf_seconds=43200,
@@ -303,6 +303,36 @@ def test_mode_gate_fail_closed(tmp_path):
         lr.parse_args([])                        # --mode 缺省 ⇒ 拒绝启动
     args = lr.parse_args(["--mode", "paper"])
     assert args.mode == "paper"
+
+
+def test_live_config_has_no_engine_switch():
+    """单一生产链:配置里不再保留 engine 开关(模型层不允许选旧链)。"""
+    assert "engine" not in _cfg_min()["cognition"]
+
+
+def test_load_strategy_params_requires_balance_detector(tmp_path):
+    """策略配置没有平衡箱 ⇒ 没有事件来源 ⇒ 直接拒绝,而不是退回 v20 语义。"""
+    strat = json.loads((ROOT / "config" / "strategy.json").read_text("utf-8"))
+    strat["use_balance_detector"] = False
+    path = tmp_path / "strategy.json"
+    path.write_text(json.dumps(strat), encoding="utf-8")
+    with pytest.raises(ValueError, match="use_balance_detector"):
+        lr.load_strategy_params(path)
+
+
+def test_new_position_manager_rejects_non_balance_config():
+    with pytest.raises(ValueError, match="use_balance_detector"):
+        lr.new_position_manager(lr.Params(), {})
+
+
+def test_runner_rejects_retired_engine(tmp_path):
+    """旧配置残留 engine=v20:启动即失败(不静默降级到旧链)。"""
+    cfg = _cfg_min()
+    cfg["cognition"]["engine"] = "v20"
+    with pytest.raises(RuntimeError, match="v20"):
+        lr.LiveRunner("paper", cfg, object(), object(),
+                      state_path=tmp_path / "s.json",
+                      journal_dir=tmp_path / "j")
 
 
 def test_client_oid_idempotent_and_short():

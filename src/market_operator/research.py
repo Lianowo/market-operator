@@ -58,6 +58,9 @@ import pandas as pd
 from .events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJECTED, TREND_RESUMED, RANGE_ROTATED, STRUCTURE_BROKEN, FLIP_RETESTED, PROCESS_ACCEPTED, PROCESS_REJECTED, EventDetector, MarketEvent
 from .hypothesis import Hypothesis, StructureView, build
 from .structure import Params, Regime, ZoneRole
+# dev/test 分界是生产契约(回放/战役都在用),实现住 ``split.py``;这里保留同名
+# 导入供历史研究脚本与报告复算继续使用。
+from .split import split_boundary  # noqa: F401  (re-export)
 
 # ---------------------------------------------------------------------------
 # 研究协议常量(§9 冻结;非策略先验,是协议参数)
@@ -207,10 +210,6 @@ def collect_events(df: pd.DataFrame, params: Params,
 # 2. 理论头寸测量(§9.1-3/4)
 # ---------------------------------------------------------------------------
 
-
-def split_boundary(n_bars: int, dev_frac: float) -> int:
-    """dev/test 分界 bar 索引:known_index < boundary 为 dev,否则 test。"""
-    return int(n_bars * dev_frac)
 
 
 def _mult_tag(mult: float) -> str:

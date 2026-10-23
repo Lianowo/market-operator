@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased] — 2026-10-23 — 单链路 v21 收敛(D3 / D9 / D13 / D15)
+
+- **实盘只剩一条链(`scripts/live_runner.py`)**:删除 `lifecycle`/`repairs`/`tiered`
+  导入、`CONFIG_V20`、`load_v20_params()`,以及 `ctx18` 建仓语境;`cognition.engine`
+  从"选择器"变成**守卫**——配置里出现非 `v21` 的值即报错。`load_strategy_params()`
+  **fail-closed**:配置没有 `use_balance_detector` 时直接报错,而不是退回旧链持仓
+  参数;`new_position_manager()` 只构造 v21 `PositionManager`。旧链是"启动失败",
+  不是静默回退。
+- **配置**:`config/live.json` 删除 `cognition.engine`(字段本身已无意义)。
+- **`split_boundary` 独立成模块(`src/market_operator/split.py`)**:回放/战役不再
+  经 `research.py`(555 行研究方法学)取判分边界;`research` 仍 re-export 以免打断
+  历史轮次。`tests/test_layering.py` 增加断言:生产闭包含 `split`、不含 `research`。
+- **平衡箱窗口参数化(`structure.Params`)**:新增 `box_min_rotations=1`、
+  `box_keep_broken_bars=12`、`box_keep_active_bars=24`,`_sync_balance_boxes`
+  不再内联魔法数字;docstring 与实现一致(此前注释写 rotations≥2 / 60·120 bars,
+  代码是 1 / 12·24)。三键进 `from_json` 的 int 归一。
+- **`broker._floor_step` → 公开 `floor_step`**(保留 `_floor_step` 兼容别名)。
+- 测试:524 passed / 1 skipped;新增 4 条 v21 单链路断言 + 3 条平衡箱/参数断言。
+  `tools/replay_acceptance.py` 六个主行与 24 个子行 Δ 全为 +0.0000。
+
 ## [v0.1.0] - 2026-10-19 — Research Only verdict
 
 ### Phase 1 — Methodology & OSS audits

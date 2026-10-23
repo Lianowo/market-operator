@@ -8,16 +8,20 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from market_operator.balance_detect import BalanceBox
 from market_operator.structure import (
     MarketStructure,
     Params,
     PivotKind,
     Regime,
+    Zone,
+    ZoneBook,
     ZoneRole,
     ZoneState,
     replay,
@@ -310,6 +314,80 @@ def test_params_ignores_keys_of_other_loaders(tmp_path):
     params = Params.from_json(p)
     assert (params.n_a, params.k_room) == (4, 1.5)
     assert params.balance_quality_min == Params().balance_quality_min
+
+
+def test_balance_box_windows_are_params_not_magic_numbers():
+    """箱沿采纳/保留窗口必须是字段,并与历史行为一致。
+
+    这组数字曾经只活在 docstring 里,而且和实现对不上(注释 2/60/120 bars,
+    代码 1/12/24):任何"为什么这个箱被采纳"的推理都建立在错的前提上。
+    """
+    p = Params()
+    assert (p.box_min_rotations, p.box_keep_broken_bars,
+            p.box_keep_active_bars) == (1, 12, 24)
+
+
+class _FakeBoxDetector:
+    """只提供 ``_sync_balance_boxes`` 用到的三个面:push/bars/score。"""
+
+    def __init__(self, boxes, bars):
+        self._boxes = list(boxes)
+        self.bars = list(bars)
+
+    def push(self, bar, unit):
+        self.bars.append(bar)
+
+    def score(self):
+        return [BalanceBox(**b) for b in self._boxes]
+
+
+def _box(lo, hi, rotations=1, start=0, end=2):
+    return dict(lo=lo, hi=hi, quality=0.8, start_index=start, end_index=end,
+                rotations=rotations)
+
+
+BAR_WINDOW = [
+    (BASE_TS + 3_600_000 * k, 100.0, 101.0, 99.0, 100.5, 1.0) for k in range(3)
+]
+
+
+def _book_with_boxes(boxes, **overrides):
+    params = replace(Params(use_balance_detector=True), **overrides)
+    book = ZoneBook(params)
+    book._bal_det = _FakeBoxDetector(boxes, BAR_WINDOW)
+    return book
+
+
+def _sync(book, index):
+    book._sync_balance_boxes(index, BASE_TS + 3_600_000 * index,
+                             100.0, 101.0, 99.0, 100.5, 1.0, 1.0)
+
+
+def test_box_min_rotations_gates_adoption():
+    """rotations 低于门槛的箱不造区;门槛来自 Params(默认 1 ⇒ 历史行为)。"""
+    low = [_box(98.0, 102.0, rotations=1)]
+    book_strict = _book_with_boxes(low, box_min_rotations=2)
+    _sync(book_strict, 2)
+    assert book_strict.zones == []                      # 被门槛挡住
+    book_default = _book_with_boxes(low)
+    _sync(book_default, 2)
+    assert {z.role for z in book_default.zones} == {ZoneRole.RESISTANCE,
+                                                    ZoneRole.SUPPORT}
+
+
+def test_box_edge_retention_windows_come_from_params():
+    """非 ACTIVE 边缘按 ``box_keep_broken_bars`` 过期(默认 12 根)。"""
+    book = _book_with_boxes([], box_keep_broken_bars=3)
+    _sync(book, 0)
+    book.zones.append(Zone(lo=90.0, hi=90.5, role=ZoneRole.SUPPORT,
+                           state=ZoneState.BROKEN, last_change_known=0))
+    # 另给一个远离旧区的箱,保证剪枝分支被执行
+    book._bal_det._boxes = [_box(198.0, 202.0)]
+    book._bal_det.bars = [(BASE_TS, 200.0, 202.0, 198.0, 200.0, 1.0)] * 3
+    _sync(book, 3)                                      # 3 - 0 <= 3:保留
+    assert any(z.hi == 90.5 for z in book.zones)
+    _sync(book, 4)                                      # 4 - 0 > 3:过期
+    assert not any(z.hi == 90.5 for z in book.zones)
 
 
 def test_params_rejects_two_keys_for_one_field(tmp_path):
