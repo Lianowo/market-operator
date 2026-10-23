@@ -98,3 +98,49 @@ def test_save_records_validation_issues(tmp_path, monkeypatch):
     data.save(df, "TESTUSDT")
     rec = json.loads((tmp_path / "manifest.json").read_text())["files"]["TESTUSDT_1h.csv"]
     assert any(i.startswith("gap:") for i in rec["validation_issues"])
+
+
+def _bar(ts: int) -> list:
+    return [str(ts), "1", "2", "0.5", "1.5", "10", "15"]
+
+
+def test_fetch_klines_pages_past_server_side_cap(monkeypatch):
+    """服务端单页上限低于 PAGE_LIMIT 时也要继续翻页(Bitget 1D 只给 90 根)。
+
+    回归:旧实现在 `len(page) < PAGE_LIMIT` 处 break —— 1D 一页 90 根、
+    12H 一页 180 根,都 < 200,于是 `--years 2` 的日线被静默截断到 90 天。
+    """
+    day = 86_400_000
+    n = 400
+    all_ts = [T0 + i * day for i in range(n)]
+    calls: list[int] = []
+
+    def fake_page(symbol, product_type, granularity, end_time_ms):
+        calls.append(end_time_ms)
+        older = [t for t in all_ts if t < end_time_ms]
+        return [_bar(t) for t in older[-90:]]        # 服务端硬上限 90 根/页
+
+    monkeypatch.setattr(data, "_request_page", fake_page)
+    monkeypatch.setattr(data.time, "sleep", lambda _s: None)
+
+    df = data.fetch_klines("TESTUSDT", "USDT-FUTURES", "1D",
+                           start_ts=T0, end_ts=all_ts[-1])
+
+    assert len(df) == n                              # 不是 90
+    assert df["ts"].iloc[0] == T0 and df["ts"].iloc[-1] == all_ts[-1]
+    assert df["ts"].is_monotonic_increasing
+    assert len(calls) > 1                            # 确实翻了多页
+
+
+def test_fetch_klines_terminates_when_page_does_not_advance(monkeypatch):
+    """服务端忽略 endTime、反复回同一批 bar 时必须收敛,不能死循环。"""
+    def fake_page(symbol, product_type, granularity, end_time_ms):
+        return [_bar(ts) for ts in (T0, T0 + STEP)]
+
+    monkeypatch.setattr(data, "_request_page", fake_page)
+    monkeypatch.setattr(data.time, "sleep", lambda _s: None)
+
+    df = data.fetch_klines("TESTUSDT", "USDT-FUTURES", "1H",
+                           start_ts=T0 - 10 * STEP, end_ts=T0 + STEP)
+
+    assert df["ts"].tolist() == [T0, T0 + STEP]

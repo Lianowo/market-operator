@@ -98,7 +98,10 @@ def fetch_klines(
         raw.extend(page)
         page.sort(key=lambda r: int(r[0]))
         oldest = int(page[0][0])
-        if oldest <= start_bound or len(page) < PAGE_LIMIT:
+        # 终止条件只看「是否已翻到区间下界」与「页是否还在推进」,不用
+        # len(page) < PAGE_LIMIT:Bitget 单页上限随粒度收窄(1D=90/12H=180,
+        # 均 < PAGE_LIMIT=200),按长度判会在一页后就收工,把长历史静默截断。
+        if oldest <= start_bound or oldest >= end_time:
             break
         end_time = oldest  # endTime is exclusive: response ends strictly below it
         time.sleep(PAGE_SLEEP_S)
