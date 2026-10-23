@@ -2,7 +2,7 @@
   "files": {
     "BTCUSDT_1h.csv": {
       "path": "data\\raw\\BTCUSDT_1h.csv",
-      "sha256": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
+      "sha256": "4c3369c799e4f9679e7ab64dd1f9e31fc1867eb173998b2f155be491bdc174ee",
       "rows": 17600,
       "ts_first": 1729022400000,
       "ts_last": 1792378800000,
@@ -12,7 +12,7 @@
     },
     "ETHUSDT_1h.csv": {
       "path": "data\\raw\\ETHUSDT_1h.csv",
-      "sha256": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
+      "sha256": "96de5ae4a0d8e746878073edc24ab47547fd09dc7bdcde947e68c63e7c07a323",
       "rows": 17600,
       "ts_first": 1729022400000,
       "ts_last": 1792378800000,
@@ -22,7 +22,7 @@
     },
     "SOLUSDT_1h.csv": {
       "path": "data\\raw\\SOLUSDT_1h.csv",
-      "sha256": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
+      "sha256": "a672ae99b940413eb7968892fd27f7e11204bc2128118464c8ec022deae7e5af",
       "rows": 17600,
       "ts_first": 1729022400000,
       "ts_last": 1792378800000,
@@ -491,7 +491,7 @@
       },
       "anchored_to_1h": {
         "file": "BTCUSDT_1h.csv",
-        "sha256": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
+        "sha256": "4c3369c799e4f9679e7ab64dd1f9e31fc1867eb173998b2f155be491bdc174ee",
         "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
       },
       "validation_issues": []
@@ -510,7 +510,7 @@
       },
       "anchored_to_1h": {
         "file": "ETHUSDT_1h.csv",
-        "sha256": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
+        "sha256": "96de5ae4a0d8e746878073edc24ab47547fd09dc7bdcde947e68c63e7c07a323",
         "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
       },
       "validation_issues": []
@@ -529,7 +529,7 @@
       },
       "anchored_to_1h": {
         "file": "SOLUSDT_1h.csv",
-        "sha256": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
+        "sha256": "a672ae99b940413eb7968892fd27f7e11204bc2128118464c8ec022deae7e5af",
         "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
       },
       "validation_issues": []
