@@ -1,4 +1,4 @@
-"""v20 收尾:S3 TRANSITION fade 禁 + S4 LEVEL_REJECTED 归 maker 的路由落点(v20 任务书
+"""收尾条款:S3 TRANSITION fade 禁 + S4 LEVEL_REJECTED 归 maker 的路由落点(任务书
 冻结语义,2026-10-20 核准;基线 = v19 arm-T:tiered + market 默认 + 8% cap,
 early_exit 关)。
 

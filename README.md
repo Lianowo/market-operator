@@ -2,7 +2,7 @@
 
 模拟专业交易者决策过程的加密货币研究与实盘交易系统：因果市场认知（平衡箱体与波段结构） → 事件原语（ACCEPT / REJECT 及 E1–E10） → 可证伪交易假设 → 事件驱动持仓管理 → 全成本真实回测与 Bitget 多周期实盘引擎。研究与实盘标的：Bitget USDT 永续（核心 BTC/ETH/SOL/DOGE + 全市场 >3M USDT 活跃宇宙），多尺度（2h/4h/12h/1d 混合触发）。
 
-**当前状态：v21 平衡箱统一架构与实盘引擎已就绪（`config/v21.json` / `config/live.json`，全仓 605 测试通过）。** 见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
+**当前状态:平衡箱统一架构与实盘引擎已就绪(`config/v21.json` / `config/live.json`,全仓 471 项测试通过,`tools/replay_acceptance.py` 对冻结基线逐项 Δ=0)。** 协议出处见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
 
 
 ## 设计原则
@@ -17,7 +17,7 @@
 系统当前只说一种语言（术语权威定义见 **`docs/SEMANTICS.md`**):
 
 ```
-data ──► structure ──► events(E1-E7) ──► hypothesis ──► strategy_v6 ──► position(§8)
+data ──► structure ──► events(E1-E7) ──► hypothesis ──► routing ──► position(§8)
 (抓取/校验/   (ATR/确认波段/    (E1-E7 事件       (可证伪      (turtle 唯一    (持仓管理
  sha256       区域生命周期/      目录,因果知时)    交易假设)      语义:2·atr      六条;
  manifest)   regime)                                        防线,无目标,   turtle 接线)
@@ -27,25 +27,28 @@ aggregate(多 TF 聚合) ◄─────────────────�
         │
         ▼
      broker(撮合/费用/资金费/强平约束;OrderIntent/OrderKind 规范家园)
+        │  ▲
+        │  └── capacity(风险预算的唯一口径:准入与取量共用一个公式)
+        ▼
+     campaign(多尺度战役引擎:symbol×TF 各自独立战役)
         │
         ▼
-     campaign(多尺度战役引擎:3 symbol × 5 TF = 15 战役隔离 + 3% 组合容量)
-        │
-        ▼
-     backtest_v6(规范回放核心)──► scripts/run_backtest_v6.py(唯一规范
-                                    回放入口,配置 config/canonical.json)
+     replay(规范回放核心)──► scenario(场景门面)──► tools/replay_acceptance.py
+                                                 └─► scripts/live_runner.py(实盘)
 ```
 
-- **规范策略 = `market_operator.strategy_v6`**:v5 质量路由（E1 市价优先 /
+- **规范策略 = `market_operator.routing`**:v5 质量路由（E1 市价优先 /
   E6 STRONG 市价、WEAK→同 episode E7 前缘限价）× turtle 出口几何（无固定
   目标、初始防线 2.0·atr、trailing 只紧不松、关时间止损）。v6 协议的 A/B
   二臂判选已终局（臂 B 判选；记录见 `docs/v6-protocol.md` 原文与
   `reports/backtest_v6.json/.md` 冻结产物）,**臂切换与臂 A clamp2R 实现
   已移除**,双臂实现冻结于 `research/rounds/v6/`。
-- **规范模块**:`data`、`aggregate`、`structure`、`balance_detect`、`balance`、`events`、`hypothesis`、
-  `position`、`broker`、`campaign`、`strategy_v6`、`backtest_v6`、`trigger`、`bitget_live`、`tg`、`secrets_loader`、`research`。
+- **生产闭包**:`data`、`aggregate`、`structure`、`balance_detect`、`events`、`hypothesis`、
+  `position`、`broker`、`capacity`、`campaign`、`routing`、`replay`、`trigger`、`scenario`、`bitget_live`、`tg`、`secrets_loader`、`research`(另有 `harvest`/`quality`/`repairs`/`lifecycle`/`tiered` 由生产路径传递引用)。
+- **退役实验件**:`strategy_v8`、`zonebio`、`quattro`、`aggtape`、`bandside`、`balance`、`flow_features`、`flow_study`、`tape_features` —— 只被各自的研究脚本与历史测试引用。`tests/test_layering.py` 把这条边界变成断言:生产闭包不得 import 退役模块,生产模块名不得含版本号,退役清单不得出现无人引用的孤儿。
 
-## v21 极简平衡箱与实盘统一架构（当前活跃架构）
+
+## 平衡箱统一架构与实盘引擎(当前活跃架构)
 
 详见 **`docs/v21-protocol.md`**、**`config/v21.json`** 与 **`config/live.json`**：
 
@@ -68,7 +71,7 @@ v1-v5 各轮与 v6 双臂 A/B 快照、PR#9/#10 前向设施已按轮次归档�
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest -q                       # 605 passed(全量规范回归 + v1..v21 测试)
+python -m pytest -q                       # 475 passed(全量回归 + 各轮历史测试)
 
 # v21 平衡箱与多周期混合触发回测诊断
 python scripts/_diag_v21_backtest.py

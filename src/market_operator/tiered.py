@@ -1,4 +1,4 @@
-"""v19 阶梯配注(docs/v19-protocol.md,冻结 2026-10-20;research-log #35
+"""阶梯配注(docs/v19-protocol.md;research-log #35
 预注册,先于运行)。
 
 规范地位:本模块是 v19 协议 §2"三闸软着陆为阶梯配注"在路由侧的唯一落点

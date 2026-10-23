@@ -1,4 +1,4 @@
-"""v8 路由策略 —— EDGE_RECLAIMED EDGE_RECLAIM 边缘收复入场(docs/v8-protocol.md §1,冻结)。
+"""已退役:EDGE_RECLAIMED 边缘收复入场(出处 docs/v8-protocol.md §1;仅 scripts/run_backtest_v8.py 与历史测试使用)。
 
 规范地位:v8 研究轮(第 11 次 test 曝光,research-log #14 预注册)的策略实现,
 在战役引擎上以 `router_factory=V8Router` 接插(campaign.run_campaigns 缝,

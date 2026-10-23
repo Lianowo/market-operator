@@ -1,4 +1,4 @@
-"""规范(canonical)回放核心:v6 语义链唯一回放基础设施。
+"""规范回放核心:语义链的唯一回放基础设施。
 
 规范地位:本模块是唯一规范回放核心(canonical replay core)。语义合并
 (refactor/semantics-unify)后,规范链的认知缓存、回放结果、成交-决策

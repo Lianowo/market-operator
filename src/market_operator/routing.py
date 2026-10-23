@@ -1,4 +1,4 @@
-"""v6 路由策略 —— 规范(canonical)策略语义:turtle 出口几何固化为唯一语义。
+"""路由策略:假设 → 交易计划。turtle 出口几何固化为唯一语义(出处 docs/v6-protocol.md)。
 
 规范地位:本模块是规范语义链中"假设 → 交易计划"的唯一策略实现。语义
 合并(refactor/semantics-unify)时,docs/v6-protocol.md §2-S2 的 A/B

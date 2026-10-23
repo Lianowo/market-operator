@@ -1,4 +1,4 @@
-"""v10 触发麦克风(docs/v10-protocol.md §A,冻结 2026-10-20):事件知时细化层。
+"""触发麦克风:事件知时细化层(出处 docs/v10-protocol.md §A)。
 
 规范地位:本模块是 v10 §A 的唯一实现。**认知尺度上的检测器、结构、收割、
 执行、费用与组合容量语义零改动**(events.py/structure.py/position.py/broker
