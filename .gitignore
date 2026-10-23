@@ -9,4 +9,5 @@ runtime/
 logs/
 config/secrets.env
 secrets.env
-
+reports/_storage_growth.json
+reports/_storage_manifest.jsonl

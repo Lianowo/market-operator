@@ -46,8 +46,35 @@
     "universe_refresh_seconds": 7200,
     "api_error_max": 5,
     "state_path": "runtime/live/state.json",
+    "heartbeat_path": "runtime/live/heartbeat.json",
+    "state_bar_tail": 24,
+    "campaigns_write_seconds": 60,
+    "intent_keep_hours": 72,
+    "gap_recovery": {
+      "stop_check_seconds": 120
+    },
     "journal_dir": "logs",
     "journal_prefix": "live_"
+  },
+  "heartbeat": {
+    "enabled": true,
+    "write_seconds": 15,
+    "stall_seconds": 180,
+    "self_fence_seconds": 900,
+    "protect_on_stall": true,
+    "note": "进程内心跳线程(与主循环解耦)。write_seconds=落盘间隔;stall_seconds=主循环多久无进展判卡死(告警+只保护不主出补挂止损);self_fence_seconds=卡死多久且仍有持仓则自我熔断退出(退出码3),由看护拉起并补做缺口;0=关闭自我熔断。"
+  },
+  "supervisor": {
+    "poll_seconds": 30,
+    "ok_seconds": 120,
+    "stale_seconds": 300,
+    "recover_max_seconds": 2700,
+    "max_restarts_per_hour": 6,
+    "startup_grace_seconds": 180,
+    "gc_hours": 24,
+    "log_max_mb": 32,
+    "runner_argv": ["scripts/live_runner.py", "--mode", "live"],
+    "note": "跨平台看护(scripts/live_supervisor.py):只读 runtime/live/heartbeat.json 判定缺失/正常/迟到/补做中/卡死→终止+拉起。ok_seconds=正常阈值;stale_seconds=迟到上限(超过即卡死);recover_max_seconds=掉线补做允许的最长静默;max_restarts_per_hour=重启预算(超出只告警,交人工);gc_hours=顺带执行存储治理的间隔(0=不执行)。"
   },
   "universe": {
     "enabled": true,

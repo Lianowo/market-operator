@@ -90,6 +90,48 @@ python research/rounds/v5/run_backtest_v5.py
 python research/rounds/v6/run_backtest_v6.py   # v6 A/B 双臂(复现判选)
 ```
 
+## 实盘运维(看护与存储治理)
+
+判活口径只有一条:**`runtime/live/heartbeat.json` 里的时间事实**。不看进程名、
+不看端口、不看计划任务的"上次运行结果"(2026-10-22 的掉线事故,根因正是这些
+间接证据在换机器/换系统后全部失效,而交易所侧止损已被打掉、本地仍在按旧状态记账)。
+
+| 心跳事实 | 结论 | 看护动作 |
+|----------|------|----------|
+| 文件不存在 | 没在跑 | 拉起(受重启预算约束) |
+| `age <= supervisor.ok_seconds` | 正常 | 无 |
+| `ok < age <= stale` | 迟到 | 只记录(宁可漏杀,不可错杀) |
+| `status=recovering` 且 `age <= recover_max` | 掉线补做中 | 等(补做要重放几千根 bar) |
+| `age > stale` | 卡死 / 进程没了 | 终止残留 → 拉起 |
+| 重启预算耗尽 | 需人工 | 只告警,不再拉起 |
+
+```bash
+python scripts/live_supervisor.py --status    # 体检:心跳年龄/判定/重启预算
+python scripts/live_supervisor.py             # 常驻看护(runner 由它拉起,自带每日存储治理)
+python scripts/live_supervisor.py --once       # 单次判定(交给计划任务每 5 分钟触发)
+python scripts/live_supervisor.py --once --no-start   # 演练:只告警不拉起
+python scripts/live_status.py                 # 人读快照:持仓/挂单/缺口/心跳
+python scripts/storage_gc.py                  # 只读盘点 + 增长预测
+python scripts/storage_gc.py --enforce        # 执行安全清理 + 预算闸门(0/1/2)
+python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文件
+```
+
+进程内还有一条独立的保护线(`src/market_operator/heartbeat.py: HeartbeatGuard`):
+主循环停摆超过 `heartbeat.stall_seconds` 后,心跳线程仍按 `write_seconds` 落盘并
+**只保护不主出** —— 核对交易所计划单,缺失则按本地防线补挂;停摆超过
+`self_fence_seconds` 且仍有持仓,则以退出码 3 自我熔断,由看护拉起并走掉线补做
+(交易所侧止损是最后一道墙,带病运行只会持续错过止盈/止损)。runner 与看护各自的
+单实例锁是内核文件锁:进程死亡即释放,崩溃不会留下毒锁,也不会出现两个进程同时下单。
+
+存储治理同样只"删字节不删信息":审计 JSONL 只做明文 → `.gz`(`--log-days 3`),
+`.gz` 默认永不删除(`--log-max-days 0`),控制台日志先整份 gzip 归档并校验通过才
+截断(尾部 4MB 留作即时排障),备份目录打成 zip 后才删;`data/raw`、`config/`、
+热档(`runtime/live/*.json`)、研究冻结产物一律不动。增长预测只按
+`logs/ runtime/ data/` 的写入速率外推(一次性研究产物混进来会把"还能跑多久"估得
+离谱),结果落 `reports/_storage_growth.json`。计划任务入口:
+`tools/schedule/live_supervisor.cmd`(常驻看护)与
+`tools/schedule/storage_gc.cmd`(`--enforce` 每日一次)。
+
 数据固定证据：`data/manifest.json`（每批原始数据 sha256, 2024-10-15 → 2026-10-19, 0 缺口）；合约规格离线缓存强制（`data/contracts.json` 逐条 sha256)。
 
 ## 研究演进与结论快照（详见 `docs/acceptance.md` 与 `docs/v21-protocol.md`)
