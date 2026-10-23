@@ -90,7 +90,8 @@
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": -0.50
+    "reject_opp_lock_frac": -0.50,
+    "opp_lock_max_giveback_r": 0.25
   },
   "small_account_compounding": {
     "equity0": 104.0,

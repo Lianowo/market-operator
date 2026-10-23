@@ -63,6 +63,13 @@ from market_operator.heartbeat import HeartbeatGuard            # noqa: E402
 from market_operator.lifecycle import (                         # noqa: E402
     LifecycleParams, V20Params, V20Router)
 from market_operator.position import Position, PositionManager  # noqa: E402
+from market_operator.position import (                          # noqa: E402
+    fmt_px,
+    lock_is_protective,
+    opp_lock_live_px,
+    opp_lock_px,
+    tighten_lock,
+)
 from market_operator.repairs import (                           # noqa: E402
     prior_moves_delta, range_quantile)
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
@@ -144,6 +151,9 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
             breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
             time_stop=False,
             reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
+            # 行情锚定缓冲(R 倍数);缺省 0 ⇒ 纯计划口径(旧行为)
+            opp_lock_max_giveback_r=float(
+                arm_cfg.get("opp_lock_max_giveback_r", 0.0)),
         )
     p16 = raw["v16_params"]
     return PositionManager(
@@ -1530,35 +1540,92 @@ class LiveRunner:
             return
 
         # ② 固定 TP1(target_1)盘中触价/突破同步
+        #    锁利口径与 position.on_bar 完全一致(共用 position.py helper):
+        #      lock = tighten_lock(计划口径, 行情口径) 再经 lock_is_protective
+        #      闸门;闸门不通过 ⇒ 不推进、不置 reduced,保留原结构止损。
         if pos_pm.target_1 is not None and not pos_pm.reduced and not pos_pm.pending_reduce:
             target = float(pos_pm.target_1)
             lock_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
+            giveback_r = float(getattr(cs.pm, "opp_lock_max_giveback_r", 0.0) or 0.0)
             old_inv = float(pos_pm.invalid)
+            # 参考价:逐 bar 口径取子 bar 收盘 c;live 另取 mark 的更保守一侧
+            # (mark 可能比刚收的子 bar 更新,止损落位必须对"当下可见价"成立)。
+            ref_px = c
+            mark_px = float(pos_dict.get("mark") or 0.0)
+            if self.mode != "paper" and mark_px > 0.0:
+                ref_px = (max(c, mark_px) if pos_pm.direction < 0
+                          else min(c, mark_px))
             if lock_cfg < 0.0:
                 broke = (c < target) if pos_pm.direction < 0 else (c > target)
                 if broke:
-                    pos_pm.reduced = True
-                    span = target - float(pos_pm.entry)
                     frac = abs(lock_cfg)
-                    lock_px = float(pos_pm.entry) + frac * span
-                    pos_pm.invalid = (min(pos_pm.invalid, lock_px) if pos_pm.direction < 0
-                                      else max(pos_pm.invalid, lock_px))
-                    pos_pm.log.append(
-                        f"v21|sub_bar_opp_break_lock|子周期收盘突破对侧缘 target={target:.8g} "
-                        f"锁利({frac:.0%}) invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
+                    plan_px = opp_lock_px(pos_pm.entry, target, frac)
+                    live_px = opp_lock_live_px(pos_pm.direction, ref_px,
+                                               giveback_r, pos_pm.initial_risk)
+                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px,
+                                           ref_px, pos_pm.entry)
+                    if lock_px is None or not lock_is_protective(
+                            pos_pm.direction, lock_px, ref_px):
+                        # 落位闸门:可用候选为空(锁利价已在现价盈利侧/身后,
+                        # 或落到 entry 亏损侧)⇒ 推进它等于把唯一保护单变成
+                        # "挂单即成交"的止盈单 / 亏损锁。
+                        pos_pm.log.append(
+                            f"v21|sub_bar_opp_break_lock_reject|子周期收盘突破对侧缘 "
+                            f"target={target:.8g} 锁利({frac:.0%}) 算得 "
+                            f"{fmt_px(lock_px)} 不在现价 {ref_px:.8g} 保护侧 "
+                            f"⇒ 保持原防线 invalid={pos_pm.invalid:.8g}")
+                        self._journal("lock_reject", {
+                            "symbol": sym, "tf": cs.tf_label,
+                            "why": "sub_bar_opp_break_lock",
+                            "direction": pos_pm.direction,
+                            "target": target, "lock": lock_px,
+                            "ref": ref_px, "invalid": pos_pm.invalid})
+                    else:
+                        pos_pm.reduced = True
+                        pos_pm.invalid = (min(pos_pm.invalid, lock_px)
+                                          if pos_pm.direction < 0
+                                          else max(pos_pm.invalid, lock_px))
+                        pos_pm.log.append(
+                            f"v21|sub_bar_opp_break_lock|子周期收盘突破对侧缘 "
+                            f"target={target:.8g} 锁利({frac:.0%}) "
+                            f"计划={fmt_px(plan_px)} 行情={fmt_px(live_px)} "
+                            f"ref={ref_px:.8g} "
+                            f"invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
             elif lock_cfg > 0.0:
                 hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
                 if hit:
-                    pos_pm.reduced = True
-                    span = target - float(pos_pm.entry)
                     broke_through = (c < target) if pos_pm.direction < 0 else (c > target)
                     frac = lock_cfg if broke_through else min(0.10, lock_cfg)
-                    lock_px = float(pos_pm.entry) + frac * span
-                    pos_pm.invalid = (min(pos_pm.invalid, lock_px) if pos_pm.direction < 0
-                                      else max(pos_pm.invalid, lock_px))
-                    pos_pm.log.append(
-                        f"v21|sub_bar_opp_lock|子周期触及对侧缘 target={target:.8g} "
-                        f"锁利({frac:.0%}) invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
+                    plan_px = opp_lock_px(pos_pm.entry, target, frac)
+                    live_px = opp_lock_live_px(pos_pm.direction, ref_px,
+                                               giveback_r, pos_pm.initial_risk)
+                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px,
+                                           ref_px, pos_pm.entry)
+                    if lock_px is None or not lock_is_protective(
+                            pos_pm.direction, lock_px, ref_px):
+                        # 仅影线触及分支最易踩到"锁利价回落到现价盈利侧"。
+                        pos_pm.log.append(
+                            f"v21|sub_bar_opp_lock_reject|子周期触及对侧缘 "
+                            f"target={target:.8g} 锁利({frac:.0%}) 算得 "
+                            f"{fmt_px(lock_px)} 不在现价 {ref_px:.8g} 保护侧 "
+                            f"⇒ 保持原防线 invalid={pos_pm.invalid:.8g}")
+                        self._journal("lock_reject", {
+                            "symbol": sym, "tf": cs.tf_label,
+                            "why": "sub_bar_opp_lock",
+                            "direction": pos_pm.direction,
+                            "target": target, "lock": lock_px,
+                            "ref": ref_px, "invalid": pos_pm.invalid})
+                    else:
+                        pos_pm.reduced = True
+                        pos_pm.invalid = (min(pos_pm.invalid, lock_px)
+                                          if pos_pm.direction < 0
+                                          else max(pos_pm.invalid, lock_px))
+                        pos_pm.log.append(
+                            f"v21|sub_bar_opp_lock|子周期触及对侧缘 "
+                            f"target={target:.8g} 锁利({frac:.0%}) "
+                            f"计划={fmt_px(plan_px)} 行情={fmt_px(live_px)} "
+                            f"ref={ref_px:.8g} "
+                            f"invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
             else:
                 # 传统 §8.2 target_1 触及减仓 50%
                 hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
@@ -1583,6 +1650,9 @@ class LiveRunner:
                     box_lo=pos_dict.get("box_lo"),
                     box_hi=pos_dict.get("box_hi"),
                     bars=cs.trig_bars[-45:] if cs.trig_bars else cs.cog_bars[-45:],
+                    # 图上 ENTRY 必须是建仓均价(不是本次事件价 c):否则止损
+                    # 推进通知会把 ENTRY 画在事件价上,相对关系整体错位。
+                    entry_price=float(pos_pm.entry),
                 )
 
     def _close_cognition(self, cs: CampaignState, cog_bar) -> None:

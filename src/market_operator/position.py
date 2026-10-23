@@ -100,6 +100,21 @@ v20 增量(v20 收尾 S1/S2,冻结 2026-10-20;加性开关,默认参数行为逐
   (出场桶沿用 v16 target)。目标方向不齐(d·(target−entry) ≤ 0)⇒ 退
   回 v16 单段收割(同 R4 纪律);harvest_fade_2leg 与 harvest_ladder3 互
   斥(同栈 raise ValueError;R4 死亡名单不接线,双栏只在 v20 S2 臂接)。
+
+v21 锁利口径(2026-10-23 实盘事故修复;`opp_lock_max_giveback_r=0` ⇒ 逐位
+旧行为,parity 钉死):
+- **计划口径** `opp_lock_px(entry, target, frac)` = entry + |frac|·(target−entry)
+  (原实现内联 span 计算,现收敛为唯一出口,position.py 与 live_runner.py 共用)。
+- **落位闸门** `lock_is_protective(direction, lock_px, ref_px)`:锁利价必须仍在
+  当下参考价(收盘价 c)的保护侧,否则**不推进**(`v21|*_lock_reject` 台账),
+  保留原结构止损且不置 reduced。修前该边界缺陷会把唯一保护单挂到现价盈利侧
+  ⇒ 挂单瞬间按市价成交,仓位等于裸奔。
+- **行情锚定** `opp_lock_live_px(direction, ref, giveback_r, R)` = ref ∓
+  giveback_r·R:锁利只在收盘裁决,而收盘价往往已走过计划口径算出的位置
+  (计划价退化为"等回踩"的止盈单)。`tighten_lock` 先滤掉**不可用候选**
+  (不在 ref 保护侧 / 不在 entry 盈利侧),再取更贴近现价者(空头取小/多头
+  取大):既保证至少锁到协议行程比例,又保证不回吐超过 giveback_r 个 R;
+  两口径都不可用 ⇒ 不推进(`v21|*_lock_reject`),绝不"锁"到亏损侧。
 """
 
 from __future__ import annotations
@@ -126,6 +141,111 @@ S1_TRAIL_ARM_MFE_R = 1.0          # S1:trail 上线 MFE 闸(恰 1R 上线)
 S1_FAMILY = ("E1", "E6", "E7", "E4")   # S1 扶手对象:cont 家族 + E4
 S2_LEVEL = 0.25                   # S2:缘前 25%(entry→target 行程,恰触 inclusive)
 S2_BANK_FRAC = 0.4                # S2:缘前 25% 落袋 40% 仓(缘收剩 60%)
+
+
+# ---------------------------------------------------------------------------
+# v21 锁利口径(唯一出口;position.py 与 live_runner.py 共用,禁止各自重算)
+# ---------------------------------------------------------------------------
+
+
+def opp_lock_px(entry: float, target: float, frac: float) -> Optional[float]:
+    """REJECT 对侧锁利价(**计划口径**):沿 entry→target 行程推进 |frac|。
+
+    `entry→target_1` 的行程才是"这段交易打算赚多少"的口径;`reject_opp_lock_frac`
+    就是它的比例 ⇒ 锁利价 = entry + |frac|·(target−entry)。注意是"行程比例"而非
+    "箱体跨度比例":只有建仓价恰在箱体边缘(canonical REJECT)时二者等价。
+    frac<=0 / span 退化 ⇒ None(调用方不得推进防线)。
+    """
+    entry_px, target_px = float(entry), float(target)
+    frac_abs = abs(float(frac))
+    span = target_px - entry_px
+    if frac_abs <= 0.0 or abs(span) < 1e-12:
+        return None
+    return entry_px + frac_abs * span
+
+
+def stop_protect_dist(direction: int, stop_px: float, ref_px: float) -> float:
+    """止损位相对现价的有向距离:**> 0 才是有效保护单**。
+
+    多头(d=+1)止损必须低于现价 ⇒ ref−stop;空头(d=−1)止损必须高于现价
+    ⇒ stop−ref。统一写成 −d·(stop−ref),两个方向共用一个式子,避免"某一侧
+    写反"这类不可测的灾难。
+    """
+    return -float(direction) * (float(stop_px) - float(ref_px))
+
+
+def lock_is_protective(direction: int, lock_px: Optional[float],
+                       ref_px: float, min_buf: float = 0.0) -> bool:
+    """锁利/推进价落位闸门:必须在现价保护侧且留 min_buf 缓冲。
+
+    ref_px 取"当下可见的参考价"(逐 bar 口径用收盘价 c)。闸门不通过 ⇒ 调用方
+    **不得**推进防线(保留原结构止损):宁可不锁利,也不能把仓位唯一的一张保护
+    单挂到错误一侧(挂到盈利侧 = 挂单瞬间按市价成交,仓位等于裸奔)。
+    """
+    if lock_px is None:
+        return False
+    return stop_protect_dist(direction, float(lock_px), ref_px) > \
+        float(min_buf) + 1e-12
+
+
+def lock_is_profitable(direction: int, lock_px: Optional[float],
+                       entry_px: float) -> bool:
+    """锁利价必须在 entry 的**盈利侧**(否则只是"收紧亏损止损",不是锁利)。
+
+    退化行程(d·(target−entry) ≤ 0,建仓价已在箱体内部/越过对侧)下,
+    `opp_lock_px` 算出的位置可落在 entry 亏损侧;把它当止损推进等于凭空收紧
+    亏损容忍度(纯增加被扫概率,没有一分钱落袋),不属于 §8.2 锁利语义。
+    """
+    if lock_px is None:
+        return False
+    return float(direction) * (float(lock_px) - float(entry_px)) > 1e-12
+
+
+def opp_lock_live_px(direction: int, ref_px: float, giveback_r: float,
+                     risk_px: float) -> Optional[float]:
+    """**行情口径**锁利价:锚在现价,只允许回吐 `giveback_r` 个 R。
+
+    空头 ref + giveback_r·R / 多头 ref − giveback_r·R(以 R 为单位 ⇒ 2h/12h/
+    不同币种同尺度,无需 ATR 管线)。
+
+    存在的理由:锁利只在**收盘**裁决,而那一刻价格往往已经走过了
+    `opp_lock_px` 按 entry→target 行程算出的位置。GOOGLUSDT 即样本:计划口径
+    锁利 323.34,而 2h 收盘 321.33 ⇒ 锁利价落在现价**身后 2.01(0.63%
+    = 0.65R)**:行情不回踩,这张止损等价于不存在(什么也没锁住);回踩触发
+    时,已把 1.08R 的行程回吐到 0.24R(实际成交 324.01)。所以锁利必须以
+    **当下可见价**为锚。
+    giveback_r<=0 / risk<=0 ⇒ None(关闭,退回纯计划口径 = 历史 parity)。
+    """
+    g, risk = float(giveback_r), float(risk_px)
+    if g <= 0.0 or risk <= 0.0 or float(ref_px) <= 0.0:
+        return None
+    return float(ref_px) - float(direction) * g * risk
+
+
+def tighten_lock(direction: int, plan_px: Optional[float],
+                 live_px: Optional[float], ref_px: float,
+                 entry_px: float, min_buf: float = 0.0) -> Optional[float]:
+    """合并两种口径:先过滤掉**不可用**的候选,再取更贴近现价的一侧。
+
+    可用 = ① 在 ref_px 保护侧(挂上去是保护单,不是"挂单即成交"的止盈单)
+          ② 在 entry_px 盈利侧(真锁到了利润,而不是凭空收紧亏损止损)。
+    过滤后空头取更小 / 多头取更大(更贴近现价 = 锁得更多);一个都不剩 ⇒
+    None(调用方不推进防线,台账记 reject)。
+    纯 min/max 的盲合并有个退化坑:计划口径落在现价盈利侧(行程反向)时,
+    "取紧者"反而会选中那个非法值,把本来可用的行情锚定价一起丢掉。
+    """
+    cands = [float(px) for px in (plan_px, live_px)
+             if px is not None
+             and lock_is_protective(direction, float(px), ref_px, min_buf)
+             and lock_is_profitable(direction, float(px), entry_px)]
+    if not cands:
+        return None
+    return min(cands) if direction < 0 else max(cands)
+
+
+def fmt_px(px: Optional[float]) -> str:
+    """Optional 价格的安全格式化(日志用;None ⇒ "n/a")。"""
+    return "n/a" if px is None else f"{float(px):.8g}"
 
 
 @dataclass
@@ -193,7 +313,8 @@ class PositionManager:
                  harvest_fade_2leg: bool = False,
                  s2_level: float = S2_LEVEL,
                  s2_bank_frac: float = S2_BANK_FRAC,
-                 reject_opp_lock_frac: float = 0.0) -> None:
+                 reject_opp_lock_frac: float = 0.0,
+                 opp_lock_max_giveback_r: float = 0.0) -> None:
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
@@ -221,6 +342,8 @@ class PositionManager:
         self.s2_level = float(s2_level)
         self.s2_bank_frac = float(s2_bank_frac)
         self.reject_opp_lock_frac = float(reject_opp_lock_frac)
+        # v21 行情锚定缓冲(R 的倍数;0 = 关闭,退回纯计划口径 = 历史 parity)
+        self.opp_lock_max_giveback_r = float(opp_lock_max_giveback_r)
         if self.harvest_fade_2leg and self.harvest_ladder3:
             raise ValueError("v20 S2 双格收割与 v18 R4 三段收割互斥"
                              "(R4 死亡名单不接线;同栈即语义冲突)")
@@ -331,41 +454,82 @@ class PositionManager:
 
         # 3. §8.2 target_1 触及:
         #    - 若启用了 reject_opp_lock_frac < 0:仅当收盘真正突破对侧(c 越过 target_1)
-        #      才将防线收紧锁利(|reject_opp_lock_frac| * span);触及对侧但未突破前完全
-        #      保持原结构防线 + Turtle,绝不因对侧震荡提前扫保本;
+        #      才将防线收紧锁利(opp_lock_px:entry→target 行程的 |frac|);触及对侧但
+        #      未突破前完全保持原结构防线 + Turtle,绝不因对侧震荡提前扫保本;
         #    - 若启用了 reject_opp_lock_frac > 0:触及对侧即锁利推进防线;
         #    - 否则按传统 §8.2 减仓 50%(仅一次),余仓 invalid 移至 entry。
+        #    v21 锁利口径(两条锁利分支共用,详见模块顶部 helper):
+        #      lock = tighten_lock(计划口径, 行情口径) —— 计划口径锁 entry→target
+        #      行程的 frac,行情口径只允许回吐 opp_lock_max_giveback_r 个 R;
+        #      二者取更贴近现价者,再由 lock_is_protective 闸门保证落在现价
+        #      保护侧(否则不推进、不置 reduced,下一根 bar 再判)。
         if pos.target_1 is not None and not pos.reduced and not pos.pending_reduce:
             if self.reject_opp_lock_frac < 0.0:
                 broke = (c < pos.target_1) if pos.direction < 0 else (c > pos.target_1)
                 if broke:
-                    pos.reduced = True
-                    span = float(pos.target_1) - float(pos.entry)
                     frac = abs(self.reject_opp_lock_frac)
-                    lock_px = float(pos.entry) + frac * span
-                    old = pos.invalid
-                    pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
-                                   else max(pos.invalid, lock_px))
-                    pos.log.append(
-                        f"v21|opp_break_lock|收盘突破对侧缘 target={pos.target_1:.8g} "
-                        f"锁利({frac:.0%}) invalid {old:.8g}->{pos.invalid:.8g}")
+                    plan_px = opp_lock_px(pos.entry, pos.target_1, frac)
+                    live_px = opp_lock_live_px(pos.direction, c,
+                                               self.opp_lock_max_giveback_r,
+                                               pos.initial_risk)
+                    lock_px = tighten_lock(pos.direction, plan_px, live_px, c,
+                                           pos.entry)
+                    if lock_px is None or not lock_is_protective(
+                            pos.direction, lock_px, c):
+                        # 落位闸门(1):可用候选为空(计划口径落到现价盈利侧/
+                        # entry 亏损侧,且没有可用的行情锚定价)。
+                        # (收盘虽破对侧,行情早已走远或已回抽越过锁利价)。
+                        # 推进它等于把唯一保护单变成"止盈单",交易所立即触发
+                        # ⇒ 保持原结构防线,下一根 bar 再判(不置 reduced)。
+                        pos.log.append(
+                            f"v21|opp_break_lock_reject|收盘突破对侧缘 "
+                            f"target={pos.target_1:.8g} 锁利({frac:.0%}) 算得 "
+                            f"{fmt_px(lock_px)} 不在现价 {c:.8g} 保护侧 "
+                            f"⇒ 保持原防线 invalid={pos.invalid:.8g}")
+                    else:
+                        pos.reduced = True
+                        old = pos.invalid
+                        pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
+                                       else max(pos.invalid, lock_px))
+                        pos.log.append(
+                            f"v21|opp_break_lock|收盘突破对侧缘 target={pos.target_1:.8g} "
+                            f"锁利({frac:.0%}) 计划={fmt_px(plan_px)} "
+                            f"行情={fmt_px(live_px)} ref={c:.8g} "
+                            f"invalid {old:.8g}->{pos.invalid:.8g}")
             else:
                 hit = (l <= pos.target_1) if pos.direction < 0 \
                     else (h >= pos.target_1)
                 if hit:
                     if self.reject_opp_lock_frac > 0.0:
-                        pos.reduced = True
-                        span = float(pos.target_1) - float(pos.entry)
                         broke_through = (c < pos.target_1) if pos.direction < 0 else (c > pos.target_1)
                         frac = self.reject_opp_lock_frac if broke_through else min(0.10, self.reject_opp_lock_frac)
-                        lock_px = float(pos.entry) + frac * span
-                        old = pos.invalid
-                        pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
-                                       else max(pos.invalid, lock_px))
-                        pos.log.append(
-                            f"v21|opp_lock|触及对侧缘 target={pos.target_1:.8g} "
-                            f"不减仓锁利({frac:.0%}) "
-                            f"invalid {old:.8g}->{pos.invalid:.8g}")
+                        plan_px = opp_lock_px(pos.entry, pos.target_1, frac)
+                        live_px = opp_lock_live_px(pos.direction, c,
+                                                   self.opp_lock_max_giveback_r,
+                                                   pos.initial_risk)
+                        lock_px = tighten_lock(pos.direction, plan_px, live_px, c,
+                                               pos.entry)
+                        if lock_px is None or not lock_is_protective(
+                                pos.direction, lock_px, c):
+                            # 落位闸门(2):仅影线触及分支最易踩到"锁利价回落
+                            # 到现价盈利侧" —— 极值刺到目标后收盘已反抽回 near
+                            # entry,把防线推到 frac(<10%) 位只是把止损变成贴着
+                            # 建仓价的止盈单。闸门不通过 ⇒ 不推进、不减仓。
+                            pos.log.append(
+                                f"v21|opp_lock_reject|触及对侧缘 "
+                                f"target={pos.target_1:.8g} 锁利({frac:.0%}) 算得 "
+                                f"{fmt_px(lock_px)} 不在现价 {c:.8g} 保护侧 "
+                                f"⇒ 保持原防线 invalid={pos.invalid:.8g}")
+                        else:
+                            pos.reduced = True
+                            old = pos.invalid
+                            pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
+                                           else max(pos.invalid, lock_px))
+                            pos.log.append(
+                                f"v21|opp_lock|触及对侧缘 target={pos.target_1:.8g} "
+                                f"不减仓锁利({frac:.0%}) "
+                                f"计划={fmt_px(plan_px)} 行情={fmt_px(live_px)} "
+                                f"invalid {old:.8g}->{pos.invalid:.8g}")
                     elif defer_reduce:
                         intents.append(self._defer_reduce(pos, ts, c, l if pos.direction < 0 else h))
                     else:

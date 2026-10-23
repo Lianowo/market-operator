@@ -388,7 +388,8 @@ class TelegramNotifier:
                   target_price: Optional[float] = None,
                   box_lo: Optional[float] = None,
                   box_hi: Optional[float] = None,
-                  bars: Optional[Sequence[tuple]] = None) -> bool:
+                  bars: Optional[Sequence[tuple]] = None,
+                  entry_price: Optional[float] = None) -> bool:
         lines = [
             f"⚡ 交易执行: {symbol}",
             f"🏷️ 动作类型: {fill_kind}",
@@ -415,11 +416,14 @@ class TelegramNotifier:
             lines.append(f"📝 详情说明: {clean_note}")
         png = None
         if bars:
+            # ENTRY 线优先用显式传入的建仓均价;缺省(旧调用口径)退回本次事件价
             png = render_bw_kline_png(
                 bars, symbol=symbol, tf_label=tf_label,
                 title_tag=f"TRADE {fill_kind}",
                 box_lo=box_lo, box_hi=box_hi,
-                entry_price=price, stop_price=stop_price,
+                entry_price=(float(entry_price) if entry_price is not None
+                             else price),
+                stop_price=stop_price,
                 target_price=target_price, direction=direction)
         return self.send("fill", "\n".join(lines), use_trade_bot=True, png_bytes=png)
 

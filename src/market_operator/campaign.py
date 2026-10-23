@@ -140,6 +140,8 @@ class ArmConfig:
     harvest_fade_2leg: bool = False
     breakeven_on_reduce: bool = True
     reject_opp_lock_frac: float = 0.0
+    # v21 行情锚定缓冲(R 的倍数;0 ⇒ 纯计划口径,逐位旧行为)
+    opp_lock_max_giveback_r: float = 0.0
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -431,7 +433,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 harvest_fade_2leg=(arm.harvest_fade_2leg if arm is not None
                                    else False),
                 reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
-                                      else 0.0)),
+                                      else 0.0),
+                opp_lock_max_giveback_r=(arm.opp_lock_max_giveback_r
+                                         if arm is not None else 0.0)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
