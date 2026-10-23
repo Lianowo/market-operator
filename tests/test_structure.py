@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -284,3 +286,50 @@ def test_replay_contract_and_event_timestamps():
         z.touches = -999
     assert all(z.touches != -999 for z in structure.zones)
     assert isinstance(structure.regime(), Regime)
+
+
+# ---------------------------------------------------------------------------
+# 配置 → Params:键名风格不参与匹配(历史配置写的是 N_a / N_f / N_time)
+# ---------------------------------------------------------------------------
+
+
+def test_params_binds_n_a_n_f_n_time_whatever_the_key_style(tmp_path):
+    """大写键也必须生效——此前它们被静默丢弃,配置里写着却从未起作用。"""
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"N_a": 5, "N_f": 2, "N_time": 7}), encoding="utf-8")
+    params = Params.from_json(p)
+    assert (params.n_a, params.n_f, params.n_time) == (5, 2, 7)
+
+
+def test_params_ignores_keys_of_other_loaders(tmp_path):
+    """同一份 JSON 还供路由/经纪商读取,不认识任何字段的键必须被忽略。"""
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"NA": 4, "k_room": 1.5,
+                             "portfolio_cap_frac": 0.12,
+                             "router_params": {"k_bm": 9.0}}), encoding="utf-8")
+    params = Params.from_json(p)
+    assert (params.n_a, params.k_room) == (4, 1.5)
+    assert params.balance_quality_min == Params().balance_quality_min
+
+
+def test_params_rejects_two_keys_for_one_field(tmp_path):
+    """同一字段被两个键指向 ⇒ 报错,不替调用方挑一个。"""
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"n_a": 5, "N_a": 3}), encoding="utf-8")
+    with pytest.raises(ValueError, match="只能保留一个"):
+        Params.from_json(p)
+
+
+def test_production_config_binds_structural_priors():
+    """生产配置里的结构先验必须真的落到字段上(键名大小写不再是陷阱)。"""
+    from market_operator.scenario import PRODUCTION_CONFIG
+    from market_operator.structure import _key_id
+
+    raw = json.loads(PRODUCTION_CONFIG.read_text(encoding="utf-8"))
+    params = Params.from_json(PRODUCTION_CONFIG)
+    by_id = {_key_id(k): k for k in raw}
+    for name in ("n_a", "n_f", "n_time"):
+        key = by_id.get(_key_id(name))
+        assert key is not None, f"{PRODUCTION_CONFIG.name} 缺少 {name}"
+        assert getattr(params, name) == int(raw[key])
+

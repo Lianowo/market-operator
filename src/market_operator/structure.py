@@ -48,8 +48,13 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------------
-# 参数(§2-§6 先验,来自 config/defaults.json,冻结)
+# 参数(§2-§6 先验,来自配置文件,冻结)
 # ---------------------------------------------------------------------------
+
+
+def _key_id(key: str) -> str:
+    """配置键的归一形式:大小写与下划线都不参与匹配(``N_a`` ≡ ``n_a``)。"""
+    return key.replace("_", "").lower()
 
 
 @dataclass(frozen=True)
@@ -79,9 +84,29 @@ class Params:
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "Params":
-        """从 config/defaults.json 加载冻结先验(未知键忽略)。"""
+        """从 JSON 加载结构先验;键名风格不参与匹配。
+
+        键按 ``去掉下划线 + 忽略大小写`` 归一,所以 ``N_a``/``n_a``/``NA`` 等价。
+        历史上配置写的是大写 ``N_a``/``N_f``/``N_time``,而字段是小写,于是这三个
+        键被静默丢弃、从未生效(20 份配置全部如此,只因取值恰好等于默认值才没
+        暴露)。现在两种写法都绑定;若同一字段被多个键指向,直接报错而不是替
+        调用方挑一个。
+
+        不认识任何字段的键忽略:同一份 JSON 还供路由/经纪商/场景门面读取。
+        """
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-        wanted = {f: raw[f] for f in cls.__dataclass_fields__ if f in raw}
+        keys_by_id: dict = {}
+        for key in raw:
+            keys_by_id.setdefault(_key_id(key), []).append(key)
+        wanted: dict = {}
+        for name in cls.__dataclass_fields__:
+            hits = keys_by_id.get(_key_id(name), [])
+            if not hits:
+                continue
+            if len(hits) > 1:
+                raise ValueError(
+                    f"{path}: 键 {sorted(hits)} 都指向字段 {name!r},只能保留一个")
+            wanted[name] = raw[hits[0]]
         if "e4_depth_atr" in wanted:
             wanted["e4_depth_atr"] = tuple(wanted["e4_depth_atr"])
         for k in ("atr_n", "n_a", "n_f", "n_time", "range_max_pivots"):
