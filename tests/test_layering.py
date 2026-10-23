@@ -21,8 +21,6 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "market_operator"
 PRODUCTION_ENTRY_POINTS = (
@@ -32,16 +30,21 @@ PRODUCTION_ENTRY_POINTS = (
 
 # 已退役:只被研究脚本与各自的历史测试引用,不参与任何生产路径。
 # 判定依据是 import 反向依赖(见提交说明),不是"看起来像旧版本"。
+#
+# 特别注意两个**看着像退役、实际仍在生产路径上**的模块:
+# `lifecycle` 与 `tiered` 由 scripts/live_runner.py(实盘入口)直接 import,
+# `harvest`/`quality`/`repairs` 由 campaign 传递 import —— 它们不是历史包袱,
+# 是当前策略的组成部分,所以**不在此清单**。
 RETIRED = frozenset({
     "strategy_v8",   # scripts/run_backtest_v8.py + tests/test_v8.py
     "zonebio",       # scripts/run_zonebio.py + tests/test_zonebio.py
-    "quattro",       # 无任何引用(v7 对照实验,逐字复刻)
+    "quattro",       # tests/test_quattro.py(v7 逐字复刻对照,只留历史断言)
     "aggtape",       # v19-orderflow 研究件
     "bandside",      # scripts/run_v15.py + tests/test_v15.py
     "balance",       # scripts/_diag_balance.py(被 balance_detect 取代)
-    "flow_features",  # orders flow 研究件
+    "flow_features",  # v12 订单流研究件
     "flow_study",
-    "tape_features",
+    "tape_features",  # 只读注解层,未进入任何判定
 })
 
 _VERSION_IN_NAME = re.compile(r"(^|_)v\d+(_|$)")
