@@ -78,9 +78,12 @@
   `--restore`)→ 保留期清理 → 增长预测 → 预算闸门(35GB 硬 / 30GB 软,退出码
   0/1/2);审计日志只压缩不删除,控制台日志先归档校验再截断留 4MB 尾巴;增长预测
   只按 `logs/ runtime/ data/` 速率外推,落 `reports/_storage_growth.json`。
-- **计划任务入口**:`tools/schedule/live_supervisor.cmd`(常驻看护)与
-  `tools/schedule/storage_gc.cmd`(`--enforce`);移除 OS 专用
-  `scripts/live_watchdog.ps1`。新增 `tests/test_live_supervision.py`(21 项:判定
+- **计划任务入口**:`\MarketOperator\MarketOperatorLive`(每 3 分钟重复、忽略重叠)
+  与 `\MarketOperator\MarketOperatorStorageGC`(每日 04:10)直接用解释器绝对路径
+  调用 `scripts/live_supervisor.py` / `scripts/storage_gc.py --enforce` —— 实测
+  计划任务环境里 `cmd.exe /c *.cmd` 会静默退出(退出码 0、无任何日志),绝对路径
+  直调稳定;重复触发的新实例由单实例锁挡掉,等价于"没跑就拉起"。
+  `tools/schedule/*.cmd` 保留给人工使用;移除 OS 专用 `scripts/live_watchdog.ps1`。新增 `tests/test_live_supervision.py`(21 项:判定
   五档、单实例锁跨进程、看护动作、启动宽限、压缩无损与预算闸门),全量 467 passed。
   注:实盘运行时行情刷新会改写 `data/raw/*` 与 `data/manifest.json`,
   `test_v13_cascade` 的哈希锁定用例此时必然失败(环境时序,非回归),复跑前需停 runner。

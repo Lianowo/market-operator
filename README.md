@@ -128,9 +128,22 @@ python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文
 截断(尾部 4MB 留作即时排障),备份目录打成 zip 后才删;`data/raw`、`config/`、
 热档(`runtime/live/*.json`)、研究冻结产物一律不动。增长预测只按
 `logs/ runtime/ data/` 的写入速率外推(一次性研究产物混进来会把"还能跑多久"估得
-离谱),结果落 `reports/_storage_growth.json`。计划任务入口:
-`tools/schedule/live_supervisor.cmd`(常驻看护)与
-`tools/schedule/storage_gc.cmd`(`--enforce` 每日一次)。
+离谱),结果落 `reports/_storage_growth.json`。
+
+计划任务(`\MarketOperator\MarketOperatorLive` 每 3 分钟重复、
+`\MarketOperator\MarketOperatorStorageGC` 每日 04:10)**直接用解释器绝对路径**
+调用脚本,不经 `cmd.exe`:计划任务的运行环境里 `python` 未必在 `PATH`,而
+`cmd.exe /c *.cmd` 一旦解析失败会静默退出(退出码 0、无日志,反而掩盖故障)。
+已在运行时重复触发的新实例会被单实例锁挡掉并立刻退出,等价于"没跑就拉起"。
+
+```bat
+D:\LiAn\Tools\Python\python.exe scripts\live_supervisor.py
+D:\LiAn\Tools\Python\python.exe scripts\storage_gc.py --enforce
+```
+
+`tools/schedule/live_supervisor.cmd` / `storage_gc.cmd` / `live_runner.cmd` 保留给
+人工、双击或非计划任务场景(它们额外把控制台输出重定向到
+`logs/supervisor.log`、`logs/storage_gc.log`、`logs/live_stdout.log`)。
 
 数据固定证据：`data/manifest.json`（每批原始数据 sha256, 2024-10-15 → 2026-10-19, 0 缺口）；合约规格离线缓存强制（`data/contracts.json` 逐条 sha256)。
 
