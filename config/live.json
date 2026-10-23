@@ -3,7 +3,7 @@
   "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=250U:4%, <=600U:3%, <=1500U:2%, >1500U:1%) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利50% + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
   "meta": {
     "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Dual-Bot Telegram K-Line Charts",
-    "strategy_config": "config/v21.json",
+    "strategy_config": "config/strategy.json",
     "cognition_frame": "支持 v21 多周期并发(2h/4h 同周期触发, 12h->2h 降档触发, 1d->4h 降档触发)及 12h->2h 单帧兼容模式",
     "execution_approximation": [
       "市价决策:canonical 于次一执行细 bar 开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",

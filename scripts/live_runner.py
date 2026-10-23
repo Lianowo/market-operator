@@ -70,7 +70,7 @@ from market_operator.trigger import (                           # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "live.json"
 CONFIG_V20 = ROOT / "config" / "v20.json"
-CONFIG_V21 = ROOT / "config" / "v21.json"
+STRATEGY_CONFIG = ROOT / "config" / "strategy.json"   # 生产策略配置(唯一)
 
 MS_1H = 3_600_000
 N_FILL_H = 12                                    # canonical N_fill(墙钟小时)
@@ -82,8 +82,8 @@ TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400
 # ---------------------------------------------------------------------------
 
 
-def load_v21_params(cfg_path: Path = CONFIG_V21) -> tuple:
-    """加载 v21 极简平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由参数。"""
+def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
+    """加载生产策略参数:平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由。"""
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
     params = Params.from_json(cfg_path)
     whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
@@ -371,7 +371,7 @@ class LiveRunner:
         self.cog_cfg = cfg["cognition"]
         self.engine_version = str(self.cog_cfg.get("engine") or "v20")
         if self.engine_version == "v21":
-            self.raw_strat, self.params, self.rp, self.rp_by_tf = load_v21_params()
+            self.raw_strat, self.params, self.rp, self.rp_by_tf = load_strategy_params()
             self.raw20 = self.raw_strat
         else:
             self.raw20, self.params, self.rp = load_v20_params()

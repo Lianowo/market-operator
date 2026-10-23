@@ -2,7 +2,7 @@
 
 对齐 .codeartsdoer/specs/tf_trigger_exp/spec.md 的因子定义:
   因子 T(触发帧;12h->2h、1d->4h 固定照抄 M3c):
-    T0 = 2h 同周期 + 4h->2h(现行 config/v21.json)
+    T0 = 2h 同周期 + 4h->2h(现行 config/strategy.json)
     T1 = 2h->1h + 4h->2h
     T2 = 2h 同周期 + 4h 不下沉
     T3 = 2h->1h + 4h 不下沉
@@ -49,7 +49,7 @@ from market_operator.structure import Params                       # noqa: E402
 from market_operator.routing import RouterParams                   # noqa: E402
 from market_operator.trigger import prepare_mic_cognition          # noqa: E402
 
-CONFIG = ROOT / "config" / "v21.json"
+CONFIG = ROOT / "config" / "strategy.json"
 HTF = ("2h", "4h", "12h", "1d")
 
 # 触发帧秒数(None = 同周期收盘确认)

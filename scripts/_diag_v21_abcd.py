@@ -2,7 +2,7 @@
 reports/prereg/20261022_abcd.md)。
 
 臂定义:
-  a0 现行 v21 口径(config/v21.json 逐项照抄,用于 parity 校验)
+  a0 现行 v21 口径(config/strategy.json 逐项照抄,用于 parity 校验)
   A  ACCEPT×TRANSITION 准入闸:view.regime=TRANSITION 时丢弃 ACCEPT 事件
   B  TF 预算再分配:12h 0.0225->0.0075(3槽->1槽),4h 0.0225->0.0375(3槽->5槽)
   C  REJECT 前缘 maker:e3_market 市价 -> zone 前缘限价(long=zone_lo/short=zone_hi)
@@ -54,7 +54,7 @@ from market_operator.routing import (                          # noqa: E402
 )
 from market_operator.trigger import prepare_mic_cognition          # noqa: E402
 
-CONFIG = ROOT / "config" / "v21.json"
+CONFIG = ROOT / "config" / "strategy.json"
 OUTDIR = ROOT / "reports" / "tf_trigger_exp" / "abcd_20261022"
 HTF = ("2h", "4h", "12h", "1d")
 TRIG_MAP = {"2h": None, "4h": 7200, "12h": 7200, "1d": 14400}   # T0(现行)

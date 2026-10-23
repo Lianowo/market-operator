@@ -2,7 +2,7 @@
 
 模拟专业交易者决策过程的加密货币研究与实盘交易系统：因果市场认知（平衡箱体与波段结构） → 事件原语（ACCEPT / REJECT 及 E1–E10） → 可证伪交易假设 → 事件驱动持仓管理 → 全成本真实回测与 Bitget 多周期实盘引擎。研究与实盘标的：Bitget USDT 永续（核心 BTC/ETH/SOL/DOGE + 全市场 >3M USDT 活跃宇宙），多尺度（2h/4h/12h/1d 混合触发）。
 
-**当前状态:平衡箱统一架构与实盘引擎已就绪(`config/v21.json` / `config/live.json`,全仓 471 项测试通过,`tools/replay_acceptance.py` 对冻结基线逐项 Δ=0)。** 协议出处见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
+**当前状态:平衡箱统一架构与实盘引擎已就绪(`config/strategy.json` / `config/live.json`,全仓 471 项测试通过,`tools/replay_acceptance.py` 对冻结基线逐项 Δ=0)。** 协议出处见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
 
 
 ## 设计原则
@@ -50,7 +50,7 @@ aggregate(多 TF 聚合) ◄─────────────────�
 
 ## 平衡箱统一架构与实盘引擎(当前活跃架构)
 
-详见 **`docs/v21-protocol.md`**、**`config/v21.json`** 与 **`config/live.json`**：
+详见 **`docs/v21-protocol.md`**、**`config/strategy.json`** 与 **`config/live.json`**：
 
 - **六维平衡箱识别（`balance_detect.py`）**：基于拍卖市场理论，在多尺度窗口阶梯 `(8..144)` 上以 12%/88% 稳健分位边界、方向效率、驻留率、重叠度、遍历比、上下沿轮动次数与重心稳定性识别高置信度震荡箱体（`use_balance_detector=True, balance_quality_min=0.35`），自动派生箱体上下沿支撑/阻力与对侧目标 `box_opposite`。
 - **双原语与高阶降档混合触发（M3c）**：

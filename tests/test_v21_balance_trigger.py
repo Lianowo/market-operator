@@ -81,7 +81,7 @@ def test_restraint_gates_rotations_and_quality():
 
 def test_v21_config_valid_and_loads_balance_detector():
     root = Path(__file__).resolve().parents[1]
-    cfg_path = root / "config" / "v21.json"
+    cfg_path = root / "config" / "strategy.json"
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
     p = Params.from_json(cfg_path)
     assert p.use_balance_detector is True

@@ -38,7 +38,7 @@ from .routing import RouterParams
 from .trigger import prepare_mic_cognition
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PRODUCTION_CONFIG = REPO_ROOT / "config" / "v21.json"
+PRODUCTION_CONFIG = REPO_ROOT / "config" / "strategy.json"
 CONTRACTS_PATH = REPO_ROOT / "data" / "contracts.json"
 
 #: 认知周期(策略在哪些周期的收盘上做决策)。顺序即报表顺序。
