@@ -18,10 +18,9 @@
 
 ```
 data ──► structure ──► events(E1-E7) ──► hypothesis ──► routing ──► position(§8)
-(抓取/校验/   (ATR/确认波段/    (E1-E7 事件       (可证伪      (turtle 唯一    (持仓管理
- sha256       区域生命周期/      目录,因果知时)    交易假设)      语义:2·atr      六条;
- manifest)   regime)                                        防线,无目标,   turtle 接线)
-                                                            trailing 只紧)
+抓取/校验/    ATR/确认波段/    事件目录      可证伪       假设→计划     持仓管理六条;
+sha256 校验   区域生命周期/    (因果知时)    交易假设     (turtle)      turtle 接线
+manifest     regime
                                                                     │
 aggregate(多 TF 聚合) ◄──────────────────────────────────────────────┘
         │
