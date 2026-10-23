@@ -513,6 +513,8 @@ def test_engine_mic_fill_next_trigger_open_and_bar_dup_skip():
     assert res.counters.get("dup", 0) >= 1
     assert res.counters["opens_filled"] == 1
     assert res.counters["mic_go_events"] == 1
+    assert res.counters["go_events"] >= res.counters["mic_go_events"], \
+        "go_events 是总次数,mic 是其中触发帧的子集"
 
 
 def test_engine_parity_mic_disabled_regardless_of_attachment():

@@ -286,3 +286,28 @@ def test_e1_priority_cancel_isolated_per_campaign():
     # 若 STRUCTURE_BROKEN 判弱+FLIP_RETESTED 成单+BREAKOUT_ACCEPTED 撤满,则撤单只可能发生在 TEST@2h
     for r in cancels:
         assert r["symbol"] == "TEST@2h"
+
+
+def test_go_event_counter_counts_router_offers_once_per_frame():
+    """``go_events`` = 送入路由的次数(按帧);``mic_go_events`` 是其中的触发帧子集。
+
+    同一现象若在认知帧与 trigger 帧都被检出,引擎各自决策一次,故计两次——
+    仓位去重(dup)发生在提交阶段,不改变"路由被调用了几次"这个事实。
+    """
+    from types import SimpleNamespace
+
+    from market_operator.campaign import _count_go
+
+    go_set = frozenset({("BREAKOUT_ACCEPTED", 1)})
+    events = [SimpleNamespace(id="BREAKOUT_ACCEPTED", direction=1),
+              SimpleNamespace(id="BREAKOUT_ACCEPTED", direction=-1),   # 方向不在 GO 集
+              SimpleNamespace(id="TREND_RESUMED", direction=1)]        # 不在白名单
+
+    counters: dict = {}
+    assert _count_go(counters, events, go_set) == 1
+    assert counters == {"go_events": 1}, "认知路径不碰 mic_go_events"
+
+    assert _count_go(counters, events, go_set, mic=True) == 1
+    assert counters == {"go_events": 2, "mic_go_events": 1}
+    assert counters["mic_go_events"] <= counters["go_events"]
+

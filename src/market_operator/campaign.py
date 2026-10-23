@@ -147,6 +147,25 @@ def _lc(counters: dict, key: str, n: int = 1) -> None:
     counters[key] = counters.get(key, 0) + n
 
 
+def _count_go(counters: dict, events, go_set: frozenset,
+              *, mic: bool = False) -> int:
+    """统计"送入路由的 GO 事件"次数,并返回本次条数。
+
+    口径(此前两条路径各自内联,容易漂移):
+
+    - ``go_events`` 是**次数**,不是去重后的事件数:同一市场事件若在认知帧和
+      trigger 帧都被检出,两条路径各自独立决策,各计一次;
+    - ``mic_go_events`` 是其中来自 trigger 帧的部分,恒 ≤ ``go_events``;
+    - 只统计 ``go_set`` 内的 ``(id, direction)`` —— 白名单事件是"GO",被路由
+      拒绝/闸门挡下的都不改变这个计数(拒绝原因另有 counters)。
+    """
+    n = sum(1 for e in events if (e.id, e.direction) in go_set)
+    _lc(counters, "go_events", n)
+    if mic:
+        _lc(counters, "mic_go_events", n)
+    return n
+
+
 def campaign_key(symbol: str, tf_label: str) -> str:
     """战役键(broker/账本/交易归属的复合键;含 "@" 与 symbol 分隔安全)。"""
     return f"{symbol}@{tf_label}"
@@ -430,6 +449,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     capacity_mode=capacity_mode)
     equity_rows: list = []
     cap_skips: list = []
+    # go_events/mic_go_events 的口径见 _count_go(送入路由的次数,非去重后事件数)
     counters = {"go_events": 0, "open_intents": 0, "opens_filled": 0,
                 "min_size_skips": 0, "liquidations": 0,
                 "limits_armed": 0, "limit_fills_entry": 0, "limit_expired": 0,
@@ -660,10 +680,7 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
         new_events = kept
         if not new_events:
             return
-    counters["go_events"] += sum(
-        1 for e in new_events if (e.id, e.direction) in go_set)
-    counters["mic_go_events"] += sum(
-        1 for e in new_events if (e.id, e.direction) in go_set)
+    _count_go(counters, new_events, go_set, mic=True)
     _inject_ctx18(st, cog_bars=f.cog.bars, i=i,
                   rngq_bars=mic.bars, rngq_i=a)
     decisions = st.router.on_bar(
@@ -771,8 +788,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     lo, hi = bounds["lo"], bounds["hi"]
     if not (lo <= i < hi):
         return
-    counters["go_events"] += sum(
-        1 for e in new_events if (e.id, e.direction) in go_set)
+    _count_go(counters, new_events, go_set)
     _inject_ctx18(st, cog_bars=cog.bars, i=i)
     decisions = st.router.on_bar(
         sym, bar, i, cog.views.get(i), atr, new_events,
