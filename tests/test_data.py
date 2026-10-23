@@ -100,6 +100,23 @@ def test_save_records_validation_issues(tmp_path, monkeypatch):
     assert any(i.startswith("gap:") for i in rec["validation_issues"])
 
 
+def test_save_writes_lf_bytes_and_hashes_them(tmp_path, monkeypatch):
+    """落盘字节与仓库口径一致(LF),manifest 的 sha256 才跨机器成立。
+
+    `.gitattributes` 规定 `data/raw/*.csv` 为 `text eol=lf`;若 save 按平台
+    写 CRLF,manifest 记下的哈希就只对 Windows 工作区成立,Linux/CI 上
+    checkout 出 LF 后必然对不上。
+    """
+    monkeypatch.setattr(data, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(data, "MANIFEST_PATH", tmp_path / "manifest.json")
+    path = data.save(make_df(6), "TESTUSDT")
+
+    raw = path.read_bytes()
+    assert b"\r\n" not in raw
+    rec = json.loads((tmp_path / "manifest.json").read_text())["files"]["TESTUSDT_1h.csv"]
+    assert rec["sha256"] == hashlib.sha256(raw).hexdigest()
+
+
 def _bar(ts: int) -> list:
     return [str(ts), "1", "2", "0.5", "1.5", "10", "15"]
 

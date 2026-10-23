@@ -18,6 +18,7 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -149,7 +150,13 @@ def save(df: pd.DataFrame, symbol: str, granularity: str = "1H") -> Path:
     raw_dir.mkdir(parents=True, exist_ok=True)
     label = _granularity_label(granularity)
     path = raw_dir / f"{symbol}_{label}.csv"
-    df.to_csv(path, index=False, columns=COLUMNS)
+    # 换行符显式写 LF:pandas 在 Windows 上默认 os.linesep(CRLF),而
+    # `.gitattributes` 规定 data/raw/*.csv 的仓库字节是 LF(aggregate._csv_bytes
+    # 同一口径)。若按平台写 CRLF,manifest 里记的 sha256 就只对那台机器成立——
+    # 换一台机器 checkout 出 LF 后哈希立刻对不上(重构期间确实踩到过)。
+    buf = StringIO()
+    df.to_csv(buf, index=False, columns=COLUMNS, lineterminator="\n")
+    path.write_bytes(buf.getvalue().encode("utf-8"))
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
 
     issues = validate(df, step_ms=_granularity_ms(granularity))
