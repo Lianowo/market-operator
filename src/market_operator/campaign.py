@@ -34,15 +34,14 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
   输入认知 TF bar,同 v4 声明:入场成交的认知 bar 不做裁决)→ v6 路由
   决策(MarketRouter;段内才启用 OPEN)。
 
-组合约束(v6-protocol §1 冻结先验,组合容量):
-- 全部战役合计 open 最坏情景 = Σ(各仓 |mark→invalid| 止损实现亏损) +
-  Σ(平仓侧 taker+滑点费用预算) + 新仓(止损距离风险 + 双边费用预算)
-  ≤ portfolio_cap_frac(3%)× equity_mtm;
-- 决策时刻评估(按信号时间 FIFO):超出则**整笔跳过**(不缩量),账本外
-  记录 cap_skips(ts/campaign/机制/方向/预算),counters 累计
-  "portfolio_cap_skips";成交时刻由 PR#9 已修的 broker 口径
-  (portfolio_stop_risk_frac / available_entry_notional,跨品种/跨战役
-  杠杆账)做第二层保守钳制(缩量,如实声明)。
+组合约束(口径唯一,见 capacity 模块):
+- 准入:本周期池内 已占用最坏情景 + 新仓最坏情景 ≤ 上限 × equity_mtm,最坏
+  情景 = 止损亏损 + 平仓侧 taker+滑点;超出则按信号时间 FIFO **整笔跳过**
+  (不缩量),账本外记录 cap_skips(ts/campaign/事件/方向/预算),counters 累计
+  "portfolio_cap_skips";
+- 成交:同一模块按止损风险反解数量(账户池与名义杠杆上限做第二层钳制)。
+  两个时刻的预算单位不同(准入含费用、裁剪只算止损风险)是**有意**的:实测
+  对称化会让净收益变差,理由与数字见 capacity.RiskBudget.includes_costs。
 - 每战役同时一仓一挂单(槽位纪律,同 v5);BREAKOUT_ACCEPTED 优先级撤单不动 §8 减仓单
   (持仓不与入场挂单共存)。
 
@@ -58,6 +57,7 @@ from typing import Optional
 import pandas as pd
 
 from .aggregate import TF_HOURS
+from . import capacity
 from .replay import (
     MS_15M,
     MS_1H,
@@ -262,39 +262,22 @@ def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
-# 组合容量(3% 最坏情景,FIFO 决策时整笔跳过)
+# 组合容量:口径唯一,全部委托给 capacity 模块(决策门与成交裁剪同一公式)
 # ---------------------------------------------------------------------------
 
 
-def _outstanding_worst_case(broker: Broker, tf_filter: Optional[str] = None) -> float:
-    """open 最坏情景 Σ(|mark→invalid| 止损亏损 + 平仓侧 taker+滑点预算)。"""
-    total = 0.0
-    suffix = f"@{tf_filter}" if tf_filter else None
-    for sym, pos in broker.positions.items():
-        if suffix and not sym.endswith(suffix):
-            continue
-        mark = broker.last_mark.get(sym, pos.entry)
-        stop_loss = pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
-        close_fee = pos.qty * mark * (broker.taker_fee + broker.slippage)
-        total += stop_loss + close_fee
-    return total
+def _outstanding_worst_case(broker: Broker,
+                            tf_filter: Optional[str] = None) -> float:
+    """准入时刻已占用的最坏情景(货币单位)。
 
+    实现只有一处(capacity 模块);本函数是它的**接缝**:冻结诊断脚本
+    ``scripts/_diag_v21_abcd.py`` 在此 monkeypatch 以复现历史数字,因此名字与
+    签名(``(broker, tf_filter)``)必须保留。
+    """
+    symbol = f"@{tf_filter}" if tf_filter else None
+    return broker.capacity_usage(broker.equity_mtm(), symbol,
+                                 moment=capacity.DECISION)[1]
 
-def _candidate_worst_case(broker: Broker, entry_ref: float,
-                          invalid: float, equity: float) -> float:
-    """新仓最坏情景预算(risk_frac sizing ∩ 名义上限,含双边 taker+滑点)。
-
-    不取整 step(略高估 = 保守);ref/invalid 退化 ⇒ inf(拒绝新增风险)。"""
-    risk_per_unit = abs(entry_ref - invalid)
-    if risk_per_unit <= 0.0 or equity <= 0.0:
-        return float("inf")
-    eff_rf = broker.current_risk_frac()
-    qty = min(eff_rf * equity / risk_per_unit,
-              broker._available_entry_notional(equity) / entry_ref)
-    if qty <= 0.0:
-        return float("inf")
-    return qty * risk_per_unit + qty * entry_ref * 2.0 * (
-        broker.taker_fee + broker.slippage)
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +311,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   router_params_by_tf: Optional[dict] = None,
                   tf_cap_by_tf: Optional[dict] = None,
                   dynamic_risk_tiers: Optional[list] = None,
+                  capacity_mode: str = capacity.ADMISSION_FULL_COST,
                   ) -> BacktestResult:
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
     docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 routing docstring)。
@@ -442,7 +426,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     maker_fee=maker_fee, cost_multiplier=cost_multiplier,
                     portfolio_stop_risk_frac=portfolio_cap_frac,
                     tf_stop_risk_frac_by_tf=tf_cap_by_tf,
-                    dynamic_risk_tiers=dynamic_risk_tiers)
+                    dynamic_risk_tiers=dynamic_risk_tiers,
+                    capacity_mode=capacity_mode)
     equity_rows: list = []
     cap_skips: list = []
     counters = {"go_events": 0, "open_intents": 0, "opens_filled": 0,
@@ -840,34 +825,30 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
-        # 组合容量 / 各时间尺度(TF)独立容量池(FIFO:决策时刻整笔跳过,记 reason)
+        # 组合容量(口径唯一,见 capacity):FIFO 决策时刻整笔跳过,不缩量
         equity = broker.equity_mtm()
-        cand_wc = _candidate_worst_case(broker, d.intent.ref_price,
-                                        d.hyp.invalid, equity)
-        if broker.tf_stop_risk_frac_by_tf and st.frame.tf_label in broker.tf_stop_risk_frac_by_tf:
-            tf_cap = float(broker.tf_stop_risk_frac_by_tf[st.frame.tf_label])
-            worst_tf = _outstanding_worst_case(broker, st.frame.tf_label) + cand_wc
-            if worst_tf > tf_cap * equity:
-                counters["portfolio_cap_skips"] += 1
-                cap_skips.append({
-                    "ts": t, "campaign": key, "event_id": d.hyp.event_id,
-                    "direction": d.hyp.direction, "route": d.route,
-                    "reason_code": "TF_CAP",
-                    "worst_case": worst_tf, "budget_frac": tf_cap,
-                    "equity": equity})
-                continue
-        if broker.portfolio_stop_risk_frac is not None and not broker.tf_stop_risk_frac_by_tf:
-            cap_frac = float(broker.portfolio_stop_risk_frac)
-            worst = _outstanding_worst_case(broker) + cand_wc
-            if worst > cap_frac * equity:
-                counters["portfolio_cap_skips"] += 1
-                cap_skips.append({
-                    "ts": t, "campaign": key, "event_id": d.hyp.event_id,
-                    "direction": d.hyp.direction, "route": d.route,
-                    "reason_code": "PORTFOLIO_CAP",
-                    "worst_case": worst, "budget_frac": cap_frac,
-                    "equity": equity})
-                continue
+        risk_per_unit = abs(d.intent.ref_price - d.hyp.invalid)
+        qty_full = broker.qty_for_entry(equity, d.intent.ref_price,
+                                        d.hyp.invalid, key, use_budget=False)
+        cap_frac, _used, _headroom, pool = broker.capacity_usage(
+            equity, key, moment=capacity.DECISION)
+        used = _outstanding_worst_case(
+            broker, st.frame.tf_label if pool == "tf" else None)
+        delta = capacity.delta_exposure(
+            qty_full, d.intent.ref_price, risk_per_unit,
+            taker_fee=broker.taker_fee, slippage=broker.slippage,
+            include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
+        if broker.risk_budget.is_active and (
+                qty_full <= 0.0 or used + delta > cap_frac * equity + 1e-9):
+            counters["portfolio_cap_skips"] += 1
+            cap_skips.append({
+                "ts": t, "campaign": key, "event_id": d.hyp.event_id,
+                "direction": d.hyp.direction, "route": d.route,
+                "reason_code": "TF_CAP" if pool == "tf" else "PORTFOLIO_CAP",
+                "worst_case": used + delta, "budget_frac": cap_frac,
+                "equity": equity})
+            continue
+
         counters["open_intents"] += 1
         if arm is not None and _arm_route(st, broker, d, arm, t, fill_after,
                                           n_fill, atr, extra_meta, counters):

@@ -43,9 +43,9 @@ def test_combined_prospective_stops_are_bounded():
 def test_stop_tightening_updates_budget_but_loosen_is_rejected():
     b = broker()
     place(b, "BTC", T0)
-    prev = b._available_stop_risk(b.equity_mtm())
+    prev = b.available_risk_budget(b.equity_mtm())
     b.update_protective_invalid("BTC", 99.8)
-    assert b._available_stop_risk(b.equity_mtm()) > prev
+    assert b.available_risk_budget(b.equity_mtm()) > prev
     with pytest.raises(ValueError, match="loosened"):
         b.update_protective_invalid("BTC", 99.7)
 
@@ -61,7 +61,7 @@ def test_add_also_consumes_total_stop_risk():
     assert row["kind"] in ("ADD", "SKIP")
     if row["kind"] == "ADD":
         assert row["qty"] < original
-    assert b._available_stop_risk(b.equity_mtm()) >= -1e-8
+    assert b.available_risk_budget(b.equity_mtm()) >= -1e-8
 
 
 def test_legacy_frozen_backtest_default_is_unchanged():
@@ -71,4 +71,4 @@ def test_legacy_frozen_backtest_default_is_unchanged():
                    "BTC": ContractSpec(symbol="BTC", size_min=.01,
                      size_step=.01, size_place=2, price_place=2, min_trade_usdt=5)})
     assert b.portfolio_stop_risk_frac is None
-    assert b._available_stop_risk(300) == float("inf")
+    assert b.available_risk_budget(300) == float("inf")

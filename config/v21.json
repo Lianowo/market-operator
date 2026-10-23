@@ -43,6 +43,7 @@
   "k_imp": 1.5,
   "turtle_stop_atr": 2.0,
   "portfolio_cap_frac": 0.12,
+  "capacity_mode": "admission_full_cost",
   "tf_cap_by_tf": {
     "2h": 0.0225,
     "4h": 0.0225,

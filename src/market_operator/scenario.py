@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from . import aggregate, data as datafeed
+from . import aggregate, capacity, data as datafeed
 from .replay import prepare_cognition
 from .broker import ContractSpec
 from .campaign import ArmConfig, build_campaign_frame, run_campaigns
@@ -108,6 +108,7 @@ class ScenarioSettings:
     trigger_seconds_by_timeframe: Mapping[str, Optional[int]]
     tf_cap_by_timeframe: Mapping[str, float]
     portfolio_cap_frac: float
+    capacity_mode: str
     risk_frac: float
     leverage_cap: float
     dev_frac: float
@@ -164,6 +165,8 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
         trigger_seconds_by_timeframe=trigger,
         tf_cap_by_timeframe=dict(raw.get("tf_cap_by_tf", {})),
         portfolio_cap_frac=float(raw.get("portfolio_cap_frac", 0.03)),
+        capacity_mode=str(raw.get("capacity_mode",
+                                  capacity.ADMISSION_FULL_COST)),
         risk_frac=float(raw["risk_frac"]),
         leverage_cap=float(raw["leverage_cap"]),
         dev_frac=float(raw["dev_frac"]),
@@ -308,6 +311,7 @@ class ScenarioRunner:
             router_params: Optional[RouterParams] = None,
             router_params_by_timeframe: Optional[Mapping[str, RouterParams]] = None,
             tf_cap_by_timeframe: Optional[Mapping[str, float]] = None,
+            capacity_mode: Optional[str] = None,
             arm: Optional[ArmConfig] = None) -> ScenarioOutcome:
         """按场景回放。所有可替换项缺省为配置值(即"现行语义")。"""
         settings = self.settings
@@ -334,6 +338,8 @@ class ScenarioRunner:
             tf_cap_by_tf=dict(settings.tf_cap_by_timeframe
                               if tf_cap_by_timeframe is None
                               else tf_cap_by_timeframe),
+            capacity_mode=settings.capacity_mode if capacity_mode is None
+            else str(capacity_mode),
             arm=settings.arm if arm is None else arm,
             router_params=settings.router if router_params is None else router_params,
             router_params_by_tf=dict(settings.router_by_timeframe

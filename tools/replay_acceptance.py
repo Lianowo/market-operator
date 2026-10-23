@@ -164,7 +164,8 @@ def compare(baseline: dict, current: dict) -> list[str]:
 
 
 def _run_all(scenarios: Iterable[str], segments: Iterable[str],
-             cost_multipliers: Iterable[float], progress: bool) -> dict:
+             cost_multipliers: Iterable[float], progress: bool,
+             capacity_mode: str | None = None) -> dict:
     results: dict = {}
     for name in scenarios:
         t0 = time.time()
@@ -173,7 +174,8 @@ def _run_all(scenarios: Iterable[str], segments: Iterable[str],
         for segment in segments:
             for cm in cost_multipliers:
                 t1 = time.time()
-                outcome = runner.run(segment=segment, cost_multiplier=cm)
+                outcome = runner.run(segment=segment, cost_multiplier=cm,
+                                     capacity_mode=capacity_mode)
                 summary = summarize(outcome)
                 key = f"{name}|{segment}|{cm:g}x"
                 summary["scenario"] = name
@@ -218,12 +220,16 @@ def main() -> int:
     parser.add_argument("--segments", default="dev,test,full")
     parser.add_argument("--costs", default="1.0")
     parser.add_argument("--quiet-prep", action="store_true")
+    parser.add_argument("--capacity-mode", default=None,
+                        choices=["full_cost", "stop_risk", "admission_full_cost"],
+                        help="覆盖配置的容量口径(对照实验用)")
     args = parser.parse_args()
 
     names = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
     segments = [s.strip() for s in args.segments.split(",") if s.strip()]
     costs = [float(c) for c in args.costs.split(",") if c.strip()]
-    current = _run_all(names, segments, costs, progress=not args.quiet_prep)
+    current = _run_all(names, segments, costs, progress=not args.quiet_prep,
+                       capacity_mode=args.capacity_mode)
 
     baseline: dict = {}
     if BASELINE_PATH.exists():

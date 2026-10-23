@@ -83,6 +83,8 @@ from typing import Optional
 
 import requests
 
+from . import capacity
+
 
 class OrderKind(str, Enum):
     OPEN = "OPEN"
@@ -292,7 +294,8 @@ class Broker:
                  cost_multiplier: float = 1.0, liq_frac: float = 0.9,
                  portfolio_stop_risk_frac: Optional[float] = None,
                  tf_stop_risk_frac_by_tf: Optional[dict] = None,
-                 dynamic_risk_tiers: Optional[list] = None) -> None:
+                 dynamic_risk_tiers: Optional[list] = None,
+                 capacity_mode: str = capacity.ADMISSION_FULL_COST) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
         self.initial_equity = float(equity)
@@ -319,6 +322,11 @@ class Broker:
             [(float(t[0]), float(t[1])) for t in dynamic_risk_tiers]
             if dynamic_risk_tiers else None
         )
+        # 风险预算的唯一口径(见 capacity 模块):决策门与成交裁剪共用
+        self.risk_budget = capacity.RiskBudget(
+            portfolio_frac=portfolio_stop_risk_frac,
+            per_timeframe_frac=self.tf_stop_risk_frac_by_tf or {},
+            mode=capacity_mode)
 
         self.positions: dict[str, _AcctPosition] = {}
         self.pending: dict[str, list[_Pending]] = {}
@@ -547,42 +555,61 @@ class Broker:
                 return r_frac
         return self.dynamic_risk_tiers[-1][1]
 
-    def _available_stop_risk(self, equity: float, symbol: Optional[str] = None) -> float:
-        """从当前盯市价到结构止损的账户/周期风险;支持按时间尺度(TF)独立容量池。"""
-        if self.tf_stop_risk_frac_by_tf and symbol and "@" in symbol:
-            tf_lbl = symbol.rsplit("@", 1)[1]
-            tf_cap = self.tf_stop_risk_frac_by_tf.get(tf_lbl)
-            if tf_cap is not None:
-                outstanding_tf = 0.0
-                suffix = f"@{tf_lbl}"
-                for sym, pos in self.positions.items():
-                    if not sym.endswith(suffix):
-                        continue
-                    if pos.invalid is None:
-                        return 0.0
-                    mark = self.last_mark.get(sym, pos.entry)
-                    outstanding_tf += pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
-                avail_tf = max(0.0, equity * tf_cap - outstanding_tf)
-                if self.portfolio_stop_risk_frac is None:
-                    return avail_tf
-                # 若同时设了全局安全上限,取二者较小值
-                outstanding_all = 0.0
-                for sym, pos in self.positions.items():
-                    if pos.invalid is None:
-                        return 0.0
-                    mark = self.last_mark.get(sym, pos.entry)
-                    outstanding_all += pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
-                avail_all = max(0.0, equity * self.portfolio_stop_risk_frac - outstanding_all)
-                return min(avail_tf, avail_all)
-        if self.portfolio_stop_risk_frac is None:
-            return float("inf")
-        outstanding = 0.0
-        for sym, pos in self.positions.items():
-            if pos.invalid is None:
-                return 0.0  # stop 未知,不接受任何新增风险
-            mark = self.last_mark.get(sym, pos.entry)
-            outstanding += pos.qty * max(0.0, pos.direction * (mark - pos.invalid))
-        return max(0.0, equity * self.portfolio_stop_risk_frac - outstanding)
+    # -- 风险预算:唯一口径见 capacity 模块 ---------------------------------
+    def _budget_headroom(self, equity: float, symbol: Optional[str], *,
+                         moment: str) -> tuple[float, str, float]:
+        """各生效池剩余额度的最小值:``(剩余, 最紧池名, 该池上限占比)``。"""
+        headroom, name, frac = capacity.budget_headroom(
+            self.risk_budget.pools(capacity.timeframe_of(symbol), moment=moment),
+            equity, self.positions, self.last_mark,
+            taker_fee=self.taker_fee, slippage=self.slippage,
+            include_costs=self.risk_budget.includes_costs(moment))
+        if math.isfinite(headroom):
+            headroom = max(0.0, headroom)
+        return headroom, name, frac
+
+    def available_risk_budget(self, equity: float,
+                              symbol: Optional[str] = None) -> float:
+        """成交时刻仍可占用的最坏情景额度;``inf`` = 未配置容量上限。"""
+        return self._budget_headroom(equity, symbol, moment=capacity.FILL)[0]
+
+    def _available_stop_risk(self, equity: float,
+                             symbol: Optional[str] = None) -> float:
+        """历史接缝名:冻结诊断脚本在此 monkeypatch,语义 = 成交时刻剩余预算。"""
+        return self.available_risk_budget(equity, symbol)
+
+    def capacity_usage(self, equity: float, symbol: Optional[str] = None, *,
+                       moment: str = capacity.DECISION
+                       ) -> tuple[float, float, float, str]:
+        """``(上限占比, 已占用, 剩余, 最紧池名)``;未配置上限时剩余为 inf。"""
+        if not self.risk_budget.is_active:
+            return 0.0, 0.0, math.inf, ""
+        headroom, name, frac = self._budget_headroom(equity, symbol,
+                                                     moment=moment)
+        return frac, frac * equity - headroom, headroom, name
+
+    def qty_within_risk_budget(self, equity: float, price: float,
+                               risk_per_unit: float,
+                               symbol: Optional[str] = None) -> float:
+        """按成交时刻口径反解数量(与决策门同一分母,故两边同解)。"""
+        return capacity.qty_for_budget(
+            self._available_stop_risk(equity, symbol), price, risk_per_unit,
+            taker_fee=self.taker_fee, slippage=self.slippage,
+            include_costs=self.risk_budget.includes_costs(capacity.FILL))
+
+    def qty_for_entry(self, equity: float, price: float, stop: Optional[float],
+                      symbol: Optional[str] = None, *, size_mult: float = 1.0,
+                      use_budget: bool = True) -> float:
+        """统一建仓数量 = 单笔风险 ∩ 账户名义上限 (∩ 风险预算),未取整。"""
+        risk_per_unit = abs(price - stop) if stop is not None else 0.0
+        if risk_per_unit <= 0.0 or equity <= 0.0:
+            return 0.0
+        qty = min(self.current_risk_frac() * size_mult * equity / risk_per_unit,
+                  self._available_entry_notional(equity) / price)
+        if use_budget:
+            qty = min(qty, self.qty_within_risk_budget(equity, price,
+                                                       risk_per_unit, symbol))
+        return max(0.0, qty)
 
     def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
         """入场挂单成交:limit_price 精确成交(无滑点),maker 费,sizing 同 OPEN。"""
@@ -608,11 +635,8 @@ class Broker:
         risk_per_unit = abs(price - od.invalid)
         # v14 C5/C4:size_mult(quality tier × 1/切份数;缺省 1.0 ⇒ 逐位旧口径)
         size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
-        eff_risk_frac = self.current_risk_frac()
-        qty_risk = eff_risk_frac * size_mult * equity / risk_per_unit
-        qty_cap = self._available_entry_notional(equity) / price
-        qty_portfolio_stop = self._available_stop_risk(equity, sym) / risk_per_unit
-        qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
+        qty = _floor_step(self.qty_for_entry(equity, price, od.invalid, sym,
+                                             size_mult=size_mult),
                           spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
@@ -671,11 +695,8 @@ class Broker:
         equity = self.equity_mtm()
         risk_per_unit = abs(price - pos.invalid)
         size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
-        eff_risk_frac = self.current_risk_frac()
-        qty_risk = eff_risk_frac * size_mult * equity / risk_per_unit
-        qty_cap = self._available_entry_notional(equity) / price
-        qty_portfolio_stop = self._available_stop_risk(equity, sym) / risk_per_unit
-        qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
+        qty = _floor_step(self.qty_for_entry(equity, price, pos.invalid, sym,
+                                             size_mult=size_mult),
                           spec.size_step, spec.size_place)
         if qty < spec.size_min or qty * price < spec.min_trade_usdt:
             return self._limit_skip(
@@ -831,11 +852,8 @@ class Broker:
         risk_per_unit = abs(price - po.invalid)
         # v14 C5:size_mult(quality tier;缺省 1.0 ⇒ 逐位旧口径)
         size_mult = float(po.meta.get("size_mult", 1.0) or 1.0)
-        eff_risk_frac = self.current_risk_frac()
-        qty_risk = eff_risk_frac * size_mult * equity / risk_per_unit
-        qty_cap = self._available_entry_notional(equity) / price
-        qty_portfolio_stop = self._available_stop_risk(equity, sym) / risk_per_unit
-        qty = _floor_step(min(qty_risk, qty_cap, qty_portfolio_stop),
+        qty = _floor_step(self.qty_for_entry(equity, price, po.invalid, sym,
+                                             size_mult=size_mult),
                           spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
@@ -895,12 +913,22 @@ class Broker:
         requested = (po.intent.qty_frac or 0.0) * pos.open_qty
         equity = self.equity_mtm()
         cap_qty = self._available_entry_notional(equity) / price
-        if self.portfolio_stop_risk_frac is not None:
+        # 加仓与建仓共用同一预算。admission_full_cost 复现现行口径(仅在配置了
+        # 账户池时钳制,且只按账户池);full_cost / stop_risk 让周期池同样生效。
+        if self.risk_budget.mode == capacity.ADMISSION_FULL_COST:
+            constrained = self.portfolio_stop_risk_frac is not None
+            scope = None
+        else:
+            constrained = self.risk_budget.is_active
+            scope = sym
+        if constrained:
             if pos.invalid is None or pos.direction * (price - pos.invalid) <= 0:
                 return self._skip_row(po, ts, "BAD_INVALID", "add without protective stop")
-            stop_qty = self._available_stop_risk(equity) / (
-                pos.direction * (price - pos.invalid))
-            cap_qty = min(cap_qty, stop_qty)
+            risk_per_unit = pos.direction * (price - pos.invalid)
+            cap_qty = min(cap_qty, self.qty_within_risk_budget(
+                equity, price, risk_per_unit, scope))
+
+
         qty = _floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
         if qty < spec.size_min or qty * price < spec.min_trade_usdt:
             return self._skip_row(po, ts, "MIN_SIZE",
