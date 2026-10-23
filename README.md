@@ -80,6 +80,13 @@ python scripts/live_paper_check.py
 python scripts/live_runner.py --mode paper
 python scripts/live_runner.py --mode live
 
+# 实盘运维(只读自检 / 缺口补做预演 / 常驻看护 / 存储治理)
+python scripts/live_status.py            # 本地↔交易所↔保护单三方核对,不一致时退出码 1
+python scripts/live_gap_preview.py       # 只读预演掉线缺口补做(所有写操作被拦截)
+python scripts/storage_gc.py             # 存储盘点 + 预算判定(默认只读)
+python scripts/storage_gc.py --apply --dedupe-gz   # 安全清理(日志/备份/缓存/无损去重)
+powershell -File scripts/live_watchdog.ps1 -Action register   # 注册每 3 分钟拉起的计划任务
+
 # 规范基线回放(产物 reports/backtest_v6_turtle.*)
 python scripts/run_backtest_v6.py
 

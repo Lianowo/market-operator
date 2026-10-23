@@ -45,9 +45,20 @@
     "reconcile_seconds": 120,
     "universe_refresh_seconds": 7200,
     "api_error_max": 5,
+    "max_consecutive_errors": 20,
+    "state_bar_tail": 24,
+    "campaigns_write_seconds": 120,
     "state_path": "runtime/live/state.json",
     "journal_dir": "logs",
-    "journal_prefix": "live_"
+    "journal_prefix": "live_",
+    "gap_recovery": {
+      "enabled": true,
+      "min_gap_seconds": 180,
+      "stop_policy": "market",
+      "reduce_policy": "market",
+      "stop_check_seconds": 120,
+      "note": "掉线补做:重启后把缺口内已收盘的 bar 逐根补放进 canonical 持仓管理(移动防线/对侧锁利/TP1),但绝不补开新仓。缺口内曾触及固定止损而交易所仍有仓 → stop_policy=market 立即市价离场(否则 rearm 只重挂止损并告警);TP1 该减未减 → reduce_policy=market 市价减仓(接受回撤换确定性,limit 会挂一张可能永不成交的单)。stop_check_seconds:核对保护止损计划单是否仍在交易所的周期,本地有记录而交易所没有 = 保护失效,价格已越过防线则市价离场,否则重挂。"
+    }
   },
   "universe": {
     "enabled": true,
