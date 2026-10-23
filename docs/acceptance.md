@@ -433,3 +433,11 @@ python tools/replay_acceptance.py --quiet-prep   # 同场景重放 × 冻结基�
 三条路径共用同一个 `Exposure`/`RiskBudget`,任何一处公式改动都会同时改变
 准入与成交——这正是要的(以前三份实现各自漂移)。
 
+
+## 重构验收结论(2026-10-23)
+
+`refactor/domain-model` 对生产链去版本化之后,按上面的判据实测:6 个「场景 × 段」
+× 4 个周期共 24 行全部 Δ = 0.0000,逐笔摘要一致。证明链条、替代前闭合的三处工程
+缺口(book4 依赖的 DOGE 数据入库、`data.save` 的 LF 口径与 manifest 哈希自洽、
+1D/12H 分页截断修复)以及残余风险,见 `reports/refactor_20261023/ACCEPTANCE.md`。
+
