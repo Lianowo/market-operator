@@ -1,5 +1,5 @@
 {
-  "fetched_at_utc": "2026-10-19T06:36:26+00:00",
+  "fetched_at_utc": "2026-10-23T02:28:36+00:00",
   "source_url": "https://api.bitget.com/api/v2/mix/market/contracts",
   "product_type": "USDT-FUTURES",
   "entries": {
@@ -43,6 +43,49 @@
         "openTime": "",
         "maxMarketOrderQty": "220",
         "maxOrderQty": "1200",
+        "isRwa": "NO"
+      }
+    },
+    "DOGEUSDT": {
+      "sha256": "f4f37ae72f44fe0e81631274f8a1a307be28f88539ccb3574eaa7706a41068f6",
+      "raw": {
+        "symbol": "DOGEUSDT",
+        "baseCoin": "DOGE",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.1",
+        "sellLimitPriceRatio": "0.1",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "1",
+        "priceEndStep": "1",
+        "volumePlace": "0",
+        "pricePlace": "5",
+        "sizeMultiplier": "1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.15",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "6300000",
+        "maxOrderQty": "51000000",
         "isRwa": "NO"
       }
     },

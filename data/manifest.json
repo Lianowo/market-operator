@@ -2,33 +2,36 @@
   "files": {
     "BTCUSDT_1h.csv": {
       "path": "data\\raw\\BTCUSDT_1h.csv",
-      "sha256": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
+      "sha256": "4c3369c799e4f9679e7ab64dd1f9e31fc1867eb173998b2f155be491bdc174ee",
       "rows": 17600,
       "ts_first": 1729022400000,
       "ts_last": 1792378800000,
       "fetched_at_utc": "2026-10-19T04:14:42+00:00",
       "span_days": 733.29,
-      "validation_issues": []
+      "validation_issues": [],
+      "git_line_ending": "lf"
     },
     "ETHUSDT_1h.csv": {
       "path": "data\\raw\\ETHUSDT_1h.csv",
-      "sha256": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
+      "sha256": "96de5ae4a0d8e746878073edc24ab47547fd09dc7bdcde947e68c63e7c07a323",
       "rows": 17600,
       "ts_first": 1729022400000,
       "ts_last": 1792378800000,
       "fetched_at_utc": "2026-10-19T04:15:39+00:00",
       "span_days": 733.29,
-      "validation_issues": []
+      "validation_issues": [],
+      "git_line_ending": "lf"
     },
     "SOLUSDT_1h.csv": {
       "path": "data\\raw\\SOLUSDT_1h.csv",
-      "sha256": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
+      "sha256": "a672ae99b940413eb7968892fd27f7e11204bc2128118464c8ec022deae7e5af",
       "rows": 17600,
       "ts_first": 1729022400000,
       "ts_last": 1792378800000,
       "fetched_at_utc": "2026-10-19T04:16:34+00:00",
       "span_days": 733.29,
-      "validation_issues": []
+      "validation_issues": [],
+      "git_line_ending": "lf"
     },
     "BTCUSDT_2h.csv": {
       "path": "data\\raw\\BTCUSDT_2h.csv",
@@ -491,7 +494,7 @@
       },
       "anchored_to_1h": {
         "file": "BTCUSDT_1h.csv",
-        "sha256": "5631d240628f0171c4019c42a41db9189459c7be36ffc0f186fb6d856104ed5e",
+        "sha256": "4c3369c799e4f9679e7ab64dd1f9e31fc1867eb173998b2f155be491bdc174ee",
         "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
       },
       "validation_issues": []
@@ -510,7 +513,7 @@
       },
       "anchored_to_1h": {
         "file": "ETHUSDT_1h.csv",
-        "sha256": "81ee2cae0c384cc437a7edab077355a02692b02c9655cc1b3d30f2d4fab70f0a",
+        "sha256": "96de5ae4a0d8e746878073edc24ab47547fd09dc7bdcde947e68c63e7c07a323",
         "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
       },
       "validation_issues": []
@@ -529,7 +532,7 @@
       },
       "anchored_to_1h": {
         "file": "SOLUSDT_1h.csv",
-        "sha256": "9bb0e87fed875707574222a16cd660c64bf570a33bc8636fd44b53cb1af6be13",
+        "sha256": "a672ae99b940413eb7968892fd27f7e11204bc2128118464c8ec022deae7e5af",
         "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
       },
       "validation_issues": []
@@ -5971,6 +5974,119 @@
       "purpose": "v19-orderflow 认知帧(同窗+180d warm-up);v12 既有帧零改动",
       "granularity": "1h",
       "parts_n": 1,
+      "validation_issues": []
+    },
+    "DOGEUSDT_1h.csv": {
+      "path": "data\\raw\\DOGEUSDT_1h.csv",
+      "sha256": "6d580ace76463390d53decf42e288637a6f9c1c2ce7c73156a447626ed4aad97",
+      "rows": 17600,
+      "ts_first": 1729022400000,
+      "ts_last": 1792378800000,
+      "fetched_at_utc": "2026-10-23T06:16:20+00:00",
+      "span_days": 733.29,
+      "granularity": "1H",
+      "step_ms": 3600000,
+      "validation_issues": []
+    },
+    "DOGEUSDT_5m.csv": {
+      "path": "data\\raw\\DOGEUSDT_5m.csv",
+      "sha256": "232e40bac459e1cb0afa7e4d294c13c531903f0d0b4cd5eede77ef062bd9bba2",
+      "rows": 211200,
+      "ts_first": 1729022400000,
+      "ts_last": 1792382100000,
+      "fetched_at_utc": "2026-10-23T06:16:19+00:00",
+      "span_days": 733.33,
+      "granularity": "5m",
+      "step_ms": 300000,
+      "validation_issues": [
+        "non-positive volume at 1784404500000"
+      ]
+    },
+    "DOGEUSDT_15m.csv": {
+      "path": "data\\raw\\DOGEUSDT_15m.csv",
+      "sha256": "061d16cbb2559707424303cd3d5157e0283e77dc8c66b5d276b455f0e59950ea",
+      "rows": 70400,
+      "ts_first": 1729022400000,
+      "ts_last": 1792381500000,
+      "fetched_at_utc": "2026-10-23T06:16:19+00:00",
+      "span_days": 733.32,
+      "granularity": "15m",
+      "step_ms": 900000,
+      "validation_issues": []
+    },
+    "DOGEUSDT_30m.csv": {
+      "path": "data\\raw\\DOGEUSDT_30m.csv",
+      "sha256": "f789a1a2fde555cc18f0add4ffdb26cd554e9b098afe8800acab239caeea64e9",
+      "rows": 35200,
+      "ts_first": 1729022400000,
+      "ts_last": 1792380600000,
+      "span_days": 733.31,
+      "source": "15m聚合(UTC 对齐,docs/v13-protocol.md §1;tf=30m)",
+      "aggregated_from": {
+        "file": "DOGEUSDT_15m.csv",
+        "sha256": "de8f0570d1229b579fc27a0eec2fffa58e70396f303b2b9e73a9b8c6ed244297"
+      },
+      "anchored_to_1h": {
+        "file": "DOGEUSDT_1h.csv",
+        "sha256": "2ccac0898106148993440a711291084edc9b3416f98581a91542dedcc034a50b",
+        "check": "30m 帧 2:1 聚合 → 1h == 盘上 1h 帧 逐位(OHLC+ts;构图前硬断言)"
+      },
+      "validation_issues": []
+    },
+    "DOGEUSDT_2h.csv": {
+      "path": "data\\raw\\DOGEUSDT_2h.csv",
+      "sha256": "c3a0a71a1d7dde15872cf3908e7be966b0ae11afe1d168996bbe896573786369",
+      "rows": 8800,
+      "ts_first": 1729022400000,
+      "ts_last": 1792375200000,
+      "span_days": 733.25,
+      "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=2h)",
+      "aggregated_from": {
+        "file": "DOGEUSDT_1h.csv",
+        "sha256": "2ccac0898106148993440a711291084edc9b3416f98581a91542dedcc034a50b"
+      },
+      "validation_issues": []
+    },
+    "DOGEUSDT_4h.csv": {
+      "path": "data\\raw\\DOGEUSDT_4h.csv",
+      "sha256": "bd919eda2683a21118f1db76940e35f7e3f00169b04f9121e344a71bca317cef",
+      "rows": 4400,
+      "ts_first": 1729022400000,
+      "ts_last": 1792368000000,
+      "span_days": 733.17,
+      "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=4h)",
+      "aggregated_from": {
+        "file": "DOGEUSDT_1h.csv",
+        "sha256": "2ccac0898106148993440a711291084edc9b3416f98581a91542dedcc034a50b"
+      },
+      "validation_issues": []
+    },
+    "DOGEUSDT_12h.csv": {
+      "path": "data\\raw\\DOGEUSDT_12h.csv",
+      "sha256": "dbba2c071c84dd3fcfc4e6e611af1741a0004154126d83b000b729b0f9ac58c0",
+      "rows": 1468,
+      "ts_first": 1728993600000,
+      "ts_last": 1792368000000,
+      "span_days": 733.5,
+      "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=12h)",
+      "aggregated_from": {
+        "file": "DOGEUSDT_1h.csv",
+        "sha256": "2ccac0898106148993440a711291084edc9b3416f98581a91542dedcc034a50b"
+      },
+      "validation_issues": []
+    },
+    "DOGEUSDT_1d.csv": {
+      "path": "data\\raw\\DOGEUSDT_1d.csv",
+      "sha256": "4400fb7d04dbd71c06ac7173e6874e0198479caa9e07d6edf8936ecd61f802c0",
+      "rows": 735,
+      "ts_first": 1728950400000,
+      "ts_last": 1792368000000,
+      "span_days": 734.0,
+      "source": "1h聚合(UTC 对齐,docs/v3-protocol.md §1;tf=1d)",
+      "aggregated_from": {
+        "file": "DOGEUSDT_1h.csv",
+        "sha256": "2ccac0898106148993440a711291084edc9b3416f98581a91542dedcc034a50b"
+      },
       "validation_issues": []
     }
   }
