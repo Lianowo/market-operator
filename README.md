@@ -60,7 +60,7 @@ aggregate(多 TF 聚合) ◄─────────────────�
   - `2h` / `4h` 同周期收盘确认触发（配强克制过滤：`min_box_rotations=3`、`min_bar_impulse_atr=1.2`、同箱沿冷却）；
   - `12h -> 2h`、`1d -> 4h` 降一档细周期触发，兼顾大箱体高胜率与早入场高盈亏比。
 - **分类止损与对侧突破锁利**：`REJECT` 采用箱体外缘结构止损，触及或突破对侧缘 `box_opposite` 时**不平半仓**，而是把防线交给"**回吐预算**"（v21.7：`budget = (1−|frac|)·|target−entry|`，`stop = peak ∓ budget`，`peak` 为入场以来最有利极值）—— 推进可多次棘轮、回吐超预算立刻市价离场，不再把仓位钉在一个落后于行情的绝对价位上（`reject_opp_lock_frac=-0.25` 即"锁 ¼、让 ¾"，`-0.50` 为"锁一半"；标定见 `docs/v21-protocol.md` §5.1）；剩余仓位交由 §8.3 确认 pivot 移动防线收割；`ACCEPT` 采用 2.0·ATR 初始防线与无上限移动防线。
-- **各周期独立风险容量池与阶梯动态复利**：`tf_cap_by_tf` 为 `2h`/`4h`/`12h`/`1d` 分配独立风险预算，防止短周期仓位挤占大周期高胜率机会；实盘支持 104 USDT 起步 × 20x 杠杆 × 四档净值阶梯动态风险（`<=250U:4%`, `<=600U:3%`, `<=1500U:2%`, `>1500U:1%`）与 Telegram 信号/交易双机器人高清黑白 K 线+箱体结构图推送。
+- **各周期独立风险容量池与阶梯动态复利**：`tf_cap_by_tf` 为 `2h`/`4h`/`12h`/`1d` 分配独立风险预算，防止短周期仓位挤占大周期高胜率机会；实盘支持 104 USDT 起步 × 20x 杠杆 × 四档净值阶梯动态风险（`<=250U:4%`, `<=600U:3%`, `<=1500U:2%`, `>1500U:1%`）与 Telegram 信号/运营双通道高清黑白 K 线结构图推送（信号广播与容量闸门解耦：公开信号频道只发市场结构与 `exec_status` 处置说明，成交/防线推进/平仓/日结/告警全部走运营通道）。
 
 ## 历史轮次归档（research/)
 
@@ -73,7 +73,7 @@ v1-v5 各轮与 v6 双臂 A/B 快照、PR#9/#10 前向设施已按轮次归档�
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest -q                       # 524 passed / 1 skipped(全量回归 + 各轮历史测试)
+python -m pytest -q                       # 618 passed / 1 skipped(全量回归 + 各轮历史测试)
 
 # v21 平衡箱与多周期混合触发回测诊断
 python scripts/_diag_v21_backtest.py
@@ -122,6 +122,7 @@ python scripts/live_supervisor.py --status    # 体检:心跳年龄/判定/重�
 python scripts/live_supervisor.py             # 常驻看护(runner 由它拉起,自带每日存储治理)
 python scripts/live_supervisor.py --once       # 单次判定(交给计划任务每 5 分钟触发)
 python scripts/live_supervisor.py --once --no-start   # 演练:只告警不拉起
+python scripts/live_restart.py                # 改完代码后换进程(不等看护 300s 窗口,立即拉起并确认心跳)
 python scripts/live_status.py                 # 人读快照:持仓/挂单/缺口/心跳
 python scripts/storage_gc.py                  # 只读盘点 + 增长预测
 python scripts/storage_gc.py --enforce        # 执行安全清理 + 预算闸门(0/1/2)

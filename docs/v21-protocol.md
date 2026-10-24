@@ -78,9 +78,11 @@
 4. **小资金阶梯动态复利（`small_account_compounding` / `config/live.json`）**：
    - 104 USDT 起步 × 20x 杠杆上限；
    - 按账户实时净值阶梯调整单笔风险：`<=250U: 4%`、`<=600U: 3%`、`<=1500U: 2%`、`>1500U: 1%`。
-5. **实盘多周期并发与双机器人黑白 K 线通知（`live_runner.py` + `tg.py`）**：
+5. **实盘多周期并发、信号闸门解耦与双通道黑白 K 线结构通知（`live_runner.py` + `tg.py`）**：
    - `LiveRunner` 在 `engine="v21"` 下自动为每个品种装配 `2h`、`4h`、`12h(->2h)`、`1d(->4h)` 四个独立战役实例。
-   - `TelegramNotifier` 支持信号 Bot（信号/日结/告警）与交易 Bot（开仓/减仓/移动防线/平仓）双通道分离，内置无依赖纯 Python 高清黑白 K 线与平衡箱体 PNG 渲染器（`render_bw_kline_png`），每行一条 Emoji 关键信息配图直发。
+   - **信号广播与容量闸门解耦**：`_submit_open` 先结算结构事实（区间/箱体/风险档/周期）与容量/风控闸门，无论是否被 `TF_CAP` / `PORTFOLIO_CAP` / `MIN_NOTIONAL` / 熔断挡下都推送信号通知，并以 `exec_status` 明确说明本系统处置（如 `仅参考 · 12h 周期容量已满,本系统本拍未开仓` 或 `本系统已同向开仓(市价)`）；同事件按 `(symbol, tf, event, ts, direction, route)` 去重，通知异常记入 `signal_notice_errors` 且绝不打断决策链。
+   - **`TelegramNotifier` 信号/运营双通道分离（`_KIND_CHANNEL`）**：`signal` 走公开信号频道（不含账户权益、持仓量或下单回执，可公开订阅），`fill`（开仓/减仓/锁利与防线推进/平仓）、`daily`、`alert` 及未知类型一律走运营通道（`TELEGRAM_TRADE_*` 未单独配置时回退信号 Bot 并如实报告 `ops_channel_separate=False`）。
+   - **纯 Python 高清黑白 K 线结构图（`render_bw_kline_png`）**：标注平衡箱体（浅灰带 + 粗虚线上下沿）、事件区间（斜线填充 + 细虚线 + 触边次数）、`±R` 标尺、认知帧结构端点 `PH/PL`（白底衬 + 右沿自动左翻），右侧标签栏按 12px 行距碰撞避让，纵轴按间距统一小数位精度。
 
 ### 5.1 锁利预算 `frac` 的标定（2026-10-24）
 

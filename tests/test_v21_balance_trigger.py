@@ -614,7 +614,7 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
     exp1 = 112.0 - _prod_giveback(100.0, 110.0)
     assert abs(runner.positions["BTCUSDT"]["invalid"] - exp1) < 1e-9
     assert abs(cs.pm.positions["BTCUSDT"].invalid - exp1) < 1e-9
-    lock_fill = [f for f in fills if "止损推进" in f[1]][-1]
+    lock_fill = [f for f in fills if "锁利推进" in f[1]][-1]
     assert abs(lock_fill[4]["stop_price"] - exp1) < 1e-9
     # 图 ENTRY = 建仓均价(不是本次事件价 111.0,修前会把相对关系画错)
     assert lock_fill[4]["entry_price"] == 100.0
@@ -715,7 +715,8 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     exp_stop = 112.0 - _prod_giveback(100.0, 110.0)
     assert runner.positions["BTCUSDT"]["invalid"] == exp_stop
     assert cs_12h.pm.positions["BTCUSDT"].invalid == exp_stop
-    assert any("止损推进" in f[1] for f in fills)
+    # 通知的**语义标题**必须是"锁利推进"(防线已进盈利侧),不是"止损推进"
+    assert any("锁利推进" in f[1] for f in fills)
 
     # 再下一根 2H bar(k=397,仍非 12h 收盘时刻):低点 104.0 跌破新止损
     # 应由 _on_sub_bar 立即按止损价触发 STOP 平仓,无需等待 12h 收盘
@@ -989,8 +990,9 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
     exp1 = 320.93 + _prod_giveback(324.02, 322.66)
     assert abs(runner.positions["BTCUSDT"]["invalid"] - exp1) < 1e-9
     assert abs(cs.pm.positions["BTCUSDT"].invalid - exp1) < 1e-9
-    adv = [f for f in fills if "止损推进" in f[1]]
+    adv = [f for f in fills if "锁利推进" in f[1]]
     assert len(adv) == 1
+    assert adv[0][1].startswith("锁利推进(已锁")          # 语义标题(空头锁利)
     assert abs(adv[0][3] - 321.33) < 1e-9                    # 参考价=子周期收盘
     assert abs(adv[0][4]["entry_price"] - 324.02) < 1e-9     # 图 ENTRY=真实建仓价
     assert adv[0][4]["price_label"] == "参考价(子周期收盘)"
@@ -1005,7 +1007,7 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
                     run_paper_fills=True)
     exp2 = 318.5 + _prod_giveback(324.02, 322.66)
     assert abs(runner.positions["BTCUSDT"]["invalid"] - exp2) < 1e-9
-    adv2 = [f for f in fills if "止损推进" in f[1]]
+    adv2 = [f for f in fills if "锁利推进" in f[1]]
     assert len(adv2) == 1
     assert abs(adv2[0][4]["stop_price"] - exp2) < 1e-9
     assert abs(adv2[0][4]["entry_price"] - 324.02) < 1e-9

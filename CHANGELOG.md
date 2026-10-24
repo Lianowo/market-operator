@@ -1,5 +1,107 @@
 # Changelog
 
+## [Unreleased] — 2026-10-24 — 信号广播与容量闸门解耦 + 通知双通道 + 图表结构标注
+
+三件事同源：**信号是市场事实，执行是本账户状态**。修前两者被同一段代码绑死 ——
+信号广播写在 `_submit_open` 的闸门之后，任一闸门 `return` 都连带吞掉通知，容量池
+一满，ACCEPT/REJECT 在信号频道就彻底不可见；所有通知又都挤在同一个 Bot 里，公开
+频道被迫与账户成交/日结/告警共用一个房间。
+
+- **P0 闸门只产出 `block` 码，不再决定"要不要通知"**：`_submit_open` 重排为
+  「结构事实（区间/箱体/风险档/周期）→ 闸门 → 信号广播 → 记账 → 装配」，闸门
+  （`API_HALT`/`degenerate_risk`/`TF_CAP`/`PORTFOLIO_CAP`/`MIN_NOTIONAL`/
+  `DAILY_LOSS_BREAKER`/`RATE_LIMIT`/`DUPLICATE`）只赋值，广播在记账之前。
+  计数器/日志语义逐条沿用 `_BLOCK_COUNTERS` / `_note_block`（`TF_CAP` 仍同时计入
+  `tf_cap_skips` + `cap_skips`，`MIN_NOTIONAL` 仍记 qty/ref），历史 counters 与
+  journal 口径可直接对读。
+- **信号消息新增"系统执行"行**（`exec_status`）：被挡时写
+  `仅参考 · 组合容量已满,本系统本拍未开仓`（周容量点名 `12h 周期容量已满`），
+  放行时写 `本系统已挂限价单` / `本系统已同向开仓(市价)`。公开频道**只写结构与
+  处置**，不出现权益/持仓量/下单成败 —— 该频道可以公开订阅。
+- **`_notify_signal` 三重纪律**：① 按 `(symbol, tf, event, ts, direction, route)`
+  去重（2048 条滑窗，闸门重复评估不刷屏，但计数器照常累加）② 通知器缺失/抛异常
+  只记 `signal_notice_errors` + journal，绝不反噬决策链 ③ 渲染与 HTTP 都在通知器
+  工作线程里跑（`png_factory` 延迟渲染），主循环只付一次入队成本。
+- **P0 通知双通道（`tg.py`）**：`_KIND_CHANNEL` 一张表就是唯一事实 —— `signal`
+  →公开频道，`fill`/`daily`/`alert`→运营频道，**未知类型一律落运营**（宁可多给
+  运营看，也不把账户数据塞进公开群）；`send(kind, ...)` 是唯一出口，
+  `channel_of()` 供测试直读。运营通道未配置时**回退**到信号 Bot（不静默丢告警），
+  `ops_channel_separate` 按解析后的 token/chat 是否不同如实回答 —— 这很重要，
+  因为 `secrets_loader` 已把 `TELEGRAM_TRADE_*` 回退填满，"键存在"不再等于"显式
+  配置"（修前用 `_ops_explicit` 标记，正好把回退误报成"已分开"）。启动日志与起动
+  告警都打 `信号通道=on/off / 信号/运营 独立|运营回退信号 Bot|未配置`。
+- **`send_signal` 参数化结构事实**：新增 `tf_label/bars/box_lo/box_hi/target_1/
+  zone_lo/zone_hi/zone_touches/pivots/atr/exec_status/decision_ts`；`send_fill`
+  同样收 `zone_*`/`pivots`/`atr`，且坚持 `entry_price`（真实建仓价）与 `price`
+  （本次事件价）分离。测试期间抓到一个真 bug：runner 侧把方向写成
+  `direction=` 而模板要的是 `side=`，每条信号都会 `TypeError` 被 except 吞掉 ——
+  正是"通知永不 raise"的反面代价，故测试直接断言 `signals[0]["side"]`。
+- **P1 图表结构标注（`render_bw_kline_png`）**：平衡箱体（浅灰带 + 粗虚线上下沿）、
+  事件区间（斜线填充 + 细虚线 + 触边次数）、`±R` 标尺（以 entry/stop 定义 1R）、
+  结构端点（三角 + 最近两个价位标签，带白底衬、贴右沿时自动改放左侧）、右侧标签
+  栏统一登记后**按 12px 行距避让**（修前每条线各自压字，价位接近时互相盖住）。
+  纵轴刻度按间距统一定精度（修前 `.6g` 让 113.503 与 98.1832 混排，视觉上像不等
+  距）；字体优先中文字体、失败退 ASCII（CJK 不可用时摘要自动改英文）。
+  pivot 下标只在画**认知帧**时标注 —— 触发帧与认知帧坐标不同，硬标会整体错位。
+- **`secrets_loader`**：`TELEGRAM_TRADE_*` 为可选件（缺省回退 `TELEGRAM_*`），
+  新增 `environ=` 注入便于测试，缺这对键不再导致启动失败。
+- **新增 `scripts/live_restart.py`**：代码更新后的平滑换进程工具 —— 按看护同一条
+  `spawn_detached` 路径终止旧 PID 并立即拉起新进程、轮询确认心跳，避免"kill 后干等
+  看护 300s stale 窗口 + 消耗重启预算 + 误报停摆"。
+- 测试：`tests/test_live_runtime.py` 新增 8 条 —— 容量挡下仍广播（含 `box/zone/
+  touches/tf_label` 逐字段）、周容量点名、同事件只推一条、通知抛异常不打断决策、
+  **真通知器跑一遍完整链路**（锁死 `send_signal` 的关键字契约，拼错即重现上面
+  那次 `side=`/`direction=` 事故）、`_KIND_CHANNEL` 分流（未知类型落运营）、回退
+  不谎报"已分开"、运营键可选；全量 618 passed / 1 skipped。
+
+## [Unreleased] — 2026-10-24 — 修复「锁利回吐预算耗尽」只记账不下单（止盈不兑现）
+
+实盘 10-24 21:47 切到 `live_runner` 后第一次锁利离场（PHAUSDT，+13% 未平）暴露：
+日志写 `⇒ 市价离场`，交易所侧**没有任何平仓单**。根因不是行情判断，而是
+`_sub_bar_close_out` 的 live 分支对所有触发原因一视同仁地只调 `_reconcile()`。
+
+- **P0 `_sub_bar_close_out(..., executor=...)`**：离场出口现在必须显式声明
+  **执行者**，两类触发条件的执行者不同，代码不再含糊：
+  - `exchange_stop` —— 触发条件是"价格触及某个既定价位"，该价位有交易所原生
+    TPSL `pos_loss` 在挂 ⇒ 触发即由交易所成交，本进程只对账。**前提**
+    `_stop_is_resting(sym, invalid)`（本地有 order_id 且触发价在 1.5 个价格档
+    内）；实测无保护单时**降级**为本进程市价离场（`unprotected_stop_exits`
+    + 告警），修前这种"防线破了却没人执行"的情形没有任何动作。
+  - `local_market` —— 触发条件是**行情状态的函数**（`peak − d·budget` 与现价
+    的关系），事前写不成一张挂单价，只能此刻市价离场。
+- **新增 `_live_market_exit`**：风控离场一步到位（不进意图池、不占每时下单
+  配额），先撤入场/保护单再下单（避免市价单与 TPSL 双平甚至反手）；幂等三重
+  保证 —— ① 以 `self.positions` 当前事实为准（本地无仓绝不下单）②
+  `_exit_settle` 有待结回执则跳过 ③ 成交即清仓。下单失败**不装成已平**：
+  仓位保留、`exit_submit_errors` 计数、告警明说"保护单已撤、下一拍自动重挂"。
+- **成交回执两步出账**：market 单下单瞬间 fills 常还没索引到，先用参考价记账
+  （`price_label="参考价(下单时,回执待校正)"`），登记 `_exit_settle`，由
+  `_settle_exits` 在后续步用权威成交价校正（journal `exit_settle`，偏差 >0.2%
+  才补发一条校正告警）；超时仍无回执记 `exit_settle_miss` 并停手。**一条离场
+  通知绝不因为接口晚到 200ms 而消失。**
+- **P1 离场分型（两个正交事实）**：`executor`（`protective_stop` /
+  `external` / `unknown` / `local_market`）× `pnl`。判据
+  `stop_execution_evidence`：`d·(exit − stop) ≤ +tol`（挂单不可能成交得比触发
+  价更好）。反向判据会把**每一次盈利离场**都归因成移动止损，把外部平仓冒充成
+  自家止盈 —— 比不分类更危险，故方向钉死。文案随事实：`止盈(移动止损触发)` /
+  `止损(保护单触发)` / `离场确认(外部平仓·盈利|亏损)` / `止盈(回撤预算耗尽·
+  市价离场)`；journal `reconcile_closed` 增 `executor / stop / exit_ts_ms /
+  pnl / price_source`。
+- **P1 防线通知按来源命名**：`_defense_title` 把锁利、§8.3 trail、结构收紧分开
+  —— 锁利进盈利侧 = "锁利推进(已锁 X% TP1 行程)"，修前一律叫"止损推进"，用户
+  看到的是"又在收紧止损"，与"已经锁住浮盈"的后续处置完全不同。
+- **P2 `_close_fill_fact`（原 `_last_fill_price`）**：三条修正 —— ① **不假定
+  列表顺序**（显式按成交时间降序取最新；修前遍历覆盖，留下的是窗口内**最旧**
+  一笔平仓成交，实测 BABA 回执 110.47 而其保护单 105.148 早该成交）② 同一订单
+  多笔成交按 `size` 加权聚合（vwap + 最晚时刻）③ 时间窗 `opened_ts`，窗口内
+  没有 ⇒ 返回 `None`（如实不编），绝不把上一笔仓的平仓价记到这一仓头上。
+- **已知平仓即同时清 pm 事实**：`_live_close_filled(role=exit)` 现在同步
+  `cs.pm.positions.pop`（与 `_reconcile_closed` 同口径），修前 pm 侧留幽灵仓，
+  该品种再触发 `pm.open` 会因"已持仓"被拒。
+- 测试：`tests/test_live_runtime.py` 新增 14 条（执行者分流、幂等、失败兜底、
+  分型方向、回执 vwap/时间窗/校正/超时）；`tests/test_v21_balance_trigger.py`
+  的三处断言随语义标题改为"锁利推进"（行为未变，只是不再叫止损）。
+
 ## [Unreleased] — 2026-10-24 — 退役残留清理（无行为变更）
 
 删的是「已经不在执行路径上、但还能被 import / 被读」的东西，不改任何交易行为。

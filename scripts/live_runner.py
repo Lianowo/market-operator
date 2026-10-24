@@ -29,7 +29,10 @@ clientOid 前缀(OID_PREFIX)对账,异己单一律不触碰。
   同窗口,超时转市价(TIMEOUT_TO_TAKER);S2 段落袋等部分 REDUCE 市价;
 ④ EXIT 市价;⑤ 保护止损(交易所原生 TPSL `pos_loss` @ 当前 invalid)只保护
   不主出,invalid 变动撤旧换新;⑥ pm(§8)按 12h 收盘裁决,入场成交的认知 bar 不
-  裁决(canonical 同口径:opened_ts > bar 标签才跳过)。
+  裁决(canonical 同口径:opened_ts > bar 标签才跳过);⑦ **决策型离场**由本进程
+  发市价单(触发条件是行情状态的函数,不存在可指望的挂单:锁利回吐预算耗尽 /
+  防线触及但交易所无保护单),按"成交即记账 + 回执校正"两步出账 —— 详见
+  `_sub_bar_close_out` 的 `executor` 契约与 `_live_market_exit`。
 
 用法:
     python scripts/live_runner.py --mode live     # 主 agent 启动(本件不启动)
@@ -162,6 +165,98 @@ def _utc_ms(iso: Optional[str]) -> Optional[int]:
         return int(datetime.fromisoformat(str(iso)).timestamp() * 1000)
     except (TypeError, ValueError):
         return None
+
+
+def _fill_ts_ms(row: dict) -> Optional[int]:
+    """成交行的**可比较**时间戳(epoch ms);取不到返回 None。
+
+    Bitget v2 fills 的字段随端点/版本漂移(`cTime` / `uTime` / `updatedTime`),
+    因此不假定某一个是权威,只要求"同一字段口径内可比" —— 排序与
+    `since_ms` 过滤都只依赖可比性,不依赖绝对含义。
+    """
+    for key in ("cTime", "uTime", "updatedTime"):
+        v = row.get(key)
+        if v in (None, ""):
+            continue
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 离场事实分型(纯函数;P1 语义:谁执行的 × 赚没赚,两个正交事实)
+# ---------------------------------------------------------------------------
+#
+# 为什么必须分开:同一句"平仓"里混着三件不同的事 ——
+#   ① 交易所挂着的保护单被触发(执行者=交易所,runner 只对账);
+#   ② 外部/人工平仓(执行者不是我方任何逻辑);
+#   ③ 策略决定**此刻**离场(执行者必须是本进程,见 `_live_market_exec`)。
+# 把 ③ 写进 ① 的分支就是 2026-10-24 的事故:日志写"⇒ 市价离场",仓还在。
+#
+# 盈利与否是**独立**维度:保护单在盈利侧成交(移动止损)= 事实上的止盈,
+# 但它的执行者仍是交易所;外部平仓也可能盈利。分开记,文案才不会说谎。
+
+# 保护单成交的判据容差(相对价格):止损市价单允许滑点,但滑过 0.2%
+# 就不能再把成交归因于那张保护单 —— 否则"外部平仓"会被冒充成止损。
+EXIT_STOP_TOL_FRAC = 2e-3
+
+
+def realized_pnl(direction: int, qty: float, entry: float, exit_px: float,
+                 taker_fee: float) -> float:
+    """已实现盈亏(canonical 口径:价差 × 数量 × 方向 − 平仓侧 taker)。"""
+    d = 1 if int(direction) > 0 else -1
+    qty, entry, exit_px = float(qty), float(entry), float(exit_px)
+    gross = qty * d * (exit_px - entry)
+    fee = qty * exit_px * float(taker_fee)
+    return gross - fee
+
+
+def stop_execution_evidence(direction: int, exit_px: float, stop_px: float,
+                            *, tol_frac: float = EXIT_STOP_TOL_FRAC) -> bool:
+    """成交价能否**归因于**那张保护单(挂单不可能成交得比触发价更好)。
+
+    判据:`d·(exit − stop) ≤ +tol`
+      * 多头(d=+1)⇒ `exit ≤ stop + tol`(在止损或其**下方**成交);
+      * 空头(d=−1)⇒ `exit ≥ stop − tol`(在止损或其**上方**成交)。
+
+    不对称是刻意的:止损市价单只在"不利侧"成交,所以
+      · 成交优于触发价 ⇒ **一定不是**这张挂单(外部/人工平仓);
+      · 成交不优于触发价 ⇒ 可归因(可能滑点,含跳空越价成交)。
+    反过来的判据(≥ −tol)会让**每一次盈利离场**都变成"移动止损止盈",
+    把外部平仓冒充成自家止盈 —— 比不分类更危险,故此处钉死方向。
+
+    `tol` 吸收"标记价触发 / 最新价成交"的正常偏差(相对价格 0.2%);
+    超过 `tol` 的有利偏差一律记为外部平仓,并在文案里写出两个价位供核对。
+    """
+    d = 1 if int(direction) > 0 else -1
+    px, stop = float(exit_px), float(stop_px)
+    tol = abs(px) * float(tol_frac) + 1e-12
+    return d * (px - stop) <= tol
+
+
+def exit_label(*, executor: str, pnl: Optional[float],
+               reason: str = "") -> str:
+    """离场通知的**动作类型**:执行者 × 盈亏 → 一句可核对的中文事实。
+
+    executor ∈ {protective_stop, external, unknown, local_market}:
+      * `protective_stop` —— 保护单成交;盈利侧成交即"移动止损止盈";
+      * `external`      —— 成交价不在保护单成交侧 ⇒ 不是本系统止损;
+      * `unknown`       —— 取不到成交价,只如实报"交易所已无此仓";
+      * `local_market`  —— 本进程按决策发的市价单(回撤预算耗尽/裸奔补平)。
+    """
+    gain = None if pnl is None else float(pnl) > 0.0
+    if executor == "local_market":
+        if "lock" in str(reason):
+            return ("止盈(回撤预算耗尽·市价离场)" if gain
+                    else "离场(回撤预算耗尽·市价)")
+        return "止盈(无保护单·市价离场)" if gain else "止损(无保护单·市价离场)"
+    if executor == "protective_stop":
+        return "止盈(移动止损触发)" if gain else "止损(保护单触发)"
+    if executor == "external":
+        return "离场确认(外部平仓·盈利)" if gain else "离场确认(外部平仓·亏损)"
+    return "离场确认(交易所已无此仓)"
 
 
 class DailyLossBreaker:
@@ -363,6 +458,7 @@ class LiveRunner:
     """主循环接线;client/tg 注入(paper 冒烟零真单;测试注入假件)。"""
 
     OID_PREFIX = "mo21"
+    MAX_EXIT_SUBMIT_RETRIES = 3      # 决策型离场下单失败的重试上限(每步一次)
 
     def __init__(self, mode: str, cfg: dict, client, tg: TelegramNotifier, *,
                  equity0: Optional[float] = None,
@@ -429,12 +525,19 @@ class LiveRunner:
         self.positions: dict[str, dict] = {}
         self.open_intents: dict[str, dict] = {}
         self.stops: dict[str, dict] = {}
+        # 信号频道去重窗口(进程内):同一事件同一拍只推一条,与闸门结果无关
+        self._signal_sent: dict[tuple, int] = {}
         self.counters = {"signals": 0, "orders_placed": 0, "cap_skips": 0,
                          "tf_cap_skips": 0, "min_notional_skips": 0,
                          "rate_skips": 0, "breaker_blocks": 0, "fills": 0,
                          "mgmt_execs": 0, "expired_intents": 0,
                          "reconcile_alerts": 0, "reduce_fills": 0, "exits": 0,
-                         "api_halt_skips": 0, "order_errors": 0}
+                         "api_halt_skips": 0, "order_errors": 0,
+                         "lock_exits": 0,            # 回撤预算耗尽 → 本进程市价离场
+                         "exit_submit_errors": 0,    # 决策型离场下单失败
+                         "unprotected_stop_exits": 0,  # 防线触及但无交易所保护单
+                         "exit_settle_miss": 0,      # 决策型离场成交回执始终未取到
+                         "signal_notice_errors": 0}  # 信号广播自身异常(不影响决策)
         self._universe_at = 0.0
         self._reconcile_at = 0.0
         self._daily_date: Optional[str] = None
@@ -447,6 +550,13 @@ class LiveRunner:
         self._leverage_done: set[str] = set()
         self._alert_last: dict[str, float] = {}
         self._missing_streak: dict[str, int] = {}   # 对账缺失连续轮次(防误清)
+        # 决策型离场的**成交回执待结**:market 单下单瞬间 fills 端点常还没索引到,
+        # 先用参考价记账(宁可偏差也不静默),随后每步用权威成交价校正一次。
+        # 键 = symbol(同一仓同一时刻只可能有一笔离场在结算)。
+        self._exit_settle: dict[str, dict] = {}
+        # 决策型离场**下单失败**的重试队列:失败绝不能等到下一根 2H bar(最长 2h 裸奔)。
+        # 每步重试一次,上限 MAX_EXIT_SUBMIT_RETRIES,终态必须告警到人。
+        self._exit_retry: dict[str, dict] = {}
         # 掉线补做(gap recovery):_load_state 以崩溃时刻的末根 bar 为界切分,
         # 缺口 bar 在首次 step 内经 _advance 逐根补放(canonical 持仓管理),
         # 补放期间禁止新开仓,补放后按交易所事实结算"错过"的止盈/止损。
@@ -1320,6 +1430,8 @@ class LiveRunner:
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
         if self.mode == "live":
+            self._retry_exits(now_ms)       # 上次离场下单失败:本步立即重试
+            self._settle_exits(now_ms)      # 决策型离场:用权威成交价校正回执
             self._sync_live_fills(now_ms)
         base_ms = 7200 * 1000
         for sym, cs in sorted(self.campaigns.items()):
@@ -1457,14 +1569,46 @@ class LiveRunner:
                                                  bar[0] + base_ms - obs_ms))
                 self._close_cognition(cs, cog_bar)
 
+    def _stop_is_resting(self, sym: str, trigger: float) -> bool:
+        """防线上是否**确有**交易所保护单在挂(本地记录 + 触发价同档)。
+
+        用途:决定固定止损被触及时"谁来执行"。本地记录只证明"我们挂过",
+        这里要求 order_id 在册且触发价与当前防线同档(一个价格档内),才承认
+        交易所是执行者;否则就是"没人会执行",必须本进程补市价单。
+        """
+        cur = self.stops.get(sym)
+        if not cur or not cur.get("order_id"):
+            return False
+        try:
+            placed = float(cur.get("trigger"))
+        except (TypeError, ValueError):
+            return False
+        tick = 10.0 ** (-int(self._spec(sym).price_place))
+        # 容差 = 1.5 个价格档:挂单价经过 `fit_price` 取整(多头向下、空头向上),
+        # 与 invalid 的差值必然 < 1 档;超过 1.5 档就是"另一条防线"(旧单),
+        # 不能拿它冒充当前防线的执行者。
+        return abs(placed - float(trigger)) <= tick * 1.5 + 1e-12
+
     def _sub_bar_close_out(self, cs: CampaignState, pos_pm,
                            pos_dict: dict, ts: int, ref_px: float, *,
-                           why: str, route: str) -> None:
-        """子周期触价离场的统一出口(paper 记账 / live 对账)。
+                           why: str, route: str, executor: str) -> None:
+        """子周期触价离场的统一出口(paper 记账 / live 按**执行者**分流)。
 
-        固定止损与"锁利回吐预算耗尽"是同一个动作的两条触发路径 —— 都必须在
-        子周期立刻离场,且都必须先把本地止损记账撤掉(否则下一拍 `_manage_stops`
-        会把已平的仓位重新挂单,形成幽灵保护单)。
+        固定止损与"锁利回吐预算耗尽"都在子周期立刻离场,但**执行者不同**,
+        这一步必须显式写清,而不是含混地"统一对账":
+
+        * `executor="exchange_stop"` —— 触发条件是"价格触及某个既定价位",
+          该价位上挂着交易所原生 TPSL ⇒ 触发即由交易所成交,本进程只对账
+          (`_reconcile`)。此处**不得**再发市价单:仓位可能已经成交,再发一张
+          就是反向开仓。前提是 `_stop_is_resting` 为真;保护单不在挂 ⇒ 无人
+          执行,降级为 `local_market`(计数/告警),这是修前的裸奔盲区。
+        * `executor="local_market"` —— 触发条件是**行情状态的函数**(例如
+          "自峰值回吐 > 预算"),事前写不成一张挂单价 ⇒ 只能由本进程此刻发
+          市价单(`_live_market_exit`)。2026-10-24 的事故正是把这一支当成
+          "交易所已有计划单":日志写"⇒ 市价离场",仓却一直在。
+
+        两条路径都要先把本地止损记账撤掉,否则下一拍 `_manage_stops` 会把
+        已平的仓位重新挂单,形成幽灵保护单。
         """
         sym = cs.symbol
         if self.mode == "paper":
@@ -1488,22 +1632,212 @@ class LiveRunner:
                 "status": "armed",
             }
             self._paper_close_fill(sym, stop_it, float(ref_px), ts)
-        elif self._gap_replay:
+            return
+        if self._gap_replay:
             # 补放缺口 bar:本进程当时不在场,计划单可能未触发/未挂出。
             # 先记账(不在此处平仓,避免与补放中的后续 bar 逻辑交错),
             # 补放结束后由 _gap_settle 按 stop_policy 一次性结算。
             self._gap_stop_hit[sym] = {"ts": ts, "stop": float(ref_px),
                                        "bar_close": float(ref_px)}
-        else:
-            # live:交易所已有计划单,触价即刻触发对账以消除状态延迟
+            return
+        if executor == "exchange_stop" \
+                and self._stop_is_resting(sym, float(pos_pm.invalid)):
+            # 交易所是执行者:触价即刻触发对账以消除状态延迟
             self._reconcile()
+            return
+        if executor == "exchange_stop":
+            # 防线被触及但交易所侧没有对应保护单:没有任何挂单会替我们离场。
+            self.counters["unprotected_stop_exits"] = \
+                self.counters.get("unprotected_stop_exits", 0) + 1
+            self._journal("stop_unprotected_exit",
+                          {"symbol": sym, "invalid": float(pos_pm.invalid),
+                           "qty": pos_dict.get("qty"), "ref_px": float(ref_px),
+                           "why": why})
+            self._alert_throttled(
+                f"unprot:{sym}",
+                f"{sym} 防线 {float(pos_pm.invalid):.8g} 已触及但交易所无保护单在挂"
+                f" → 本进程市价离场(修前该情形无任何动作)")
+            why = f"{why}_unprotected"
+        # 决策型:触发条件是行情状态的函数,只能本进程此刻市价离场
+        self._live_market_exit(pos_dict, ts=ts, why=why, route=route,
+                               ref_px=ref_px)
+
+    def _live_market_exit(self, pos: dict, *, ts: int,
+                          why: str, route: str, ref_px: float) -> bool:
+        """决策型离场:由本进程**自己**发市价单(没有可指望的交易所挂单)。
+
+        与 `_arm_close_intent`(意图池 + 限频 + 到期转市价)的区别:这是风控
+        离场,必须一次到位 —— 不占订单配额、不进意图池、不留"挂而不成"的窗口。
+
+        幂等由三处共同保证(缺一不可):
+        ① 以 `self.positions` 的**当前事实**为准,本地已无此仓 ⇒ 绝不下单
+          (否则"对已平的仓再平一次"就是反向开仓);
+        ② `_exit_settle` 里已有该品种的待结回执 ⇒ 上一笔离场还在下单/结算中;
+        ③ 成交即 `_live_close_filled` 清仓,后续 bar 的 `_on_sub_bar` 直接返回。
+
+        记账顺序刻意如此:先下单(交易所事实),再取成交回执,最后记账。取不到
+        回执时用参考价记账并登记 `_exit_settle`,由后续步校正 —— 绝不让
+        "取不到成交价"变成"不发通知/不记账"。
+        """
+        sym = str(pos["symbol"])
+        if sym in self._exit_settle:
+            return False
+        cur = self.positions.get(sym)
+        if cur is None or float(cur.get("qty") or 0.0) <= 1e-9:
+            return False
+        pos = cur                        # 数量/入场价一律取本地最新事实
+        spec = self._spec(sym)
+        qty = floor_step(float(pos["qty"]), spec.size_step, spec.size_place)
+        if qty <= 0.0:
+            self.counters["exit_submit_errors"] = \
+                self.counters.get("exit_submit_errors", 0) + 1
+            self._journal("exit_submit_error",
+                          {"symbol": sym,
+                           "why": f"qty<=0 after floor_step({spec.size_step})"})
+            self.tg.send_alert(f"{sym} 决策型离场数量按合约精度取整为 0"
+                               f"(step={spec.size_step}) → 无法下单,人工核查")
+            return False
+        side = self.close_side_of(int(pos["direction"]))
+        oid = client_oid_of(self.OID_PREFIX, sym,
+                            str(pos.get("event_id") or "STOP"), side,
+                            int(ts), role="exit")[:36]
+        # 先撤入场/保护单:市价单与仍挂着的 TPSL 并存会双平(甚至反手)。
+        # 撤单失败不阻断下单(TPSL 在仓位归零后自然失效)。
+        self._cancel_entry(sym, why)
+        self._cancel_stop(sym, why)
+        it = {"oid": oid, "symbol": sym, "role": "exit", "kind": "market",
+              "direction": -int(pos["direction"]), "qty": qty,
+              "limit_price": None, "invalid": pos["invalid"],
+              "target_1": pos.get("target_1"), "event_id": pos.get("event_id"),
+              "route": f"exit:{str(why)[:32]}", "decision_ts": int(ts),
+              "expiry_ts": int(ts) + N_FILL_H * MS_1H,
+              "status": "armed", "exchange_order_id": None}
+        try:
+            resp = self.client.place_market_order(
+                sym, side=side, size=qty, client_oid=oid,
+                trade_side=self.close_trade_side())
+            it["exchange_order_id"] = str((resp or {}).get("orderId") or "")
+            self.counters["orders_placed"] += 1
+            req_ms = int(time.time() * 1000)
+            fact = self._close_fill_fact(sym, since_ms=req_ms - 2000)
+            if fact is not None:
+                px, px_src = float(fact[0]), "fills"
+            else:
+                px, px_src = float(ref_px), "ref"
+                self._exit_settle[sym] = {
+                    "oid": oid, "since_ms": req_ms - 2000,
+                    "deadline_ms": req_ms + 180_000, "ref_px": float(ref_px),
+                    "direction": int(pos["direction"]), "qty": float(qty),
+                    "entry": float(pos["entry"]), "why": str(why)}
+            it["price_source"] = px_src
+            pnl = realized_pnl(int(pos["direction"]), qty, float(pos["entry"]),
+                               px, self.risk["taker_fee"])
+            self.counters["lock_exits"] = self.counters.get("lock_exits", 0) + 1
+            self._exit_retry.pop(sym, None)     # 成功即出队(重试队列只服务失败)
+            self._journal("exit_submit",
+                          {"symbol": sym, "oid": oid,
+                           "exchange_order_id": it["exchange_order_id"],
+                           "qty": qty, "why": why, "ref_px": float(ref_px),
+                           "px": px, "price_source": px_src,
+                           "pnl": pnl, "route": route[:80]})
+            self._live_close_filled(
+                it, ref_price=px, pnl=pnl,
+                title=exit_label(executor="local_market", pnl=pnl, reason=why),
+                note=f"{why} · {route}",
+                price_label=("成交价" if px_src == "fills"
+                             else "参考价(下单时,回执待校正)"))
+            return True
+        except BitgetError as e:
+            it["status"] = "error"
+            self.counters["exit_submit_errors"] = \
+                self.counters.get("exit_submit_errors", 0) + 1
+            self._journal("exit_submit_error",
+                          {"symbol": sym, "oid": oid, "why": str(e)[:160],
+                           "why_action": why})
+            tries = int((self._exit_retry.get(sym) or {}).get("attempts", 0))
+            self._exit_retry[sym] = {"why": why, "route": route,
+                                     "ref_px": float(ref_px),
+                                     "attempts": tries}
+            if tries == 0:
+                # 首次失败立刻告警(限频 5 分钟:重试期间不再刷屏)
+                self._alert_throttled(
+                    f"exitfail:{sym}",
+                    f"{sym} 决策型离场下单失败:{str(e)[:120]}"
+                    f"(仓位仍在;保护单已撤,每步自动重试 ≤"
+                    f"{self.MAX_EXIT_SUBMIT_RETRIES} 次,人工核查)", gap_s=300.0)
+            self._api_note(e)          # 计数/熔断口径与其他下单路径一致
+            return False
+
+    def _retry_exits(self, now_ms: int) -> None:
+        """决策型离场下单失败的**逐步重试**(不依赖可能过期的 mark)。
+
+        为什么必须重试而不是等下一根 bar:锁利回吐预算已耗尽,防线已被证明
+        守不住,等 2H 收盘才重试等于放任回撤扩大。重试由"当时的离场决策"驱动,
+        不看 `mark` —— mark 在两次对账之间可能过期,用它判"是否还该离场"会
+        造成无谓平仓或漏平。
+
+        终态:`attempts` 用完仍失败 ⇒ 必须发一条**到人**的告警并出队(不再重试),
+        因为此后该仓已无任何自动化保护。
+        """
+        for sym, rec in list(self._exit_retry.items()):
+            pos = self.positions.get(sym)
+            if pos is None:
+                self._exit_retry.pop(sym, None)     # 已平(可能是别的路径平的)
+                continue
+            ref = float(pos.get("mark") or rec.get("ref_px") or 0.0)
+            rec["attempts"] = int(rec.get("attempts", 0)) + 1
+            ok = self._live_market_exit(
+                pos, ts=int(now_ms), why=str(rec.get("why")),
+                route=str(rec.get("route")), ref_px=ref or float(pos["entry"]))
+            if ok:
+                self._exit_retry.pop(sym, None)
+                continue
+            if int(rec["attempts"]) >= self.MAX_EXIT_SUBMIT_RETRIES:
+                # 终态:重试用尽 ⇒ 立刻出队并发一条到人的告警(此刻该仓已无
+                # 任何自动化保护,继续静默重试只会让损失扩大)
+                self._exit_retry.pop(sym, None)
+                self._journal("exit_submit_giveup",
+                              {"symbol": sym, "attempts": rec.get("attempts"),
+                               "why": rec.get("why")})
+                self.tg.send_alert(
+                    f"{sym} 决策型离场重试 {rec.get('attempts')} 次仍失败"
+                    f"(原因 {rec.get('why')}) —— 已停止自动重试,仓位仍在,"
+                    f"请立即人工平仓/核查")
+
+    def _defense_title(self, pos_pm, last_log: str) -> str:
+        """防线推进通知的**语义标题**(不能一律叫"止损推进")。
+
+        修前:锁利把防线推到盈利侧时,通知仍写"止损推进" —— 用户看到的是
+        "又在收紧止损",实际发生的是"已经锁住浮盈",两件事的后续处置完全
+        不同(前者是风险,后者是收益兑现的路径)。这里按**推进的来源**命名,
+        并把"已锁住多少 TP1 行程"算出来,可核对:
+
+            locked = d·(invalid − entry) / |target_1 − entry|      # 盈利侧为正
+
+        ≤0 表示防线仍在亏损侧(结构防线/收紧),不能说成"锁利"。
+        """
+        d = 1 if int(pos_pm.direction) > 0 else -1
+        entry = float(pos_pm.entry)
+        stop = float(pos_pm.invalid)
+        if "opp_lock" in last_log:
+            tgt = pos_pm.target_1
+            span = abs(float(tgt) - entry) if tgt is not None else 0.0
+            frac = (d * (stop - entry) / span) if span > 0 else 0.0
+            return (f"锁利推进(已锁 {frac:.0%} TP1 行程)" if frac > 0
+                    else "锁利推进(防线仍在成本侧)")
+        if "§8.3|trail" in last_log:
+            return "结构防线推进(§8.3 trail)"
+        if d * (stop - entry) > 0:
+            return "防线推进(已进入盈利区)"
+        return "防线收紧"
 
     def _on_sub_bar(self, cs: CampaignState, bar) -> None:
         """持仓期间子周期(2H)触价同步与结算:
         1. 固定 STOP(pos_pm.invalid):与回测 broker.execute_protective_stop 同口径,
            子周期极值触及(low<=stop / high>=stop)时:
            - paper 模式立即按止损价(或缺口开盘价)平仓结算并清理 pm/positions;
-           - live 模式立即触发一次 _reconcile() 同步交易所保护单成交状态。
+           - live 模式:执行者是交易所 TPSL ⇒ 触发一次 _reconcile() 同步成交;
+             若该价位上**没有**在挂的保护单,则由本进程市价离场(不能等)。
         2. 固定 TP1(pos_pm.target_1):
            - 更新 pos_pm._best 实时 MFE(即锁利的峰值锚);
            - 当启用对侧锁利(reject_opp_lock_frac != 0)时,用与回放 on_bar 同一个
@@ -1534,7 +1868,8 @@ class LiveRunner:
             self._sub_bar_close_out(
                 cs, pos_pm, pos_dict, ts, ref_px,
                 why="sub_bar_protective_stop",
-                route=f"STOP|sub_bar trigger={stop:.8g}")
+                route=f"STOP|sub_bar trigger={stop:.8g}",
+                executor="exchange_stop")
             return
 
         # ② 固定 TP1(target_1)盘中触价 ⇒ 对侧锁利 / 传统减仓
@@ -1574,6 +1909,9 @@ class LiveRunner:
                 elif ld.action == "exit":
                     # 回吐预算已耗尽:此时再挂止损就是挂一张"永不触发"的单,
                     # 直接市价离场 —— 把"锁利"兑现成事实,而不是承诺。
+                    # 执行者必须是本进程:这个触发条件是"自峰值回撤 > 预算",
+                    # 随行情连续变化,事前无法写成一张挂单价。
+                    pos_pm.armed = True          # 事实:锁利已 arming(审计要一致)
                     pos_pm.log.append(
                         f"v21|sub_bar_lock_giveback_exhausted|"
                         f"峰值={pos_pm._best:.8g} 回吐={ld.drawdown:.8g} "
@@ -1587,7 +1925,8 @@ class LiveRunner:
                         cs, pos_pm, pos_dict, ts, ref_px,
                         why="sub_bar_lock_exhausted",
                         route=(f"LOCK_EXIT|giveback={ld.drawdown:.8g} "
-                               f"budget={ld.budget:.8g} ref={ref_px:.8g}"))
+                               f"budget={ld.budget:.8g} ref={ref_px:.8g}"),
+                        executor="local_market")
                     return
                 else:
                     if ld.armed and not pos_pm.armed:
@@ -1614,7 +1953,7 @@ class LiveRunner:
                 self._touch_campaigns()      # 防线推进:冷档必须留住
                 last_log = pos_pm.log[-1] if pos_pm.log else "子周期防线锁利"
                 self.tg.send_fill(
-                    sym, f"止损推进({self.mode})",
+                    sym, f"{self._defense_title(pos_pm, last_log)}({self.mode})",
                     float(pos_dict["qty"]),
                     c,
                     note=f"{old_inv:.6g} -> {pos_pm.invalid:.6g} ({last_log[:48]})",
@@ -1658,7 +1997,7 @@ class LiveRunner:
                     pos_dict["invalid"] = float(pos_pm.invalid)
                 last_log = pos_pm.log[-1] if pos_pm.log else "防线收紧"
                 self.tg.send_fill(
-                    sym, f"止损推进({self.mode})",
+                    sym, f"{self._defense_title(pos_pm, last_log)}({self.mode})",
                     pos_dict["qty"] if pos_dict else 0.0,
                     float(cog_bar[4]),
                     note=f"{old_inv:.6g} -> {pos_pm.invalid:.6g} ({last_log[:48]})",
@@ -1670,6 +2009,8 @@ class LiveRunner:
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo") if pos_dict else None,
                     box_hi=pos_dict.get("box_hi") if pos_dict else None,
+                    pivots=self._chart_pivots(s.pivots[-6:]),
+                    atr=atr,
                     bars=cs.cog_bars[-45:] if cs.cog_bars else cs.trig_bars[-45:],
                 )
             for intent in mgmt:
@@ -1707,7 +2048,7 @@ class LiveRunner:
                         "symbol": sym, "ts": int(bar[0]),
                         "event": getattr(d.hyp, "event_id", None)})
                     continue
-                self._submit_open(cs, d, t, mic=mic)
+                self._submit_open(cs, d, t, mic=mic, view=view)
             else:
                 raise RuntimeError(f"unknown decision {d.kind}")
 
@@ -1727,97 +2068,220 @@ class LiveRunner:
                                 min_trade_usdt=5.0)
         return sp
 
-    def _submit_open(self, cs: CampaignState, d, t: int, *, mic: bool) -> None:
+    @staticmethod
+    def _box_bounds(zone_lo, zone_hi, box_opposite):
+        """平衡箱体上下沿:事件区间 + 对侧近缘的极值;区间缺失则整体不画。"""
+        if zone_lo is None or zone_hi is None:
+            return None, None
+        pts = [float(zone_lo), float(zone_hi)]
+        if box_opposite is not None:
+            pts.append(float(box_opposite))
+        return min(pts), max(pts)
+
+    @staticmethod
+    def _signal_chart_bars(cs: CampaignState, mic: bool):
+        """信号图取哪个帧,并说明该帧是否为认知帧。
+
+        pivot 的 `known_index` 是认知帧坐标:只有画认知帧时下标才对得上,
+        画触发帧时若硬标就会整体错位(标注错位比不标更有害)。
+        """
+        if mic and cs.trig_bars:
+            return cs.trig_bars[-45:], False
+        cog = cs.cog_bars[-45:]
+        if cog:
+            return cog, True
+        return cs.trig_bars[-45:], False
+
+    @staticmethod
+    def _chart_pivots(pivots) -> list:
+        """图上的结构端点:`[(窗口下标, 价格, "high"|"low")]`。
+
+        `pivots` 传 `StructureView.pivots`(认知帧坐标):下标按 `known_index`
+        折算到末 45 根;落在窗口外的丢掉,None 由渲染器自行忽略。
+        """
+        out: list = []
+        win = 45
+        for p in list(pivots or ())[-6:]:
+            idx = int(getattr(p, "known_index", -1))
+            if idx < 0:
+                continue
+            kind = getattr(p, "kind", "high")
+            out.append((win - 1 - idx if idx < win else None,
+                        float(p.price), getattr(kind, "value", str(kind))))
+        return out
+
+    def _signal_status_text(self, block: Optional[str], *, tf_label: str,
+                            kind: str) -> str:
+        """把闸门结果翻成一句对外口径(公开频道不得出现账户数字)。"""
+        if block == "TF_CAP":
+            return f"仅参考 · {tf_label} 周期容量已满,本系统本拍未开仓"
+        if block is not None:
+            return self._BLOCK_STATUS.get(block, f"仅参考 · {block}")
+        act = "挂限价单" if kind == "limit" else "同向开仓(市价)"
+        return f"本系统已{act}"
+
+    def _note_block(self, sym: str, cs: CampaignState, hyp, block: str, *,
+                    qty: float, ref: float) -> None:
+        """闸门记账:计数器与日志字段与解耦前逐条一致。"""
+        for name, inc in self._BLOCK_COUNTERS.get(block, ()):
+            self.counters[name] = self.counters.get(name, 0) + inc
+        rec = {"symbol": sym, "why": block, "event": hyp.event_id}
+        if block == "TF_CAP":
+            rec["tf"] = cs.tf_label
+        if block == "MIN_NOTIONAL":
+            rec.update({"qty": qty, "ref": ref})
+        self._journal("reject" if block == "degenerate_risk" else "skip", rec)
+
+    def _notify_signal(self, key: tuple, *, size_note: str, exec_status: str,
+                       **payload) -> None:
+        """信号广播:同一事件只推一条,且永不 raise。
+
+        与容量/熔断/下单结果无关(见 `_submit_open` 文档)。渲染与 HTTP 都在
+        通知器工作线程里跑,主循环只做入队;任何异常只记
+        `signal_notice_errors` + 日志,绝不反噬决策链。
+        """
+        if key in self._signal_sent:
+            return
+        self._signal_sent[key] = 1
+        while len(self._signal_sent) > 2048:        # 只做窗口内去重
+            self._signal_sent.pop(next(iter(self._signal_sent)))
+        fn = getattr(self.tg, "send_signal", None)
+        if fn is None:
+            return
+        try:
+            fn(size_note=size_note, exec_status=exec_status, **payload)
+        except Exception as e:                      # noqa: BLE001 通知不反噬
+            self.counters["signal_notice_errors"] = \
+                self.counters.get("signal_notice_errors", 0) + 1
+            self._journal("signal_notice_error", {
+                "symbol": payload.get("symbol"),
+                "event": payload.get("event_id"),
+                "why": f"{type(e).__name__}: {str(e)[:120]}"})
+
+    # 闸门 → 对外口径:信号频道只看到确定性文案,不含账户数字。
+    # 空串表示按周期名动态拼装(见 _signal_status_text)。
+    _BLOCK_STATUS = {
+        "API_HALT": "仅参考 · API 熔断中,本系统暂停新开仓",
+        "degenerate_risk": "仅参考 · 参考价已越过失效位(风险距离为 0)",
+        "TF_CAP": "",
+        "PORTFOLIO_CAP": "仅参考 · 组合容量已满,本系统本拍未开仓",
+        "MIN_NOTIONAL": "仅参考 · 数量低于交易所最小下单,本系统本拍未开仓",
+        "DAILY_LOSS_BREAKER": "仅参考 · 当日亏损熔断,本系统暂停新开仓",
+        "RATE_LIMIT": "仅参考 · 触达下单频率上限,本系统本拍未开仓",
+        "DUPLICATE": "仅参考 · 同一信号已处理,本次为重复回放",
+    }
+    # 闸门 → 计数器增量(与解耦前逐条对齐,历史 counters 仍可直读)
+    _BLOCK_COUNTERS = {
+        "API_HALT": (("api_halt_skips", 1),),
+        "degenerate_risk": (),
+        "TF_CAP": (("tf_cap_skips", 1), ("cap_skips", 1)),
+        "PORTFOLIO_CAP": (("cap_skips", 1),),
+        "MIN_NOTIONAL": (("min_notional_skips", 1),),
+        "DAILY_LOSS_BREAKER": (("breaker_blocks", 1),),
+        "RATE_LIMIT": (("rate_skips", 1),),
+        "DUPLICATE": (),
+    }
+
+    def _submit_open(self, cs: CampaignState, d, t: int, *, mic: bool,
+                     view=None) -> None:
+        """意图 → 闸门 → 信号广播 → 装配(执行在撮合/live 下单层)。
+
+        信号广播与容量/熔断/下单结果**完全解耦**:检测到事件就推送结构
+        事实,再用 `exec_status` 说明本系统是否真的下手。解耦前闸门 `return`
+        会连带吞掉通知 —— 容量一满,ACCEPT/REJECT 在信号频道彻底不可见。
+        闸门的计数器/日志语义保持不变(见 `_BLOCK_COUNTERS` / `_note_block`)。
+        """
         sym = cs.symbol
         hyp = d.hyp
-        if self.mode == "live" and self.api_halted:
-            self.counters["api_halt_skips"] = self.counters.get("api_halt_skips", 0) + 1
-            self._journal("skip", {"symbol": sym, "why": "API_HALT",
-                                   "event": hyp.event_id})
-            return
         # hedge_mode:side 表持仓方向(开多 buy / 开空 sell)+ tradeSide=open
         side = "buy" if hyp.direction > 0 else "sell"
         entry_ref = float(d.limit_price) if d.kind == "limit" \
             else float(d.intent.ref_price)
-        risk_per_unit = abs(entry_ref - float(hyp.invalid))
-        if risk_per_unit <= 0.0:
-            self._journal("reject", {"symbol": sym, "why": "degenerate_risk",
-                                     "event": hyp.event_id})
-            return
+        invalid = float(hyp.invalid)
+        risk_per_unit = abs(entry_ref - invalid)
         spec = self._spec(sym)
         size_mult = float(d.meta.get("size_mult") or 1.0)
         equity = float(self.equity)
         eff_rf = self.current_risk_frac(equity)
-        qty = eff_rf * size_mult * equity / risk_per_unit
-        # 用该品种实际生效杠杆(而非统一上限):低上限品种按 20x 算出的数量
-        # 会超出交易所可用保证金而被拒
-        eff_lev = float(self.leverage_by_sym.get(sym)
-                        or self.risk.get("leverage_cap") or 20)
-        qty = min(qty, eff_lev * equity / entry_ref)
-        qty = floor_step(qty, spec.size_step, spec.size_place)
-        # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
-        outstanding = sum(
-            worst_case_of_position(p["direction"], p["qty"],
-                                   p.get("mark") or p["entry"], p["invalid"],
-                                   self.risk["taker_fee"])
-            for p in self.positions.values())
-        candidate = qty * risk_per_unit + qty * entry_ref * 2.0 * \
-            (self.risk["taker_fee"] + self.risk["slippage_per_side"])
-        tf_caps = self.risk.get("tf_cap_by_tf") or {}
-        tf_cap = tf_caps.get(cs.tf_label)
-        if tf_cap is not None:
-            tf_out = sum(
+        # ---- 与容量无关的结构事实:一次算清,信号与执行共用同一份 ----
+        regime = hyp.regime.value if hyp.regime is not None else ""
+        zone_lo = d.meta.get("zone_lo")
+        zone_hi = d.meta.get("zone_hi")
+        box_lo, box_hi = self._box_bounds(zone_lo, zone_hi,
+                                          d.meta.get("box_opposite"))
+        chart_bars, on_cog = self._signal_chart_bars(cs, mic)
+        chart_pivots = self._chart_pivots(getattr(view, "pivots", ())) \
+            if on_cog else []
+        # ---- 闸门:只产出 block 码,不决定要不要通知 ----
+        block: Optional[str] = None
+        qty = 0.0
+        if self.mode == "live" and self.api_halted:
+            block = "API_HALT"
+        elif risk_per_unit <= 0.0:
+            block = "degenerate_risk"
+        if block is None:
+            qty = eff_rf * size_mult * equity / risk_per_unit
+            # 用该品种实际生效杠杆(而非统一上限):低上限品种按 20x 算出的数量
+            # 会超出交易所可用保证金而被拒
+            eff_lev = float(self.leverage_by_sym.get(sym)
+                            or self.risk.get("leverage_cap") or 20)
+            qty = min(qty, eff_lev * equity / entry_ref)
+            qty = floor_step(qty, spec.size_step, spec.size_place)
+            # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
+            outstanding = sum(
                 worst_case_of_position(p["direction"], p["qty"],
                                        p.get("mark") or p["entry"], p["invalid"],
                                        self.risk["taker_fee"])
-                for p in self.positions.values()
-                if p.get("tf_label", "12h") == cs.tf_label)
-            if tf_out + candidate > float(tf_cap) * equity:
-                self.counters["tf_cap_skips"] = self.counters.get("tf_cap_skips", 0) + 1
-                self.counters["cap_skips"] += 1
-                self._journal("skip", {"symbol": sym, "tf": cs.tf_label,
-                                       "why": "TF_CAP", "event": hyp.event_id})
-                return
-        if outstanding + candidate > self.risk["portfolio_cap_frac"] * equity:
-            self.counters["cap_skips"] += 1
-            self._journal("skip", {"symbol": sym, "why": "PORTFOLIO_CAP",
-                                   "event": hyp.event_id})
-            return
-        if qty * entry_ref < max(spec.min_trade_usdt,
-                                 spec.size_min * entry_ref):
-            self.counters["min_notional_skips"] += 1
-            self._journal("skip", {"symbol": sym, "why": "MIN_NOTIONAL",
-                                   "event": hyp.event_id, "qty": qty,
-                                   "ref": entry_ref})
-            return
-        if self.breaker.should_stop(equity):
-            self.counters["breaker_blocks"] += 1
-            self._journal("skip", {"symbol": sym, "why": "DAILY_LOSS_BREAKER",
-                                   "event": hyp.event_id})
-            return
-        if not self.rate.allow():
-            self.counters["rate_skips"] += 1
-            self._journal("skip", {"symbol": sym, "why": "RATE_LIMIT",
-                                   "event": hyp.event_id})
-            return
-        oid = client_oid_of(self.OID_PREFIX, sym, hyp.event_id, side, t)
-        # 断点幂等:同键不重发;已失败的意图亦不再重试(避免每轮重发同一坏单)
-        if self.open_intents.get(oid, {}).get("status") in (
-                "armed", "filled", "error"):
+                for p in self.positions.values())
+            candidate = qty * risk_per_unit + qty * entry_ref * 2.0 * \
+                (self.risk["taker_fee"] + self.risk["slippage_per_side"])
+            tf_caps = self.risk.get("tf_cap_by_tf") or {}
+            tf_cap = tf_caps.get(cs.tf_label)
+            if tf_cap is not None:
+                tf_out = sum(
+                    worst_case_of_position(p["direction"], p["qty"],
+                                           p.get("mark") or p["entry"],
+                                           p["invalid"], self.risk["taker_fee"])
+                    for p in self.positions.values()
+                    if p.get("tf_label", "12h") == cs.tf_label)
+                if tf_out + candidate > float(tf_cap) * equity:
+                    block = "TF_CAP"
+            if block is None and outstanding + candidate > \
+                    self.risk["portfolio_cap_frac"] * equity:
+                block = "PORTFOLIO_CAP"
+            if block is None and qty * entry_ref < max(
+                    spec.min_trade_usdt, spec.size_min * entry_ref):
+                block = "MIN_NOTIONAL"
+            if block is None and self.breaker.should_stop(equity):
+                block = "DAILY_LOSS_BREAKER"
+            if block is None and not self.rate.allow():
+                block = "RATE_LIMIT"
+        oid = None
+        if block is None:
+            oid = client_oid_of(self.OID_PREFIX, sym, hyp.event_id, side, t)
+            # 断点幂等:同键不重发;已失败的意图亦不再重试(避免每轮重发同一坏单)
+            if self.open_intents.get(oid, {}).get("status") in (
+                    "armed", "filled", "error"):
+                block = "DUPLICATE"
+        # ---- 信号广播(公开频道):先发事实,再记账 ----
+        self._notify_signal(
+            (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
+            size_note=f"风险档 {eff_rf:.2%} ×{size_mult:g}"
+                      f"{' · 降档触发' if mic else ''}",
+            exec_status=self._signal_status_text(block, tf_label=cs.tf_label,
+                                                kind=d.kind),
+            symbol=sym, tf_label=cs.tf_label, event_id=hyp.event_id,
+            side=side, route=d.route,
+            ref_price=entry_ref, invalid=invalid, target_1=hyp.target_1,
+            regime=regime, bars=chart_bars, box_lo=box_lo, box_hi=box_hi,
+            zone_lo=zone_lo, zone_hi=zone_hi,
+            zone_touches=d.meta.get("zone_touches"),
+            pivots=chart_pivots, atr=getattr(view, "atr", None),
+            decision_ts=t)
+        if block is not None:
+            self._note_block(sym, cs, hyp, block, qty=qty, ref=entry_ref)
             return
         self.counters["signals"] += 1
-        regime = hyp.regime.value if hyp.regime is not None else ""
-        z_lo = d.meta.get("zone_lo")
-        z_hi = d.meta.get("zone_hi")
-        b_opp = d.meta.get("box_opposite")
-        if z_lo is not None and z_hi is not None and b_opp is not None:
-            box_lo = float(min(z_lo, z_hi, b_opp))
-            box_hi = float(max(z_lo, z_hi, b_opp))
-        elif z_lo is not None and z_hi is not None:
-            box_lo, box_hi = float(z_lo), float(z_hi)
-        else:
-            box_lo, box_hi = None, None
-        chart_bars = cs.trig_bars[-45:] if mic and cs.trig_bars else (cs.cog_bars[-45:] or cs.trig_bars[-45:])
         intent = {"oid": oid, "symbol": sym, "tf_label": cs.tf_label,
                   "role": "entry", "kind": d.kind, "direction": hyp.direction,
                   "qty": qty,
@@ -1830,14 +2294,6 @@ class LiveRunner:
                   "expiry_ts": t + N_FILL_H * MS_1H, "status": "armed",
                   "exchange_order_id": None}
         self.open_intents[oid] = intent
-        self.tg.send_signal(sym, hyp.event_id,
-                            "多" if hyp.direction > 0 else "空", d.route,
-                            entry_ref, float(hyp.invalid),
-                            f"规模 {qty}(风险档 {eff_rf:.2%}, ×{size_mult:g})"
-                            f"{' [降档触发]' if mic else ''}",
-                            regime=regime, tf_label=cs.tf_label,
-                            bars=chart_bars, box_lo=box_lo, box_hi=box_hi,
-                            target_1=hyp.target_1)
         if self.mode == "live":
             try:
                 if d.kind == "limit":
@@ -2024,33 +2480,55 @@ class LiveRunner:
                                       "kind": kind, "qty": qty,
                                       "reason": str(reason)[:80]})
 
-    def _live_close_filled(self, it: dict, *, ref_price: float) -> None:
+    def _live_close_filled(self, it: dict, *, ref_price: float,
+                           title: Optional[str] = None,
+                           note: Optional[str] = None,
+                           price_label: str = "成交价格",
+                           pnl: Optional[float] = None) -> None:
+        """live 平仓记账(市价成交即记账;限价由 `_sync_live_fills` 确认)。
+
+        可选 `title` / `note` / `pnl` 让调用方带**语义**入账(决策型离场要把
+        "止盈(回撤预算耗尽)"与"止损(保护单触发)"分开),而不必再造一条记账
+        路径 —— 记账口径(数量、费用、pm/positions 清理)只有这一处。
+        """
         pos = self.positions.get(it["symbol"])
         if pos is None:
             return
         qty = min(it["qty"], pos["qty"])
-        gross = qty * pos["direction"] * (float(ref_price) - float(pos["entry"]))
-        fee = qty * float(ref_price) * self.risk["taker_fee"]
+        if pnl is None:
+            gross = qty * pos["direction"] * (float(ref_price)
+                                              - float(pos["entry"]))
+            fee = qty * float(ref_price) * self.risk["taker_fee"]
+            pnl = gross - fee
         pos["qty"] = round(pos["qty"] - qty, 10)
         it["status"] = "filled"
         self.counters["reduce_fills" if it["role"] == "reduce" else "exits"] += 1
         cs = self._get_cs_for(it["symbol"], pos.get("tf_label")) or self.campaigns.get(it["symbol"])
         chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
         self.tg.send_fill(
-            it["symbol"], f"平仓({self.mode},{it['role']})",
-            qty, float(ref_price), pnl=gross - fee,
-            note=str(it["route"])[:60],
+            it["symbol"], title or f"平仓({self.mode},{it['role']})",
+            qty, float(ref_price), pnl=pnl,
+            note=str(it["route"])[:60] if note is None else str(note)[:160],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
             direction=-pos["direction"],
             entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),
             box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
-            bars=chart_bars)
+            bars=chart_bars, price_label=price_label)
         self._journal("close_fill", {"oid": it["oid"], "symbol": it["symbol"],
-                                     "qty": qty, "role": it["role"]})
+                                     "qty": qty, "role": it["role"],
+                                     "price": float(ref_price), "pnl": pnl,
+                                     "price_source": it.get("price_source")})
         if it["role"] == "exit" or pos["qty"] <= 1e-9:
-            self.positions.pop(it["symbol"], None)
+            sym = it["symbol"]
+            self.positions.pop(sym, None)
+            self._missing_streak.pop(sym, None)
+            # 已知平仓:pm 侧事实必须**同时**清 —— 否则 `_close_cognition`
+            # 继续管理一个不存在的仓,且该品种再触发 `pm.open` 会因"已持仓"
+            # 被拒(告警"pm 建仓拒绝")。与 `_reconcile_closed` 同口径。
+            if cs is not None:
+                cs.pm.positions.pop(sym, None)
         self._touch_campaigns()              # 平仓/减仓:pm 数量已变
 
     # ------------------------------------------------------------------
@@ -2300,64 +2778,170 @@ class LiveRunner:
                 self._journal("timeout_to_taker", {"oid": oid,
                                                    "symbol": it["symbol"]})
 
-    def _last_fill_price(self, sym: str) -> Optional[float]:
-        """该品种最近一笔'平仓'成交价(离场价);取不到返回 None(如实不编)。
+    def _close_fill_fact(self, sym: str, *, since_ms: Optional[int] = None,
+                         opened_ts_ms: Optional[int] = None
+                         ) -> Optional[tuple[float, Optional[int]]]:
+        """该品种**最近一笔**平仓成交的 `(vwap, 成交时刻ms)`;取不到返回 None。
 
-        只认 tradeSide=close:fills 为倒序(新→旧)且含开仓成交,直接取末条会
-        拿成开仓价 ⇒ 算出 pnl≈0 的误导性回执(实测 AAVE 取成 157.67)。
+        三条修正(修前一个都不成立,所以离场回执系统性错):
+        ① **不许假定列表顺序**:fills 端点按新→旧返回,但排序口径随端点/版本
+           漂移。这里显式按成交时间**降序**取第一条 —— 修前是遍历覆盖,留下
+           的是窗口内**最旧**一笔平仓成交(实测 BABA 回执 110.47,而它的保护单
+           105.148 早该成交:拿的是上一笔)。
+        ② **同一订单的多笔成交按 size 加权聚合**(vwap + 最晚时刻),而不是
+           只取其中一笔 —— 分批成交时单笔价格不代表这笔平仓。
+        ③ **时间窗**:只用"本仓开仓之后"的平仓成交(`opened_ts_ms`)。窗口内
+           没有 ⇒ 返回 None(如实不编),绝不把上一笔仓的平仓价记到这一仓头上。
+
+        `since_ms` 供"我刚下的这张单"用:只要那之后的成交,避免把同时段内
+        另一笔平仓算进来。
         """
         try:
-            res = self.client.recent_fills(sym, limit=50)
+            res = self.client.recent_fills(sym, limit=100)
         except BitgetError:
             return None
         rows = res if isinstance(res, list) else (
             (res or {}).get("fillList") or (res or {}).get("fills") or [])
-        px: Optional[float] = None
+        cand: list[tuple[int, float, float, str]] = []
         for r in rows:
             if str(r.get("symbol")) != sym:
                 continue
-            if str(r.get("tradeSide") or "") != "close":
+            if str(r.get("tradeSide") or "").lower() != "close":
+                continue
+            ts = _fill_ts_ms(r)
+            if ts is None:
+                continue
+            if since_ms is not None and ts < int(since_ms):
+                continue
+            if opened_ts_ms is not None and ts < int(opened_ts_ms):
                 continue
             try:
-                px = float(r.get("price"))
+                px, size = float(r.get("price")), float(r.get("size") or 0.0)
             except (TypeError, ValueError):
                 continue
-        return px
+            if px <= 0.0:
+                continue
+            cand.append((ts, px, size, str(r.get("orderId") or "")))
+        if not cand:
+            return None
+        cand.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        newest_ts, newest_px, _sz, oid = cand[0]
+        if not oid:                       # 无订单号的端点:只能如实取最新一笔
+            return newest_px, newest_ts
+        same = [c for c in cand if c[3] == oid]
+        tot = sum(c[2] for c in same)
+        if tot <= 0.0:
+            return newest_px, newest_ts
+        vwap = sum(c[1] * c[2] for c in same) / tot
+        return vwap, max(c[0] for c in same)
+
+    def _settle_exits(self, now_ms: int) -> None:
+        """决策型离场的**成交回执结算**(下单瞬间取不到成交价时的二次确认)。
+
+        记账已在 `_live_market_exit` 用参考价落地(宁可偏差,也不静默),所以这里
+        **只做校正**:journal 记权威成交价与已实现盈亏;偏差显著(>0.2%)才补发
+        一条告警 —— 一条离场通知绝不因为"接口晚到 200ms"而消失。
+        超时仍未取到回执 ⇒ 如实记 `exit_settle_miss` 并停手(不无限重试)。
+        """
+        for sym, rec in list(self._exit_settle.items()):
+            fact = self._close_fill_fact(sym, since_ms=int(rec["since_ms"]))
+            if fact is None:
+                if now_ms >= int(rec["deadline_ms"]):
+                    self._exit_settle.pop(sym, None)
+                    self.counters["exit_settle_miss"] = \
+                        self.counters.get("exit_settle_miss", 0) + 1
+                    self._journal("exit_settle_miss",
+                                  {"symbol": sym, "oid": rec["oid"],
+                                   "ref_px": rec["ref_px"]})
+                continue
+            self._exit_settle.pop(sym, None)
+            px, ts = float(fact[0]), fact[1]
+            pnl = realized_pnl(rec["direction"], rec["qty"], rec["entry"], px,
+                               self.risk["taker_fee"])
+            pnl_ref = realized_pnl(rec["direction"], rec["qty"], rec["entry"],
+                                   float(rec["ref_px"]), self.risk["taker_fee"])
+            self._journal("exit_settle",
+                          {"symbol": sym, "oid": rec["oid"],
+                           "ref_px": float(rec["ref_px"]), "exit_price": px,
+                           "exit_ts_ms": ts, "pnl": pnl, "pnl_ref": pnl_ref,
+                           "why": rec.get("why")})
+            ref = float(rec["ref_px"])
+            if ref > 0.0 and abs(px - ref) / ref > 2e-3:
+                self.tg.send_alert(
+                    f"{sym} 离场回执校正:成交 {px:.8g} ≠ 记账参考 {ref:.8g}"
+                    f"(差 {abs(px - ref) / ref:.2%}),已实现 {pnl:+.2f} USDT")
 
     def _reconcile_closed(self, sym: str, pos: dict) -> None:
-        """交易所已无此仓(保护止损触发 / 外部平仓):以交易所为准清理本地事实。
+        """交易所已无此仓:以交易所为准清理本地事实,并**如实分型**离场。
 
-        修前缺陷:只报 ours_only 且文案误写为"异己仓",本地持仓事实永不清理
-        ⇒ ① 该品种被 position_open 卡住不再开新仓;② 每轮重复误报告警。
+        修前两处失真(都是"把未知写成确定"):
+        ① 一律报"离场确认(交易所已无此仓)",盈利离场与亏损离场无法区分;
+        ② 成交价取 fills 窗口里最旧的一笔 ⇒ 回执价格/PnL 系统性错。
+
+        现在按两个正交事实出账:
+        * `executor` —— 成交价是否落在保护单成交侧(`stop_execution_evidence`);
+        * `pnl`      —— 按该笔成交价与 taker 费计算。
+        取不到成交价 ⇒ executor="unknown"、pnl=None,文案只陈述已知事实。
         """
         cs = self._get_cs_for(sym, pos.get("tf_label")) or self.campaigns.get(sym)
         if cs is not None:
             cs.pm.positions.pop(sym, None)
-        self.stops.pop(sym, None)
+        st = self.stops.pop(sym, None)       # 取证据:触发前那张保护单的价位
         self.positions.pop(sym, None)
         self._missing_streak.pop(sym, None)
+        self._exit_settle.pop(sym, None)     # 仓已确认归零:无需再校正回执
+        self._exit_retry.pop(sym, None)      # 同上:重试队列也随仓位归零作废
         self._touch_campaigns()              # 交易所已无此仓:冷档 pm 事实要清
-        px = self._last_fill_price(sym)
-        pnl = None
-        if px is not None:
-            pnl = (float(pos["qty"]) * int(pos["direction"])
-                   * (px - float(pos["entry"]))
-                   - float(pos["qty"]) * px * self.risk["taker_fee"])
+        fact = self._close_fill_fact(
+            sym, opened_ts_ms=(int(pos["opened_ts"]) if pos.get("opened_ts")
+                               else None))
+        px: Optional[float] = float(fact[0]) if fact is not None else None
+        stop_px: Optional[float] = None
+        for cand in ((st or {}).get("trigger"), pos.get("invalid")):
+            try:
+                if cand not in (None, 0, 0.0):
+                    stop_px = float(cand)
+                    break
+            except (TypeError, ValueError):
+                continue
+        if px is None:
+            executor = "unknown"
+        elif stop_px is not None and stop_execution_evidence(
+                int(pos["direction"]), px, stop_px):
+            executor = "protective_stop"
+        else:
+            executor = "external"
+        pnl = (realized_pnl(pos["direction"], pos["qty"], pos["entry"], px,
+                            self.risk["taker_fee"]) if px is not None else None)
+        label = exit_label(executor=executor, pnl=pnl)
         self.counters["reconcile_closed"] = \
             self.counters.get("reconcile_closed", 0) + 1
-        self._journal("reconcile_closed", {"symbol": sym,
-                                           "direction": pos["direction"],
-                                           "qty": pos["qty"],
-                                           "exit_price": px})
+        self._journal("reconcile_closed",
+                      {"symbol": sym, "direction": pos["direction"],
+                       "qty": pos["qty"], "entry": pos["entry"],
+                       "exit_price": px,
+                       "exit_ts_ms": (fact[1] if fact else None),
+                       "price_source": ("fills" if px is not None else None),
+                       "stop": stop_px, "executor": executor, "pnl": pnl})
+        if executor == "protective_stop":
+            note = (f"成交价落在保护单成交侧(止损 {stop_px:.8g})"
+                    f"{' · 盈利侧成交即移动止损止盈' if (pnl or 0.0) > 0 else ''}"
+                    f";本地持仓事实已按交易所清理")
+        elif executor == "external":
+            note = (f"成交价未落在保护单成交侧(止损 {stop_px:.8g})"
+                    f" ⇒ 外部/人工平仓;本地持仓事实已按交易所清理")
+        else:
+            note = "取不到成交回执(fills 无本仓开仓后的平仓成交);仅清理本地事实"
         self.tg.send_fill(
-            sym, "离场确认(交易所已无此仓)", float(pos["qty"]),
+            sym, label, float(pos["qty"]),
             float(px if px is not None else pos.get("mark") or pos["entry"]),
-            pnl=pnl,
-            note="保护止损触发或外部平仓;本地持仓事实已按交易所为准清理",
+            pnl=pnl, note=note,
             tf_label=pos.get("tf_label"), direction=int(pos["direction"]),
             entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=float(pos["invalid"]), target_price=pos.get("target_1"),
-            box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"))
+            box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
+            price_label=("成交价" if px is not None else "参考价(无成交回执)"))
+
 
     def _reconcile(self) -> None:
         try:
@@ -2585,6 +3169,12 @@ def main(argv=None) -> None:
     tg = TelegramNotifier(
         secrets, dropped_log=ROOT / "runtime" / "live" / "tg_missed.jsonl",
         async_mode=True)
+    # 通道路由如实播报:运营通道未单独配置时会与信号同房间(宁可如此,也不静默
+    # 丢告警),启动时把这件事说清楚,免得日后误以为运营信息没有外泄面。
+    chan_txt = ("信号/运营 独立" if tg.ops_channel_separate
+                else "运营回退信号 Bot" if tg.ops_configured else "未配置")
+    print(f"[live_runner] Telegram:信号通道={'on' if tg.configured else 'off'}"
+          f" / {chan_txt}", flush=True)
     contracts, contract_raw = load_contracts_live(client)   # 全量:精度/min_notional/maxLever
     runner = LiveRunner(args.mode, cfg, client, tg,
                         contracts=contracts, contract_raw=contract_raw,
@@ -2598,8 +3188,8 @@ def main(argv=None) -> None:
           f"{r['portfolio_cap_frac']} 日损熔断 {r['max_daily_loss_frac']} "
           f"每时单限 {r['orders_per_hour']};宇宙 >= "
           f"{cfg['universe']['min_usdt_volume_24h']:.0f} USDT)", flush=True)
-    tg.send_alert(f"live_runner 起动(mode={args.mode});信号/成交/日结/告警"
-                  f"通道就绪")
+    tg.send_alert(f"live_runner 起动(mode={args.mode});信号=公开广播"
+                  f"(仅结构+执行口径),成交/日结/告警={chan_txt}")
     print(f"[live_runner] gap_started={runner._gap_started_ms} "
           f"gap_symbols={sorted(runner._gap_bars)} "
           f"gap_bars={sum(len(v) for v in runner._gap_bars.values())}",

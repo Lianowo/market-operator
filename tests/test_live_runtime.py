@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -939,4 +940,589 @@ def test_route_step_suppresses_new_entries_during_gap_replay(tmp_path,
     r._gap_replay = False
     r._route_step(cs, 1.0, [], view=None, mic=False)
     assert len(submitted) == 1
+
+
+# ---------------------------------------------------------------------------
+# ⑩ 离场执行者(P0)/ 离场分型(P1)/ 成交回执(P2)
+# ---------------------------------------------------------------------------
+
+
+class _FillClient(_FakeClient):
+    """可注入成交回执的假客户端(离场回执路径用);market 单可开关失败。"""
+
+    def __init__(self, fills=(), **kw):
+        super().__init__(**kw)
+        self.fills = list(fills)
+        self.fail_market = False
+        self.market_attempts = 0
+
+    def recent_fills(self, symbol, limit=20):
+        return list(self.fills)
+
+    def place_market_order(self, symbol, **kw):
+        self.market_attempts += 1
+        if self.fail_market:
+            raise BitgetError("market rejected")
+        return super().place_market_order(symbol, **kw)
+
+
+def _journal_rows(tmp_path: Path) -> list[dict]:
+    rows: list[dict] = []
+    for p in sorted((tmp_path / "logs").glob("*.jsonl")):
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def _row(tmp_path: Path, **match) -> dict:
+    for r in _journal_rows(tmp_path):
+        if all(r.get(k) == v for k, v in match.items()):
+            return r
+    raise AssertionError(f"journal 无此行:{match}")
+
+
+def test_stop_execution_evidence_is_one_sided():
+    """止损市价单只能“不优于触发价”成交:优于它 ⇒ 一定不是这张挂单。
+
+    反向判据(≥ −tol)会把每一次盈利离场都归因成移动止损 —— 比不分类更危险。
+    """
+    assert lr.stop_execution_evidence(1, 94.0, 95.0)          # 多头越价成交
+    assert lr.stop_execution_evidence(1, 95.0, 95.0)          # 恰在触发价
+    assert not lr.stop_execution_evidence(1, 104.0, 95.0)     # 优于止损 ⇒ 非本单
+    assert lr.stop_execution_evidence(-1, 106.0, 105.0)       # 空头越价成交
+    assert not lr.stop_execution_evidence(-1, 90.0, 105.0)    # 空头优于止损
+
+
+def test_exit_label_matrix():
+    assert lr.exit_label(executor="protective_stop", pnl=12.0) == "止盈(移动止损触发)"
+    assert lr.exit_label(executor="protective_stop", pnl=-3.0) == "止损(保护单触发)"
+    assert lr.exit_label(executor="external", pnl=12.0).startswith("离场确认(外部平仓·盈利")
+    assert lr.exit_label(executor="external", pnl=-1.0).startswith("离场确认(外部平仓·亏损")
+    assert lr.exit_label(executor="unknown", pnl=None).startswith("离场确认")
+    assert lr.exit_label(executor="local_market", pnl=5.0,
+                         reason="sub_bar_lock_exhausted").startswith("止盈")
+
+
+def test_lock_exhausted_live_sends_market_exit_once(tmp_path):
+    """P0:回撤预算耗尽必须由**本进程**市价离场,且同一仓只发一次。"""
+    client, tg = _FillClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=2.0, mark=106.0)
+    r.stops["BTCUSDT"] = {"trigger": 94.0, "qty": 2.0, "order_id": "S1"}
+    cs = types.SimpleNamespace(symbol="BTCUSDT")
+    pm = types.SimpleNamespace(direction=1, invalid=94.0, entry=100.0,
+                               target_1=110.0)
+
+    r._sub_bar_close_out(cs, pm, r.positions["BTCUSDT"], 1_700_000_000_000,
+                         106.0, why="sub_bar_lock_exhausted",
+                         route="LOCK_EXIT|giveback=4 budget=7.5",
+                         executor="local_market")
+
+    assert len(client.market_orders) == 1
+    od = client.market_orders[0]
+    assert od["symbol"] == "BTCUSDT"
+    assert od["side"] == r.close_side_of(1)          # hedge_mode 语义由 runner 决定
+    assert od["trade_side"] == r.close_trade_side()
+    assert od["size"] == 2.0
+    assert "S1" in [c[1] for c in client.plan_canceled]   # 先撤保护单,避免双平
+    assert "BTCUSDT" not in r.positions              # 成交即清仓(幂等的根据)
+    assert r.counters["lock_exits"] == 1
+    assert r.counters["exits"] == 1
+    assert tg.fills[-1]["title"].startswith("止盈")
+    assert _row(tmp_path, kind="exit_submit")["qty"] == 2.0
+
+    # 下一根 bar(即使调用方仍拿旧字段)不得再发一张:已无此仓
+    r._sub_bar_close_out(cs, pm, {"symbol": "BTCUSDT"}, 1_700_000_007_200,
+                         104.0, why="sub_bar_lock_exhausted",
+                         route="LOCK_EXIT|again", executor="local_market")
+    assert len(client.market_orders) == 1
+
+
+
+def test_lock_exhausted_paper_stays_virtual(tmp_path):
+    """paper 路径不受 P0 影响:绝不发真单,仍按参考价虚拟结算。"""
+    client, tg = _FillClient(), _FakeTG()
+    r = lr.LiveRunner("paper", _cfg_min(), client, tg,
+                      state_path=tmp_path / "state.json",
+                      journal_dir=tmp_path / "logs", equity0=1000.0,
+                      contracts={}, symbols=())
+    pm = types.SimpleNamespace(direction=1, invalid=94.0, entry=100.0,
+                               target_1=110.0)
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=1.0, mark=106.0)
+    cs = types.SimpleNamespace(
+        symbol="BTCUSDT", pm=types.SimpleNamespace(positions={"BTCUSDT": pm}))
+
+    r._sub_bar_close_out(cs, pm, r.positions["BTCUSDT"], 1_700_000_000_000,
+                         106.0, why="sub_bar_lock_exhausted", route="LOCK_EXIT",
+                         executor="local_market")
+
+    assert client.market_orders == []
+    assert "BTCUSDT" not in r.positions
+    assert cs.pm.positions == {}
+    assert r.equity > 1000.0
+
+
+def test_protective_stop_with_resting_order_only_reconciles(tmp_path):
+    """执行者是交易所时**不得**再发市价单(仓位可能已成交 ⇒ 会反向开仓)。"""
+    client, tg = _FillClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=94.0)
+    r.stops["BTCUSDT"] = {"trigger": 95.0, "qty": 1.0, "order_id": "S1"}
+    pm = types.SimpleNamespace(direction=1, invalid=95.0, entry=100.0,
+                               target_1=110.0)
+
+    r._sub_bar_close_out(types.SimpleNamespace(symbol="BTCUSDT"), pm,
+                         r.positions["BTCUSDT"], 1_700_000_000_000, 95.0,
+                         why="sub_bar_protective_stop", route="STOP",
+                         executor="exchange_stop")
+
+    assert client.market_orders == []
+    assert r.counters["unprotected_stop_exits"] == 0
+    assert r._missing_streak.get("BTCUSDT") == 1      # 只推了一轮对账(待下轮确认)
+
+
+def test_protective_stop_without_resting_order_market_exits(tmp_path):
+    """防线上没有在挂的保护单 = 没有任何挂单会执行 ⇒ 本进程补市价单。"""
+    client, tg = _FillClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=94.0)
+    pm = types.SimpleNamespace(direction=1, invalid=95.0, entry=100.0,
+                               target_1=110.0)
+
+    r._sub_bar_close_out(types.SimpleNamespace(symbol="BTCUSDT"), pm,
+                         r.positions["BTCUSDT"], 1_700_000_000_000, 95.0,
+                         why="sub_bar_protective_stop", route="STOP",
+                         executor="exchange_stop")
+
+    assert len(client.market_orders) == 1
+    assert r.counters["unprotected_stop_exits"] == 1
+    assert tg.fills[-1]["title"] == "止损(无保护单·市价离场)"
+    assert _row(tmp_path, kind="stop_unprotected_exit")["invalid"] == 95.0
+
+
+def test_lock_exit_market_failure_alerts_and_keeps_position(tmp_path):
+    """下单失败不能装成已平:仓位仍在、保护单待重挂、告警必须说清。"""
+    client, tg = _FillClient(), _FakeTG()
+    client.fail_market = True
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=1.0, mark=106.0)
+    r.stops["BTCUSDT"] = {"trigger": 94.0, "qty": 1.0, "order_id": "S1"}
+
+    ok = r._live_market_exit(r.positions["BTCUSDT"], ts=1_700_000_000_000,
+                             why="sub_bar_lock_exhausted", route="LOCK_EXIT",
+                             ref_px=106.0)
+
+    assert ok is False
+    assert "BTCUSDT" in r.positions                  # 仓位仍在(不得静默清账)
+    assert r.stops.get("BTCUSDT") is None            # 已撤 ⇒ 下一拍 _manage_stops 重挂
+    assert r.counters["exit_submit_errors"] == 1
+    assert r.counters["lock_exits"] == 0
+    assert "决策型离场下单失败" in tg.alerts[-1]
+
+
+
+def test_lock_exit_failure_is_retried_next_step(tmp_path):
+    """失败必须**下一步**就重试(不能等下一根 2H bar 才重试,最长 2h 裸奔)。"""
+    client, tg = _FillClient(), _FakeTG()
+    client.fail_market = True
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=1.0, mark=106.0)
+    r.stops["BTCUSDT"] = {"trigger": 94.0, "qty": 1.0, "order_id": "S1"}
+
+    assert r._live_market_exit(r.positions["BTCUSDT"], ts=1_700_000_000_000,
+                               why="sub_bar_lock_exhausted", route="LOCK_EXIT",
+                               ref_px=106.0) is False
+    assert r._exit_retry["BTCUSDT"]["attempts"] == 0
+
+    client.fail_market = False
+    r._retry_exits(1_700_000_015_000)
+
+    assert client.market_attempts == 2            # 首发(失败) + 重试(成功)
+    assert len(client.market_orders) == 1
+    assert "BTCUSDT" not in r.positions
+    assert r._exit_retry == {}
+    assert r.counters["lock_exits"] == 1
+
+
+def test_lock_exit_gives_up_after_retry_cap(tmp_path):
+    """重试用完仍是失败 ⇒ 必须发一条到人的终态告警并停止重试(不再静默)。"""
+    client, tg = _FillClient(), _FakeTG()
+    client.fail_market = True
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=1.0, mark=106.0)
+    r._live_market_exit(r.positions["BTCUSDT"], ts=1_700_000_000_000,
+                        why="sub_bar_lock_exhausted", route="LOCK_EXIT",
+                        ref_px=106.0)
+    for i in range(r.MAX_EXIT_SUBMIT_RETRIES):
+        r._retry_exits(1_700_000_015_000 + i * 15_000)
+
+    assert r._exit_retry == {}
+    assert "BTCUSDT" in r.positions               # 仍未平:必须由人接手
+    assert "请立即人工平仓" in tg.alerts[-1]
+    assert _row(tmp_path, kind="exit_submit_giveup")["symbol"] == "BTCUSDT"
+    assert r.counters["exit_submit_errors"] == 1 + r.MAX_EXIT_SUBMIT_RETRIES
+
+
+def test_close_fill_fact_picks_newest_order_vwap(tmp_path):
+    """P2:必须取**最新**那笔平仓单,并按 size 聚合;顺序与时间窗都要对。"""
+    fills = [
+        {"symbol": "BABAUSDT", "tradeSide": "close", "price": "110.47",
+         "size": "1", "cTime": "1699000000000", "orderId": "OLD"},
+        {"symbol": "BABAUSDT", "tradeSide": "close", "price": "104",
+         "size": "0.5", "cTime": "1700000900000", "orderId": "NEW"},
+        {"symbol": "BABAUSDT", "tradeSide": "close", "price": "106",
+         "size": "0.5", "cTime": "1700000900500", "orderId": "NEW"},
+        {"symbol": "BABAUSDT", "tradeSide": "open", "price": "100", "size": "1",
+         "cTime": "1700000990000", "orderId": "ENTRY"},
+    ]
+    r = _runner(tmp_path, _FillClient(fills=fills), _FakeTG())
+    px, ts = r._close_fill_fact("BABAUSDT")
+    assert px == pytest.approx(105.0)                # (104×0.5 + 106×0.5) / 1
+    assert ts == 1_700_000_900_500
+
+    # 端点若按正序返回(旧→新),结论必须一致(不假定列表顺序)
+    r2 = _runner(tmp_path, _FillClient(fills=list(reversed(fills))), _FakeTG())
+    assert r2._close_fill_fact("BABAUSDT")[0] == pytest.approx(105.0)
+
+    # 时间窗:开仓之前那笔平仓不许算进来(否则拿上一笔仓的价格冒充)
+    assert r._close_fill_fact("BABAUSDT",
+                              opened_ts_ms=1_700_001_000_000) is None
+
+
+def test_reconcile_closed_labels_loss_as_protective_stop(tmp_path):
+    client = _FillClient(fills=[{"symbol": "BTCUSDT", "tradeSide": "close",
+                                 "price": "94.0", "size": "1",
+                                 "cTime": "1700000100000", "orderId": "C1"}])
+    tg = _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    pos = _pos(entry=100.0, invalid=95.0, qty=1.0, mark=94.0)
+    pos["opened_ts"] = 1_700_000_000_000
+    r.positions["BTCUSDT"] = pos
+    r.stops["BTCUSDT"] = {"trigger": 95.0, "qty": 1.0, "order_id": "S1"}
+
+    r._reconcile_closed("BTCUSDT", pos)
+
+    row = _row(tmp_path, kind="reconcile_closed")
+    assert row["executor"] == "protective_stop"
+    assert row["exit_price"] == 94.0
+    assert row["exit_ts_ms"] == 1_700_000_100_000
+    assert row["pnl"] < 0
+    assert tg.fills[-1]["title"] == "止损(保护单触发)"
+
+
+def test_reconcile_closed_labels_profit_above_stop_as_external(tmp_path):
+    """成交优于保护单 ⇒ 不是本系统止损:如实标成外部平仓(盈利),不冒充止盈。"""
+    client = _FillClient(fills=[{"symbol": "BTCUSDT", "tradeSide": "close",
+                                 "price": "104.0", "size": "1",
+                                 "cTime": "1700000100000", "orderId": "C1"}])
+    tg = _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    pos = _pos(entry=100.0, invalid=95.0, qty=1.0, mark=104.0)
+    pos["opened_ts"] = 1_700_000_000_000
+    r.positions["BTCUSDT"] = pos
+    r.stops["BTCUSDT"] = {"trigger": 95.0, "qty": 1.0, "order_id": "S1"}
+
+    r._reconcile_closed("BTCUSDT", pos)
+
+    row = _row(tmp_path, kind="reconcile_closed")
+    assert row["executor"] == "external"
+    assert row["pnl"] > 0
+    assert tg.fills[-1]["title"] == "离场确认(外部平仓·盈利)"
+
+
+def test_reconcile_closed_ignores_fills_before_position_open(tmp_path):
+    """窗口内没有平仓成交 ⇒ exit_price/pnl 如实为 None,绝不借用上一笔仓。"""
+    client = _FillClient(fills=[{"symbol": "BTCUSDT", "tradeSide": "close",
+                                 "price": "94.0", "size": "1",
+                                 "cTime": "1699999990000", "orderId": "OLD"}])
+    tg = _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    pos = _pos(entry=100.0, invalid=95.0, qty=1.0, mark=94.0)
+    pos["opened_ts"] = 1_700_000_000_000
+    r.positions["BTCUSDT"] = pos
+
+    r._reconcile_closed("BTCUSDT", pos)
+
+    row = _row(tmp_path, kind="reconcile_closed")
+    assert row["exit_price"] is None
+    assert row["executor"] == "unknown"
+    assert row["pnl"] is None
+    assert tg.fills[-1]["title"] == "离场确认(交易所已无此仓)"
+
+
+def test_exit_settle_corrects_reference_price(tmp_path):
+    """P0 回执:下单瞬间没取到成交价 ⇒ 后续步用权威成交价校正并留痕。"""
+    now = int(time.time() * 1000)
+    client = _FillClient()
+    r = _runner(tmp_path, client, _FakeTG())
+    r._exit_settle["BTCUSDT"] = {"oid": "X", "since_ms": now - 5000,
+                                 "deadline_ms": now + 60_000, "ref_px": 100.0,
+                                 "direction": 1, "qty": 1.0, "entry": 90.0,
+                                 "why": "sub_bar_lock_exhausted"}
+    client.fills = [{"symbol": "BTCUSDT", "tradeSide": "close",
+                     "price": "101.5", "size": "1",
+                     "cTime": str(now - 1000), "orderId": "X"}]
+
+    r._settle_exits(now)
+
+    assert "BTCUSDT" not in r._exit_settle
+    row = _row(tmp_path, kind="exit_settle")
+    assert row["exit_price"] == pytest.approx(101.5)
+    assert row["pnl"] > 0
+    assert "离场回执校正" in r.tg.alerts[-1]
+
+
+def test_exit_settle_gives_up_after_deadline(tmp_path):
+    """超时仍无回执 ⇒ 如实记 miss 并停止重试(不无限刷接口)。"""
+    now = int(time.time() * 1000)
+    r = _runner(tmp_path, _FillClient(), _FakeTG())
+    r._exit_settle["BTCUSDT"] = {"oid": "X", "since_ms": now - 5000,
+                                 "deadline_ms": now - 1, "ref_px": 100.0,
+                                 "direction": 1, "qty": 1.0, "entry": 90.0,
+                                 "why": "sub_bar_lock_exhausted"}
+
+    r._settle_exits(now)
+
+    assert r._exit_settle == {}
+    assert r.counters["exit_settle_miss"] == 1
+    assert _row(tmp_path, kind="exit_settle_miss")["ref_px"] == 100.0
+
+
+def test_defense_title_separates_lock_from_trail():
+    """“止损推进”必须按来源分述:锁利进盈利区 ≠ 收紧止损。"""
+    r = lr.LiveRunner.__new__(lr.LiveRunner)      # 纯判定,无需构造
+    pos = types.SimpleNamespace(direction=1, entry=100.0, invalid=102.5,
+                                target_1=110.0)
+    assert r._defense_title(pos, "v21|opp_lock|峰值=110") == \
+        "锁利推进(已锁 25% TP1 行程)"
+    assert r._defense_title(pos, "§8.3|trail new pivot low=101") == \
+        "结构防线推进(§8.3 trail)"
+    pos.invalid = 97.0
+    assert r._defense_title(pos, "其它") == "防线收紧"
+
+
+# ---------------------------------------------------------------------------
+# ⑪ 通知分通道 + 信号广播与容量闸门解耦
+#
+# 修前:信号广播写在 `_submit_open` 的闸门之后,任一闸门 `return` 都会连带
+# 吞掉通知 —— 容量池一满,ACCEPT/REJECT 在信号频道就彻底不可见了。
+# 现在:检测到事件即广播结构事实,`exec_status` 只说明"本系统有没有上车"。
+# ---------------------------------------------------------------------------
+
+
+class _SignalTG(_FakeTG):
+    """记录信号广播的假发信器(成交/告警仍走父类)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.signals: list[dict] = []
+
+    def send_signal(self, symbol, event_id, side, route, ref_price, invalid,
+                    size_note="", regime="", **kw):
+        self.signals.append({"symbol": symbol, "event_id": event_id,
+                             "side": side, "route": route,
+                             "ref_price": ref_price, "invalid": invalid,
+                             "size_note": size_note, "regime": regime, **kw})
+        return True
+
+
+def _decision(*, kind="market", direction=1, ref=100.0, invalid=95.0,
+              target=110.0, zone=(99.0, 101.0), opposite=97.0):
+    hyp = types.SimpleNamespace(
+        event_id="LEVEL_REJECTED", direction=direction, invalid=invalid,
+        target_1=target, regime=types.SimpleNamespace(value="RANGE_ROTATED"))
+    return types.SimpleNamespace(
+        kind=kind, hyp=hyp, intent=types.SimpleNamespace(ref_price=ref),
+        route="e3_market", limit_price=None,
+        meta={"zone_lo": zone[0], "zone_hi": zone[1], "zone_touches": 3,
+              "box_opposite": opposite, "size_mult": 1.0})
+
+
+def _campaign(symbol="BTCUSDT", tf_label="12h"):
+    bars = [(NOW - (45 - i) * 43_200_000, 100.0, 101.0, 99.0, 100.5, 1.0)
+            for i in range(45)]
+    return types.SimpleNamespace(symbol=symbol, tf_label=tf_label,
+                                 trig_bars=list(bars), cog_bars=list(bars))
+
+
+def test_signal_broadcast_survives_portfolio_cap(tmp_path):
+    """容量闸门可以挡执行,但不能挡通知:结构信号照发,执行口径如实标注。"""
+    client, tg = _FakeClient(), _SignalTG()
+    cfg = _cfg_min()
+    cfg["risk"]["portfolio_cap_frac"] = 0.0        # 任何新仓都超预算
+    r = _runner(tmp_path, client, tg, mode="paper", cfg=cfg)
+    r.equity = 104.0                     # paper 尚未跑第一根 K 线时的权益占位
+
+    r._submit_open(_campaign(), _decision(), NOW, mic=False)
+
+    assert len(tg.signals) == 1
+    sig = tg.signals[0]
+    assert "组合容量已满" in sig["exec_status"]
+    # 结构事实随信号一起出:箱体=区间+对侧近缘的极值,触边次数原样透传
+    assert sig["box_lo"] == pytest.approx(97.0)
+    assert sig["box_hi"] == pytest.approx(101.0)
+    assert sig["zone_lo"] == pytest.approx(99.0)
+    assert sig["zone_touches"] == 3
+    assert sig["tf_label"] == "12h"
+    # 闸门记账与"没真开仓"这件事都还在
+    assert r.counters["cap_skips"] == 1
+    assert r.counters["signals"] == 0
+    assert r.open_intents == {}
+    assert client.market_orders == []
+
+
+def test_signal_broadcast_tf_cap_names_the_bucket(tmp_path):
+    """周期容量池挡下时,信号里必须点名是哪个周期满了(否则读者无法判断)。"""
+    tg = _SignalTG()
+    cfg = _cfg_min()
+    cfg["risk"]["tf_cap_by_tf"] = {"12h": 0.0}
+    r = _runner(tmp_path, _FakeClient(), tg, mode="paper", cfg=cfg)
+    r.equity = 104.0
+
+    r._submit_open(_campaign(tf_label="12h"), _decision(), NOW, mic=False)
+
+    assert "12h 周期容量已满" in tg.signals[0]["exec_status"]
+    assert r.counters["tf_cap_skips"] == 1
+    assert r.counters["cap_skips"] == 1
+
+
+def test_signal_broadcast_once_per_event(tmp_path):
+    """同一事件同一拍被重复评估:闸门照旧计数,信号只推一条(不刷屏)。"""
+    tg = _SignalTG()
+    cfg = _cfg_min()
+    cfg["risk"]["portfolio_cap_frac"] = 0.0
+    r = _runner(tmp_path, _FakeClient(), tg, mode="paper", cfg=cfg)
+    r.equity = 104.0
+    cs, d = _campaign(), _decision()
+
+    r._submit_open(cs, d, NOW, mic=False)
+    r._submit_open(cs, d, NOW, mic=False)
+
+    assert len(tg.signals) == 1
+    assert r.counters["cap_skips"] == 2
+
+
+def test_signal_notice_error_never_breaks_decision(tmp_path):
+    """通知链路抛异常只记账:闸门与决策链必须照常跑完。"""
+    class _BoomTG(_FakeTG):
+        def send_signal(self, *a, **kw):
+            raise RuntimeError("boom")
+
+    tg = _BoomTG()
+    cfg = _cfg_min()
+    cfg["risk"]["portfolio_cap_frac"] = 0.0
+    r = _runner(tmp_path, _FakeClient(), tg, mode="paper", cfg=cfg)
+    r.equity = 104.0
+
+    r._submit_open(_campaign(), _decision(), NOW, mic=False)
+
+    assert r.counters["signal_notice_errors"] == 1
+    assert r.counters["cap_skips"] == 1
+
+
+def test_signal_broadcast_kwargs_match_notifier_signature(tmp_path):
+    """runner 传给 `send_signal` 的关键字必须与模板签名逐一对得上。
+
+    假发信器收 `**kwargs`,拼错关键字会变成"静默不发"——测试期间就撞到过
+    `direction=` 与模板 `side=` 的错位。这里用**真通知器**走一遍完整链路:
+    任何签名错位都会立刻变成 `signal_notice_errors`,而且一条也发不出去。
+    """
+    from market_operator.tg import TelegramNotifier
+
+    calls: list[tuple] = []
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
+    class _Sess:
+        proxies = {}
+        timeout = None
+
+        def post(self, url, data=None, files=None, timeout=None):
+            calls.append((url, data, files))
+            return _Resp()
+
+    tg = TelegramNotifier({"TELEGRAM_BOT_TOKEN": "SIG",
+                           "TELEGRAM_CHAT_ID": "C1",
+                           "TELEGRAM_TRADE_BOT_TOKEN": "OPS",
+                           "TELEGRAM_TRADE_CHAT_ID": "C2"},
+                          session=_Sess(), async_mode=False)
+    cfg = _cfg_min()
+    cfg["risk"]["portfolio_cap_frac"] = 0.0
+    r = _runner(tmp_path, _FakeClient(), tg, mode="paper", cfg=cfg)
+    r.equity = 104.0
+
+    r._submit_open(_campaign(), _decision(), NOW, mic=False)
+
+    assert r.counters.get("signal_notice_errors", 0) == 0
+    assert len(calls) == 1
+    url, data, _files = calls[0]
+    assert "/botSIG/" in url                # 信号只走公开频道
+    assert data["chat_id"] == "C1"
+    body = data.get("caption") or data.get("text") or ""
+    assert "系统执行" in body and "组合容量已满" in body
+    assert "平衡箱体" in body and "事件区间" in body
+
+
+def test_notifier_routes_by_kind_only():
+    """分流是一张表:未知类型落运营通道,公开频道永远只收信号。"""
+    from market_operator.tg import (CHANNEL_OPS, CHANNEL_SIGNAL,
+                                    TelegramNotifier)
+
+    n = TelegramNotifier({"TELEGRAM_BOT_TOKEN": "SIGTOK",
+                          "TELEGRAM_CHAT_ID": "SIGCHAT",
+                          "TELEGRAM_TRADE_BOT_TOKEN": "OPSTOK",
+                          "TELEGRAM_TRADE_CHAT_ID": "OPSCHAT"})
+    sent: list[tuple] = []
+
+    def _fake_post(token, chat_id, kind, body):
+        sent.append((token, chat_id, kind))
+        return True
+
+    n._post_text_sync = _fake_post
+    for kind in ("signal", "fill", "daily", "alert", "mystery"):
+        assert n.send(kind, "x") is True
+
+    assert [s[0] for s in sent] == ["SIGTOK", "OPSTOK", "OPSTOK",
+                                    "OPSTOK", "OPSTOK"]
+    assert n.channel_of("signal") == CHANNEL_SIGNAL
+    assert n.channel_of("mystery") == CHANNEL_OPS
+    assert n.ops_channel_separate is True
+
+
+def test_notifier_reports_fallback_instead_of_pretending_split():
+    """secrets_loader 会把运营键回退填成同值:此时必须如实报"未分开"。"""
+    from market_operator.tg import TelegramNotifier
+
+    n = TelegramNotifier({"TELEGRAM_BOT_TOKEN": "T",
+                          "TELEGRAM_CHAT_ID": "C",
+                          "TELEGRAM_TRADE_BOT_TOKEN": "T",
+                          "TELEGRAM_TRADE_CHAT_ID": "C"})
+    assert n.configured is True
+    assert n.ops_configured is True          # 回退可用:不静默丢告警
+    assert n.ops_channel_separate is False   # 但没有真的分开
+    sent: list[tuple] = []
+    n._post_text_sync = lambda token, chat_id, kind, body: \
+        sent.append((token, chat_id)) or True
+    n.send("alert", "x")
+    assert sent == [("T", "C")]
+
+
+def test_secrets_loader_ops_channel_is_optional(tmp_path):
+    """运营通道是可选件:未配置时回退到信号机器人,不应让启动失败。"""
+    p = _write_secrets(tmp_path, PLACEHOLDER)
+    sec = load_secrets(p, environ={})
+    assert sec["TELEGRAM_TRADE_BOT_TOKEN"] == PLACEHOLDER["TELEGRAM_BOT_TOKEN"]
+    assert sec["TELEGRAM_TRADE_CHAT_ID"] == PLACEHOLDER["TELEGRAM_CHAT_ID"]
+
+    p2 = _write_secrets(tmp_path, {**PLACEHOLDER,
+                                   "TELEGRAM_TRADE_BOT_TOKEN": "0:OPS",
+                                   "TELEGRAM_TRADE_CHAT_ID": "-100123"})
+    sec2 = load_secrets(p2, environ={})
+    assert sec2["TELEGRAM_TRADE_BOT_TOKEN"] == "0:OPS"
+    assert sec2["TELEGRAM_TRADE_CHAT_ID"] == "-100123"
 
