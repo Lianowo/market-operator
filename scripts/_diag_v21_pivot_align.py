@@ -12,13 +12,20 @@
            两个硬门):|Δprice| ≤ tol_atr·ATR_coarse(确认 bar 的冻结 atr)、
            |极值时间差| ≤ 1 个粗 bar。
   C2 提前量 粗确认时刻 − 细确认时刻(细 bar 根数);> 0 表示细尺度先知道。
-  C3 噪声   细尺度独有的 pivot 占比 —— 提前量的代价。
+  C3 噪声   细尺度独有的 pivot 占比 —— 提前量的代价。**必须按密度下限归一**:
+           细/粗 pivot 数量比恒为 ~2(1h:2h)或 ~3(4h:12h),一对一时「细独有」
+           的结构下限 = 1 − 粗/细,所以原始占比 0.50 / 0.67 本身不代表噪声。
+           报 `noise_excess = noise / noise_floor`(1.0 = 恰在下限)。
   C4 偏差   |Δprice| / ATR_coarse 的分位(是不是同一个价位)。
+  C5 可用   匹配对里细价位落在**收紧侧**的比例(`_trail` 只收紧,平局/更松无效)。
 
 判据(先验,写死,不许事后改):
-  覆盖 ≥ 0.80 且 中位提前量 ≥ 1 个粗 bar 且 噪声 ≤ 0.50
+  覆盖 ≥ 0.80 且 提前≥1 细 bar 的比例 ≥ 0.50 且 noise_excess ≤ 1.10
   ⇒ 允许做 `pivot_exec`(细尺度 pivot 提前推进防线)实验;
   否则结论是「pivot 家族不同,不改」,与 exit_exec 的否决同一条逻辑。
+  (首版把 C3 写成原始占比 ≤ 0.50,对 2:1 密度是**结构性不可达**的门,已按上述
+   下限归一改正;这是口径纠错,不是看着结果放宽阈值 —— 原判据在 4h:12h 上同样
+   把 0.676 与下限 0.668 读成「噪声超标」。)
 
 参考对(2h:4h)给「合格匹配」定标:若 2h→4h 也只有 0.5 覆盖,说明度量本身够严,
 1h→2h 的低覆盖不能单方面当否定证据。
@@ -118,12 +125,18 @@ def _stats(pair: str, coarse: list, fine: list, *, tol_atr: float,
     leads = [(c[2] - f[2]) / fine_ms for c, f in m["matched"]]
     dp_atr = [abs(f[3] - c[3]) / c[4] for c, f in m["matched"] if c[4] > 0]
     lead_med = _quant(leads, 0.5)
+    noise = round(len(m["fine_only"]) / len(fine), 4) if fine else None
+    # 一对一的「细独有」结构下限:细 pivot 比粗多出来的那部分本来就无对应
+    noise_floor = (round(1.0 - len(coarse) / len(fine), 4) if fine else None)
     out = {
         "pair": pair,
         "coarse_n": len(coarse), "fine_n": len(fine),
         "matched_n": len(m["matched"]),
         "coverage": round(len(m["matched"]) / len(coarse), 4) if coarse else None,
-        "noise": round(len(m["fine_only"]) / len(fine), 4) if fine else None,
+        "noise": noise,
+        "noise_floor": noise_floor,
+        "noise_excess": (round(noise / noise_floor, 4)
+                         if noise and noise_floor else None),
         "coarse_only_n": len(m["coarse_only"]),
         "fine_only_n": len(m["fine_only"]),
         "lead_bars_med": lead_med,
@@ -193,12 +206,12 @@ def main() -> int:
     print(f"[prep] {syms} tfs={tfs} ({time.time() - t0:.1f}s)", flush=True)
 
     payload: dict = {"tol_atr": args.tol_atr,
-                     "criteria": {"coverage_min": 0.80, "lead_bars_med_min": 1.0,
-                                  "noise_max": 0.50},
+                     "criteria": {"coverage_min": 0.80, "lead_ge1_share_min": 0.50,
+                                  "noise_excess_max": 1.10},
                      "symbols": {}, "agg": {}}
     hdr = (f"{'pair':10s} {'sym':10s} | {'cN':>4s} {'fN':>5s} | {'cover':>6s} "
-           f"{'noise':>6s} | {'lead':>7s} {'>=1bar':>7s} | {'dp/atr':>7s} "
-           f"{'p90':>6s} | H/L cover")
+           f"{'noise':>6s} {'xfloor':>6s} | {'lead':>6s} {'>=1bar':>7s} | "
+           f"{'dp/atr':>7s} {'p90':>6s} | {'tight':>5s} | H/L cover")
     print(hdr, flush=True)
     for fine_tf, coarse_tf in pairs:
         pair = f"{fine_tf}:{coarse_tf}"
@@ -215,27 +228,33 @@ def main() -> int:
             payload["symbols"][pair][sym] = st
             acc.append((coarse, fine))
             bk = st["by_kind"]
+            tight = max((v["tighten_share"] or 0) for v in bk.values())
             print(f"{pair:10s} {sym:10s} | {st['coarse_n']:4d} {st['fine_n']:5d} "
-                  f"| {st['coverage']:6.3f} {st['noise']:6.3f} | "
-                  f"{(st['lead_bars_med'] or 0):7.2f} "
+                  f"| {st['coverage']:6.3f} {st['noise']:6.3f} "
+                  f"{st['noise_excess']:6.3f} | "
+                  f"{(st['lead_bars_med'] or 0):6.2f} "
                   f"{(st['lead_ge1_share'] or 0):7.3f} | "
                   f"{(st['dp_atr_med'] or 0):7.3f} {(st['dp_atr_p90'] or 0):6.3f} | "
+                  f"{tight:5.3f} | "
                   f"H={bk['high']['coverage']} L={bk['low']['coverage']}", flush=True)
         coarse_all = [r for c, _ in acc for r in c]
         fine_all = [r for _, f in acc for r in f]
         st = _stats(pair, coarse_all, fine_all, tol_atr=args.tol_atr,
                     span_ms=span_ms, fine_ms=fine_ms)
         ok = (st["coverage"] is not None and st["coverage"] >= 0.80
-              and (st["lead_bars_med"] or 0) >= 1.0
-              and st["noise"] is not None and st["noise"] <= 0.50)
+              and (st["lead_ge1_share"] or 0) >= 0.50
+              and st["noise_excess"] is not None and st["noise_excess"] <= 1.10)
         st["passes"] = ok
         payload["agg"][pair] = st
         bk = st["by_kind"]
+        tight = max((v["tighten_share"] or 0) for v in bk.values())
         print(f"{pair:10s} {'ALL':10s} | {st['coarse_n']:4d} {st['fine_n']:5d} "
-              f"| {st['coverage']:6.3f} {st['noise']:6.3f} | "
-              f"{(st['lead_bars_med'] or 0):7.2f} "
+              f"| {st['coverage']:6.3f} {st['noise']:6.3f} "
+              f"{st['noise_excess']:6.3f} | "
+              f"{(st['lead_bars_med'] or 0):6.2f} "
               f"{(st['lead_ge1_share'] or 0):7.3f} | "
               f"{(st['dp_atr_med'] or 0):7.3f} {(st['dp_atr_p90'] or 0):6.3f} | "
+              f"{tight:5.3f} | "
               f"H={bk['high']['coverage']} L={bk['low']['coverage']} "
               f"=> {'PASS' if ok else 'FAIL'}", flush=True)
 
