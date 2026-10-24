@@ -143,6 +143,13 @@ class ArmConfig:
     reject_opp_lock_frac: float = 0.0
     # v21 行情锚定缓冲(R 的倍数;0 ⇒ 纯计划口径,逐位旧行为)
     opp_lock_max_giveback_r: float = 0.0
+    # v21.6 出场推进粒度(False ⇒ 逐位旧行为:§8.2/§8.3 只在认知 bar 收盘推进)
+    # True ⇒ 每根已收盘执行细 bar 也推进价格型出场(目标/锁利/移动防线),
+    # 不影响路由、准入、开仓与任何时间类计数(见 position.on_bar.price_only)。
+    exit_exec: bool = False
+    # exit_exec=True 时是否也把 §8.3 移动防线搬到执行细 bar(False ⇒ 只提前
+    # §8.2 目标/锁利,trail 仍只在认知收盘推进)
+    exit_exec_trail: bool = True
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -316,6 +323,7 @@ class _CampaignState:
     pos_mgr: PositionManager
     lo: int
     hi: int
+    last_atr: float = 0.0      # 最近一次认知 bar 的 ATR(执行细 bar 出场推进复用)
 
 
 def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
@@ -490,6 +498,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     else:
         full_ts = fine_ts
 
+    # v21.6 出场推进粒度开关(arm 缺省/False ⇒ 逐位旧行为)
+    exit_exec = bool(arm.exit_exec) if arm is not None else False
+    exit_exec_trail = bool(arm.exit_exec_trail) if arm is not None else True
     for ts in full_ts:
         for key in keys:                       # 同 ts 按 campaign key 字典序
             st = states[key]
@@ -515,6 +526,23 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 # ④ mark-to-market(执行细 bar 收盘;强平保护沿用,预期 0)
                 broker.mark(key, ts, c)
                 counters["liquidations"] = broker.n_liquidations
+                # ④.5 v21.6 出场推进粒度(arm.exit_exec;False ⇒ 整段不执行):
+                #     每根已收盘执行细 bar 推进一次**价格型**出场(§8.2 目标/
+                #     锁利、§8.3 移动防线、§8.1 兜底),让 2h/4h/1d 仓位不必
+                #     等到认知收盘才收网。只碰持仓管理 —— 路由/准入/开仓、
+                #     事件消费与时间类计数(bars_held/§8.6/v19 半窗)全部不动,
+                #     ATR 沿用最近一次认知 bar 的冻结值。
+                if exit_exec:
+                    pm_pos = st.pos_mgr.positions.get(sym)
+                    if (pm_pos is not None
+                            and broker.position_of(key) is not None
+                            and int(ts) > int(pm_pos.opened_ts)):
+                        _lc(counters, "exit_exec_ticks")
+                        m2 = st.pos_mgr.on_bar(sym, q, st.last_atr,
+                                               price_only=True,
+                                               skip_trail=not exit_exec_trail)
+                        broker.update_protective_invalid(key, pm_pos.invalid)
+                        _apply_mgmt(st, broker, m2, ts, counters, n_fill)
                 # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
                 for i in f.close_edge.get(ts, ()):
                     _cognition_step(st, broker, i, counters, cap_skips,
@@ -754,28 +782,16 @@ def _inject_ctx18(st: _CampaignState, *, cog_bars, i: int,
             "mic": rngq_bars is not None})
 
 
-def _cognition_step(st: _CampaignState, broker: Broker, i: int,
-                    counters: dict, cap_skips: list, bounds: dict,
-                    go_set: frozenset, n_fill: int,
-                    arm: Optional[ArmConfig] = None) -> None:
-    """认知 bar i 收盘:§8 持仓管理 → v6 路由(段内才启用 OPEN)。"""
-    f = st.frame
-    key, sym = f.key, f.symbol
-    cog = f.cog
-    bar = cog.bars[i]
-    t = int(bar[0])
-    new_events = cog.events_by.get(i, [])
-    new_pivots = cog.pivots_by.get(i, [])
-    atr = cog.atrs[i]
+def _apply_mgmt(st: _CampaignState, broker: Broker, mgmt: list, t: int,
+                counters: dict, n_fill: int) -> None:
+    """§8 出场意图落地(认知收盘与执行细 bar 两条路径共用)。
 
-    # §8 六条(入场成交的认知 bar 不做裁决,同 v4/v5 声明)
-    pos_pm = st.pos_mgr.positions.get(sym)
-    if pos_pm is not None and pos_pm.opened_ts > bar[0]:
-        mgmt = []
-    else:
-        mgmt = st.pos_mgr.on_bar(sym, bar, atr, new_pivots, new_events)
-    if sym in st.pos_mgr.positions and broker.position_of(key) is not None:
-        broker.update_protective_invalid(key, st.pos_mgr.positions[sym].invalid)
+    循环体逐字搬自 `_cognition_step` 原实现:v18 R4 / v20 S2 的段落桶计数、
+    REDUCE 的 maker 尝试、其余一律 `broker.submit`。抽出来只是为了让
+    v21.6 的「执行细 bar 出场推进」与认知收盘走**同一落地口径** —— 粒度
+    开关不得改变下单语义,否则 A/B 读数会把两种差异混在一起。
+    """
+    key = st.frame.key
     for intent in mgmt:
         intent = _rekey(intent, key)
         # v18 R4 / v20 S2:分层收割段落 = REDUCE 市价(次一执行细 bar 开盘,
@@ -798,6 +814,32 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
             counters["reduce_limits_armed"] += 1
         else:
             broker.submit(intent, decision_ts=t)
+
+
+def _cognition_step(st: _CampaignState, broker: Broker, i: int,
+                    counters: dict, cap_skips: list, bounds: dict,
+                    go_set: frozenset, n_fill: int,
+                    arm: Optional[ArmConfig] = None) -> None:
+    """认知 bar i 收盘:§8 持仓管理 → v6 路由(段内才启用 OPEN)。"""
+    f = st.frame
+    key, sym = f.key, f.symbol
+    cog = f.cog
+    bar = cog.bars[i]
+    t = int(bar[0])
+    new_events = cog.events_by.get(i, [])
+    new_pivots = cog.pivots_by.get(i, [])
+    atr = cog.atrs[i]
+    st.last_atr = atr
+
+    # §8 六条(入场成交的认知 bar 不做裁决,同 v4/v5 声明)
+    pos_pm = st.pos_mgr.positions.get(sym)
+    if pos_pm is not None and pos_pm.opened_ts > bar[0]:
+        mgmt = []
+    else:
+        mgmt = st.pos_mgr.on_bar(sym, bar, atr, new_pivots, new_events)
+    if sym in st.pos_mgr.positions and broker.position_of(key) is not None:
+        broker.update_protective_invalid(key, st.pos_mgr.positions[sym].invalid)
+    _apply_mgmt(st, broker, mgmt, t, counters, n_fill)
 
     # v6 路由(仅段内启用;白名单与闸门在 MarketRouter 内部)
     lo, hi = bounds["lo"], bounds["hi"]

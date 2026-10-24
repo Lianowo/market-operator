@@ -376,16 +376,31 @@ class PositionManager:
                new_pivots: Sequence[Pivot] = (),
                new_events: Sequence[MarketEvent] = (),
                defer_reduce: bool = False,
-               defer_add: bool = False) -> list[OrderIntent]:
-        """按优先级 §8.1>§8.5>§8.2>§8.3>§8.6 评估;返回订单意图列表。"""
+               defer_add: bool = False,
+               price_only: bool = False,
+               skip_trail: bool = False) -> list[OrderIntent]:
+        """按优先级 §8.1>§8.5>§8.2>§8.3>§8.6 评估;返回订单意图列表。
+
+        price_only=True 是**执行细 bar 的价格型出场推进**(v21.6,默认关):
+        只跑与价格直接相关的裁决 —— §8.1 破位兜底、§8.2 目标/锁利推进、
+        §8.3 移动防线;不消费事件(§8.5/§8.4 由空事件序列自然跳过),也不推进
+        时间类计数(bars_held / consec_adverse)⇒ §8.6 时间帽与 v19 半窗仍按
+        认知 bar 计。调用方只在**已收盘的执行细 bar**上、且持仓已过入场 bar
+        时调用,策略链路(路由/准入/开仓)完全不经此路径。
+
+        skip_trail=True(仅与 price_only 一起用)进一步只保留 §8.2 目标/锁利与
+        §8.1 兜底、不动 §8.3 移动防线 —— 用来把「更早收网」拆成「更早锁利」与
+        「更早收紧 trail」两个来源,判定哪一半在细尺度上真有钱。
+        """
         pos = self.positions.get(symbol)
         if pos is None:
             return []
         self.last = []
         ts, o, h, l, c, _v = _bar_parts(bar)
-        pos.bars_held += 1
+        if not price_only:
+            pos.bars_held += 1
         pos._best = min(pos._best, l) if pos.direction < 0 else max(pos._best, h)
-        if self.early_exit:
+        if self.early_exit and not price_only:
             # v19 逆根计数:收盘全逆(d·(c−o)<0)+1,否则复位(恰 0 收平非逆)
             if pos.direction * (float(c) - float(o)) < 0.0:
                 pos.consec_adverse += 1
@@ -406,7 +421,9 @@ class PositionManager:
             return [self._exit(pos, ts, c, reason)]
 
         # 2. §8.5 反向 STRUCTURE_BROKEN(CHoCH 出场)
-        for ev in new_events:
+        #    price_only(执行细 bar 价格型推进)不消费事件:事件只能在其决策
+        #    时点(认知/trigger 收盘)被裁决一次,否则同一事件会被重复消费。
+        for ev in (() if price_only else new_events):
             if ev.id == STRUCTURE_BROKEN and ev.direction == -pos.direction:
                 reason = (f"§8.5|STRUCTURE_BROKEN reverse CHoCH event_ts={ev.ts} "
                           f"exit all")
@@ -531,7 +548,7 @@ class PositionManager:
         #    一经上线恢复只紧不松
         # fade 收割模式禁用 trail;但无结构目标(target_1=None)时回退 trail,
         # 避免收割与 trailing 双失、只剩静态 2·ATR 防线(①fade 收割的护栏)
-        if not pos.harvest or pos.target_1 is None:
+        if (not pos.harvest or pos.target_1 is None) and not skip_trail:
             gated = self._s1_gated(pos)
             if gated and not pos.trail_armed:
                 arm_mfe = pos.mfe_r >= self.trail_arm_mfe_r     # 恰 1R 上线
@@ -549,7 +566,8 @@ class PositionManager:
                 self._trail(pos, new_pivots, atr)
 
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
-        if self.allow_add and not pos.added and not pos.pending_add:
+        if (not price_only) and self.allow_add and not pos.added \
+                and not pos.pending_add:
             for ev in new_events:
                 if ev.id == TREND_RESUMED and ev.direction == pos.direction:
                     intent = self.try_add(pos, ev, c, add_frac=pos.size_frac,

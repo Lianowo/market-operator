@@ -103,7 +103,9 @@ python scripts/_diag_balance.py            # v21.2 Pivot 平衡箱对照
 python scripts/_diag_balance_detect.py     # v21.3 六维框子识别器诊断
 python scripts/_diag_v21_backtest.py       # v21 M3c 多周期回测与成本压力验证
 python scripts/live_paper_check.py         # v21 实盘多周期装配与真网行情 paper 冒烟校验
-python -m pytest -q                        # 570 passed, 1 skipped（全量回归 + v21 专项测试）
+python scripts/_diag_v21_scale.py --segments dev,test --funding const,history --xexec
+                                           # v21.6 尺度级联 + 出场推进粒度判定(4 标的,~6min)
+python -m pytest -q                        # 574 passed, 1 skipped（全量回归 + v21 专项测试）
 ```
 
 ## 8. 生产 `main` 合并口径（v21 分支）
@@ -137,6 +139,42 @@ python -m pytest -q                        # 570 passed, 1 skipped（全量回�
 
 ### 8.3 收敛清单
 
-零引用模块/脚本清单与执行建议见 `reports/refactor_20261023/CLEANUP_PROPOSAL.md`
-（**只提案，未删除**）。
+零引用模块/脚本清单与执行记录见 `reports/refactor_20261023/CLEANUP_PROPOSAL.md`。
+2026-10-24 已执行:15 个零引用脚本 `git mv` 到 `scripts/archive/`(标签
+`pre-cleanup-20261024` 为回滚锚点),`scripts/archive/README.md` 记录退役原因;
+核验时否掉两项误判 —— `src/market_operator/split.py`(生产判分契约,`campaign` /
+`replay` 相对导入)与 `tape_features.py`(测试白名单引用)**均保留**。
+
+## 9. 第五阶段（v21.6）：时间尺度级联与出场推进粒度
+
+判定报告:`reports/scale_20261024/REPORT.md`(原始读数同目录 `scale.json` / `table.md`)。
+工具:`scripts/_diag_v21_scale.py`(`Ctx(tfs=…, trig_map=…)` 参数化装配,`load_all_data`
+新增 `1h` 观察周期 —— 认知帧 = 1h、**执行帧 = 15m**)。
+
+### 9.1 结论(全部否决改口径)
+
+| 问题 | 读数 | 判定 |
+|---|---|---|
+| `1h` 观察周期自身 | E[R] −0.040(const dev)/ −0.042(hist dev)/ −0.047 / −0.035(test);成本/笔比 2h 高 21% | **不做** |
+| `2h` 触发 `1h` | dev +0.045 vs 基线 +0.031,test **−0.157 vs −0.117**(反向) | **不采纳**(dev 拟合) |
+| `2h` 触发 `30m` | dev +0.040 vs +0.031,test −0.109 vs −0.117(同向 +0.008R,DD +2.3pt) | **不采纳**(噪声带内) |
+| `1h` 触发 `30m` | dev −0.051 vs −0.042,test −0.051 vs −0.035(两段同向恶化) | **不级联** |
+| 出场推进粒度 `exit_exec` | 12 组中 11 组变差(2h dev −14.1 / test −7.1 USDT) | **保持默认关** |
+
+### 9.2 出场粒度的语义边界(本轮唯一落地的代码)
+
+- `position.PositionManager.on_bar(price_only=True)`:只跑 §8.1 兜底 / §8.2 目标与
+  锁利;**不推进** `bars_held`/`consec_adverse`(§8.6 时间帽、v19 半窗仍按认知 bar 计),
+  **不消费**事件(§8.5/§8.4)。
+- `campaign.ArmConfig.exit_exec`(默认 `False`,逐位旧行为):每根已收盘执行细 bar
+  补一次价格型裁决,ATR 用最近一次认知 bar 的冻结值,且只在 `ts > opened_ts` 时触发;
+  路由/准入/开仓/事件流一律不经此路径。`_apply_mgmt()` 与认知收盘共用同一落地口径。
+- **关键事实**:`_trail()` 只消费 `new_pivots`,而 pivot 只在认知收盘确认 ⇒ 执行粒度上
+  没有 pivot 可喂,`exit_exec` 与 `exit_exec_trail=False` 的 84 组读数**逐位相同**。
+  「移动止盈被 2h 卡住」的真正解法是让 pivot 在更低周期确认(策略级改动),不是改
+  回放时钟。
+- 度量:`give-back` 只降 0.01R(1.121 → 1.111),代价是 −14 USDT ⇒ 提前锁利被正常
+  回抽扫掉。`give_back_r_mean ≈ 1.12R` 是「目标常到不了 + 结构防线宽度」的结构性
+  让利,不是时钟问题。
+
 

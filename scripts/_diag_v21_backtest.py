@@ -25,23 +25,33 @@ CONFIG = ROOT / "config" / "canonical.json"
 
 
 def load_all_data(symbols, params, tf_list=("2h", "4h", "12h", "1d")):
-    """预加载认知帧(BalanceDetector 高置信度平衡箱)与各细周期触发帧(30m/1h/2h/4h)。"""
+    """预加载认知帧(BalanceDetector 高置信度平衡箱)与各细周期触发帧(30m/1h/2h/4h)。
+
+    v21.6:`tf_list` 允许含 `"1h"` —— 认知帧 = 1h 原始帧,执行帧必须换成 15m
+    (`campaign.build_campaign_frame` 对 tf_hours==1 走 v4 的 1h⟷15m 四子 bar
+    覆盖断言,给 1h 执行帧会直接 assert),同时补 15m 触发帧(900)供 1h 战役
+    的下一级联使用。不含 "1h" 时行为与旧版逐位一致(不多读任何文件)。
+    """
     cog_by, df_cog_by, df_exec_by, df_trig_by = {}, {}, {}, {}
     for sym in symbols:
         t0 = time.time()
         df_1h = mo_data.load(sym)
         df_30m = mo_data.load(sym, "30m")
+        df_15m = mo_data.load(sym, "15m") if "1h" in tf_list else None
         df_2h = agg.load_tf(sym, "2h")
         df_4h = agg.load_tf(sym, "4h")
         df_12h = agg.load_tf(sym, "12h")
         df_1d = agg.load_tf(sym, "1d")
         df_trig_by[sym] = {1800: df_30m, 3600: df_1h, 7200: df_2h, 14400: df_4h}
-        df_map = {"2h": df_2h, "4h": df_4h, "12h": df_12h, "1d": df_1d}
+        if df_15m is not None:
+            df_trig_by[sym][900] = df_15m
+        df_map = {"1h": df_1h, "2h": df_2h, "4h": df_4h,
+                  "12h": df_12h, "1d": df_1d}
         for tf in tf_list:
             df_cog = df_map[tf]
             cog_by[(sym, tf)] = prepare_cognition(df_cog, params, sym, enable_e7=True)
             df_cog_by[(sym, tf)] = df_cog
-            df_exec_by[(sym, tf)] = df_1h
+            df_exec_by[(sym, tf)] = df_15m if tf == "1h" else df_1h
         print(f"[prep] {sym} 认知+细帧就绪 ({time.time() - t0:.1f}s)", flush=True)
     return cog_by, df_cog_by, df_exec_by, df_trig_by
 

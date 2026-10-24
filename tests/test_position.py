@@ -417,3 +417,53 @@ def test_deferred_add_rejection_keeps_real_position_unchanged():
     again = m.on_bar("BTCUSDT", _bar(3, 97.5, 94.5, 95.0), ATR,
                      new_events=[_e4_short(96.0)], defer_add=True)
     assert len(again) == 1 and again[0].kind is OrderKind.ADD
+
+
+# ---------------------------------------------------------------------------
+# v21.6 出场推进粒度:price_only(执行细 bar 上的价格型裁决)
+# ---------------------------------------------------------------------------
+
+
+def test_price_only_does_not_advance_time_counters():
+    """price_only 不推进 bars_held(§8.6 时间帽 / v19 半窗仍按认知 bar 计)。"""
+    m = _mgr()
+    pos = _short(m)
+    assert m.on_bar("BTCUSDT", _bar(1, 99.4, 98.6, 98.8), ATR,
+                    price_only=True) == []
+    assert pos.bars_held == 0
+    m.on_bar("BTCUSDT", _bar(2, 99.4, 98.6, 98.8), ATR)
+    assert pos.bars_held == 1
+
+
+def test_price_only_still_advances_target_reduce():
+    """价格型出场(§8.2 目标/锁利)在执行细 bar 上照常推进。"""
+    m = _mgr()
+    pos = _short(m)
+    intents = m.on_bar("BTCUSDT", _bar(1, 99.0, 93.5, 93.8), ATR,
+                       price_only=True)
+    assert len(intents) == 1 and intents[0].kind is OrderKind.REDUCE
+    assert pos.reduced and pos.bars_held == 0
+
+
+def test_price_only_does_not_consume_events():
+    """同一事件只能在决策时点裁决一次:price_only 不消费 §8.5/§8.4。"""
+    m = _mgr()
+    _short(m)
+    quiet = _bar(1, 99.4, 98.6, 98.8)
+    assert m.on_bar("BTCUSDT", quiet, ATR, new_events=[_e6(1)],
+                    price_only=True) == []
+    assert "BTCUSDT" in m.positions
+    intents = m.on_bar("BTCUSDT", quiet, ATR, new_events=[_e6(1)])
+    assert len(intents) == 1 and intents[0].reason.startswith("§8.5|")
+
+
+def test_price_only_leaves_trail_to_cognition_bars():
+    """§8.3 移动防线由 pivot 确认驱动,price_only(无 pivot)不得改动 invalid。"""
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.0, 95.0, 95.5), ATR, price_only=True)
+    assert pos.invalid == 101.0
+    m.on_bar("BTCUSDT", _bar(2, 99.0, 95.0, 95.5), ATR,
+             new_pivots=[_pivot_high(97.0, known=2)])
+    assert pos.invalid == pytest.approx(97.1)      # 97.0 + k_bm(0.1)·1
+

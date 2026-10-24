@@ -1,0 +1,2969 @@
+{
+ "note": "1h 观察周期执行帧 = 15m;2h/4h 执行帧 = 1h",
+ "arms": {
+  "solo_2h__dev__const__1": {
+   "n": 438,
+   "gross": 87.4271,
+   "cost": 81.7196,
+   "net": 23.9258,
+   "eq": 323.9258,
+   "wr": 0.4726,
+   "pf": 1.2406,
+   "dd_pct": 17.0002,
+   "e_r": 0.0242,
+   "by_tf": {
+    "2h": {
+     "n": 438,
+     "net": 23.93,
+     "e_r": 0.0242,
+     "funding": 8.85,
+     "give_back_r": 1.121,
+     "hold_bars": 8.7
+    }
+   },
+   "funding_total": 8.85,
+   "tail": {
+    "mfe_r_mean": 1.1566,
+    "mae_r_mean": -0.6255,
+    "give_back_r_mean": 1.121,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 2.5247,
+    "hold_bars_mean": 8.7,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 0.8
+  },
+  "solo_2h_xexec__dev__const__1": {
+   "n": 439,
+   "gross": 72.5181,
+   "cost": 80.7076,
+   "net": 9.8177,
+   "eq": 309.8177,
+   "wr": 0.4738,
+   "pf": 1.2028,
+   "dd_pct": 16.8706,
+   "e_r": 0.0101,
+   "by_tf": {
+    "2h": {
+     "n": 439,
+     "net": 9.82,
+     "e_r": 0.0101,
+     "funding": 8.68,
+     "give_back_r": 1.1107,
+     "hold_bars": 8.64
+    }
+   },
+   "funding_total": 8.68,
+   "tail": {
+    "mfe_r_mean": 1.1334,
+    "mae_r_mean": -0.6292,
+    "give_back_r_mean": 1.1107,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 5.9008,
+    "hold_bars_mean": 8.64,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7151,
+   "run_s": 0.8
+  },
+  "solo_2h_xlock__dev__const__1": {
+   "n": 439,
+   "gross": 72.5181,
+   "cost": 80.7076,
+   "net": 9.8177,
+   "eq": 309.8177,
+   "wr": 0.4738,
+   "pf": 1.2028,
+   "dd_pct": 16.8706,
+   "e_r": 0.0101,
+   "by_tf": {
+    "2h": {
+     "n": 439,
+     "net": 9.82,
+     "e_r": 0.0101,
+     "funding": 8.68,
+     "give_back_r": 1.1107,
+     "hold_bars": 8.64
+    }
+   },
+   "funding_total": 8.68,
+   "tail": {
+    "mfe_r_mean": 1.1334,
+    "mae_r_mean": -0.6292,
+    "give_back_r_mean": 1.1107,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 5.9008,
+    "hold_bars_mean": 8.64,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7151,
+   "run_s": 0.9
+  },
+  "solo_2h__dev__history__1": {
+   "n": 438,
+   "gross": 87.8804,
+   "cost": 75.6825,
+   "net": 30.6508,
+   "eq": 330.6508,
+   "wr": 0.4726,
+   "pf": 1.2391,
+   "dd_pct": 16.3923,
+   "e_r": 0.0306,
+   "by_tf": {
+    "2h": {
+     "n": 438,
+     "net": 30.65,
+     "e_r": 0.0306,
+     "funding": 1.87,
+     "give_back_r": 1.114,
+     "hold_bars": 8.7
+    }
+   },
+   "funding_total": 1.87,
+   "tail": {
+    "mfe_r_mean": 1.1566,
+    "mae_r_mean": -0.6255,
+    "give_back_r_mean": 1.114,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.9717,
+    "hold_bars_mean": 8.7,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 0.9
+  },
+  "solo_2h_xexec__dev__history__1": {
+   "n": 441,
+   "gross": 78.2135,
+   "cost": 75.2186,
+   "net": 21.3596,
+   "eq": 321.3596,
+   "wr": 0.4739,
+   "pf": 1.2129,
+   "dd_pct": 17.0971,
+   "e_r": 0.0214,
+   "by_tf": {
+    "2h": {
+     "n": 441,
+     "net": 21.36,
+     "e_r": 0.0214,
+     "funding": 1.76,
+     "give_back_r": 1.1032,
+     "hold_bars": 8.658
+    }
+   },
+   "funding_total": 1.76,
+   "tail": {
+    "mfe_r_mean": 1.1354,
+    "mae_r_mean": -0.6301,
+    "give_back_r_mean": 1.1032,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 2.8075,
+    "hold_bars_mean": 8.658,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7199,
+   "run_s": 0.8
+  },
+  "solo_2h_xlock__dev__history__1": {
+   "n": 441,
+   "gross": 78.2135,
+   "cost": 75.2186,
+   "net": 21.3596,
+   "eq": 321.3596,
+   "wr": 0.4739,
+   "pf": 1.2129,
+   "dd_pct": 17.0971,
+   "e_r": 0.0214,
+   "by_tf": {
+    "2h": {
+     "n": 441,
+     "net": 21.36,
+     "e_r": 0.0214,
+     "funding": 1.76,
+     "give_back_r": 1.1032,
+     "hold_bars": 8.658
+    }
+   },
+   "funding_total": 1.76,
+   "tail": {
+    "mfe_r_mean": 1.1354,
+    "mae_r_mean": -0.6301,
+    "give_back_r_mean": 1.1032,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 2.8075,
+    "hold_bars_mean": 8.658,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7199,
+   "run_s": 0.8
+  },
+  "solo_2h__test__const__1": {
+   "n": 230,
+   "gross": -18.5091,
+   "cost": 48.2562,
+   "net": -55.8686,
+   "eq": 244.1314,
+   "wr": 0.3652,
+   "pf": 0.9071,
+   "dd_pct": 23.3184,
+   "e_r": -0.1266,
+   "by_tf": {
+    "2h": {
+     "n": 230,
+     "net": -55.87,
+     "e_r": -0.1266,
+     "funding": 4.67,
+     "give_back_r": 1.1249,
+     "hold_bars": 7.77
+    }
+   },
+   "funding_total": 4.67,
+   "tail": {
+    "mfe_r_mean": 1.0107,
+    "mae_r_mean": -0.7334,
+    "give_back_r_mean": 1.1249,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.77,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 0.7
+  },
+  "solo_2h_xexec__test__const__1": {
+   "n": 232,
+   "gross": -24.7381,
+   "cost": 48.419,
+   "net": -62.2132,
+   "eq": 237.7868,
+   "wr": 0.375,
+   "pf": 0.8763,
+   "dd_pct": 23.2383,
+   "e_r": -0.1396,
+   "by_tf": {
+    "2h": {
+     "n": 232,
+     "net": -62.21,
+     "e_r": -0.1396,
+     "funding": 4.64,
+     "give_back_r": 1.1094,
+     "hold_bars": 7.685
+    }
+   },
+   "funding_total": 4.64,
+   "tail": {
+    "mfe_r_mean": 0.9791,
+    "mae_r_mean": -0.7319,
+    "give_back_r_mean": 1.1094,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.685,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3338,
+   "run_s": 0.7
+  },
+  "solo_2h_xlock__test__const__1": {
+   "n": 232,
+   "gross": -24.7381,
+   "cost": 48.419,
+   "net": -62.2132,
+   "eq": 237.7868,
+   "wr": 0.375,
+   "pf": 0.8763,
+   "dd_pct": 23.2383,
+   "e_r": -0.1396,
+   "by_tf": {
+    "2h": {
+     "n": 232,
+     "net": -62.21,
+     "e_r": -0.1396,
+     "funding": 4.64,
+     "give_back_r": 1.1094,
+     "hold_bars": 7.685
+    }
+   },
+   "funding_total": 4.64,
+   "tail": {
+    "mfe_r_mean": 0.9791,
+    "mae_r_mean": -0.7319,
+    "give_back_r_mean": 1.1094,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.685,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3338,
+   "run_s": 0.7
+  },
+  "solo_2h__test__history__1": {
+   "n": 230,
+   "gross": -18.8172,
+   "cost": 44.3976,
+   "net": -52.2245,
+   "eq": 247.7755,
+   "wr": 0.3652,
+   "pf": 0.9063,
+   "dd_pct": 22.4934,
+   "e_r": -0.1173,
+   "by_tf": {
+    "2h": {
+     "n": 230,
+     "net": -52.22,
+     "e_r": -0.1173,
+     "funding": 0.44,
+     "give_back_r": 1.1153,
+     "hold_bars": 7.77
+    }
+   },
+   "funding_total": 0.44,
+   "tail": {
+    "mfe_r_mean": 1.0107,
+    "mae_r_mean": -0.7334,
+    "give_back_r_mean": 1.1153,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.77,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 0.9
+  },
+  "solo_2h_xexec__test__history__1": {
+   "n": 232,
+   "gross": -25.8912,
+   "cost": 44.4915,
+   "net": -59.3684,
+   "eq": 240.6316,
+   "wr": 0.375,
+   "pf": 0.8719,
+   "dd_pct": 22.5412,
+   "e_r": -0.1324,
+   "by_tf": {
+    "2h": {
+     "n": 232,
+     "net": -59.37,
+     "e_r": -0.1324,
+     "funding": 0.43,
+     "give_back_r": 1.0999,
+     "hold_bars": 7.685
+    }
+   },
+   "funding_total": 0.43,
+   "tail": {
+    "mfe_r_mean": 0.9791,
+    "mae_r_mean": -0.7319,
+    "give_back_r_mean": 1.0999,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.685,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3338,
+   "run_s": 0.7
+  },
+  "solo_2h_xlock__test__history__1": {
+   "n": 232,
+   "gross": -25.8912,
+   "cost": 44.4915,
+   "net": -59.3684,
+   "eq": 240.6316,
+   "wr": 0.375,
+   "pf": 0.8719,
+   "dd_pct": 22.5412,
+   "e_r": -0.1324,
+   "by_tf": {
+    "2h": {
+     "n": 232,
+     "net": -59.37,
+     "e_r": -0.1324,
+     "funding": 0.43,
+     "give_back_r": 1.0999,
+     "hold_bars": 7.685
+    }
+   },
+   "funding_total": 0.43,
+   "tail": {
+    "mfe_r_mean": 0.9791,
+    "mae_r_mean": -0.7319,
+    "give_back_r_mean": 1.0999,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.685,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3338,
+   "run_s": 0.7
+  },
+  "solo_2h_t1h__dev__const__1": {
+   "n": 443,
+   "gross": 114.6214,
+   "cost": 87.6924,
+   "net": 46.4261,
+   "eq": 346.4261,
+   "wr": 0.4763,
+   "pf": 1.3055,
+   "dd_pct": 14.3789,
+   "e_r": 0.0451,
+   "by_tf": {
+    "2h": {
+     "n": 443,
+     "net": 46.43,
+     "e_r": 0.0451,
+     "funding": 9.7,
+     "give_back_r": 1.1562,
+     "hold_bars": 8.847
+    }
+   },
+   "funding_total": 9.7,
+   "tail": {
+    "mfe_r_mean": 1.2147,
+    "mae_r_mean": -0.6304,
+    "give_back_r_mean": 1.1562,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.3011,
+    "hold_bars_mean": 8.847,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.1
+  },
+  "solo_2h_t1h_xexec__dev__const__1": {
+   "n": 449,
+   "gross": 98.1029,
+   "cost": 87.6442,
+   "net": 29.979,
+   "eq": 329.979,
+   "wr": 0.4788,
+   "pf": 1.2601,
+   "dd_pct": 15.0777,
+   "e_r": 0.0291,
+   "by_tf": {
+    "2h": {
+     "n": 449,
+     "net": 29.98,
+     "e_r": 0.0291,
+     "funding": 9.56,
+     "give_back_r": 1.1392,
+     "hold_bars": 8.724
+    }
+   },
+   "funding_total": 9.56,
+   "tail": {
+    "mfe_r_mean": 1.1837,
+    "mae_r_mean": -0.6351,
+    "give_back_r_mean": 1.1392,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.9965,
+    "hold_bars_mean": 8.724,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7388,
+   "run_s": 1.1
+  },
+  "solo_2h_t1h_xlock__dev__const__1": {
+   "n": 449,
+   "gross": 98.1029,
+   "cost": 87.6442,
+   "net": 29.979,
+   "eq": 329.979,
+   "wr": 0.4788,
+   "pf": 1.2601,
+   "dd_pct": 15.0777,
+   "e_r": 0.0291,
+   "by_tf": {
+    "2h": {
+     "n": 449,
+     "net": 29.98,
+     "e_r": 0.0291,
+     "funding": 9.56,
+     "give_back_r": 1.1392,
+     "hold_bars": 8.724
+    }
+   },
+   "funding_total": 9.56,
+   "tail": {
+    "mfe_r_mean": 1.1837,
+    "mae_r_mean": -0.6351,
+    "give_back_r_mean": 1.1392,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.9965,
+    "hold_bars_mean": 8.724,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7388,
+   "run_s": 1.3
+  },
+  "solo_2h_t1h__dev__history__1": {
+   "n": 444,
+   "gross": 107.8681,
+   "cost": 80.8254,
+   "net": 46.7143,
+   "eq": 346.7143,
+   "wr": 0.473,
+   "pf": 1.2824,
+   "dd_pct": 15.3969,
+   "e_r": 0.045,
+   "by_tf": {
+    "2h": {
+     "n": 444,
+     "net": 46.71,
+     "e_r": 0.045,
+     "funding": 2.14,
+     "give_back_r": 1.149,
+     "hold_bars": 8.827
+    }
+   },
+   "funding_total": 2.14,
+   "tail": {
+    "mfe_r_mean": 1.2077,
+    "mae_r_mean": -0.6336,
+    "give_back_r_mean": 1.149,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.2945,
+    "hold_bars_mean": 8.827,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.2
+  },
+  "solo_2h_t1h_xexec__dev__history__1": {
+   "n": 449,
+   "gross": 101.3041,
+   "cost": 81.1285,
+   "net": 39.936,
+   "eq": 339.936,
+   "wr": 0.4811,
+   "pf": 1.2663,
+   "dd_pct": 14.0903,
+   "e_r": 0.0384,
+   "by_tf": {
+    "2h": {
+     "n": 449,
+     "net": 39.94,
+     "e_r": 0.0384,
+     "funding": 2.09,
+     "give_back_r": 1.1326,
+     "hold_bars": 8.719
+    }
+   },
+   "funding_total": 2.09,
+   "tail": {
+    "mfe_r_mean": 1.185,
+    "mae_r_mean": -0.6354,
+    "give_back_r_mean": 1.1326,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.5073,
+    "hold_bars_mean": 8.719,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7384,
+   "run_s": 1.1
+  },
+  "solo_2h_t1h_xlock__dev__history__1": {
+   "n": 449,
+   "gross": 101.3041,
+   "cost": 81.1285,
+   "net": 39.936,
+   "eq": 339.936,
+   "wr": 0.4811,
+   "pf": 1.2663,
+   "dd_pct": 14.0903,
+   "e_r": 0.0384,
+   "by_tf": {
+    "2h": {
+     "n": 449,
+     "net": 39.94,
+     "e_r": 0.0384,
+     "funding": 2.09,
+     "give_back_r": 1.1326,
+     "hold_bars": 8.719
+    }
+   },
+   "funding_total": 2.09,
+   "tail": {
+    "mfe_r_mean": 1.185,
+    "mae_r_mean": -0.6354,
+    "give_back_r_mean": 1.1326,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.5073,
+    "hold_bars_mean": 8.719,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7384,
+   "run_s": 1.3
+  },
+  "solo_2h_t1h__test__const__1": {
+   "n": 235,
+   "gross": -39.0121,
+   "cost": 47.7309,
+   "net": -75.9597,
+   "eq": 224.0403,
+   "wr": 0.3447,
+   "pf": 0.8068,
+   "dd_pct": 28.7412,
+   "e_r": -0.1762,
+   "by_tf": {
+    "2h": {
+     "n": 235,
+     "net": -75.96,
+     "e_r": -0.1762,
+     "funding": 4.6,
+     "give_back_r": 1.1312,
+     "hold_bars": 7.836
+    }
+   },
+   "funding_total": 4.6,
+   "tail": {
+    "mfe_r_mean": 0.9703,
+    "mae_r_mean": -0.7436,
+    "give_back_r_mean": 1.1312,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.836,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.0
+  },
+  "solo_2h_t1h_xexec__test__const__1": {
+   "n": 236,
+   "gross": -45.2405,
+   "cost": 47.5652,
+   "net": -82.0447,
+   "eq": 217.9553,
+   "wr": 0.3602,
+   "pf": 0.7741,
+   "dd_pct": 29.526,
+   "e_r": -0.1896,
+   "by_tf": {
+    "2h": {
+     "n": 236,
+     "net": -82.04,
+     "e_r": -0.1896,
+     "funding": 4.52,
+     "give_back_r": 1.1123,
+     "hold_bars": 7.659
+    }
+   },
+   "funding_total": 4.52,
+   "tail": {
+    "mfe_r_mean": 0.9279,
+    "mae_r_mean": -0.7379,
+    "give_back_r_mean": 1.1123,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.659,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3383,
+   "run_s": 0.9
+  },
+  "solo_2h_t1h_xlock__test__const__1": {
+   "n": 236,
+   "gross": -45.2405,
+   "cost": 47.5652,
+   "net": -82.0447,
+   "eq": 217.9553,
+   "wr": 0.3602,
+   "pf": 0.7741,
+   "dd_pct": 29.526,
+   "e_r": -0.1896,
+   "by_tf": {
+    "2h": {
+     "n": 236,
+     "net": -82.04,
+     "e_r": -0.1896,
+     "funding": 4.52,
+     "give_back_r": 1.1123,
+     "hold_bars": 7.659
+    }
+   },
+   "funding_total": 4.52,
+   "tail": {
+    "mfe_r_mean": 0.9279,
+    "mae_r_mean": -0.7379,
+    "give_back_r_mean": 1.1123,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.659,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3383,
+   "run_s": 0.9
+  },
+  "solo_2h_t1h__test__history__1": {
+   "n": 233,
+   "gross": -35.1604,
+   "cost": 43.6271,
+   "net": -67.965,
+   "eq": 232.035,
+   "wr": 0.3476,
+   "pf": 0.8262,
+   "dd_pct": 26.5378,
+   "e_r": -0.1569,
+   "by_tf": {
+    "2h": {
+     "n": 233,
+     "net": -67.96,
+     "e_r": -0.1569,
+     "funding": 0.34,
+     "give_back_r": 1.1244,
+     "hold_bars": 7.886
+    }
+   },
+   "funding_total": 0.34,
+   "tail": {
+    "mfe_r_mean": 0.9805,
+    "mae_r_mean": -0.7434,
+    "give_back_r_mean": 1.1244,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.886,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 0.9
+  },
+  "solo_2h_t1h_xexec__test__history__1": {
+   "n": 238,
+   "gross": -49.6911,
+   "cost": 43.9245,
+   "net": -82.7224,
+   "eq": 217.2776,
+   "wr": 0.3571,
+   "pf": 0.7549,
+   "dd_pct": 29.8938,
+   "e_r": -0.1894,
+   "by_tf": {
+    "2h": {
+     "n": 238,
+     "net": -82.72,
+     "e_r": -0.1894,
+     "funding": 0.35,
+     "give_back_r": 1.0997,
+     "hold_bars": 7.611
+    }
+   },
+   "funding_total": 0.35,
+   "tail": {
+    "mfe_r_mean": 0.9183,
+    "mae_r_mean": -0.7381,
+    "give_back_r_mean": 1.0997,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.611,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3389,
+   "run_s": 1.0
+  },
+  "solo_2h_t1h_xlock__test__history__1": {
+   "n": 238,
+   "gross": -49.6911,
+   "cost": 43.9245,
+   "net": -82.7224,
+   "eq": 217.2776,
+   "wr": 0.3571,
+   "pf": 0.7549,
+   "dd_pct": 29.8938,
+   "e_r": -0.1894,
+   "by_tf": {
+    "2h": {
+     "n": 238,
+     "net": -82.72,
+     "e_r": -0.1894,
+     "funding": 0.35,
+     "give_back_r": 1.0997,
+     "hold_bars": 7.611
+    }
+   },
+   "funding_total": 0.35,
+   "tail": {
+    "mfe_r_mean": 0.9183,
+    "mae_r_mean": -0.7381,
+    "give_back_r_mean": 1.0997,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.611,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3389,
+   "run_s": 1.0
+  },
+  "solo_2h_t30m__dev__const__1": {
+   "n": 439,
+   "gross": 97.8602,
+   "cost": 84.1297,
+   "net": 32.4939,
+   "eq": 332.4939,
+   "wr": 0.4738,
+   "pf": 1.2654,
+   "dd_pct": 14.0033,
+   "e_r": 0.0322,
+   "by_tf": {
+    "2h": {
+     "n": 439,
+     "net": 32.49,
+     "e_r": 0.0322,
+     "funding": 9.08,
+     "give_back_r": 1.1367,
+     "hold_bars": 8.698
+    }
+   },
+   "funding_total": 9.08,
+   "tail": {
+    "mfe_r_mean": 1.1797,
+    "mae_r_mean": -0.6326,
+    "give_back_r_mean": 1.1367,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.859,
+    "hold_bars_mean": 8.698,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.2
+  },
+  "solo_2h_t30m_xexec__dev__const__1": {
+   "n": 442,
+   "gross": 72.3939,
+   "cost": 82.0844,
+   "net": 8.643,
+   "eq": 308.643,
+   "wr": 0.4796,
+   "pf": 1.2008,
+   "dd_pct": 16.3784,
+   "e_r": 0.0088,
+   "by_tf": {
+    "2h": {
+     "n": 442,
+     "net": 8.64,
+     "e_r": 0.0088,
+     "funding": 8.75,
+     "give_back_r": 1.1202,
+     "hold_bars": 8.584
+    }
+   },
+   "funding_total": 8.75,
+   "tail": {
+    "mfe_r_mean": 1.1446,
+    "mae_r_mean": -0.6325,
+    "give_back_r_mean": 1.1202,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 6.7028,
+    "hold_bars_mean": 8.584,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7159,
+   "run_s": 1.3
+  },
+  "solo_2h_t30m_xlock__dev__const__1": {
+   "n": 442,
+   "gross": 72.3939,
+   "cost": 82.0844,
+   "net": 8.643,
+   "eq": 308.643,
+   "wr": 0.4796,
+   "pf": 1.2008,
+   "dd_pct": 16.3784,
+   "e_r": 0.0088,
+   "by_tf": {
+    "2h": {
+     "n": 442,
+     "net": 8.64,
+     "e_r": 0.0088,
+     "funding": 8.75,
+     "give_back_r": 1.1202,
+     "hold_bars": 8.584
+    }
+   },
+   "funding_total": 8.75,
+   "tail": {
+    "mfe_r_mean": 1.1446,
+    "mae_r_mean": -0.6325,
+    "give_back_r_mean": 1.1202,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 6.7028,
+    "hold_bars_mean": 8.584,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7159,
+   "run_s": 1.3
+  },
+  "solo_2h_t30m__dev__history__1": {
+   "n": 438,
+   "gross": 98.97,
+   "cost": 77.5279,
+   "net": 40.338,
+   "eq": 340.338,
+   "wr": 0.4749,
+   "pf": 1.2657,
+   "dd_pct": 13.3826,
+   "e_r": 0.0397,
+   "by_tf": {
+    "2h": {
+     "n": 438,
+     "net": 40.34,
+     "e_r": 0.0397,
+     "funding": 1.94,
+     "give_back_r": 1.1304,
+     "hold_bars": 8.705
+    }
+   },
+   "funding_total": 1.94,
+   "tail": {
+    "mfe_r_mean": 1.1813,
+    "mae_r_mean": -0.6335,
+    "give_back_r_mean": 1.1304,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 1.4982,
+    "hold_bars_mean": 8.705,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.3
+  },
+  "solo_2h_t30m_xexec__dev__history__1": {
+   "n": 443,
+   "gross": 79.2444,
+   "cost": 75.9788,
+   "net": 21.8182,
+   "eq": 321.8182,
+   "wr": 0.4808,
+   "pf": 1.2174,
+   "dd_pct": 15.4663,
+   "e_r": 0.0219,
+   "by_tf": {
+    "2h": {
+     "n": 443,
+     "net": 21.82,
+     "e_r": 0.0219,
+     "funding": 1.77,
+     "give_back_r": 1.1129,
+     "hold_bars": 8.612
+    }
+   },
+   "funding_total": 1.77,
+   "tail": {
+    "mfe_r_mean": 1.1492,
+    "mae_r_mean": -0.6325,
+    "give_back_r_mean": 1.1129,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 2.7485,
+    "hold_bars_mean": 8.612,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7200,
+   "run_s": 1.3
+  },
+  "solo_2h_t30m_xlock__dev__history__1": {
+   "n": 443,
+   "gross": 79.2444,
+   "cost": 75.9788,
+   "net": 21.8182,
+   "eq": 321.8182,
+   "wr": 0.4808,
+   "pf": 1.2174,
+   "dd_pct": 15.4663,
+   "e_r": 0.0219,
+   "by_tf": {
+    "2h": {
+     "n": 443,
+     "net": 21.82,
+     "e_r": 0.0219,
+     "funding": 1.77,
+     "give_back_r": 1.1129,
+     "hold_bars": 8.612
+    }
+   },
+   "funding_total": 1.77,
+   "tail": {
+    "mfe_r_mean": 1.1492,
+    "mae_r_mean": -0.6325,
+    "give_back_r_mean": 1.1129,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": 2.7485,
+    "hold_bars_mean": 8.612,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 7200,
+   "run_s": 1.3
+  },
+  "solo_2h_t30m__test__const__1": {
+   "n": 224,
+   "gross": -14.2103,
+   "cost": 46.8152,
+   "net": -50.4587,
+   "eq": 249.5413,
+   "wr": 0.3616,
+   "pf": 0.927,
+   "dd_pct": 25.6222,
+   "e_r": -0.1176,
+   "by_tf": {
+    "2h": {
+     "n": 224,
+     "net": -50.46,
+     "e_r": -0.1176,
+     "funding": 4.55,
+     "give_back_r": 1.1191,
+     "hold_bars": 8.074
+    }
+   },
+   "funding_total": 4.55,
+   "tail": {
+    "mfe_r_mean": 1.0236,
+    "mae_r_mean": -0.7299,
+    "give_back_r_mean": 1.1191,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.074,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.1
+  },
+  "solo_2h_t30m_xexec__test__const__1": {
+   "n": 225,
+   "gross": -21.7675,
+   "cost": 46.8212,
+   "net": -57.9953,
+   "eq": 242.0047,
+   "wr": 0.3689,
+   "pf": 0.8883,
+   "dd_pct": 25.5026,
+   "e_r": -0.1347,
+   "by_tf": {
+    "2h": {
+     "n": 225,
+     "net": -58.0,
+     "e_r": -0.1347,
+     "funding": 4.45,
+     "give_back_r": 1.0996,
+     "hold_bars": 7.858
+    }
+   },
+   "funding_total": 4.45,
+   "tail": {
+    "mfe_r_mean": 0.9853,
+    "mae_r_mean": -0.7299,
+    "give_back_r_mean": 1.0996,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.858,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3324,
+   "run_s": 1.1
+  },
+  "solo_2h_t30m_xlock__test__const__1": {
+   "n": 225,
+   "gross": -21.7675,
+   "cost": 46.8212,
+   "net": -57.9953,
+   "eq": 242.0047,
+   "wr": 0.3689,
+   "pf": 0.8883,
+   "dd_pct": 25.5026,
+   "e_r": -0.1347,
+   "by_tf": {
+    "2h": {
+     "n": 225,
+     "net": -58.0,
+     "e_r": -0.1347,
+     "funding": 4.45,
+     "give_back_r": 1.0996,
+     "hold_bars": 7.858
+    }
+   },
+   "funding_total": 4.45,
+   "tail": {
+    "mfe_r_mean": 0.9853,
+    "mae_r_mean": -0.7299,
+    "give_back_r_mean": 1.0996,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.858,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3324,
+   "run_s": 1.0
+  },
+  "solo_2h_t30m__test__history__1": {
+   "n": 224,
+   "gross": -14.7478,
+   "cost": 42.9795,
+   "net": -47.088,
+   "eq": 252.912,
+   "wr": 0.3616,
+   "pf": 0.9247,
+   "dd_pct": 24.7654,
+   "e_r": -0.1092,
+   "by_tf": {
+    "2h": {
+     "n": 224,
+     "net": -47.09,
+     "e_r": -0.1092,
+     "funding": 0.42,
+     "give_back_r": 1.1095,
+     "hold_bars": 8.074
+    }
+   },
+   "funding_total": 0.42,
+   "tail": {
+    "mfe_r_mean": 1.0236,
+    "mae_r_mean": -0.7299,
+    "give_back_r_mean": 1.1095,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.074,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 1.0
+  },
+  "solo_2h_t30m_xexec__test__history__1": {
+   "n": 225,
+   "gross": -21.5801,
+   "cost": 43.0467,
+   "net": -53.9635,
+   "eq": 246.0365,
+   "wr": 0.3689,
+   "pf": 0.8896,
+   "dd_pct": 24.5837,
+   "e_r": -0.1247,
+   "by_tf": {
+    "2h": {
+     "n": 225,
+     "net": -53.96,
+     "e_r": -0.1247,
+     "funding": 0.39,
+     "give_back_r": 1.0902,
+     "hold_bars": 7.858
+    }
+   },
+   "funding_total": 0.39,
+   "tail": {
+    "mfe_r_mean": 0.9853,
+    "mae_r_mean": -0.7299,
+    "give_back_r_mean": 1.0902,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.858,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3324,
+   "run_s": 1.1
+  },
+  "solo_2h_t30m_xlock__test__history__1": {
+   "n": 225,
+   "gross": -21.5801,
+   "cost": 43.0467,
+   "net": -53.9635,
+   "eq": 246.0365,
+   "wr": 0.3689,
+   "pf": 0.8896,
+   "dd_pct": 24.5837,
+   "e_r": -0.1247,
+   "by_tf": {
+    "2h": {
+     "n": 225,
+     "net": -53.96,
+     "e_r": -0.1247,
+     "funding": 0.39,
+     "give_back_r": 1.0902,
+     "hold_bars": 7.858
+    }
+   },
+   "funding_total": 0.39,
+   "tail": {
+    "mfe_r_mean": 0.9853,
+    "mae_r_mean": -0.7299,
+    "give_back_r_mean": 1.0902,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.858,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 3324,
+   "run_s": 1.1
+  },
+  "solo_1h__dev__const__1": {
+   "n": 897,
+   "gross": 81.0627,
+   "cost": 193.6651,
+   "net": -66.9618,
+   "eq": 233.0382,
+   "wr": 0.4292,
+   "pf": 1.1196,
+   "dd_pct": 36.3867,
+   "e_r": -0.0402,
+   "by_tf": {
+    "1h": {
+     "n": 897,
+     "net": -66.96,
+     "e_r": -0.0402,
+     "funding": 11.1,
+     "give_back_r": 1.1558,
+     "hold_bars": 8.481
+    }
+   },
+   "funding_total": 11.1,
+   "tail": {
+    "mfe_r_mean": 1.1269,
+    "mae_r_mean": -0.6345,
+    "give_back_r_mean": 1.1558,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.481,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 2.4
+  },
+  "solo_1h_xexec__dev__const__1": {
+   "n": 915,
+   "gross": 75.4944,
+   "cost": 193.0138,
+   "net": -71.8613,
+   "eq": 228.1387,
+   "wr": 0.4437,
+   "pf": 1.1139,
+   "dd_pct": 38.2777,
+   "e_r": -0.043,
+   "by_tf": {
+    "1h": {
+     "n": 915,
+     "net": -71.86,
+     "e_r": -0.043,
+     "funding": 10.38,
+     "give_back_r": 1.1083,
+     "hold_bars": 8.036
+    }
+   },
+   "funding_total": 10.38,
+   "tail": {
+    "mfe_r_mean": 1.0849,
+    "mae_r_mean": -0.6249,
+    "give_back_r_mean": 1.1083,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.036,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28501,
+   "run_s": 2.7
+  },
+  "solo_1h_xlock__dev__const__1": {
+   "n": 915,
+   "gross": 75.4944,
+   "cost": 193.0138,
+   "net": -71.8613,
+   "eq": 228.1387,
+   "wr": 0.4437,
+   "pf": 1.1139,
+   "dd_pct": 38.2777,
+   "e_r": -0.043,
+   "by_tf": {
+    "1h": {
+     "n": 915,
+     "net": -71.86,
+     "e_r": -0.043,
+     "funding": 10.38,
+     "give_back_r": 1.1083,
+     "hold_bars": 8.036
+    }
+   },
+   "funding_total": 10.38,
+   "tail": {
+    "mfe_r_mean": 1.0849,
+    "mae_r_mean": -0.6249,
+    "give_back_r_mean": 1.1083,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.036,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28501,
+   "run_s": 2.5
+  },
+  "solo_1h__dev__history__1": {
+   "n": 902,
+   "gross": 70.6148,
+   "cost": 188.8965,
+   "net": -71.6105,
+   "eq": 228.3895,
+   "wr": 0.429,
+   "pf": 1.1018,
+   "dd_pct": 35.2002,
+   "e_r": -0.042,
+   "by_tf": {
+    "1h": {
+     "n": 902,
+     "net": -71.61,
+     "e_r": -0.042,
+     "funding": 2.21,
+     "give_back_r": 1.1523,
+     "hold_bars": 8.452
+    }
+   },
+   "funding_total": 2.21,
+   "tail": {
+    "mfe_r_mean": 1.1293,
+    "mae_r_mean": -0.6337,
+    "give_back_r_mean": 1.1523,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.452,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 2.7
+  },
+  "solo_1h_xexec__dev__history__1": {
+   "n": 916,
+   "gross": 65.3976,
+   "cost": 187.38,
+   "net": -75.6729,
+   "eq": 224.3271,
+   "wr": 0.441,
+   "pf": 1.0973,
+   "dd_pct": 36.7411,
+   "e_r": -0.0446,
+   "by_tf": {
+    "1h": {
+     "n": 916,
+     "net": -75.67,
+     "e_r": -0.0446,
+     "funding": 2.14,
+     "give_back_r": 1.1019,
+     "hold_bars": 7.987
+    }
+   },
+   "funding_total": 2.14,
+   "tail": {
+    "mfe_r_mean": 1.074,
+    "mae_r_mean": -0.6253,
+    "give_back_r_mean": 1.1019,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.987,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28355,
+   "run_s": 2.6
+  },
+  "solo_1h_xlock__dev__history__1": {
+   "n": 916,
+   "gross": 65.3976,
+   "cost": 187.38,
+   "net": -75.6729,
+   "eq": 224.3271,
+   "wr": 0.441,
+   "pf": 1.0973,
+   "dd_pct": 36.7411,
+   "e_r": -0.0446,
+   "by_tf": {
+    "1h": {
+     "n": 916,
+     "net": -75.67,
+     "e_r": -0.0446,
+     "funding": 2.14,
+     "give_back_r": 1.1019,
+     "hold_bars": 7.987
+    }
+   },
+   "funding_total": 2.14,
+   "tail": {
+    "mfe_r_mean": 1.074,
+    "mae_r_mean": -0.6253,
+    "give_back_r_mean": 1.1019,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.987,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28355,
+   "run_s": 2.9
+  },
+  "solo_1h__test__const__1": {
+   "n": 419,
+   "gross": 51.5965,
+   "cost": 115.1545,
+   "net": -36.5833,
+   "eq": 263.4167,
+   "wr": 0.3819,
+   "pf": 1.1646,
+   "dd_pct": 34.2323,
+   "e_r": -0.0467,
+   "by_tf": {
+    "1h": {
+     "n": 419,
+     "net": -36.58,
+     "e_r": -0.0467,
+     "funding": 7.26,
+     "give_back_r": 1.1529,
+     "hold_bars": 9.03
+    }
+   },
+   "funding_total": 7.26,
+   "tail": {
+    "mfe_r_mean": 1.1162,
+    "mae_r_mean": -0.6686,
+    "give_back_r_mean": 1.1529,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 9.03,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 2.1
+  },
+  "solo_1h_xexec__test__const__1": {
+   "n": 414,
+   "gross": 30.0094,
+   "cost": 110.2919,
+   "net": -54.4319,
+   "eq": 245.5681,
+   "wr": 0.401,
+   "pf": 1.1021,
+   "dd_pct": 35.1197,
+   "e_r": -0.0721,
+   "by_tf": {
+    "1h": {
+     "n": 414,
+     "net": -54.43,
+     "e_r": -0.0721,
+     "funding": 6.89,
+     "give_back_r": 1.1348,
+     "hold_bars": 8.911
+    }
+   },
+   "funding_total": 6.89,
+   "tail": {
+    "mfe_r_mean": 1.0697,
+    "mae_r_mean": -0.6625,
+    "give_back_r_mean": 1.1348,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.911,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14368,
+   "run_s": 2.3
+  },
+  "solo_1h_xlock__test__const__1": {
+   "n": 414,
+   "gross": 30.0094,
+   "cost": 110.2919,
+   "net": -54.4319,
+   "eq": 245.5681,
+   "wr": 0.401,
+   "pf": 1.1021,
+   "dd_pct": 35.1197,
+   "e_r": -0.0721,
+   "by_tf": {
+    "1h": {
+     "n": 414,
+     "net": -54.43,
+     "e_r": -0.0721,
+     "funding": 6.89,
+     "give_back_r": 1.1348,
+     "hold_bars": 8.911
+    }
+   },
+   "funding_total": 6.89,
+   "tail": {
+    "mfe_r_mean": 1.0697,
+    "mae_r_mean": -0.6625,
+    "give_back_r_mean": 1.1348,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.911,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14368,
+   "run_s": 2.1
+  },
+  "solo_1h__test__history__1": {
+   "n": 419,
+   "gross": 55.0286,
+   "cost": 110.1906,
+   "net": -27.7978,
+   "eq": 272.2022,
+   "wr": 0.3819,
+   "pf": 1.1732,
+   "dd_pct": 33.245,
+   "e_r": -0.035,
+   "by_tf": {
+    "1h": {
+     "n": 419,
+     "net": -27.8,
+     "e_r": -0.035,
+     "funding": 0.73,
+     "give_back_r": 1.1445,
+     "hold_bars": 9.03
+    }
+   },
+   "funding_total": 0.73,
+   "tail": {
+    "mfe_r_mean": 1.1162,
+    "mae_r_mean": -0.6686,
+    "give_back_r_mean": 1.1445,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 9.03,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 2.2
+  },
+  "solo_1h_xexec__test__history__1": {
+   "n": 416,
+   "gross": 28.8562,
+   "cost": 105.3173,
+   "net": -50.2869,
+   "eq": 249.7131,
+   "wr": 0.4014,
+   "pf": 1.0971,
+   "dd_pct": 34.407,
+   "e_r": -0.066,
+   "by_tf": {
+    "1h": {
+     "n": 416,
+     "net": -50.29,
+     "e_r": -0.066,
+     "funding": 0.62,
+     "give_back_r": 1.1278,
+     "hold_bars": 8.874
+    }
+   },
+   "funding_total": 0.62,
+   "tail": {
+    "mfe_r_mean": 1.069,
+    "mae_r_mean": -0.665,
+    "give_back_r_mean": 1.1278,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.874,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14375,
+   "run_s": 2.2
+  },
+  "solo_1h_xlock__test__history__1": {
+   "n": 416,
+   "gross": 28.8562,
+   "cost": 105.3173,
+   "net": -50.2869,
+   "eq": 249.7131,
+   "wr": 0.4014,
+   "pf": 1.0971,
+   "dd_pct": 34.407,
+   "e_r": -0.066,
+   "by_tf": {
+    "1h": {
+     "n": 416,
+     "net": -50.29,
+     "e_r": -0.066,
+     "funding": 0.62,
+     "give_back_r": 1.1278,
+     "hold_bars": 8.874
+    }
+   },
+   "funding_total": 0.62,
+   "tail": {
+    "mfe_r_mean": 1.069,
+    "mae_r_mean": -0.665,
+    "give_back_r_mean": 1.1278,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.874,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14375,
+   "run_s": 2.2
+  },
+  "solo_1h_t30m__dev__const__1": {
+   "n": 917,
+   "gross": 56.1696,
+   "cost": 191.1843,
+   "net": -89.9715,
+   "eq": 210.0285,
+   "wr": 0.4144,
+   "pf": 1.0833,
+   "dd_pct": 35.4108,
+   "e_r": -0.0559,
+   "by_tf": {
+    "1h": {
+     "n": 917,
+     "net": -89.97,
+     "e_r": -0.0559,
+     "funding": 11.01,
+     "give_back_r": 1.1793,
+     "hold_bars": 8.532
+    }
+   },
+   "funding_total": 11.01,
+   "tail": {
+    "mfe_r_mean": 1.1381,
+    "mae_r_mean": -0.6536,
+    "give_back_r_mean": 1.1793,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.532,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 7.2
+  },
+  "solo_1h_t30m_xexec__dev__const__1": {
+   "n": 930,
+   "gross": 63.4302,
+   "cost": 194.6096,
+   "net": -85.1601,
+   "eq": 214.8399,
+   "wr": 0.428,
+   "pf": 1.0951,
+   "dd_pct": 36.3991,
+   "e_r": -0.052,
+   "by_tf": {
+    "1h": {
+     "n": 930,
+     "net": -85.16,
+     "e_r": -0.052,
+     "funding": 10.53,
+     "give_back_r": 1.1316,
+     "hold_bars": 7.998
+    }
+   },
+   "funding_total": 10.53,
+   "tail": {
+    "mfe_r_mean": 1.0913,
+    "mae_r_mean": -0.6404,
+    "give_back_r_mean": 1.1316,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.998,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28823,
+   "run_s": 7.1
+  },
+  "solo_1h_t30m_xlock__dev__const__1": {
+   "n": 930,
+   "gross": 63.4302,
+   "cost": 194.6096,
+   "net": -85.1601,
+   "eq": 214.8399,
+   "wr": 0.428,
+   "pf": 1.0951,
+   "dd_pct": 36.3991,
+   "e_r": -0.052,
+   "by_tf": {
+    "1h": {
+     "n": 930,
+     "net": -85.16,
+     "e_r": -0.052,
+     "funding": 10.53,
+     "give_back_r": 1.1316,
+     "hold_bars": 7.998
+    }
+   },
+   "funding_total": 10.53,
+   "tail": {
+    "mfe_r_mean": 1.0913,
+    "mae_r_mean": -0.6404,
+    "give_back_r_mean": 1.1316,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.998,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28823,
+   "run_s": 7.7
+  },
+  "solo_1h_t30m__dev__history__1": {
+   "n": 917,
+   "gross": 56.5898,
+   "cost": 184.9961,
+   "net": -82.6685,
+   "eq": 217.3315,
+   "wr": 0.4144,
+   "pf": 1.0826,
+   "dd_pct": 34.1019,
+   "e_r": -0.0506,
+   "by_tf": {
+    "1h": {
+     "n": 917,
+     "net": -82.67,
+     "e_r": -0.0506,
+     "funding": 2.04,
+     "give_back_r": 1.1738,
+     "hold_bars": 8.532
+    }
+   },
+   "funding_total": 2.04,
+   "tail": {
+    "mfe_r_mean": 1.1381,
+    "mae_r_mean": -0.6536,
+    "give_back_r_mean": 1.1738,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.532,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 8.9
+  },
+  "solo_1h_t30m_xexec__dev__history__1": {
+   "n": 928,
+   "gross": 77.4663,
+   "cost": 188.6936,
+   "net": -64.5407,
+   "eq": 235.4593,
+   "wr": 0.43,
+   "pf": 1.1149,
+   "dd_pct": 34.9679,
+   "e_r": -0.0389,
+   "by_tf": {
+    "1h": {
+     "n": 928,
+     "net": -64.54,
+     "e_r": -0.0389,
+     "funding": 1.95,
+     "give_back_r": 1.1275,
+     "hold_bars": 8.046
+    }
+   },
+   "funding_total": 1.95,
+   "tail": {
+    "mfe_r_mean": 1.1014,
+    "mae_r_mean": -0.6399,
+    "give_back_r_mean": 1.1275,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.046,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28939,
+   "run_s": 7.8
+  },
+  "solo_1h_t30m_xlock__dev__history__1": {
+   "n": 928,
+   "gross": 77.4663,
+   "cost": 188.6936,
+   "net": -64.5407,
+   "eq": 235.4593,
+   "wr": 0.43,
+   "pf": 1.1149,
+   "dd_pct": 34.9679,
+   "e_r": -0.0389,
+   "by_tf": {
+    "1h": {
+     "n": 928,
+     "net": -64.54,
+     "e_r": -0.0389,
+     "funding": 1.95,
+     "give_back_r": 1.1275,
+     "hold_bars": 8.046
+    }
+   },
+   "funding_total": 1.95,
+   "tail": {
+    "mfe_r_mean": 1.1014,
+    "mae_r_mean": -0.6399,
+    "give_back_r_mean": 1.1275,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.046,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 28939,
+   "run_s": 9.0
+  },
+  "solo_1h_t30m__test__const__1": {
+   "n": 427,
+   "gross": 42.839,
+   "cost": 115.9152,
+   "net": -45.9059,
+   "eq": 254.0941,
+   "wr": 0.3841,
+   "pf": 1.1392,
+   "dd_pct": 39.6681,
+   "e_r": -0.0599,
+   "by_tf": {
+    "1h": {
+     "n": 427,
+     "net": -45.91,
+     "e_r": -0.0599,
+     "funding": 7.23,
+     "give_back_r": 1.165,
+     "hold_bars": 9.111
+    }
+   },
+   "funding_total": 7.23,
+   "tail": {
+    "mfe_r_mean": 1.1175,
+    "mae_r_mean": -0.6752,
+    "give_back_r_mean": 1.165,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 9.111,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 6.4
+  },
+  "solo_1h_t30m_xexec__test__const__1": {
+   "n": 425,
+   "gross": 11.6432,
+   "cost": 109.473,
+   "net": -72.1448,
+   "eq": 227.8552,
+   "wr": 0.3976,
+   "pf": 1.041,
+   "dd_pct": 41.2733,
+   "e_r": -0.0992,
+   "by_tf": {
+    "1h": {
+     "n": 425,
+     "net": -72.14,
+     "e_r": -0.0992,
+     "funding": 6.73,
+     "give_back_r": 1.1511,
+     "hold_bars": 8.956
+    }
+   },
+   "funding_total": 6.73,
+   "tail": {
+    "mfe_r_mean": 1.0625,
+    "mae_r_mean": -0.6732,
+    "give_back_r_mean": 1.1511,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.956,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14803,
+   "run_s": 5.7
+  },
+  "solo_1h_t30m_xlock__test__const__1": {
+   "n": 425,
+   "gross": 11.6432,
+   "cost": 109.473,
+   "net": -72.1448,
+   "eq": 227.8552,
+   "wr": 0.3976,
+   "pf": 1.041,
+   "dd_pct": 41.2733,
+   "e_r": -0.0992,
+   "by_tf": {
+    "1h": {
+     "n": 425,
+     "net": -72.14,
+     "e_r": -0.0992,
+     "funding": 6.73,
+     "give_back_r": 1.1511,
+     "hold_bars": 8.956
+    }
+   },
+   "funding_total": 6.73,
+   "tail": {
+    "mfe_r_mean": 1.0625,
+    "mae_r_mean": -0.6732,
+    "give_back_r_mean": 1.1511,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.956,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14803,
+   "run_s": 6.3
+  },
+  "solo_1h_t30m__test__history__1": {
+   "n": 427,
+   "gross": 43.5427,
+   "cost": 110.9138,
+   "net": -39.8635,
+   "eq": 260.1365,
+   "wr": 0.3841,
+   "pf": 1.14,
+   "dd_pct": 38.6109,
+   "e_r": -0.0514,
+   "by_tf": {
+    "1h": {
+     "n": 427,
+     "net": -39.86,
+     "e_r": -0.0514,
+     "funding": 0.88,
+     "give_back_r": 1.1565,
+     "hold_bars": 9.111
+    }
+   },
+   "funding_total": 0.88,
+   "tail": {
+    "mfe_r_mean": 1.1175,
+    "mae_r_mean": -0.6752,
+    "give_back_r_mean": 1.1565,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 9.111,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 6.3
+  },
+  "solo_1h_t30m_xexec__test__history__1": {
+   "n": 425,
+   "gross": 11.1034,
+   "cost": 104.6166,
+   "net": -67.5564,
+   "eq": 232.4436,
+   "wr": 0.3976,
+   "pf": 1.0387,
+   "dd_pct": 40.5578,
+   "e_r": -0.0921,
+   "by_tf": {
+    "1h": {
+     "n": 425,
+     "net": -67.56,
+     "e_r": -0.0921,
+     "funding": 0.79,
+     "give_back_r": 1.1427,
+     "hold_bars": 8.956
+    }
+   },
+   "funding_total": 0.79,
+   "tail": {
+    "mfe_r_mean": 1.0625,
+    "mae_r_mean": -0.6732,
+    "give_back_r_mean": 1.1427,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.956,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14803,
+   "run_s": 7.6
+  },
+  "solo_1h_t30m_xlock__test__history__1": {
+   "n": 425,
+   "gross": 11.1034,
+   "cost": 104.6166,
+   "net": -67.5564,
+   "eq": 232.4436,
+   "wr": 0.3976,
+   "pf": 1.0387,
+   "dd_pct": 40.5578,
+   "e_r": -0.0921,
+   "by_tf": {
+    "1h": {
+     "n": 425,
+     "net": -67.56,
+     "e_r": -0.0921,
+     "funding": 0.79,
+     "give_back_r": 1.1427,
+     "hold_bars": 8.956
+    }
+   },
+   "funding_total": 0.79,
+   "tail": {
+    "mfe_r_mean": 1.0625,
+    "mae_r_mean": -0.6732,
+    "give_back_r_mean": 1.1427,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.956,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 14803,
+   "run_s": 6.6
+  },
+  "port_2h_1h__dev__const__1": {
+   "n": 1341,
+   "gross": 143.572,
+   "cost": 279.3095,
+   "net": -70.8007,
+   "eq": 229.1993,
+   "wr": 0.4437,
+   "pf": 1.136,
+   "dd_pct": 45.7829,
+   "e_r": -0.0265,
+   "by_tf": {
+    "1h": {
+     "n": 903,
+     "net": -97.19,
+     "e_r": -0.0537,
+     "funding": 11.85,
+     "give_back_r": 1.1592,
+     "hold_bars": 8.45
+    },
+    "2h": {
+     "n": 438,
+     "net": 26.39,
+     "e_r": 0.0306,
+     "funding": 7.71,
+     "give_back_r": 1.1225,
+     "hold_bars": 8.726
+    }
+   },
+   "funding_total": 19.56,
+   "tail": {
+    "mfe_r_mean": 1.1391,
+    "mae_r_mean": -0.6319,
+    "give_back_r_mean": 1.1472,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.54,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 6.3
+  },
+  "port_2h_1h_xexec__dev__const__1": {
+   "n": 1356,
+   "gross": 123.8997,
+   "cost": 271.6544,
+   "net": -84.411,
+   "eq": 215.589,
+   "wr": 0.4521,
+   "pf": 1.1215,
+   "dd_pct": 48.5924,
+   "e_r": -0.0323,
+   "by_tf": {
+    "1h": {
+     "n": 917,
+     "net": -98.81,
+     "e_r": -0.0556,
+     "funding": 10.89,
+     "give_back_r": 1.1068,
+     "hold_bars": 7.988
+    },
+    "2h": {
+     "n": 439,
+     "net": 14.4,
+     "e_r": 0.0172,
+     "funding": 7.39,
+     "give_back_r": 1.111,
+     "hold_bars": 8.607
+    }
+   },
+   "funding_total": 18.28,
+   "tail": {
+    "mfe_r_mean": 1.0936,
+    "mae_r_mean": -0.6266,
+    "give_back_r_mean": 1.1082,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.188,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35509,
+   "run_s": 8.6
+  },
+  "port_2h_1h_xlock__dev__const__1": {
+   "n": 1356,
+   "gross": 123.8997,
+   "cost": 271.6544,
+   "net": -84.411,
+   "eq": 215.589,
+   "wr": 0.4521,
+   "pf": 1.1215,
+   "dd_pct": 48.5924,
+   "e_r": -0.0323,
+   "by_tf": {
+    "1h": {
+     "n": 917,
+     "net": -98.81,
+     "e_r": -0.0556,
+     "funding": 10.89,
+     "give_back_r": 1.1068,
+     "hold_bars": 7.988
+    },
+    "2h": {
+     "n": 439,
+     "net": 14.4,
+     "e_r": 0.0172,
+     "funding": 7.39,
+     "give_back_r": 1.111,
+     "hold_bars": 8.607
+    }
+   },
+   "funding_total": 18.28,
+   "tail": {
+    "mfe_r_mean": 1.0936,
+    "mae_r_mean": -0.6266,
+    "give_back_r_mean": 1.1082,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.188,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35509,
+   "run_s": 5.3
+  },
+  "port_2h_1h__dev__history__1": {
+   "n": 1335,
+   "gross": 145.1531,
+   "cost": 270.6137,
+   "net": -58.8355,
+   "eq": 241.1645,
+   "wr": 0.4442,
+   "pf": 1.1345,
+   "dd_pct": 43.8897,
+   "e_r": -0.0215,
+   "by_tf": {
+    "1h": {
+     "n": 900,
+     "net": -86.08,
+     "e_r": -0.0464,
+     "funding": 2.43,
+     "give_back_r": 1.1544,
+     "hold_bars": 8.457
+    },
+    "2h": {
+     "n": 435,
+     "net": 27.25,
+     "e_r": 0.031,
+     "funding": 1.68,
+     "give_back_r": 1.1143,
+     "hold_bars": 8.691
+    }
+   },
+   "funding_total": 4.11,
+   "tail": {
+    "mfe_r_mean": 1.1401,
+    "mae_r_mean": -0.6312,
+    "give_back_r_mean": 1.1414,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.533,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 5.1
+  },
+  "port_2h_1h_xexec__dev__history__1": {
+   "n": 1356,
+   "gross": 126.7404,
+   "cost": 263.3469,
+   "net": -71.7041,
+   "eq": 228.2959,
+   "wr": 0.4528,
+   "pf": 1.1214,
+   "dd_pct": 46.9744,
+   "e_r": -0.0268,
+   "by_tf": {
+    "1h": {
+     "n": 917,
+     "net": -91.25,
+     "e_r": -0.0501,
+     "funding": 2.24,
+     "give_back_r": 1.1015,
+     "hold_bars": 7.992
+    },
+    "2h": {
+     "n": 439,
+     "net": 19.55,
+     "e_r": 0.0228,
+     "funding": 1.5,
+     "give_back_r": 1.1038,
+     "hold_bars": 8.683
+    }
+   },
+   "funding_total": 3.74,
+   "tail": {
+    "mfe_r_mean": 1.0947,
+    "mae_r_mean": -0.6267,
+    "give_back_r_mean": 1.1022,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.216,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35590,
+   "run_s": 7.6
+  },
+  "port_2h_1h_xlock__dev__history__1": {
+   "n": 1356,
+   "gross": 126.7404,
+   "cost": 263.3469,
+   "net": -71.7041,
+   "eq": 228.2959,
+   "wr": 0.4528,
+   "pf": 1.1214,
+   "dd_pct": 46.9744,
+   "e_r": -0.0268,
+   "by_tf": {
+    "1h": {
+     "n": 917,
+     "net": -91.25,
+     "e_r": -0.0501,
+     "funding": 2.24,
+     "give_back_r": 1.1015,
+     "hold_bars": 7.992
+    },
+    "2h": {
+     "n": 439,
+     "net": 19.55,
+     "e_r": 0.0228,
+     "funding": 1.5,
+     "give_back_r": 1.1038,
+     "hold_bars": 8.683
+    }
+   },
+   "funding_total": 3.74,
+   "tail": {
+    "mfe_r_mean": 1.0947,
+    "mae_r_mean": -0.6267,
+    "give_back_r_mean": 1.1022,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.216,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35590,
+   "run_s": 7.2
+  },
+  "port_2h_1h__test__const__1": {
+   "n": 645,
+   "gross": 19.2898,
+   "cost": 143.1754,
+   "net": -90.6794,
+   "eq": 209.3206,
+   "wr": 0.3736,
+   "pf": 1.0424,
+   "dd_pct": 48.5795,
+   "e_r": -0.0839,
+   "by_tf": {
+    "1h": {
+     "n": 417,
+     "net": -39.42,
+     "e_r": -0.056,
+     "funding": 6.43,
+     "give_back_r": 1.1537,
+     "hold_bars": 9.064
+    },
+    "2h": {
+     "n": 228,
+     "net": -51.26,
+     "e_r": -0.1362,
+     "funding": 3.92,
+     "give_back_r": 1.1282,
+     "hold_bars": 7.741
+    }
+   },
+   "funding_total": 10.35,
+   "tail": {
+    "mfe_r_mean": 1.0783,
+    "mae_r_mean": -0.6937,
+    "give_back_r_mean": 1.1447,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.597,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 5.7
+  },
+  "port_2h_1h_xexec__test__const__1": {
+   "n": 645,
+   "gross": 2.4584,
+   "cost": 139.8512,
+   "net": -104.9416,
+   "eq": 195.0584,
+   "wr": 0.3922,
+   "pf": 1.0056,
+   "dd_pct": 48.5099,
+   "e_r": -0.0992,
+   "by_tf": {
+    "1h": {
+     "n": 415,
+     "net": -51.59,
+     "e_r": -0.0751,
+     "funding": 6.22,
+     "give_back_r": 1.1361,
+     "hold_bars": 8.994
+    },
+    "2h": {
+     "n": 230,
+     "net": -53.35,
+     "e_r": -0.1438,
+     "funding": 3.82,
+     "give_back_r": 1.1135,
+     "hold_bars": 7.707
+    }
+   },
+   "funding_total": 10.05,
+   "tail": {
+    "mfe_r_mean": 1.0421,
+    "mae_r_mean": -0.6868,
+    "give_back_r_mean": 1.128,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.535,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17859,
+   "run_s": 7.1
+  },
+  "port_2h_1h_xlock__test__const__1": {
+   "n": 645,
+   "gross": 2.4584,
+   "cost": 139.8512,
+   "net": -104.9416,
+   "eq": 195.0584,
+   "wr": 0.3922,
+   "pf": 1.0056,
+   "dd_pct": 48.5099,
+   "e_r": -0.0992,
+   "by_tf": {
+    "1h": {
+     "n": 415,
+     "net": -51.59,
+     "e_r": -0.0751,
+     "funding": 6.22,
+     "give_back_r": 1.1361,
+     "hold_bars": 8.994
+    },
+    "2h": {
+     "n": 230,
+     "net": -53.35,
+     "e_r": -0.1438,
+     "funding": 3.82,
+     "give_back_r": 1.1135,
+     "hold_bars": 7.707
+    }
+   },
+   "funding_total": 10.05,
+   "tail": {
+    "mfe_r_mean": 1.0421,
+    "mae_r_mean": -0.6868,
+    "give_back_r_mean": 1.128,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.535,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17859,
+   "run_s": 6.0
+  },
+  "port_2h_1h__test__history__1": {
+   "n": 650,
+   "gross": 22.0777,
+   "cost": 137.2714,
+   "net": -81.1201,
+   "eq": 218.8799,
+   "wr": 0.3754,
+   "pf": 1.0475,
+   "dd_pct": 46.5043,
+   "e_r": -0.0732,
+   "by_tf": {
+    "1h": {
+     "n": 419,
+     "net": -33.0,
+     "e_r": -0.0459,
+     "funding": 0.67,
+     "give_back_r": 1.1445,
+     "hold_bars": 9.03
+    },
+    "2h": {
+     "n": 231,
+     "net": -48.12,
+     "e_r": -0.1235,
+     "funding": 0.3,
+     "give_back_r": 1.1141,
+     "hold_bars": 7.903
+    }
+   },
+   "funding_total": 0.98,
+   "tail": {
+    "mfe_r_mean": 1.0784,
+    "mae_r_mean": -0.6914,
+    "give_back_r_mean": 1.1337,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.63,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 5.5
+  },
+  "port_2h_1h_xexec__test__history__1": {
+   "n": 644,
+   "gross": 0.9202,
+   "cost": 132.086,
+   "net": -98.3751,
+   "eq": 201.6249,
+   "wr": 0.3898,
+   "pf": 1.0021,
+   "dd_pct": 47.7985,
+   "e_r": -0.0919,
+   "by_tf": {
+    "1h": {
+     "n": 414,
+     "net": -48.07,
+     "e_r": -0.0692,
+     "funding": 0.59,
+     "give_back_r": 1.1263,
+     "hold_bars": 8.911
+    },
+    "2h": {
+     "n": 230,
+     "net": -50.3,
+     "e_r": -0.1336,
+     "funding": 0.33,
+     "give_back_r": 1.104,
+     "hold_bars": 7.707
+    }
+   },
+   "funding_total": 0.92,
+   "tail": {
+    "mfe_r_mean": 1.0371,
+    "mae_r_mean": -0.6888,
+    "give_back_r_mean": 1.1184,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.481,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17687,
+   "run_s": 8.0
+  },
+  "port_2h_1h_xlock__test__history__1": {
+   "n": 644,
+   "gross": 0.9202,
+   "cost": 132.086,
+   "net": -98.3751,
+   "eq": 201.6249,
+   "wr": 0.3898,
+   "pf": 1.0021,
+   "dd_pct": 47.7985,
+   "e_r": -0.0919,
+   "by_tf": {
+    "1h": {
+     "n": 414,
+     "net": -48.07,
+     "e_r": -0.0692,
+     "funding": 0.59,
+     "give_back_r": 1.1263,
+     "hold_bars": 8.911
+    },
+    "2h": {
+     "n": 230,
+     "net": -50.3,
+     "e_r": -0.1336,
+     "funding": 0.33,
+     "give_back_r": 1.104,
+     "hold_bars": 7.707
+    }
+   },
+   "funding_total": 0.92,
+   "tail": {
+    "mfe_r_mean": 1.0371,
+    "mae_r_mean": -0.6888,
+    "give_back_r_mean": 1.1184,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.481,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17687,
+   "run_s": 6.3
+  },
+  "port_2h_t1h_1h__dev__const__1": {
+   "n": 1341,
+   "gross": 194.0709,
+   "cost": 300.8068,
+   "net": -36.8661,
+   "eq": 263.1339,
+   "wr": 0.4482,
+   "pf": 1.1735,
+   "dd_pct": 43.2053,
+   "e_r": -0.0129,
+   "by_tf": {
+    "1h": {
+     "n": 899,
+     "net": -84.11,
+     "e_r": -0.0437,
+     "funding": 12.7,
+     "give_back_r": 1.1611,
+     "hold_bars": 8.455
+    },
+    "2h": {
+     "n": 442,
+     "net": 47.24,
+     "e_r": 0.0511,
+     "funding": 8.63,
+     "give_back_r": 1.155,
+     "hold_bars": 8.863
+    }
+   },
+   "funding_total": 21.33,
+   "tail": {
+    "mfe_r_mean": 1.1673,
+    "mae_r_mean": -0.6313,
+    "give_back_r_mean": 1.1591,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.59,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 4.7
+  },
+  "port_2h_t1h_1h_xexec__dev__const__1": {
+   "n": 1362,
+   "gross": 156.9157,
+   "cost": 291.9867,
+   "net": -67.037,
+   "eq": 232.963,
+   "wr": 0.4559,
+   "pf": 1.1446,
+   "dd_pct": 46.8819,
+   "e_r": -0.024,
+   "by_tf": {
+    "1h": {
+     "n": 915,
+     "net": -102.69,
+     "e_r": -0.0546,
+     "funding": 11.51,
+     "give_back_r": 1.1075,
+     "hold_bars": 7.961
+    },
+    "2h": {
+     "n": 447,
+     "net": 35.65,
+     "e_r": 0.0393,
+     "funding": 8.34,
+     "give_back_r": 1.1381,
+     "hold_bars": 8.716
+    }
+   },
+   "funding_total": 19.85,
+   "tail": {
+    "mfe_r_mean": 1.1109,
+    "mae_r_mean": -0.6281,
+    "give_back_r_mean": 1.1175,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.209,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35574,
+   "run_s": 5.8
+  },
+  "port_2h_t1h_1h_xlock__dev__const__1": {
+   "n": 1362,
+   "gross": 156.9157,
+   "cost": 291.9867,
+   "net": -67.037,
+   "eq": 232.963,
+   "wr": 0.4559,
+   "pf": 1.1446,
+   "dd_pct": 46.8819,
+   "e_r": -0.024,
+   "by_tf": {
+    "1h": {
+     "n": 915,
+     "net": -102.69,
+     "e_r": -0.0546,
+     "funding": 11.51,
+     "give_back_r": 1.1075,
+     "hold_bars": 7.961
+    },
+    "2h": {
+     "n": 447,
+     "net": 35.65,
+     "e_r": 0.0393,
+     "funding": 8.34,
+     "give_back_r": 1.1381,
+     "hold_bars": 8.716
+    }
+   },
+   "funding_total": 19.85,
+   "tail": {
+    "mfe_r_mean": 1.1109,
+    "mae_r_mean": -0.6281,
+    "give_back_r_mean": 1.1175,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.209,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35574,
+   "run_s": 4.3
+  },
+  "port_2h_t1h_1h__dev__history__1": {
+   "n": 1343,
+   "gross": 191.0331,
+   "cost": 295.1679,
+   "net": -31.5147,
+   "eq": 268.4853,
+   "wr": 0.446,
+   "pf": 1.1642,
+   "dd_pct": 41.3639,
+   "e_r": -0.0107,
+   "by_tf": {
+    "1h": {
+     "n": 900,
+     "net": -85.29,
+     "e_r": -0.0427,
+     "funding": 2.63,
+     "give_back_r": 1.1549,
+     "hold_bars": 8.465
+    },
+    "2h": {
+     "n": 443,
+     "net": 53.78,
+     "e_r": 0.0561,
+     "funding": 2.05,
+     "give_back_r": 1.1484,
+     "hold_bars": 8.874
+    }
+   },
+   "funding_total": 4.69,
+   "tail": {
+    "mfe_r_mean": 1.1622,
+    "mae_r_mean": -0.6322,
+    "give_back_r_mean": 1.1528,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.6,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 5.9
+  },
+  "port_2h_t1h_1h_xexec__dev__history__1": {
+   "n": 1364,
+   "gross": 158.5798,
+   "cost": 284.4486,
+   "net": -55.8073,
+   "eq": 244.1927,
+   "wr": 0.4567,
+   "pf": 1.1423,
+   "dd_pct": 44.98,
+   "e_r": -0.0195,
+   "by_tf": {
+    "1h": {
+     "n": 916,
+     "net": -100.23,
+     "e_r": -0.0518,
+     "funding": 2.32,
+     "give_back_r": 1.1023,
+     "hold_bars": 7.969
+    },
+    "2h": {
+     "n": 448,
+     "net": 44.42,
+     "e_r": 0.0476,
+     "funding": 1.88,
+     "give_back_r": 1.1321,
+     "hold_bars": 8.737
+    }
+   },
+   "funding_total": 4.2,
+   "tail": {
+    "mfe_r_mean": 1.1129,
+    "mae_r_mean": -0.6272,
+    "give_back_r_mean": 1.1121,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.221,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35669,
+   "run_s": 4.4
+  },
+  "port_2h_t1h_1h_xlock__dev__history__1": {
+   "n": 1364,
+   "gross": 158.5798,
+   "cost": 284.4486,
+   "net": -55.8073,
+   "eq": 244.1927,
+   "wr": 0.4567,
+   "pf": 1.1423,
+   "dd_pct": 44.98,
+   "e_r": -0.0195,
+   "by_tf": {
+    "1h": {
+     "n": 916,
+     "net": -100.23,
+     "e_r": -0.0518,
+     "funding": 2.32,
+     "give_back_r": 1.1023,
+     "hold_bars": 7.969
+    },
+    "2h": {
+     "n": 448,
+     "net": 44.42,
+     "e_r": 0.0476,
+     "funding": 1.88,
+     "give_back_r": 1.1321,
+     "hold_bars": 8.737
+    }
+   },
+   "funding_total": 4.2,
+   "tail": {
+    "mfe_r_mean": 1.1129,
+    "mae_r_mean": -0.6272,
+    "give_back_r_mean": 1.1121,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.221,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 35669,
+   "run_s": 4.3
+  },
+  "port_2h_t1h_1h__test__const__1": {
+   "n": 651,
+   "gross": 3.89,
+   "cost": 139.0467,
+   "net": -102.9009,
+   "eq": 197.0991,
+   "wr": 0.3687,
+   "pf": 1.0087,
+   "dd_pct": 52.2187,
+   "e_r": -0.0983,
+   "by_tf": {
+    "1h": {
+     "n": 419,
+     "net": -36.53,
+     "e_r": -0.0537,
+     "funding": 6.17,
+     "give_back_r": 1.1529,
+     "hold_bars": 9.03
+    },
+    "2h": {
+     "n": 232,
+     "net": -66.37,
+     "e_r": -0.1807,
+     "funding": 3.85,
+     "give_back_r": 1.1349,
+     "hold_bars": 7.808
+    }
+   },
+   "funding_total": 10.02,
+   "tail": {
+    "mfe_r_mean": 1.0671,
+    "mae_r_mean": -0.6955,
+    "give_back_r_mean": 1.1465,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.595,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 4.9
+  },
+  "port_2h_t1h_1h_xexec__test__const__1": {
+   "n": 652,
+   "gross": -21.6643,
+   "cost": 133.903,
+   "net": -124.4776,
+   "eq": 175.5224,
+   "wr": 0.388,
+   "pf": 0.949,
+   "dd_pct": 53.2653,
+   "e_r": -0.1229,
+   "by_tf": {
+    "1h": {
+     "n": 415,
+     "net": -52.99,
+     "e_r": -0.0814,
+     "funding": 5.84,
+     "give_back_r": 1.1348,
+     "hold_bars": 8.893
+    },
+    "2h": {
+     "n": 237,
+     "net": -71.49,
+     "e_r": -0.1976,
+     "funding": 3.7,
+     "give_back_r": 1.1108,
+     "hold_bars": 7.681
+    }
+   },
+   "funding_total": 9.54,
+   "tail": {
+    "mfe_r_mean": 1.0199,
+    "mae_r_mean": -0.6879,
+    "give_back_r_mean": 1.1261,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.452,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17780,
+   "run_s": 3.7
+  },
+  "port_2h_t1h_1h_xlock__test__const__1": {
+   "n": 652,
+   "gross": -21.6643,
+   "cost": 133.903,
+   "net": -124.4776,
+   "eq": 175.5224,
+   "wr": 0.388,
+   "pf": 0.949,
+   "dd_pct": 53.2653,
+   "e_r": -0.1229,
+   "by_tf": {
+    "1h": {
+     "n": 415,
+     "net": -52.99,
+     "e_r": -0.0814,
+     "funding": 5.84,
+     "give_back_r": 1.1348,
+     "hold_bars": 8.893
+    },
+    "2h": {
+     "n": 237,
+     "net": -71.49,
+     "e_r": -0.1976,
+     "funding": 3.7,
+     "give_back_r": 1.1108,
+     "hold_bars": 7.681
+    }
+   },
+   "funding_total": 9.54,
+   "tail": {
+    "mfe_r_mean": 1.0199,
+    "mae_r_mean": -0.6879,
+    "give_back_r_mean": 1.1261,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.452,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17780,
+   "run_s": 3.7
+  },
+  "port_2h_t1h_1h__test__history__1": {
+   "n": 651,
+   "gross": 2.4668,
+   "cost": 131.9845,
+   "net": -96.7583,
+   "eq": 203.2417,
+   "wr": 0.3687,
+   "pf": 1.0054,
+   "dd_pct": 51.1872,
+   "e_r": -0.0911,
+   "by_tf": {
+    "1h": {
+     "n": 419,
+     "net": -32.56,
+     "e_r": -0.0472,
+     "funding": 0.65,
+     "give_back_r": 1.1445,
+     "hold_bars": 9.03
+    },
+    "2h": {
+     "n": 232,
+     "net": -64.19,
+     "e_r": -0.1723,
+     "funding": 0.3,
+     "give_back_r": 1.1247,
+     "hold_bars": 7.761
+    }
+   },
+   "funding_total": 0.95,
+   "tail": {
+    "mfe_r_mean": 1.0659,
+    "mae_r_mean": -0.6956,
+    "give_back_r_mean": 1.1374,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.578,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "run_s": 3.5
+  },
+  "port_2h_t1h_1h_xexec__test__history__1": {
+   "n": 648,
+   "gross": -25.987,
+   "cost": 126.6657,
+   "net": -121.1957,
+   "eq": 178.8043,
+   "wr": 0.3858,
+   "pf": 0.9398,
+   "dd_pct": 52.7341,
+   "e_r": -0.1184,
+   "by_tf": {
+    "1h": {
+     "n": 414,
+     "net": -49.02,
+     "e_r": -0.0743,
+     "funding": 0.56,
+     "give_back_r": 1.1264,
+     "hold_bars": 8.907
+    },
+    "2h": {
+     "n": 234,
+     "net": -72.18,
+     "e_r": -0.1982,
+     "funding": 0.27,
+     "give_back_r": 1.1047,
+     "hold_bars": 7.558
+    }
+   },
+   "funding_total": 0.84,
+   "tail": {
+    "mfe_r_mean": 1.0193,
+    "mae_r_mean": -0.6894,
+    "give_back_r_mean": 1.1185,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.42,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17668,
+   "run_s": 3.6
+  },
+  "port_2h_t1h_1h_xlock__test__history__1": {
+   "n": 648,
+   "gross": -25.987,
+   "cost": 126.6657,
+   "net": -121.1957,
+   "eq": 178.8043,
+   "wr": 0.3858,
+   "pf": 0.9398,
+   "dd_pct": 52.7341,
+   "e_r": -0.1184,
+   "by_tf": {
+    "1h": {
+     "n": 414,
+     "net": -49.02,
+     "e_r": -0.0743,
+     "funding": 0.56,
+     "give_back_r": 1.1264,
+     "hold_bars": 8.907
+    },
+    "2h": {
+     "n": 234,
+     "net": -72.18,
+     "e_r": -0.1982,
+     "funding": 0.27,
+     "give_back_r": 1.1047,
+     "hold_bars": 7.558
+    }
+   },
+   "funding_total": 0.84,
+   "tail": {
+    "mfe_r_mean": 1.0193,
+    "mae_r_mean": -0.6894,
+    "give_back_r_mean": 1.1185,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 8.42,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 17668,
+   "run_s": 3.7
+  }
+ }
+}

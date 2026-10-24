@@ -60,6 +60,8 @@ CONFIG = ROOT / "config" / "strategy.json"
 OUTDIR = ROOT / "reports" / "tf_trigger_exp" / "abcd_20261022"
 HTF = ("2h", "4h", "12h", "1d")
 TRIG_MAP = {"2h": None, "4h": 7200, "12h": 7200, "1d": 14400}   # T0(现行)
+# v21.6:报告口径的周期全序(含新增的 1h/30m 观察周期;只影响表格行的顺序)
+TF_ORDER = ("30m", "1h", "2h", "4h", "12h", "1d")
 CSV_COLS = ("trade_id", "symbol", "tf", "event_id", "regime", "direction",
             "route", "entry_mode", "fill_wait_bars", "risk_usdt", "notional",
             "used_leverage", "open_decision_ts", "open_ts", "entry",
@@ -230,8 +232,12 @@ def _net_frozen_worst_case(broker, tf_filter=None) -> float:
 
 
 class Ctx:
-    def __init__(self, only=None) -> None:
+    def __init__(self, only=None, tfs=None, trig_map=None) -> None:
         self.cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+        # v21.6:观察周期集合与触发映射可参数化(默认 = 现行 T0 口径,逐位不变)
+        self.tfs = tuple(tfs) if tfs else HTF
+        self.trig_map = dict(TRIG_MAP if trig_map is None else trig_map)
+        self._mic_cache: dict = {}
         want = list(self.cfg["symbols"]) if only is None else list(only)
         syms = [s for s in want
                 if (ROOT / "data" / "raw" / f"{s}_1h.csv").exists()]
@@ -247,7 +253,8 @@ class Ctx:
                                 "balance_quality_min": 0.35})
         t0 = time.time()
         (self.cog_by, self.df_cog_by, self.df_exec_by,
-         self.df_trig_by) = diag.load_all_data(syms, self.params, tf_list=HTF)
+         self.df_trig_by) = diag.load_all_data(syms, self.params,
+                                              tf_list=self.tfs)
         print(f"[prep] 数据就绪 {syms} ({time.time() - t0:.1f}s)", flush=True)
 
         cfg = self.cfg
@@ -271,19 +278,30 @@ class Ctx:
             self.params, sym, obs_tf_seconds=obs_sec,
             trigger_tf_seconds=trig_sec, enable_e7=True)
 
-    def _frames(self) -> dict:
+    def frames_for(self, tfs, trig_map) -> dict:
+        """按 (观察周期集合, 触发映射) 装配帧;mic 认知按 (sym,tf,trig) 缓存。
+
+        v21.6:同一份已载数据可反复切出不同级联组合(2h→1h / 2h→30m / 1h→30m),
+        避免为一个触发开关重读全部原始帧。
+        """
         out = {}
         for sym in self.syms:
-            for tf in HTF:
-                trig_sec = TRIG_MAP[tf]
+            for tf in tfs:
+                trig_sec = trig_map.get(tf)
                 mic = None
                 if trig_sec is not None:
-                    mic = self._mic_for(sym, tf, trig_sec)
+                    ck = (sym, tf, trig_sec)
+                    if ck not in self._mic_cache:
+                        self._mic_cache[ck] = self._mic_for(sym, tf, trig_sec)
+                    mic = self._mic_cache[ck]
                 f = build_campaign_frame(self.cog_by[(sym, tf)],
                                          self.df_exec_by[(sym, tf)], tf,
                                          mic_cog=mic)
                 out[f.key] = f
         return out
+
+    def _frames(self) -> dict:
+        return self.frames_for(self.tfs, self.trig_map)
 
     # -- run ---------------------------------------------------------------
     def run(self, *, segment="dev", cm=1.0, router_cls=None, tfcap=None,
@@ -338,7 +356,11 @@ def metrics(res, equity0: float = 300.0) -> dict:
         if peak > 0:
             dd = max(dd, (peak - e) / peak)
     by_tf = {}
-    for tf in HTF:
+    tfs_in = {t.get("tf") for t in c}
+    for tf in TF_ORDER:
+        if tf not in HTF and tf not in tfs_in:
+            continue                      # 旧口径:HTF 四档恒在(可为 0);
+                                          # 新增档位(1h/30m)有交易才出现
         sub = [t for t in c if t.get("tf") == tf]
         by_tf[tf] = {"n": len(sub),
                      "net": round(sum(t["net_pnl"] for t in sub), 4)}
@@ -441,8 +463,8 @@ def main() -> None:
                 t0 = time.time()
                 res = ctx.run(segment=seg, cm=cm, **spec)
                 m = metrics(res)
-                tf_txt = " ".join(f"{tf}={m['by_tf'][tf]['net']:+.1f}"
-                                  for tf in HTF)
+                tf_txt = " ".join(f"{tf}={v['net']:+.1f}"
+                                  for tf, v in m["by_tf"].items())
                 pf = m["pf"] if m["pf"] is not None else float("nan")
                 print(f"{name:4s} {seg:5s} {cm:4.1f} | {m['n']:4d} "
                       f"{m['gross']:+8.1f} {m['cost']:7.1f} {m['net']:+8.1f} "
