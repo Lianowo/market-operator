@@ -64,8 +64,9 @@ class ReplayClient:
     def place_limit_order(self, *a, **k):
         raise AssertionError("PAPER 冒烟出现下单调用(fail-closed 违例)")
 
-    place_market_order = place_stop_market_plan = place_limit_order
-    cancel_order = cancel_plan_order = place_limit_order
+    place_market_order = place_limit_order
+    place_tpsl = place_stop_loss = place_take_profit = place_limit_order
+    cancel_order = cancel_tpsl_order = place_limit_order
 
     def __getattr__(self, name):           # balance/positions/contracts 只读委派
         return getattr(self._real, name)

@@ -27,8 +27,8 @@ clientOid 前缀(OID_PREFIX)对账,异己单一律不触碰。
 ② S4 LEVEL_REJECTED 前缘限价(entry,role=entry,kind=limit)→ GTC,N_fill=12 墙钟小时
   未成交撤单;③ §8.2 目标减仓(role=reduce,kind=limit @ target_1)→
   同窗口,超时转市价(TIMEOUT_TO_TAKER);S2 段落袋等部分 REDUCE 市价;
-④ EXIT 市价;⑤ 保护止损计划单(loss_plan @ 当前 invalid)只保护不主出,
-  invalid 变动撤旧换新;⑥ pm(§8)按 12h 收盘裁决,入场成交的认知 bar 不
+④ EXIT 市价;⑤ 保护止损(交易所原生 TPSL `pos_loss` @ 当前 invalid)只保护
+  不主出,invalid 变动撤旧换新;⑥ pm(§8)按 12h 收盘裁决,入场成交的认知 bar 不
   裁决(canonical 同口径:opened_ts > bar 标签才跳过)。
 
 用法:
@@ -65,8 +65,7 @@ from market_operator.heartbeat import (                          # noqa: E402
     SCHEMA as HB_SCHEMA, HeartbeatGuard, iso_utc)
 from market_operator.hypothesis import StructureView            # noqa: E402
 from market_operator.position import (                          # noqa: E402
-    Position, PositionManager, fmt_px, lock_is_protective, opp_lock_live_px,
-    opp_lock_px, tighten_lock)
+    Position, PositionManager, opp_lock_step)
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
 from market_operator.routing import RouterParams, MarketRouter      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
@@ -130,16 +129,23 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
             "new_position_manager: 需要 use_balance_detector=true"
             "(v21 之外没有可用的生产持仓语义)")
     arm_cfg = raw.get("arm_config") or {}
+    # 锁利 frac 不设兜底默认值:它已被标定过(2026-10-24 −0.50 → −0.25),任何写死的
+    # 默认值都会在下次标定后悄悄让实盘与回放分叉 —— 这正是 v21.6 的老问题。缺键
+    # 直接报错,让"没配"和"配了这个值"可区分。
+    if "reject_opp_lock_frac" not in arm_cfg:
+        raise ValueError(
+            "new_position_manager: 缺 arm_config.reject_opp_lock_frac。"
+            "锁利预算没有安全默认值,请显式写入配置(生产值见 config/strategy.json)。")
     return PositionManager(
         params,
         allow_add=False,
         breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
         time_stop=False,
-        reject_opp_lock_frac=float(arm_cfg.get("reject_opp_lock_frac", -0.50)),
-        # 锁利行情锚定:锁利价与决策时现价的距离上限(以 R 为单位)。修
-        # "锁利只在收盘裁决 ⇒ 计划锁利价已被行情走过、不回踩就等于没锁"。
-        # 0 = 关闭,保持纯计划口径(历史 parity)。
-        opp_lock_max_giveback_r=float(arm_cfg.get("opp_lock_max_giveback_r", 0.0)),
+        reject_opp_lock_frac=float(arm_cfg["reject_opp_lock_frac"]),
+        # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
+        # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。
+        # v21.7 起回放与实盘共用 position.opp_lock_step,不再有"实盘专用"
+        # 的 R 单位缓冲(旧的 opp_lock_max_giveback_r 已删除)。
     )
 
 
@@ -490,6 +496,16 @@ class LiveRunner:
     def close_trade_side(self) -> Optional[str]:
         """平仓 tradeSide(hedge_mode 必填 'close';one-way 省略)。"""
         return "close" if self.hedge_mode else None
+
+    def stop_hold_side(self, position_direction: int) -> str:
+        """原生 TPSL 的 holdSide:hedge_mode 用持仓方向(long/short),
+        one-way 用买卖方向(buy 表多仓 / sell 表空仓,同 ccxt 口径)。
+
+        传错会 400172 被拒 ⇒ 该仓位无交易所侧止损(只剩本地轮询看护)。
+        """
+        if self.hedge_mode:
+            return "long" if int(position_direction) > 0 else "short"
+        return "buy" if int(position_direction) > 0 else "sell"
 
     def fit_price(self, sym: str, price: float, direction: int) -> float:
         """按合约价格精度拟合:交易所逐字段校验 scale,超限即 40808 拒单
@@ -1441,6 +1457,47 @@ class LiveRunner:
                                                  bar[0] + base_ms - obs_ms))
                 self._close_cognition(cs, cog_bar)
 
+    def _sub_bar_close_out(self, cs: CampaignState, pos_pm,
+                           pos_dict: dict, ts: int, ref_px: float, *,
+                           why: str, route: str) -> None:
+        """子周期触价离场的统一出口(paper 记账 / live 对账)。
+
+        固定止损与"锁利回吐预算耗尽"是同一个动作的两条触发路径 —— 都必须在
+        子周期立刻离场,且都必须先把本地止损记账撤掉(否则下一拍 `_manage_stops`
+        会把已平的仓位重新挂单,形成幽灵保护单)。
+        """
+        sym = cs.symbol
+        if self.mode == "paper":
+            self._cancel_entry(sym, why)
+            self._cancel_stop(sym, why)
+            for oid, it in list(self.open_intents.items()):
+                if it["symbol"] == sym and it["status"] == "armed":
+                    it["status"] = "canceled"
+            cs.pm.positions.pop(sym, None)
+            stop_oid = client_oid_of(
+                self.OID_PREFIX, sym, str(pos_dict.get("event_id", "STOP")),
+                "stop", ts, role="exit")[:36]
+            stop_it = {
+                "oid": stop_oid,
+                "symbol": sym,
+                "role": "exit",
+                "kind": "market",
+                "direction": -int(pos_dict["direction"]),
+                "qty": float(pos_dict["qty"]),
+                "route": route,
+                "status": "armed",
+            }
+            self._paper_close_fill(sym, stop_it, float(ref_px), ts)
+        elif self._gap_replay:
+            # 补放缺口 bar:本进程当时不在场,计划单可能未触发/未挂出。
+            # 先记账(不在此处平仓,避免与补放中的后续 bar 逻辑交错),
+            # 补放结束后由 _gap_settle 按 stop_policy 一次性结算。
+            self._gap_stop_hit[sym] = {"ts": ts, "stop": float(ref_px),
+                                       "bar_close": float(ref_px)}
+        else:
+            # live:交易所已有计划单,触价即刻触发对账以消除状态延迟
+            self._reconcile()
+
     def _on_sub_bar(self, cs: CampaignState, bar) -> None:
         """持仓期间子周期(2H)触价同步与结算:
         1. 固定 STOP(pos_pm.invalid):与回测 broker.execute_protective_stop 同口径,
@@ -1448,10 +1505,12 @@ class LiveRunner:
            - paper 模式立即按止损价(或缺口开盘价)平仓结算并清理 pm/positions;
            - live 模式立即触发一次 _reconcile() 同步交易所保护单成交状态。
         2. 固定 TP1(pos_pm.target_1):
-           - 更新 pos_pm._best 实时 MFE;
-           - 当启用对侧锁利(reject_opp_lock_frac != 0)且子周期突破/触及 target_1 时,
-             立即推进 invalid 并同步至 self.positions(下一拍 _manage_stops 即刻更新
-             交易所止损单),无需等待 12h/1d 高周期收盘。
+           - 更新 pos_pm._best 实时 MFE(即锁利的峰值锚);
+           - 当启用对侧锁利(reject_opp_lock_frac != 0)时,用与回放 on_bar 同一个
+             裁决函数 `position.opp_lock_step` 推演:未 arming 保持结构防线 /
+             保护侧推进(可多次棘轮)/ 回吐超预算则立刻市价离场。子周期只是
+             **更早看到同一事实**,不是另一套语义 —— 2h 与 12h 采样得到同一
+             防线水平(`idempotent`,不随裁决频率漂移)。
         """
         sym = cs.symbol
         pos_pm = cs.pm.positions.get(sym)
@@ -1472,140 +1531,84 @@ class LiveRunner:
         breached = (l <= stop) if pos_pm.direction > 0 else (h >= stop)
         if breached:
             ref_px = min(o, stop) if pos_pm.direction > 0 else max(o, stop)
-            if self.mode == "paper":
-                self._cancel_entry(sym, "sub_bar_protective_stop")
-                self._cancel_stop(sym, "sub_bar_protective_stop")
-                for oid, it in list(self.open_intents.items()):
-                    if it["symbol"] == sym and it["status"] == "armed":
-                        it["status"] = "canceled"
-                cs.pm.positions.pop(sym, None)
-                stop_oid = client_oid_of(
-                    self.OID_PREFIX, sym, str(pos_dict.get("event_id", "STOP")),
-                    "stop", ts, role="exit")[:36]
-                stop_it = {
-                    "oid": stop_oid,
-                    "symbol": sym,
-                    "role": "exit",
-                    "kind": "market",
-                    "direction": -int(pos_dict["direction"]),
-                    "qty": float(pos_dict["qty"]),
-                    "route": f"STOP|sub_bar trigger={stop:.8g}",
-                    "status": "armed",
-                }
-                self._paper_close_fill(sym, stop_it, float(ref_px), ts)
-            else:
-                if self._gap_replay:
-                    # 补放缺口 bar:本进程当时不在场,计划单可能未触发/未挂出。
-                    # 先记账(不在此处平仓,避免与补放中的后续 bar 逻辑交错),
-                    # 补放结束后由 _gap_settle 按 stop_policy 一次性结算。
-                    self._gap_stop_hit[sym] = {"ts": ts, "stop": stop,
-                                               "bar_close": c}
-                else:
-                    # live 模式:交易所已有 loss_plan 计划单,触价即刻触发对账以消除状态延迟
-                    self._reconcile()
+            self._sub_bar_close_out(
+                cs, pos_pm, pos_dict, ts, ref_px,
+                why="sub_bar_protective_stop",
+                route=f"STOP|sub_bar trigger={stop:.8g}")
             return
 
-        # ② 固定 TP1(target_1)盘中触价/突破同步
-        if pos_pm.target_1 is not None and not pos_pm.reduced and not pos_pm.pending_reduce:
+        # ② 固定 TP1(target_1)盘中触价 ⇒ 对侧锁利 / 传统减仓
+        #    唯一裁决入口 `position.opp_lock_step`(与回放 `PositionManager.on_bar`
+        #    同一函数)。子周期只负责"更早看到同一事实",不引入第二套语义:
+        #      未 arming ⇒ 保持结构防线;保护侧 ⇒ 推进(可多次棘轮);
+        #      回吐超预算 ⇒ 立刻市价离场。三态穷尽,没有"拒单原地等"的裸奔态。
+        if pos_pm.target_1 is not None and not pos_pm.pending_reduce:
             target = float(pos_pm.target_1)
-            lock_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
+            frac_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
             old_inv = float(pos_pm.invalid)
-            # 落位闸门的参考价:取本地收盘 c 与已知 mark 中**更保守**的一侧
-            # (空头取较高价、多头取较低价),避免换单瞬间现价已越过锁利价。
+            # 换单参考价:本地收盘 c 与已知 mark 中**更保守**的一侧(空头取较高价、
+            # 多头取较低价),避免换单瞬间现价已越过止损/锁利价。
             ref_px = c
             _mark = float(pos_dict.get("mark") or 0.0)
             if _mark > 0.0:
                 ref_px = max(c, _mark) if pos_pm.direction < 0 else min(c, _mark)
-            if lock_cfg < 0.0:
-                broke = (c < target) if pos_pm.direction < 0 else (c > target)
-                if broke:
-                    frac = abs(lock_cfg)
-                    plan_px = opp_lock_px(pos_pm.entry, target, frac)
-                    live_px = opp_lock_live_px(
-                        pos_pm.direction, ref_px,
-                        float(getattr(cs.pm, "opp_lock_max_giveback_r", 0.0) or 0.0),
-                        float(getattr(pos_pm, "initial_risk", 0.0) or 0.0))
-                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px,
-                                           ref_px, pos_pm.entry)
-                    if not lock_is_protective(pos_pm.direction, lock_px, ref_px):
-                        # 推进价已落到现价盈利侧/身后 ⇒ 不推进(保留原结构止损);
-                        # 否则交易所会把这张"止损"当止盈单立即触发,仓位失保。
-                        pos_pm.log.append(
-                            f"v21|sub_bar_opp_break_lock_reject|子周期收盘突破对侧缘 "
-                            f"target={target:.8g} 锁利({frac:.0%}) 算得 "
-                            f"{(lock_px if lock_px is not None else float('nan')):.8g} "
-                            f"不在现价 {ref_px:.8g} 保护侧 ⇒ 保持原防线 "
-                            f"invalid={old_inv:.8g}")
-                        self._journal("lock_reject",
-                                      {"symbol": sym, "why": "wrong_side",
-                                       "target": target, "lock_px": lock_px,
-                                       "ref_px": ref_px, "invalid": old_inv,
-                                       "direction": int(pos_pm.direction)})
-                        self._alert_throttled(
-                            f"lock:{sym}",
-                            f"{sym} 锁利推进被闸门拦下:算得 {lock_px} 不在现价 "
-                            f"{ref_px} 保护侧(空头须高于现价/多头须低于现价)"
-                            f",保留原止损 {old_inv}")
-                    else:
-                        pos_pm.reduced = True
-                        pos_pm.invalid = (min(pos_pm.invalid, lock_px)
-                                          if pos_pm.direction < 0
-                                          else max(pos_pm.invalid, lock_px))
-                        pos_pm.log.append(
-                            f"v21|sub_bar_opp_break_lock|子周期收盘突破对侧缘 "
-                            f"target={target:.8g} 锁利({frac:.0%}) "
-                            f"计划={fmt_px(plan_px)} 行情={fmt_px(live_px)} "
-                            f"ref={ref_px:.8g} "
-                            f"invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
-            elif lock_cfg > 0.0:
+            if frac_cfg == 0.0:
+                # 传统 §8.2 target_1 触及减仓 50%(仅一次;仅未启用锁利时)
                 hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
-                if hit:
-                    broke_through = (c < target) if pos_pm.direction < 0 else (c > target)
-                    frac = lock_cfg if broke_through else min(0.10, lock_cfg)
-                    plan_px = opp_lock_px(pos_pm.entry, target, frac)
-                    live_px = opp_lock_live_px(
-                        pos_pm.direction, ref_px,
-                        float(getattr(cs.pm, "opp_lock_max_giveback_r", 0.0) or 0.0),
-                        float(getattr(pos_pm, "initial_risk", 0.0) or 0.0))
-                    lock_px = tighten_lock(pos_pm.direction, plan_px, live_px,
-                                           ref_px, pos_pm.entry)
-                    if not lock_is_protective(pos_pm.direction, lock_px, ref_px):
-                        # 仅影线触及分支:极值刺到目标后收盘已反抽回建仓价附近,
-                        # 推 10% 保本垫只会把止损变成贴着建仓价的止盈单 ⇒ 拦下。
-                        pos_pm.log.append(
-                            f"v21|sub_bar_opp_lock_reject|子周期触及对侧缘 "
-                            f"target={target:.8g} 锁利({frac:.0%}) 算得 "
-                            f"{(lock_px if lock_px is not None else float('nan')):.8g} "
-                            f"不在现价 {ref_px:.8g} 保护侧 ⇒ 保持原防线 "
-                            f"invalid={old_inv:.8g}")
-                        self._journal("lock_reject",
-                                      {"symbol": sym, "why": "wrong_side_wick",
-                                       "target": target, "lock_px": lock_px,
-                                       "ref_px": ref_px, "invalid": old_inv,
-                                       "direction": int(pos_pm.direction)})
-                        self._alert_throttled(
-                            f"lock:{sym}",
-                            f"{sym} 锁利推进被闸门拦下:算得 {lock_px} 不在现价 "
-                            f"{ref_px} 保护侧(空头须高于现价/多头须低于现价)"
-                            f",保留原止损 {old_inv}")
-                    else:
-                        pos_pm.reduced = True
-                        pos_pm.invalid = (min(pos_pm.invalid, lock_px)
-                                          if pos_pm.direction < 0
-                                          else max(pos_pm.invalid, lock_px))
-                        pos_pm.log.append(
-                            f"v21|sub_bar_opp_lock|子周期触及对侧缘 target={target:.8g} "
-                            f"锁利({frac:.0%}) 计划={fmt_px(plan_px)} "
-                            f"行情={fmt_px(live_px)} ref={ref_px:.8g} "
-                            f"invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
-            else:
-                # 传统 §8.2 target_1 触及减仓 50%
-                hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
-                if hit:
+                if hit and not pos_pm.reduced:
                     extreme = l if pos_pm.direction < 0 else h
-                    intent = cs.pm._reduce(pos_pm, ts, c, extreme)
-                    self._exec_mgmt(cs, intent, bar)
-
+                    self._exec_mgmt(cs, cs.pm._reduce(pos_pm, ts, c, extreme), bar)
+            else:
+                ld = opp_lock_step(
+                    direction=pos_pm.direction, entry=pos_pm.entry, target=target,
+                    frac=frac_cfg, peak=pos_pm._best, high=h, low=l, close=c,
+                    ref_px=ref_px, armed=pos_pm.armed)
+                if ld.action == "off":
+                    if not pos_pm.lock_off_logged:
+                        pos_pm.lock_off_logged = True
+                        pos_pm.log.append(
+                            f"v21|sub_bar_opp_lock_off|{ld.reason}|"
+                            f"entry={pos_pm.entry:.8g} target={target:.8g} "
+                            f"frac={frac_cfg:+.2f} ⇒ 不锁利、不减仓,"
+                            f"保持结构防线 invalid={old_inv:.8g}")
+                elif ld.action == "exit":
+                    # 回吐预算已耗尽:此时再挂止损就是挂一张"永不触发"的单,
+                    # 直接市价离场 —— 把"锁利"兑现成事实,而不是承诺。
+                    pos_pm.log.append(
+                        f"v21|sub_bar_lock_giveback_exhausted|"
+                        f"峰值={pos_pm._best:.8g} 回吐={ld.drawdown:.8g} "
+                        f"≥ 预算={ld.budget:.8g} ref={ref_px:.8g} ⇒ 市价离场")
+                    self._journal("lock_exhausted",
+                                  {"symbol": sym, "peak": pos_pm._best,
+                                   "giveback": ld.drawdown, "budget": ld.budget,
+                                   "ref_px": ref_px, "invalid": old_inv,
+                                   "direction": int(pos_pm.direction)})
+                    self._sub_bar_close_out(
+                        cs, pos_pm, pos_dict, ts, ref_px,
+                        why="sub_bar_lock_exhausted",
+                        route=(f"LOCK_EXIT|giveback={ld.drawdown:.8g} "
+                               f"budget={ld.budget:.8g} ref={ref_px:.8g}"))
+                    return
+                else:
+                    if ld.armed and not pos_pm.armed:
+                        pos_pm.armed = True
+                        pos_pm.log.append(
+                            f"v21|sub_bar_opp_lock_armed|"
+                            f"{'收盘突破' if frac_cfg < 0 else '触及'}对侧缘 "
+                            f"target={target:.8g} "
+                            f"预算={(1.0 - abs(frac_cfg)):.0%}·span "
+                            f"⇒ 此后按峰值棘轮(可多次)")
+                    if ld.action == "tighten":
+                        stop_px = float(ld.stop_px)
+                        pos_pm.invalid = (min(pos_pm.invalid, stop_px)
+                                          if pos_pm.direction < 0
+                                          else max(pos_pm.invalid, stop_px))
+                        if abs(pos_pm.invalid - old_inv) > 1e-12:
+                            pos_pm.log.append(
+                                f"v21|sub_bar_opp_lock|峰值={pos_pm._best:.8g} "
+                                f"预算={ld.budget:.8g} 回吐={ld.drawdown:.8g} "
+                                f"ref={ref_px:.8g} "
+                                f"invalid {old_inv:.8g}->{pos_pm.invalid:.8g}")
             if abs(float(pos_pm.invalid) - old_inv) > 1e-12:
                 pos_dict["invalid"] = float(pos_pm.invalid)
                 self._touch_campaigns()      # 防线推进:冷档必须留住
@@ -2080,9 +2083,9 @@ class LiveRunner:
                 self._live_close_filled(it, ref_price=price)
 
     def _pending_stop_ids(self, now_ms: int) -> Optional[set]:
-        """交易所在挂计划单 orderId 集合(TTL 缓存;取不到返回 None ≡ 不判定)。
+        """交易所在挂 TPSL orderId 集合(TTL 缓存;取不到返回 None ≡ 不判定)。
 
-        用途:本地 `stops` 只证明"我们挂过",不证明"现在还挂着"。计划单被交易所
+        用途:本地 `stops` 只证明"我们挂过",不证明"现在还挂着"。TPSL 被交易所
         撤掉/触发/风控清理后本地无从得知,表现就是**永久无保护**(2026-10-22
         掉线期间正是这种盲区)。取不到就返回上次结果,避免把"接口抖动"当成
         "保护丢了"而反复撤单重挂。
@@ -2093,7 +2096,7 @@ class LiveRunner:
                 and now_ms - self._stops_checked_at < ttl_ms:
             return self._stops_live_ids
         try:
-            raw = self.client.plan_orders_pending()
+            raw = self.client.tpsl_orders_pending()
         except BitgetError as e:
             self._api_note(e)
             self._stops_checked_at = now_ms
@@ -2106,12 +2109,12 @@ class LiveRunner:
         return ids
 
     def _dedupe_stops(self, now_ms: int) -> None:
-        """每个持仓只留一张保护计划单:清理重复/遗留挂单。
+        """每个持仓只留一张保护单:清理重复/遗留 TPSL。
 
         为什么需要:掉线补做、本地记录丢失后重挂、旧进程残留,都可能在同一
-        symbol 上留下多张同向 close 计划单。它们各自按整仓 size 触发,第一张
-        成交后其余成为无仓可平的废单;而 `stops` 只记得其中一张 ⇒ 对账看不见
-        另一张,撤旧换新时也会漏撤(2026-10-22 掉线事件里的隐性风险)。
+        symbol 上留下多张 close 单(旧式计划单与原生 TPSL 混挂也一样)。它们
+        各自按触发价成交,第一张成交后其余成为无仓可平的废单;而 `stops` 只
+        记得其中一张 ⇒ 对账看不见另一张,撤旧换新时也会漏撤。
         只处理自有 clientOid 前缀的挂单,异己单一律不碰。
         """
         rows = self._stops_live_rows
@@ -2132,7 +2135,7 @@ class LiveRunner:
                 if oid == keep:
                     continue
                 try:
-                    self.client.cancel_plan_order(sym, oid)
+                    self.client.cancel_tpsl_order(sym, oid)
                 except BitgetError:
                     continue
                 self.counters["stop_dupes"] = \
@@ -2147,18 +2150,22 @@ class LiveRunner:
                 self._stops_checked_at = 0.0
 
     def _manage_stops(self, now_ms: int) -> None:
-        """保护止损计划单(loss_plan @ 当前 invalid;invalid/数量变动撤旧换新)。
+        """保护止损单(交易所原生 TPSL `pos_loss` @ 当前 invalid)。
 
         只保护不主出:结构出场一律经 §8/canonical 路径。另外每轮(带 TTL)核对
-        计划单是否仍在交易所;本地有记录而交易所没有 = 保护失效,必须重挂,
+        TPSL 是否仍在交易所;本地有记录而交易所没有 = 保护失效,必须重挂,
         若价格已越过防线则直接市价离场(挂单只会立刻以更差价成交)。
+
+        `pos_loss` 是**仓位级**:交易所按触发时的整仓数量市价平仓,报文不带
+        size。因此"数量变了"不构成换单理由 —— 部分减仓后旧 TPSL 自动覆盖剩余
+        仓位,若按数量撤旧换新,每轮减仓都会多开一个失保窗口(撤成功、挂失败)。
         """
         live_ids = self._pending_stop_ids(now_ms) if self.mode == "live" else None
         for sym, pos in list(self.positions.items()):
             want = self.fit_price(sym, float(pos["invalid"]), pos["direction"])
             cur = self.stops.get(sym)
-            # 数量必须按合约精度取整:精度不符会被交易所直接拒单
-            # (实测 40808 size checkScale),导致保护永远挂不上
+            # 本地退出量仍按合约精度取整:精度不符会被交易所直接拒单
+            # (实测 40808 size checkScale);TPSL 报文本身不带 size。
             spec = self._spec(sym)
             stop_qty = floor_step(float(pos["qty"]), spec.size_step,
                                   spec.size_place)
@@ -2182,12 +2189,11 @@ class LiveRunner:
                         f"STOP_MISSING_BREACHED|{want:.8g}", int(now_ms),
                         role="exit", force=True)
                     self.tg.send_alert(
-                        f"{sym} 保护止损单已不在交易所(被撤/被触发/被清理)"
+                        f"{sym} 交易所止损单已不在挂(被撤/被触发/被清理)"
                         f",且现价 {mark:.8g} 已越过防线 {want:.8g} → 市价离场")
                     continue
                 cur = None      # 无保护单:落到下面重挂
-            if cur is not None and abs(cur["trigger"] - want) < 1e-12 \
-                    and abs(cur["qty"] - stop_qty) < 1e-12:
+            if cur is not None and abs(float(cur["trigger"]) - want) < 1e-12:
                 continue
             try:
                 if cur is not None and cur.get("order_id"):
@@ -2196,29 +2202,31 @@ class LiveRunner:
                     # 外层 except ⇒ 不挂新单,而下一轮会因同一原因再失败 ——
                     # 仓位在无人察觉的情况下持续失保。
                     try:
-                        self.client.cancel_plan_order(sym, cur["order_id"])
+                        self.client.cancel_tpsl_order(sym, cur["order_id"])
                     except BitgetError as e:
                         self._journal("stop_cancel_skip",
                                       {"symbol": sym,
                                        "order_id": cur["order_id"],
                                        "why": str(e)[:160]})
-                resp = self.client.place_stop_market_plan(
-                    sym, trigger_price=want, size=stop_qty,
-                    plan_type="loss_plan",
-                    hold_side="long" if pos["direction"] > 0 else "short",
-                    side=self.close_side_of(pos["direction"]),
-                    trade_side=self.close_trade_side(),
+                resp = self.client.place_stop_loss(
+                    sym, trigger_price=want,
+                    hold_side=self.stop_hold_side(pos["direction"]),
                     client_oid=client_oid_of(
                         self.OID_PREFIX, sym, str(pos["event_id"]),
                         "stop", int(now_ms), role="stop"))
+                oid = str((resp or {}).get("orderId") or "")
+                if not oid:
+                    # 无单号的"成功"等于没挂:必须当失败处理,否则本地记录
+                    # 声称有保护、实际裸奔到下轮才发现。
+                    raise BitgetError("place-tpsl-order 未返回 orderId")
                 self.stops[sym] = {"trigger": want, "qty": stop_qty,
-                                   "order_id": str(resp.get("orderId") or "")}
+                                   "order_id": oid}
                 # 刚换过单:缓存里的在挂集合已过期,置空强制下轮重读,
                 # 否则新 order_id 不在旧快照里会被判"保护丢失"→ 反复撤挂。
                 self._stops_live_ids, self._stops_live_rows = None, None
                 self._stops_checked_at = 0.0
                 self._journal("stop", {"symbol": sym, "trigger": want,
-                                       "qty": stop_qty})
+                                       "qty": stop_qty, "order_id": oid})
             except BitgetError as e:
                 self.counters["stop_errors"] = \
                     self.counters.get("stop_errors", 0) + 1
@@ -2227,7 +2235,7 @@ class LiveRunner:
                                              "why": str(e)[:160]})
                 self._alert_throttled(
                     f"stop:{sym}",
-                    f"{sym} 保护止损计划失败:{str(e)[:120]}"
+                    f"{sym} 保护止损挂单失败:{str(e)[:120]}"
                     f"(当前无触发保护,人工介入;同类告警 30 分钟内不重复)")
         if live_ids is not None:
             # 快照有效才去重(刚换过单时快照已作废,留待下轮 TTL 重读)
@@ -2239,7 +2247,7 @@ class LiveRunner:
             self._stops_live_ids, self._stops_live_rows = None, None
             self._stops_checked_at = 0.0
             try:
-                self.client.cancel_plan_order(sym, cur["order_id"])
+                self.client.cancel_tpsl_order(sym, cur["order_id"])
             except BitgetError:
                 pass
 

@@ -443,3 +443,118 @@ def test_runner_heartbeat_default_is_root_anchored(monkeypatch):
     runner = _quiet_runner(monkeypatch)
     assert runner.heartbeat_path == ROOT / "runtime" / "live" / "heartbeat.json"
 
+
+# ---------------------------------------------------------------------------
+# 心跳补挂:只保护不主出 —— 原生仓位级 TPSL(无 size)
+# ---------------------------------------------------------------------------
+class _HbClient:
+    """只实现保护面用到的读/写接口;记录真实发出的 TPSL 报文。"""
+
+    def __init__(self, positions, pending, order_id="HB1"):
+        self._positions = list(positions)
+        self._pending = list(pending)
+        self._order_id = order_id
+        self.placed: list[dict] = []
+
+    def positions(self):
+        return list(self._positions)
+
+    def tpsl_orders_pending(self):
+        return list(self._pending)
+
+    def place_stop_loss(self, symbol, **kw):
+        self.placed.append({"symbol": symbol, **kw})
+        if self._order_id is None:
+            return {}
+        return {"orderId": self._order_id}
+
+
+class _HbRunner:
+    """`ensure_protection` 需要的最小 runner 面(不触 state/网络)。"""
+
+    mode = "live"
+    OID_PREFIX = "mo21"
+
+    def __init__(self, pending=None):
+        self.positions = {"BTCUSDT": {"symbol": "BTCUSDT", "direction": 1,
+                                      "qty": 1.0, "invalid": 95.0,
+                                      "event_id": "E1"}}
+        self.stops: dict = {}
+        self.journal: list[tuple] = []
+        self.guard_cache = {"_stops_live_ids": {"OLD"},
+                            "_stops_live_rows": [{"orderId": "OLD"}],
+                            "_stops_checked_at": 123.0}
+
+    def fit_price(self, sym, price, direction):
+        return float(price)
+
+    def stop_hold_side(self, direction):
+        return "long" if int(direction) > 0 else "short"
+
+    def _journal(self, kind, rec):
+        self.journal.append((kind, rec))
+
+
+class _HbNotifier:
+    def __init__(self):
+        self.alerts: list[str] = []
+
+    def send_alert(self, msg, **_kw):
+        self.alerts.append(str(msg))
+        return True
+
+
+def _guard(runner, client):
+    for attr, val in runner.guard_cache.items():
+        setattr(runner, attr, val)
+    return hb.HeartbeatGuard(runner, path=ROOT / "tests" / "fixtures" / "_hb.json",
+                             client_factory=lambda: client,
+                             notifier=_HbNotifier())
+
+
+def test_heartbeat_replaces_missing_stop_with_native_tpsl():
+    """缺失 ⇒ 补挂 pos_loss:不带 size/side/tradeSide,带 holdSide,并作废在挂快照。"""
+    client = _HbClient([{"symbol": "BTCUSDT", "direction": 1, "qty": 1.0,
+                         "entry_price": 100.0, "mark_price": 101.0}],
+                       pending=[])
+    runner = _HbRunner()
+    out = _guard(runner, client).ensure_protection()
+
+    assert out == {"checked": 1, "placed": 1, "missing": 0, "errors": 0}
+    call = client.placed[0]
+    assert call["trigger_price"] == 95.0
+    assert call["hold_side"] == "long"
+    assert "size" not in call and "side" not in call \
+        and "trade_side" not in call
+    assert runner.stops["BTCUSDT"]["order_id"] == "HB1"
+    # 新单不在主循环的旧快照里 ⇒ 必须作废,否则会被判"保护丢失"再撤再挂
+    assert runner._stops_live_ids is None and runner._stops_live_rows is None
+    assert runner._stops_checked_at == 0.0
+
+
+def test_heartbeat_keeps_existing_owned_stop():
+    """自家止损仍在挂 ⇒ 不重复补挂(异己单不算自家)。"""
+    client = _HbClient([{"symbol": "BTCUSDT", "direction": 1, "qty": 1.0}],
+                       pending=[{"orderId": "MINE", "symbol": "BTCUSDT",
+                                 "clientOid": "mo21abc"},
+                                {"orderId": "OTHER", "symbol": "BTCUSDT",
+                                 "clientOid": "zz9"}])
+    runner = _HbRunner()
+    runner.stops["BTCUSDT"] = {"trigger": 95.0, "qty": 1.0, "order_id": "MINE"}
+
+    out = _guard(runner, client).ensure_protection()
+
+    assert client.placed == [] and out["placed"] == 0
+
+
+def test_heartbeat_counts_placeless_response_as_error():
+    """接口"成功"却无 orderId ⇒ 记 errors,且不得写入本地止损记录。"""
+    client = _HbClient([{"symbol": "BTCUSDT", "direction": 1, "qty": 1.0}],
+                       pending=[], order_id=None)
+    runner = _HbRunner()
+
+    out = _guard(runner, client).ensure_protection()
+
+    assert out["errors"] == 1 and out["placed"] == 0
+    assert runner.stops == {}
+

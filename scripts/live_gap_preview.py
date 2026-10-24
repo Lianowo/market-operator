@@ -34,8 +34,8 @@ class BlockedClient:
     """读走真接口;写全部拦截并记账(返回假 orderId 让流程走完)。"""
 
     WRITES = ("place_market_order", "place_limit_order",
-              "place_stop_market_plan", "cancel_order", "cancel_plan_order",
-              "set_leverage")
+              "place_tpsl", "place_stop_loss", "place_take_profit",
+              "cancel_order", "cancel_tpsl_order", "set_leverage")
 
     def __init__(self, real):
         self._real = real

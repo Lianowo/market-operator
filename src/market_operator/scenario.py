@@ -165,11 +165,13 @@ class ScenarioSettings:
 def arm_config_from(raw: Mapping[str, Any], path: Path = PRODUCTION_CONFIG) -> ArmConfig:
     """``arm_config`` → ``ArmConfig``,忽略仅供实盘使用的键。
 
-    ``config/strategy.json`` 被回放与实盘**共用**,里面带若干只被
-    ``scripts/live_runner.py`` 读取的键(如 ``opp_lock_max_giveback_r``:
-    子周期早锁的行情锚定上限,回放链没有子周期裁决)。若不认识的键直接塞进
+    ``config/strategy.json`` 被回放与实盘**共用**,里面可能带只被
+    ``scripts/live_runner.py`` 读取的键(联调期常见)。若不认识的键直接塞进
     ``ArmConfig(**...)``,整份生产配置会加载失败 —— 宁可显式列出未知键并忽略,
     也不能让配置与链路互锁。未知键在此打印一次,便于发现拼写错误。
+
+    注:v21.7 起锁利只有 ``reject_opp_lock_frac`` 一个参数(回放与实盘
+    共用 ``position.opp_lock_step``),不再有"只给实盘看"的锁利键。
     """
     known = {f.name for f in fields(ArmConfig)}
     arm = dict(raw.get("arm_config", {}))

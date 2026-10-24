@@ -385,18 +385,21 @@ class _FakeClient:
     def positions(self):
         return list(self._positions)
 
-    def plan_orders_pending(self):
+    def tpsl_orders_pending(self):
         return self._pending
 
     def place_market_order(self, symbol, **kw):
         self.market_orders.append({"symbol": symbol, **kw})
         return {"orderId": f"M{len(self.market_orders)}"}
 
-    def place_stop_market_plan(self, symbol, **kw):
+    def place_stop_loss(self, symbol, **kw):
         self.plan_placed.append({"symbol": symbol, **kw})
         return {"orderId": f"P{len(self.plan_placed)}"}
 
-    def cancel_plan_order(self, symbol, order_id):
+    def place_take_profit(self, symbol, **kw):
+        return self.place_stop_loss(symbol, **kw)
+
+    def cancel_tpsl_order(self, symbol, order_id):
         self.plan_canceled.append((symbol, str(order_id)))
         return {}
 
@@ -501,7 +504,7 @@ def test_manage_stops_replaces_stop_missing_on_exchange(tmp_path):
 
 
 def test_manage_stops_keeps_stop_when_still_pending(tmp_path):
-    """交易所在挂且触发价/数量一致 ⇒ 不撤不挂(避免每轮撤挂抖动)。"""
+    """交易所在挂且触发价一致 ⇒ 不撤不挂(避免每轮撤挂抖动)。"""
     client = _FakeClient(pending={"entrustedList": [{"orderId": "S1"}]})
     r = _runner(tmp_path, client, _FakeTG())
     r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=101.0)
@@ -565,6 +568,60 @@ def test_manage_stops_dedupe_skips_symbols_without_position(tmp_path):
     assert client.plan_canceled == []
 
 
+def test_manage_stops_keeps_stop_after_partial_close(tmp_path):
+    """部分减仓不改 TPSL:pos_loss 是仓位级,交易所按触发时的整仓平,报文无 size。
+
+    修前:数量变动即撤旧换新 ⇒ 每次减仓都开一个"撤成功、挂失败"的失保窗口,
+    而新单在数量上其实毫无必要。
+    """
+    client = _FakeClient(pending={"entrustedList": [{"orderId": "S1"}]})
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=101.0, qty=0.4)
+    r.stops["BTCUSDT"] = {"trigger": 95.0, "qty": 1.0, "order_id": "S1"}
+
+    r._manage_stops(NOW)
+
+    assert client.plan_placed == [] and client.plan_canceled == []
+    assert r.stops["BTCUSDT"]["order_id"] == "S1"
+
+
+def test_manage_stops_places_position_level_tpsl_without_size(tmp_path):
+    """新挂保护单必须是仓位级 TPSL:不带 size/side/tradeSide,带 holdSide。"""
+    client = _FakeClient(pending={"entrustedList": []})
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=101.0)
+
+    r._manage_stops(NOW)
+
+    call = client.plan_placed[0]
+    assert call["trigger_price"] == 95.0
+    assert call["hold_side"] == "long"
+    assert "size" not in call and "side" not in call \
+        and "trade_side" not in call
+    assert r.stops["BTCUSDT"]["order_id"] == "P1"
+
+
+def test_manage_stops_treats_missing_order_id_as_failure(tmp_path):
+    """挂单接口"成功"却无 orderId = 实际没挂:必须记 stop_error,不能当已保护。
+
+    修前:`str(resp.get("orderId") or "")` 落成空串,`stops` 仍写入 ⇒ 下一轮
+    missing 判定前本地声称有保护,裸奔到 TTL 过期才被发现。
+    """
+    class _NoId(_FakeClient):
+        def place_stop_loss(self, symbol, **kw):
+            self.plan_placed.append({"symbol": symbol, **kw})
+            return {}
+
+    client = _NoId(pending={"entrustedList": []})
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=101.0)
+
+    r._manage_stops(NOW)
+
+    assert "BTCUSDT" not in r.stops
+    assert r.counters["stop_errors"] == 1
+
+
 def test_manage_stops_replace_survives_cancel_failure(tmp_path):
     """撤旧单失败(旧单已成交/不存在)不得阻断新单 —— 否则仓位长期失保。
 
@@ -576,7 +633,7 @@ def test_manage_stops_replace_survives_cancel_failure(tmp_path):
          "triggerPrice": "90"}]}
 
     class _NoCancel(_FakeClient):
-        def cancel_plan_order(self, symbol, order_id):
+        def cancel_tpsl_order(self, symbol, order_id):
             raise BitgetError("43001 order does not exist")
 
     client = _NoCancel(pending=pending)

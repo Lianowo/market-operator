@@ -14,8 +14,41 @@ from market_operator.routing import (
     RouterParams, MarketRouter,
 )
 from market_operator.structure import (
-    MarketStructure, Params, Regime, Zone, ZoneRole, ZoneState,
+    Params, Regime, Zone, ZoneRole, ZoneState,
 )
+
+
+def _prod_lock_frac() -> float:
+    """生产配置里的锁利 `frac`。
+
+    这些用例断言的是**语义**(峰值锚定、预算 = (1−|frac|)·span、可多次棘轮),
+    不是某个标定值 —— 标定会随数据更新(v21.7 从 −0.50 改到 −0.25),所以一律从
+    `config/strategy.json` 取值,免得"调个参数就要改一堆断言"。
+    """
+    payload = json.loads((Path(__file__).resolve().parents[1]
+                          / "config" / "strategy.json").read_text("utf-8"))
+    return float(payload["arm_config"]["reject_opp_lock_frac"])
+
+
+def _prod_giveback(entry: float, target: float) -> float:
+    """生产 `frac` 下允许回吐的行程(价格单位)= (1−|frac|)·|target−entry|。"""
+    return (1.0 - abs(_prod_lock_frac())) * abs(float(target) - float(entry))
+
+
+def _legacy_lock_px(entry: float, target: float, frac: float) -> float | None:
+    """**已退役**的绝对价位口径:entry→target 行程的 |frac| 处。
+
+    v21.7 前生产用这个式子算锁利价;它只看建仓时的行程,不看峰值,所以
+    决策时现价早已越过该价(钉在身后 = 永不触发)。函数已从 `position.py`
+    删除 —— 这里只作为**对照量**保留,说明新口径在 peak==target 时与之逐位
+    重合、且真正触发时回吐恰为预算。None 语义同旧实现(未启用 ⇒ None)。
+    """
+    span = float(target) - float(entry)
+    frac_abs = abs(float(frac))
+    if frac_abs <= 0.0 or abs(span) < 1e-12:
+        return None
+    return float(entry) + frac_abs * span
+
 
 
 def test_accept_reject_aliases_and_routing():
@@ -134,11 +167,13 @@ def test_v21_per_tf_capacity_and_dynamic_risk_tiers():
     assert intents1 == []
     assert pos.invalid == 105.0
     assert pos.reduced is False
-    # 2. 收盘 89.0 真正突破对侧 90.0 -> 不减仓,但止损直接锁利 50% 箱体跨度至 95.0
+    # 2. 收盘 89.0 真正突破对侧 90.0 ⇒ arming;峰值 88.5 / 预算 ½·10 = 5
+    #    ⇒ 防线 93.5(= peak + budget),不减仓(reduced 保持 False)
     intents2 = pm.on_bar("BTCUSDT", (3000, 92.0, 93.0, 88.5, 89.0, 1.0), 2.0)
     assert intents2 == []
-    assert pos.invalid == 95.0
-    assert pos.reduced is True
+    assert pos.invalid == 93.5
+    assert pos.armed is True
+    assert pos.reduced is False
 
 
 def test_dual_bot_telegram_and_bw_kline_chart():
@@ -316,97 +351,211 @@ def test_live_runner_v21_adaptive_warmup_for_new_listings(tmp_path):
     assert len([a for a in alerts if "NEW2USDT" in a]) == 1
 
 
-def test_opp_lock_plan_vs_market_definition():
-    """v21 锁利口径:计划口径(entry→target 行程) + 行情口径(现价 ∓giveback·R)。"""
+def test_opp_lock_budget_and_peak_definition():
+    """v21.7 锁利 = **回吐预算**(价格单位),不是钉在某个绝对价位。
+
+        budget = (1 − |frac|)·|target − entry| ; stop = peak ∓ budget
+
+    端点语义:``|frac|→0`` 不锁(预算 = 整段计划行程);``|frac|=1`` 全锁
+    (预算 = 0 ⇒ 触到目标即离场)。``frac`` 的符号只决定 arming 口径
+    (<0 收盘突破 / >0 盘中触及),不再是"两把尺子"里的另一把。
+    """
     from market_operator.position import (
-        fmt_px, lock_is_profitable, lock_is_protective, opp_lock_live_px,
-        opp_lock_px, stop_protect_dist, tighten_lock,
+        opp_lock_budget, opp_lock_peak_px, stop_protect_dist,
     )
 
-    # 计划口径与旧内联 `entry + frac*(target-entry)` 逐位等价
-    assert opp_lock_px(100.0, 90.0, 0.50) == 95.0
-    assert abs(opp_lock_px(324.02, 322.66, 0.50) - 323.34) < 1e-9
-    assert opp_lock_px(100.0, 100.0, 0.50) is None      # 行程退化
-    assert opp_lock_px(100.0, 90.0, 0.0) is None        # 关闭
+    assert abs(opp_lock_budget(100.0, 90.0, 0.5) - 5.0) < 1e-12
+    assert abs(opp_lock_budget(324.02, 322.66, 0.5) - 0.68) < 1e-12
+    assert opp_lock_budget(100.0, 90.0, 1.0) == 0.0        # 全锁 ⇒ 触价即平
+    assert opp_lock_budget(100.0, 90.0, 2.0) == 0.0        # 越界按全锁
+    assert opp_lock_budget(100.0, 90.0, 0.0) is None       # 未启用
+    assert opp_lock_budget(100.0, 100.0, 0.5) is None      # 行程退化
 
-    # 有向距离:> 0 才是保护侧(多=止损在现价下方 / 空=在上方)
-    assert stop_protect_dist(-1, 323.34, 321.33) > 0
-    assert stop_protect_dist(-1, 320.0, 321.33) < 0
-    assert stop_protect_dist(1, 99.0, 100.0) > 0
-    assert stop_protect_dist(1, 101.0, 100.0) < 0
-    assert lock_is_protective(-1, 323.34, 321.33) is True
-    assert lock_is_protective(-1, 320.0, 321.33) is False
-    assert lock_is_protective(-1, None, 321.33) is False
-    assert lock_is_profitable(-1, 99.0, 100.0) is True
-    assert lock_is_profitable(-1, 101.0, 100.0) is False
+    # 峰值恰等于 target 时,新口径与参考价 `entry + frac·span` 逐位重合:
+    # 说明 |frac| 仍是"锁住计划行程的多少",只是改由回吐预算来表达。
+    assert abs(opp_lock_peak_px(-1, 322.66, 0.68)
+               - _legacy_lock_px(324.02, 322.66, 0.5)) < 1e-12
+    assert abs(opp_lock_peak_px(1, 110.0, 5.0) - 105.0) < 1e-12
 
-    # 行情口径:锚在现价,只允许回吐 0.25R(GOOGLUSDT 实盘样本)
-    risk = 326.88 - 324.02
-    live = opp_lock_live_px(-1, 321.33, 0.25, risk)
-    assert abs(live - 322.045) < 1e-9
-    assert opp_lock_live_px(-1, 321.33, 0.0, risk) is None   # 关闭 ⇒ 纯计划口径
-
-    # 合并:可用候选里取更贴近现价者
-    assert abs(tighten_lock(-1, 323.34, live, 321.33, 324.02) - live) < 1e-9
-    # 只给计划口径(行情口径关闭)⇒ 计划口径,逐位旧行为
-    assert tighten_lock(-1, 323.34, None, 321.33, 324.02) == 323.34
-    # 计划口径非法(现价盈利侧),行情口径可用 ⇒ 用行情口径,不一起丢掉
-    # 多头 entry=100 / 现价 103 / 计划 99 在现价上方(非法);行情 103−0.5 = 102.5
-    assert abs(tighten_lock(1, 99.0, 102.5, 103.0, 100.0) - 102.5) < 1e-9
-    # 行情口径若落到 entry 亏损侧(97.7 < 100,只收紧亏损止损)不算锁利
-    assert tighten_lock(1, 99.0, 97.7, 99.2, 100.0) is None
-    # 两个都不可用 ⇒ None(调用方不推进)
-    assert tighten_lock(1, 101.0, None, 99.2, 100.0) is None
-    assert fmt_px(None) == "n/a"
+    # 恒等式:保护侧距离 ≡ 预算 − 自峰值回撤
+    # ⇒ "落在保护侧"与"回吐未超预算"同真同假,构造上不会算出非法价位。
+    peak, budget, ref = 320.93, 0.68, 321.33
+    stop = opp_lock_peak_px(-1, peak, budget)
+    assert abs(stop_protect_dist(-1, stop, ref)
+               - (budget - (ref - peak))) < 1e-12
 
 
-def test_opp_lock_gate_and_market_anchor_in_on_bar():
-    """§8.2 两条锁利分支:落位闸门拒绝错侧;行情锚定锁更多利润。"""
+def test_opp_lock_step_three_state():
+    """三态穷尽:未 arming 保持结构防线 / 保护侧推进(可多次)/ 越过即离场。"""
+    from market_operator.position import opp_lock_step
+
+    kw = dict(direction=1, entry=100.0, target=110.0, frac=-0.5)
+
+    # ① 未 arming(收盘 108 < 110)⇒ hold:不预设任何锁利价
+    d0 = opp_lock_step(peak=109.0, high=109.0, low=99.0, close=108.0, **kw)
+    assert (d0.action, d0.armed) == ("hold", False)
+    assert d0.budget == 5.0 and d0.stop_px is None
+
+    # ② 收盘突破 ⇒ arming + 推进到 peak−budget = 112−5 = 107
+    d1 = opp_lock_step(peak=112.0, high=112.0, low=107.0, close=111.0, **kw)
+    assert (d1.action, d1.armed) == ("tighten", True)
+    assert abs(d1.stop_px - 107.0) < 1e-12
+    assert abs(d1.drawdown - 1.0) < 1e-12
+
+    # ③ 新峰值 ⇒ **再次**棘轮(不是一次性置位):115−5 = 110
+    d2 = opp_lock_step(peak=115.0, high=115.0, low=110.0, close=114.5,
+                       armed=True, **kw)
+    assert (d2.action, d2.armed) == ("tighten", True)
+    assert abs(d2.stop_px - 110.0) < 1e-12
+
+    # ④ 回撤 ≥ 预算(115−109.5 = 5.5 ≥ 5)⇒ 市价离场;
+    #    不存在"闸门拒单后原地等下一根"的第四态。
+    d3 = opp_lock_step(peak=115.0, high=115.0, low=109.5, close=109.5,
+                       armed=True, **kw)
+    assert d3.action == "exit"
+    assert d3.drawdown >= d3.budget
+
+    # ⑤ 空头镜像 + 触及 arming(frac>0):峰值 320.93 − 预算 0.68 ⇒ 321.61
+    s = opp_lock_step(direction=-1, entry=324.02, target=322.66, frac=0.5,
+                      peak=320.93, high=324.22, low=320.93, close=321.33)
+    assert (s.action, s.armed) == ("tighten", True)
+    assert abs(s.stop_px - 321.61) < 1e-12
+
+    # ⑥ 参数域不成立(目标落在 entry 反侧)⇒ off:不锁利、不减仓
+    bad = opp_lock_step(direction=1, entry=112.0, target=110.0, frac=-0.5,
+                        peak=111.2, high=111.2, low=110.3, close=110.8)
+    assert bad.action == "off" and bad.reason == "degenerate_span"
+
+
+def test_opp_lock_on_bar_ratchet_exit_and_degenerate_domain():
+    """回放 on_bar:arming 后逐 bar 棘轮 / 越过预算即市价离场 / 退化行程不锁利。"""
     from market_operator.position import PositionManager
 
-    # ① 计划口径落到现价盈利侧(多头 target 在 entry 之下 ⇒ 行程反向)
-    #    ⇒ 闸门拒绝推进,原结构止损不动、不置 reduced
+    # ① 同一根 bar 内"冲高又跌回":收盘突破 arming,peak 118 / 预算 5 ⇒ 113,
+    #    而收盘 111 已在 113 之下 ⇒ 不挂一张必然立刻成交的单,直接市价离场。
     pm = PositionManager(Params(), allow_add=False, time_stop=False,
                          reject_opp_lock_frac=-0.50)
-    pos = pm.open("XUSDT", 1, 112.0, 106.0, 110.0, LEVEL_REJECTED, 1000, 0)
-    assert pm.on_bar("XUSDT", (2000, 111.0, 111.2, 110.3, 110.8, 1.0), 2.0) == []
-    assert pos.invalid == 106.0
-    assert pos.reduced is False
-    assert any("opp_break_lock_reject" in s for s in pos.log)
+    pos = pm.open("XUSDT", 1, 100.0, 94.0, 110.0, LEVEL_REJECTED, 1000, 0)
+    intents = pm.on_bar("XUSDT", (2000, 111.0, 118.0, 109.0, 111.0, 1.0), 2.0)
+    assert len(intents) == 1 and intents[0].kind.name == "EXIT"
+    assert "lock_giveback_exhausted" in intents[0].reason
+    assert "XUSDT" not in pm.positions
+    assert any("lock_giveback_exhausted" in s for s in pos.log)
 
-    # ② 行情锚定:空头 entry=324.02 invalid=326.88(R=2.86) target=322.66,
-    #    2h 收盘 321.33 ⇒ 计划 323.34 落在现价身后 0.65R;
-    #    giveback=0.25R ⇒ 锁利 321.33+0.715 = 322.045(实锁 0.69R)
+    # ② 正常形态:arming 推进 107,再随新峰棘轮到 110;全程不减仓
     pm2 = PositionManager(Params(), allow_add=False, time_stop=False,
-                          reject_opp_lock_frac=-0.50,
-                          opp_lock_max_giveback_r=0.25)
-    pos2 = pm2.open("XUSDT", -1, 324.02, 326.88, 322.66, LEVEL_REJECTED, 1000, 0)
-    assert pm2.on_bar("XUSDT", (2000, 323.5, 323.9, 321.0, 321.33, 1.0), 2.0) == []
-    assert abs(pos2.invalid - 322.045) < 1e-9
-    assert pos2.reduced is True
-    assert any("行情=322.045" in s for s in pos2.log)
+                          reject_opp_lock_frac=-0.50)
+    pos2 = pm2.open("XUSDT", 1, 100.0, 94.0, 110.0, LEVEL_REJECTED, 1000, 0)
+    assert pm2.on_bar("XUSDT", (2000, 110.0, 112.0, 110.0, 111.5, 1.0), 2.0) == []
+    assert abs(pos2.invalid - 107.0) < 1e-12 and pos2.armed is True
+    assert pm2.on_bar("XUSDT", (3000, 111.0, 115.0, 111.0, 114.5, 1.0), 2.0) == []
+    assert abs(pos2.invalid - 110.0) < 1e-12        # 115 − 5(棘轮可多次)
+    assert pos2.reduced is False                    # 锁利不消耗减仓额度
+    assert any("opp_lock_armed" in s for s in pos2.log)
 
-    # ③ giveback=0 ⇒ 纯计划口径(逐位旧行为):323.34
+    # ③ 参数域不成立(多头 target 110 低于 entry 112)⇒ off:防线不动、不减仓,
+    #    且只记一次(不是逐 bar 刷台账)
     pm3 = PositionManager(Params(), allow_add=False, time_stop=False,
-                          reject_opp_lock_frac=-0.50,
-                          opp_lock_max_giveback_r=0.0)
-    pos3 = pm3.open("XUSDT", -1, 324.02, 326.88, 322.66, LEVEL_REJECTED, 1000, 0)
-    pm3.on_bar("XUSDT", (2000, 323.5, 323.9, 321.0, 321.33, 1.0), 2.0)
-    assert abs(pos3.invalid - 323.34) < 1e-9
+                          reject_opp_lock_frac=-0.50)
+    pos3 = pm3.open("XUSDT", 1, 112.0, 106.0, 110.0, LEVEL_REJECTED, 1000, 0)
+    for k in (2000, 3000):
+        assert pm3.on_bar("XUSDT", (k, 111.0, 111.2, 110.3, 110.8, 1.0), 2.0) == []
+    assert pos3.invalid == 106.0 and pos3.reduced is False and pos3.armed is False
+    assert sum("opp_lock_off" in s for s in pos3.log) == 1
 
-    # ④ 仅影线触及分支(frac>0):极值刺到目标后收盘反抽回 entry 附近,
-    #    10% 计划锁利价落到多头现价**上方**(挂上即成交)⇒ 闸门拒绝
-    pm4 = PositionManager(Params(), allow_add=False, time_stop=False,
-                          reject_opp_lock_frac=0.10)
-    pos4 = pm4.open("XUSDT", 1, 100.0, 94.0, 110.0, LEVEL_REJECTED, 1000, 0)
-    pm4.on_bar("XUSDT", (2000, 101.0, 110.5, 99.0, 99.2, 1.0), 2.0)
-    assert pos4.invalid == 94.0
-    assert pos4.reduced is False
-    assert any("opp_lock_reject" in s for s in pos4.log)
+    # ④ frac=0 ⇒ 传统 §8.2 减仓 50%(两个参数域互斥,不共用 reduced)
+    pm4 = PositionManager(Params(), allow_add=False, time_stop=False)
+    pm4.open("XUSDT", 1, 100.0, 94.0, 110.0, LEVEL_REJECTED, 1000, 0)
+    intents4 = pm4.on_bar("XUSDT", (2000, 109.5, 110.5, 109.0, 110.2, 1.0), 2.0)
+    assert intents4 and intents4[0].kind.name == "REDUCE"
+
+
+def test_opp_lock_property_random_paths_keep_invariants():
+    """随机路径上的三条不变量:只紧不松 / 恒在保护侧 / 要么推进要么离场。"""
+    import random
+
+    from market_operator.position import opp_lock_step, stop_protect_dist
+
+    rng = random.Random(20261024)
+    for _ in range(200):
+        direction = rng.choice((1, -1))
+        entry = 100.0
+        span = rng.uniform(1.0, 20.0)
+        target = entry + direction * span
+        frac = -rng.choice((0.25, 0.5, 0.75, 1.0))
+        peak = entry
+        armed = False
+        prev_stop = None
+        for _ in range(40):
+            ref = entry + direction * rng.uniform(-0.2 * span, 1.5 * span)
+            hi = max(entry, ref) + rng.uniform(0.0, 0.6 * span)
+            lo = min(entry, ref) - rng.uniform(0.0, 0.6 * span)
+            peak = max(peak, hi) if direction > 0 else min(peak, lo)
+            dec = opp_lock_step(
+                direction=direction, entry=entry, target=target, frac=frac,
+                peak=peak, high=hi, low=lo, close=ref, ref_px=ref,
+                armed=armed)
+            assert dec.action in ("hold", "tighten", "exit")
+            armed = dec.armed
+            if dec.action == "tighten":
+                # 在保护侧 + 在 entry 盈利侧(结构性质,不靠闸门兜)
+                assert stop_protect_dist(direction, dec.stop_px, ref) > 0.0
+                assert direction * (dec.stop_px - entry) > 0.0
+                # 只紧不松
+                if prev_stop is not None:
+                    assert direction * (dec.stop_px - prev_stop) >= -1e-12
+                prev_stop = dec.stop_px
+            elif dec.action == "exit":
+                # 离场 ⇔ 回撤已达预算(不会"没超预算却离场")
+                assert dec.drawdown >= dec.budget - 1e-9
+            else:
+                assert dec.stop_px is None
+
+
+def test_opp_lock_frequency_invariance():
+    """同一价格路径,1×/2×/4× 采样得到**同一防线水平**(因果且频率无关)。
+
+    子周期只是"更早看到同一事实" —— 防线水平不随裁决频率漂移;若允许漂移,
+    实盘(2h 子帧)与回放(12h 认知帧)就永远不可比。
+    """
+    from market_operator.position import PositionManager
+
+    sub = [
+        (110.0, 112.0, 110.0, 111.5),
+        (111.0, 114.0, 111.0, 113.5),
+        (113.0, 116.0, 113.0, 115.5),
+        (115.0, 118.0, 115.0, 117.5),
+    ]
+
+    def agg(bars, n):
+        out = []
+        for i in range(0, len(bars), n):
+            chunk = bars[i:i + n]
+            out.append((chunk[0][0], max(b[1] for b in chunk),
+                        min(b[2] for b in chunk), chunk[-1][3]))
+        return out
+
+    def run(bars):
+        pm = PositionManager(Params(), allow_add=False, time_stop=False,
+                             reject_opp_lock_frac=-0.50)
+        pos = pm.open("XUSDT", 1, 100.0, 94.0, 110.0, LEVEL_REJECTED, 1000, 0)
+        for k, (o, h, l, c) in enumerate(bars):
+            pm.on_bar("XUSDT", (2000 + k, o, h, l, c, 1.0), 2.0,
+                      price_only=True)
+        assert pm.positions.get("XUSDT") is pos      # 路径内未触发离场
+        return pos
+
+    p1, p2, p4 = run(agg(sub, 1)), run(agg(sub, 2)), run(agg(sub, 4))
+    assert p1.armed and p2.armed and p4.armed
+    assert abs(p1.invalid - p2.invalid) < 1e-12
+    assert abs(p1.invalid - p4.invalid) < 1e-12
+    assert abs(p1.invalid - 113.0) < 1e-12        # 118 − ½·10
+    assert p1.reduced is False                    # 锁利不消耗减仓额度
+
 
 
 def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
-    """_on_sub_bar:行情锚定 + 落位闸门 + 图 ENTRY 用建仓均价。"""
+    """_on_sub_bar:峰值锚定(同一 opp_lock_step)+ 图 ENTRY 用建仓均价。"""
     import sys
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "scripts"))
@@ -446,9 +595,9 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
                            universe_enabled=False)
     runner.step(bars[-1][0] + 1)
     cs = runner.campaigns["BTCUSDT"]
-    # 生产配置(config/v21.json arm_config)已接线行情锚定
-    assert cs.pm.opp_lock_max_giveback_r == 0.25
-    assert cs.pm.reject_opp_lock_frac == -0.50
+    # 生产配置:锁利只有 frac 一个参数(第二把 R 单位尺子已删除)
+    assert cs.pm.reject_opp_lock_frac == _prod_lock_frac()
+    assert not hasattr(cs.pm, "opp_lock_max_giveback_r")
 
     it = {"oid": "mo21anch1", "symbol": "BTCUSDT", "tf_label": "12h",
           "direction": 1, "qty": 1.0, "invalid": 95.0, "target_1": 110.0,
@@ -456,40 +605,39 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
           "box_lo": 96.0, "box_hi": 110.0}
     runner._register_position("BTCUSDT", it, 100.0, bars[-1][0])
 
-    # 子周期收盘 111.0 突破 target_1 ⇒ 计划 105.0 / 行情 111−0.25·5 = 109.75
-    # ⇒ 取更贴近现价者 109.75(而不是把防线留在现价身后 1.15R 的位置)
+    # 子周期收盘 111.0 突破 target_1 ⇒ 峰值取本根 high 112,预算 (1−|frac|)·10
+    # ⇒ 防线 112 − 预算(而不是把防线钉在 entry→target 的中点 105 上)
     t_sub1 = t0 + 396 * step2
     runner._advance(cs, t_sub1 + step2,
                     new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
                     run_paper_fills=True)
-    assert abs(runner.positions["BTCUSDT"]["invalid"] - 109.75) < 1e-9
-    assert abs(cs.pm.positions["BTCUSDT"].invalid - 109.75) < 1e-9
+    exp1 = 112.0 - _prod_giveback(100.0, 110.0)
+    assert abs(runner.positions["BTCUSDT"]["invalid"] - exp1) < 1e-9
+    assert abs(cs.pm.positions["BTCUSDT"].invalid - exp1) < 1e-9
     lock_fill = [f for f in fills if "止损推进" in f[1]][-1]
-    assert abs(lock_fill[4]["stop_price"] - 109.75) < 1e-9
+    assert abs(lock_fill[4]["stop_price"] - exp1) < 1e-9
     # 图 ENTRY = 建仓均价(不是本次事件价 111.0,修前会把相对关系画错)
     assert lock_fill[4]["entry_price"] == 100.0
     assert lock_fill[3] == 111.0
 
-    # 落位闸门:同一持仓改走"仅触及"分支(frac>0.10),子周期影线刺到
-    # target 后收盘反抽回 96.0 ⇒ 计划 101.0 在现价上方、行情锚 94.75 在
-    # entry 亏损侧 ⇒ 两个候选都不可用 ⇒ 不推进、不置 reduced
-    pm = cs.pm
-    pos = pm.positions["BTCUSDT"]
-    pos.reduced = False
-    pos.invalid = 95.0
-    runner.positions["BTCUSDT"]["invalid"] = 95.0
-    pm.reject_opp_lock_frac = 0.10
-    t_sub2 = t0 + 397 * step2
+    # 同一根子周期内"冲高又跌回"且已超预算 ⇒ 立刻市价离场:
+    # 触及模式(frac>0),峰值 112 / 预算 5 ⇒ 止损 107,而收盘 105.5 已在其下
+    # ⇒ 不挂"永不触发"的止损单,也不拒单后裸奔到认知 bar 收盘。
+    cs.pm.positions.pop("BTCUSDT", None)
+    runner.positions.pop("BTCUSDT", None)
+    it2 = dict(it, oid="mo21anch2", event_id="E4", invalid=95.0)
+    runner._register_position("BTCUSDT", it2, 100.0, t_sub1)
+    cs.pm.reject_opp_lock_frac = 0.50
+    t_sub2 = t_sub1 + step2
     runner._advance(cs, t_sub2 + step2,
-                    new_bars=[(t_sub2, 100.0, 110.4, 96.0, 96.0, 20.0)],
+                    new_bars=[(t_sub2, 105.0, 112.0, 104.0, 105.5, 20.0)],
                     run_paper_fills=True)
-    pos = pm.positions["BTCUSDT"]
-    assert abs(pos.invalid - 95.0) < 1e-9
-    assert pos.reduced is False
-    assert any("sub_bar_opp_lock_reject" in s for s in pos.log)
-    # 闸门拒绝要留审计痕迹(journal 有 lock_reject 记录)
+    assert "BTCUSDT" not in runner.positions
+    assert "BTCUSDT" not in cs.pm.positions
+    assert any("平仓(paper,exit)" in f[1] and abs(f[3] - 105.5) < 1e-9
+               for f in fills)
     logs = list((tmp_path / "logs").glob("*.jsonl"))
-    assert logs and any("lock_reject" in p.read_text(encoding="utf-8")
+    assert logs and any('"kind": "lock_exhausted"' in p.read_text(encoding="utf-8")
                         for p in logs)
 
 
@@ -538,9 +686,6 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     runner.step(bars[-1][0] + 1)
     cs_12h = runner.campaigns["BTCUSDT"]
     assert cs_12h.tf_label == "12h"
-    # 本用例钉的是**旧口径 parity**(纯计划口径):行情锚定关闭后必须逐位复现
-    # 105.0;行情锚定/落位闸门另见 test_live_runner_sub_bar_lock_market_anchor。
-    cs_12h.pm.opp_lock_max_giveback_r = 0.0
 
     # 注册一笔 12h 多头 REJECT 持仓:entry=100, invalid=95, target_1=110
     open_ts = bars[-1][0]
@@ -560,24 +705,20 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     runner._register_position("BTCUSDT", it, 100.0, open_ts)
     assert runner.positions["BTCUSDT"]["invalid"] == 95.0
 
-    # 本测试钉的是"早锁 = 计划口径 50% 行程"这条 parity 语义 ⇒ 显式关闭
-    # 行情锚定(生产 strategy.json 默认 0.25R;该口径由
-    # test_live_sub_bar_lock_uses_market_anchor_when_enabled 覆盖)。
-    cs_12h.pm.opp_lock_max_giveback_r = 0.0
-
     # 下一根 2H bar(k=396,非 12h 收盘时刻):收盘 111.0 突破 target_1(110.0)
-    # 应由 _on_sub_bar 立即将 invalid 推进至 100 + 0.5*(110-100) = 105.0
+    # 应由 _on_sub_bar 立即把 invalid 推进到 峰值 − 预算(预算 = (1−|frac|)·span)
     t_sub1 = t0 + 396 * step2
     assert (t_sub1 + step2) % (43200 * 1000) != 0  # 确认非 12h 收盘点
     runner._advance(cs_12h, t_sub1 + step2,
                     new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
                     run_paper_fills=True)
-    assert runner.positions["BTCUSDT"]["invalid"] == 105.0
-    assert cs_12h.pm.positions["BTCUSDT"].invalid == 105.0
+    exp_stop = 112.0 - _prod_giveback(100.0, 110.0)
+    assert runner.positions["BTCUSDT"]["invalid"] == exp_stop
+    assert cs_12h.pm.positions["BTCUSDT"].invalid == exp_stop
     assert any("止损推进" in f[1] for f in fills)
 
-    # 再下一根 2H bar(k=397,仍非 12h 收盘时刻):低点 104.0 跌破新止损 105.0
-    # 应由 _on_sub_bar 立即按 105.0 触发 STOP 平仓,无需等待 12h 收盘
+    # 再下一根 2H bar(k=397,仍非 12h 收盘时刻):低点 104.0 跌破新止损
+    # 应由 _on_sub_bar 立即按止损价触发 STOP 平仓,无需等待 12h 收盘
     t_sub2 = t0 + 397 * step2
     assert (t_sub2 + step2) % (43200 * 1000) != 0
     runner._advance(cs_12h, t_sub2 + step2,
@@ -585,168 +726,146 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
                     run_paper_fills=True)
     assert "BTCUSDT" not in runner.positions
     assert "BTCUSDT" not in cs_12h.pm.positions
-    assert any("平仓(paper,exit)" in f[1] and abs(f[3] - 105.0) < 1e-9 for f in fills)
+    assert any("平仓(paper,exit)" in f[1] and abs(f[3] - exp_stop) < 1e-9
+               for f in fills)
 
 
-def test_opp_lock_helpers_and_googl_short_lock_repro():
-    """2026-10-23 GOOGLUSDT(live,2h)事件复现 + 锁利口径量化。
+def test_opp_lock_giveback_identity_on_googl_repro():
+    """2026-10-23 GOOGLUSDT 空头复现:回吐预算口径锁住的是**事实**,不是承诺。
 
     实盘事实:空头 entry 324.02 / 结构止损 326.88 / 结构目标 322.66;2h 收盘
-    321.33 真突破对侧缘 ⇒ 把交易所止损单从 326.87 换成 323.34
-    (= entry + 0.5·(target − entry)),随后该单在 324.01 成交 —— 价格到过
-    目标却按建仓价附近"止盈"离场。
+    321.33 突破对侧缘。当日最低 320.93。
 
-    本测试钉住三件事:
-    1) 锁利价公式 = entry→target 行程中点(逐位复现 323.34);
-    2) 该价位在**建仓价的盈利侧**(空头 323.34 < 324.02),量级只有 0.68
-       (0.21%),即"锁住 0.24R" —— 交易所/看盘软件视角它就是一张止盈单;
-    3) 但它此刻仍在现价(321.33)的保护侧(空头须高于现价),所以当时严格
-       说并非"无单裸奔";风险在于它紧贴建仓价(回抽 0.62% 即成交),且修前
-       没有任何闸门保证推进价永远落在保护侧。
+    旧口径把防线钉在 entry→target 行程中点 323.34(距现价 2.01,不回踩就
+    等于没锁;回踩触发时已把 1.08R 回吐到 0.24R,实际成交 324.01)。
+    新口径:峰值 320.93 − ½span(0.68) ⇒ 321.61 ——
+      - 距现价 0.28,仍在保护侧(空头止损须高于现价);
+      - 若真被触发,回吐恰为 0.68 = ½span(恒等式,不随行情漂移);
+      - 锁住 (324.02−321.61)/2.86 = 0.84R(旧口径 0.24R,实盘 −0.00R)。
     """
     from market_operator.position import (
-        PositionManager, lock_is_protective, opp_lock_px, stop_protect_dist,
+        PositionManager, opp_lock_budget, stop_protect_dist,
     )
 
-    entry, invalid0, target, close = 324.02, 326.88, 322.66, 321.33
-    lock_px = opp_lock_px(entry, target, 0.5)
-    assert abs(lock_px - 323.34) < 1e-9
+    entry, invalid0, target, low, close = 324.02, 326.88, 322.66, 320.93, 321.33
+    span = entry - target                       # 1.36
+    assert abs(span - 1.36) < 1e-12
+    budget = opp_lock_budget(entry, target, 0.5)
+    assert abs(budget - 0.68) < 1e-12
+    peak_stop = low + budget                    # 空头:peak + budget
+    assert abs(peak_stop - 321.61) < 1e-12
 
-    # 保护侧有向距离:空头止损必须在现价之上(>0 才是有效止损)
-    assert stop_protect_dist(-1, lock_px, close) > 0.0
-    assert lock_is_protective(-1, lock_px, close)
-    # 同一价位对多头必然是"反侧"(多头止损须低于现价)⇒ 闸门方向正确
-    assert stop_protect_dist(1, lock_px, close) < 0.0
-    assert not lock_is_protective(1, lock_px, close)
+    # 旧"绝对价位"口径:323.34,距现价 2.01(行情不回踩 ⇒ 这张单永不触发)
+    plan = _legacy_lock_px(entry, target, 0.5)
+    assert abs(plan - 323.34) < 1e-9
+    assert abs((plan - close) - 2.01) < 1e-9
 
-    # 但它是建仓价盈利侧价位:距建仓价只有 0.68(0.21%)
-    assert lock_px < entry
-    assert abs((entry - lock_px) - 0.68) < 1e-9
-    # 初始风险 R = |324.02 − 326.88| = 2.86 ⇒ 0.68/2.86 ≈ 0.238R;
-    # 而当日最大有利行程 324.02 − 320.93 = 3.09 ≈ 1.08R ⇒ 只锁住 22% 行程
-    assert abs((entry - lock_px) / (invalid0 - entry) - 0.68 / 2.86) < 1e-9
+    # 新口径严格更贴近现价(空头更小),且结构性质仍成立:
+    # 在现价保护侧 + 在 entry 盈利侧 —— 这是**性质**,不需要闸门去兜。
+    assert peak_stop < plan
+    assert stop_protect_dist(-1, peak_stop, close) > 0.0
+    assert peak_stop < entry                    # 在 entry 盈利侧(空头防线低于入场价)
+    # 触发时的回吐恰为预算(这就是"承诺成立"的定义)
+    assert abs((peak_stop - low) - budget) < 1e-12
+    # 锁住的 R:(324.02 − 321.61)/2.86 ≈ 0.84R
+    assert abs((entry - peak_stop) / (invalid0 - entry) - 0.84) < 0.01
 
-    # canonical §8.2 路径逐位复现:326.88 -> 323.34,不减仓、不触发出场
+    # canonical §8.2 路径:326.88 → 321.61,不减仓、不满仓离场
     pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
                          time_stop=False, reject_opp_lock_frac=-0.50)
     pos = pm.open("GOOGLUSDT", -1, entry, invalid0, target, LEVEL_REJECTED,
                   1792742400000, 0)
     intents = pm.on_bar("GOOGLUSDT",
-                        (1792749600000, 323.98, 324.22, 320.93, close, 1.0), 2.0)
+                        (1792749600000, 323.98, 324.22, low, close, 1.0), 2.0)
     assert intents == []
-    assert abs(pos.invalid - 323.34) < 1e-9
-    assert pos.reduced is True
-    assert any("opp_break_lock" in s for s in pos.log)
+    assert abs(pos.invalid - peak_stop) < 1e-12
+    assert pos.armed is True
+    assert pos.reduced is False
+    assert any("opp_lock_armed" in s for s in pos.log)
+    assert any("opp_lock|" in s for s in pos.log)
 
 
-def test_opp_lock_guard_keeps_structural_stop_when_lock_lands_wrong_side():
-    """锁利落位闸门:算出的锁利价一旦落到现价的盈利侧/身后,必须拒绝推进。
+def test_opp_lock_touch_arming_exhausted_in_same_bar_exits():
+    """触及 arming(frac>0)在同一根 bar 内即超预算 ⇒ 市价离场。
 
-    只有 `reject_opp_lock_frac > 0` 的"仅影线触及"分支会算出差价极小的
-    保本垫(≤10% 行程):极值刺穿对侧缘后收盘已反抽回建仓价附近时,这个
-    价位落在现价**错误一侧** —— 挂到交易所就是一张立刻成交的止盈单,
-    而原结构止损已撤掉,仓位等于裸奔。闸门不通过 ⇒ 保留原结构防线。
+    旧实现遇到"影线刺穿目标 + 收盘反抽回建仓价附近"时,算出的绝对价位落到
+    现价错误一侧 ⇒ 闸门拒单 ⇒ 防线原地不动、仓位继续裸奔。新口径下这不是
+    非法输入:峰值 322.0 / 预算 0.68 ⇒ 止损 322.68 已被现价 325.0 越过,
+    第三态(离场)就是唯一正确处置。
     """
     from market_operator.position import PositionManager
 
     pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
                          time_stop=False, reject_opp_lock_frac=0.50)
     pos = pm.open("GOOGLUSDT", -1, 324.02, 326.88, 322.66, LEVEL_REJECTED, 1000, 0)
-
-    # 影线刺穿对侧缘(l=322.0)但收盘反抽回 325.0:锁利价 323.884 已在现价
-    # 下方(空头止损必须高于现价)⇒ 闸门拦下,原结构止损 326.88 一分不动。
     intents = pm.on_bar("GOOGLUSDT", (2000, 324.0, 325.5, 322.0, 325.0, 1.0), 2.0)
-    assert intents == []
-    assert pos.invalid == 326.88
-    assert pos.reduced is False           # 未消费锁利/减仓额度,后续可再判
-    assert any("opp_lock_reject" in s for s in pos.log)
-
-    # 下一根真收在对侧缘之外(收盘 322.0):锁利 50% 行程 = 323.34 > 现价
-    # ⇒ 通过闸门,正常推进(闸门只拦"错误一侧",不改协议价位)。
-    intents2 = pm.on_bar("GOOGLUSDT", (3000, 324.0, 324.5, 321.5, 322.0, 1.0), 2.0)
-    assert intents2 == []
-    assert abs(pos.invalid - 323.34) < 1e-9
-    assert pos.reduced is True
+    assert len(intents) == 1 and intents[0].kind.name == "EXIT"
+    assert "lock_giveback_exhausted" in intents[0].reason
+    assert "GOOGLUSDT" not in pm.positions
+    assert any("lock_giveback_exhausted" in s for s in pos.log)
 
 
-def test_opp_lock_live_anchor_fixes_stale_plan_lock():
-    """锁利"行情锚定":锁利只在收盘裁决 ⇒ 计划锁利价可能已被行情走过。
+def test_opp_lock_single_ruler_no_second_scale():
+    """锁利只有一把尺子:回吐预算 =(1−|frac|)·span。
 
-    实盘口径缺陷(2026-10-23 GOOGLUSDT):2h 收盘 321.33 时才裁决,按
-    entry→target 行程算出的 323.34 已在现价**身后 2.01(0.63%)**:
-      - 不回踩 ⇒ 止损永不触发,等于没锁;
-      - 回踩触发 ⇒ 已把 1.08R 的行程回吐到 0.24R(实际成交 324.01)。
-    行情口径(`opp_lock_max_giveback_r = 0.25R`)把锁利价锚在现价 ± 0.25R
-    上,只允许回吐该缓冲;`tighten_lock` 取两口径中更紧者,故:
-      - 关闭(0)⇒ 逐位回到计划口径(历史 parity);
-      - 打开 ⇒ 锁住的利润随行情推进,不再依赖"价格回踩到旧位置"。
+    修前这里还有第二把以 R 为单位的尺子(`opp_lock_max_giveback_r`):两把
+    量纲不同的尺子取"更紧者"互相遮盖 —— 0.25R 在赢单 MFE 中位 2.07R /
+    p90 5.71R 的分布里约等于只允许回吐 ~12% 行程,必被噪声扫
+    (`reports/opp_lock_ab.md`:dev/test 净利 −12.83/−7.38)。而且"更紧"
+    并不等于更安全:止损被推到现价身后,就成了挂上即成交的止盈单。
+
+    现在:仓位参数里不存在该开关,锁利价由 peak 与单一 frac 唯一决定;
+    预算随 span 自适应 ⇒ 与周期、品种、ATR 管线全部无关。
     """
-    from market_operator.position import (
-        PositionManager, lock_is_protective, opp_lock_live_px, tighten_lock,
-    )
+    from market_operator.position import PositionManager, opp_lock_budget
 
-    entry, invalid0, target, close = 324.02, 326.88, 322.66, 321.33
-    plan = entry + 0.5 * (target - entry)
-    assert abs(plan - 323.34) < 1e-9
-    # 计划锁利价在现价上方 2.01 —— 行情不回踩到 323.34 就永远不生效
-    assert abs((plan - close) - 2.01) < 1e-9
+    pm = PositionManager(Params(), allow_add=False, time_stop=False,
+                         reject_opp_lock_frac=-0.50)
+    assert not hasattr(pm, "opp_lock_max_giveback_r")
+    try:
+        PositionManager(Params(), opp_lock_max_giveback_r=0.25)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("第二把尺子必须从构造参数中消失")
 
-    live = opp_lock_live_px(-1, close, 0.25, invalid0 - entry)   # 空头 +0.25R
-    assert abs(live - (close + 0.25 * 2.86)) < 1e-9
-    assert live < plan                                  # 更贴近现价 = 更紧
-    assert tighten_lock(-1, plan, live, close, entry) == live
-    assert tighten_lock(-1, plan, None, close, entry) == plan   # 关闭 ⇒ 计划口径
-    assert tighten_lock(-1, None, live, close, entry) == live
-    # 多头镜像:plan 102.5 比 行情 104.5 更松 ⇒ 取更大(更贴近现价)者
-    assert abs(tighten_lock(1, 102.5,
-                            opp_lock_live_px(1, 105.0, 0.25, 2.0),
-                            105.0, 100.0) - 104.5) < 1e-9
+    # 预算 = ½span,与品种/周期无关(价格单位,随 span 自动适配)
+    assert opp_lock_budget(100.0, 110.0, 0.5) == 5.0
+    assert abs(opp_lock_budget(324.02, 322.66, 0.5) - 0.68) < 1e-12
 
-    pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
-                         time_stop=False, reject_opp_lock_frac=-0.50,
-                         opp_lock_max_giveback_r=0.25)
-    pos = pm.open("GOOGLUSDT", -1, entry, invalid0, target, LEVEL_REJECTED,
-                  1792742400000, 0)
-    intents = pm.on_bar("GOOGLUSDT",
-                        (1792749600000, 323.98, 324.22, 320.93, close, 1.0), 2.0)
-    assert intents == []
-    assert abs(pos.invalid - live) < 1e-9
-    # 锁住 (324.02 − 322.045) / 2.86 ≈ 0.69R,计划口径只有 0.238R;
-    # 相对现价只让出 0.25R(计划口径让出 0.65R)。
-    assert abs(pos.direction * (pos.invalid - pos.entry) / pos.initial_risk
-               - (entry - live) / pos.initial_risk) < 1e-9
-    assert abs((pos.invalid - close) - 0.25 * pos.initial_risk) < 1e-9
-    assert any("opp_break_lock" in s and "行情=" in s for s in pos.log)
-
-    # 闸门照旧:多头的行情锁利价必须低于现价(保护侧),缓冲只向保护侧让
-    long_live = opp_lock_live_px(1, 321.33, 0.25, 2.86)
-    assert long_live < 321.33
-    assert lock_is_protective(1, long_live, 321.33)
+    # 生产配置只剩 frac 一个锁利键(回放与实盘共用同一口径)
+    strat = json.loads((Path(__file__).resolve().parents[1]
+                        / "config" / "strategy.json").read_text("utf-8"))
+    assert "opp_lock_max_giveback_r" not in strat["arm_config"]
+    assert strat["arm_config"]["reject_opp_lock_frac"] == _prod_lock_frac()
 
 
 
-def test_live_sub_bar_lock_uses_market_anchor_when_enabled(tmp_path):
-    """实盘 `_on_sub_bar`:开启 `opp_lock_max_giveback_r` 后,锁利价锚在实时价上。
+def test_live_sub_bar_lock_peak_anchor_and_ratchet(tmp_path):
+    """实盘 `_on_sub_bar`:峰值锚定 + 多次棘轮(与回放同一个 `opp_lock_step`)。
 
-    对照上一测试(关闭 ⇒ 323.34,距现价 2.01):开启后 ref=321.40,
-    锁利 = ref + 0.25R = 322.115 —— 只允许回吐 0.25R,不再依赖"价格回踩
-    到 323.34 才生效",且仍在现价保护侧(空头止损须高于现价)。
+    子周期收盘 321.33 那根的最低价 320.93 ⇒ 防线 = 320.93 + ½·1.36 = 321.61
+    (旧口径会把防线钉在 323.34,距现价 2.01,不回踩等于没锁);下一根创新低
+    318.5 ⇒ 棘轮到 319.18 —— 只紧不松,不依赖"回踩到某个旧价位"。
     """
     import sys
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "scripts"))
     import live_runner as lr
 
-    # 配置接线:生产 strategy.json 必须携带该开关,且从 arm_config 读到 pm
+    # 配置接线:生产 strategy.json 只给 frac,第二把 R 单位尺子已删除
     strat = json.loads((root / "config" / "strategy.json").read_text("utf-8"))
     pm_prod = lr.new_position_manager(Params(), strat)
-    assert abs(pm_prod.opp_lock_max_giveback_r - 0.25) < 1e-12
-    pm_cfg = lr.new_position_manager(
-        Params(),
-        {"use_balance_detector": True,
-         "arm_config": {"reject_opp_lock_frac": -0.50,
-                        "opp_lock_max_giveback_r": 0.25}})
-    assert abs(pm_cfg.opp_lock_max_giveback_r - 0.25) < 1e-12
+    assert pm_prod.reject_opp_lock_frac == _prod_lock_frac()
+    assert not hasattr(pm_prod, "opp_lock_max_giveback_r")
+
+    # 缺键不兜底:写死的默认值会让下次标定后实盘与回放悄悄分叉
+    try:
+        lr.new_position_manager(Params(), {"use_balance_detector": True})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("缺 arm_config.reject_opp_lock_frac 时必须报错")
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
     step2 = 7_200_000
@@ -786,23 +905,30 @@ def test_live_sub_bar_lock_uses_market_anchor_when_enabled(tmp_path):
         "box_lo": 322.66, "box_hi": 326.67,
     }
     runner._register_position("BTCUSDT", it, 324.02, bars[-1][0])
-    cs.pm.opp_lock_max_giveback_r = 0.25              # 打开行情锚定(0.25R)
 
     t1 = t0 + 396 * step2
     runner._advance(cs, t1 + step2,
                     new_bars=[(t1, 323.98, 324.22, 320.93, 321.33, 15.0)],
                     run_paper_fills=True)
-    # `_advance` 先把 mark 同步为 bar 收盘(321.33)⇒ ref=321.33,R=2.86;
-    # 计划口径会推到 323.34(距现价 2.01),行情口径只让出 0.25R。
-    exp = 321.33 + 0.25 * 2.86
-    assert abs(cs.pm.positions["BTCUSDT"].invalid - exp) < 1e-9
-    assert abs(runner.positions["BTCUSDT"]["invalid"] - exp) < 1e-9
+    exp1 = 320.93 + _prod_giveback(324.02, 322.66)   # 峰值 + 预算(½span 时代为 321.61)
+    assert abs(cs.pm.positions["BTCUSDT"].invalid - exp1) < 1e-9
+    assert abs(runner.positions["BTCUSDT"]["invalid"] - exp1) < 1e-9
     assert cs.pm.positions["BTCUSDT"].invalid > 321.33     # 仍在保护侧
+    assert cs.pm.positions["BTCUSDT"].armed is True
+
+    # 棘轮:新低 318.5 ⇒ 峰值 − 预算(第二次推进,不是一次性置位)
+    t2 = t1 + step2
+    runner._advance(cs, t2 + step2,
+                    new_bars=[(t2, 321.0, 321.2, 318.5, 319.0, 20.0)],
+                    run_paper_fills=True)
+    exp2 = 318.5 + _prod_giveback(324.02, 322.66)
+    assert abs(cs.pm.positions["BTCUSDT"].invalid - exp2) < 1e-9
+    assert exp2 < exp1                                    # 空头:只许向下紧
 
 
-def test_live_sub_bar_lock_guard_and_entry_price_in_chart(tmp_path):
-    """实盘 `_on_sub_bar`:①推报价必须在现价保护侧才推进;②通知图的 ENTRY 必须
-    是真实建仓均价(修前误用子周期收盘价 ⇒ 图上止损/目标相对 ENTRY 全错位)。"""
+def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
+    """实盘 `_on_sub_bar`:①通知图的 ENTRY 必须是真实建仓均价(修前误用子周期
+    收盘价 ⇒ 图上止损/目标相对 ENTRY 全错位);②锁利可多次推进。"""
     import sys
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "scripts"))
@@ -853,41 +979,59 @@ def test_live_sub_bar_lock_guard_and_entry_price_in_chart(tmp_path):
     }
     runner._register_position("BTCUSDT", it, 324.02, bars[-1][0])
     assert runner.positions["BTCUSDT"]["invalid"] == 326.88
-    # 本测试钉"计划口径 + 落位闸门 + 图 ENTRY":显式关闭行情锚定
-    # (生产 strategy.json 默认 0.25R,见 market_anchor 专项测试)。
-    cs.pm.opp_lock_max_giveback_r = 0.0
 
-    # 子周期收盘 321.33 真突破对侧缘 ⇒ 锁利 50% 推进至 323.34(高于现价,合法)
+    # 子周期收盘 321.33 突破对侧缘 ⇒ 峰值 320.93 + 预算(高于现价)
     t1 = t0 + 396 * step2
     assert (t1 + step2) % (43200 * 1000) != 0        # 确认非 12h 收盘点
     runner._advance(cs, t1 + step2,
                     new_bars=[(t1, 323.98, 324.22, 320.93, 321.33, 15.0)],
                     run_paper_fills=True)
-    assert abs(runner.positions["BTCUSDT"]["invalid"] - 323.34) < 1e-9
-    assert abs(cs.pm.positions["BTCUSDT"].invalid - 323.34) < 1e-9
+    exp1 = 320.93 + _prod_giveback(324.02, 322.66)
+    assert abs(runner.positions["BTCUSDT"]["invalid"] - exp1) < 1e-9
+    assert abs(cs.pm.positions["BTCUSDT"].invalid - exp1) < 1e-9
     adv = [f for f in fills if "止损推进" in f[1]]
     assert len(adv) == 1
     assert abs(adv[0][3] - 321.33) < 1e-9                    # 参考价=子周期收盘
     assert abs(adv[0][4]["entry_price"] - 324.02) < 1e-9     # 图 ENTRY=真实建仓价
     assert adv[0][4]["price_label"] == "参考价(子周期收盘)"
-    assert abs(adv[0][4]["stop_price"] - 323.34) < 1e-9
+    assert abs(adv[0][4]["stop_price"] - exp1) < 1e-9
 
-    # 闸门:切到"仅影线触及"(10% 保本垫)后,收盘反抽回建仓价上方时算出的
-    # 323.884 落在现价盈利侧 ⇒ 不推进、保留原结构止损、留 lock_reject 台账
-    runner.positions["BTCUSDT"]["invalid"] = 326.88
-    cs.pm.positions["BTCUSDT"].invalid = 326.88
-    cs.pm.positions["BTCUSDT"].reduced = False
-    cs.pm.reject_opp_lock_frac = 0.50
+    # 同一持仓再创新低 ⇒ 第二次推进(棘轮可多次),通知仍带真实 ENTRY;
+    # 不是"一次性置位后锁利退出舞台"
     fills.clear()
     t2 = t1 + step2
     runner._advance(cs, t2 + step2,
-                    new_bars=[(t2, 324.0, 325.5, 322.0, 325.0, 20.0)],
+                    new_bars=[(t2, 321.0, 321.2, 318.5, 319.0, 20.0)],
                     run_paper_fills=True)
-    assert runner.positions["BTCUSDT"]["invalid"] == 326.88
-    assert cs.pm.positions["BTCUSDT"].invalid == 326.88
-    assert cs.pm.positions["BTCUSDT"].reduced is False
-    assert not [f for f in fills if "止损推进" in f[1]]
-    journal = "".join(p.read_text("utf-8")
-                      for p in (tmp_path / "logs").glob("*.jsonl"))
-    assert '"kind": "lock_reject"' in journal
-    assert '"why": "wrong_side_wick"' in journal
+    exp2 = 318.5 + _prod_giveback(324.02, 322.66)
+    assert abs(runner.positions["BTCUSDT"]["invalid"] - exp2) < 1e-9
+    adv2 = [f for f in fills if "止损推进" in f[1]]
+    assert len(adv2) == 1
+    assert abs(adv2[0][4]["stop_price"] - exp2) < 1e-9
+    assert abs(adv2[0][4]["entry_price"] - 324.02) < 1e-9
+    assert exp2 < exp1
+
+
+def test_pivot_exec_without_fine_pivots_fails_fast():
+    """`pivot_exec=True` 必须配到细周期 pivot 流,否则开关静默无效。
+
+    `CampaignFrame.exec_pivots` 目前只有 `scripts/_diag_v21_scale.py` 装配,
+    `scenario.build_frames`(验收与生产同源链)不装配 ⇒ 在生产链上打开此开关,
+    回放结果与关闭**逐位相同**(2026-10-24 实测 6 段 net 完全一致)。这种"开关
+    没接上"极易被读成"机制没价值",所以在装配期直接报错。
+    """
+    import pytest
+
+    from types import SimpleNamespace
+
+    from market_operator.campaign import require_exec_pivots
+
+    bare = [SimpleNamespace(exec_pivots={}), SimpleNamespace(exec_pivots={})]
+    require_exec_pivots(False, bare)                       # 关闭 ⇒ 不校验
+
+    wired = [SimpleNamespace(exec_pivots={}), SimpleNamespace(exec_pivots={0: ()})]
+    require_exec_pivots(True, wired)                       # 有数据 ⇒ 放行
+
+    with pytest.raises(ValueError, match="exec_pivots"):
+        require_exec_pivots(True, bare)
+

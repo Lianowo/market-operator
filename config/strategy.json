@@ -1,9 +1,9 @@
 {
   "version": "v21-2026-10-21",
-  "note": "v21 极简平衡箱(BalanceDetector) + 雙原语(ACCEPT/REJECT) + 高阶降档混合触发(M3c: 2h/4h同周期, 12h->2h, 1d->4h) + 各周期独立风险池(tf_cap_by_tf) + REJECT对侧突破锁利50% & Turtle唯一移动防线收割 + 104USDT/20x阶梯动态复利。",
+  "note": "v21 极简平衡箱(BalanceDetector) + 雙原语(ACCEPT/REJECT) + 高阶降档混合触发(M3c: 2h/4h同周期, 12h->2h, 1d->4h) + 各周期独立风险池(tf_cap_by_tf) + REJECT对侧突破锁利(峰值锚定回吐预算:stop = peak ∓ (1−|frac|)·span, frac 见 arm_config.reject_opp_lock_frac) & Turtle唯一移动防线收割 + 104USDT/20x阶梯动态复利。",
   "meta": {
     "parent": "config/canonical.json",
-    "model": "BalanceDetector(quality>=0.35) + ACCEPT(E1)/REJECT(E3) + Per-TF Cap + REJECT Break-Opposite Lock(50%) + Turtle(§8.3 trail)"
+    "model": "BalanceDetector(quality>=0.35) + ACCEPT(E1)/REJECT(E3) + Per-TF Cap + REJECT Peak-Anchored Giveback-Budget Lock(frac in arm_config) + Turtle(§8.3 trail)"
   },
   "atr_n": 14,
   "k_rev": 1.0,
@@ -93,8 +93,7 @@
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": -0.50,
-    "opp_lock_max_giveback_r": 0.25
+    "reject_opp_lock_frac": -0.25
   },
   "small_account_compounding": {
     "equity0": 104.0,

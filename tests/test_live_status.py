@@ -1,8 +1,8 @@
 """实盘巡检脚本(`scripts/live_status.py`)判定逻辑测试。
 
-`live_status` 是"保护是否完好"的唯一外部读数:本地 ↔ 交易所 ↔ 计划单三方核对。
+`live_status` 是"保护是否完好"的唯一外部读数:本地 ↔ 交易所 ↔ 保护单(TPSL)三方核对。
 它若把错配判成正常,运维就会在裸奔时看到"三者一致";故把每条判定钉住:
-止损单不在交易所 / 同品种多张计划单 / 交易所独有仓 / 本地残留仓 /
+止损单不在交易所 / 同品种多张保护单 / 交易所独有仓 / 本地残留仓 /
 现价越防线 / 数量不一致,以及心跳年龄的单位(修前除数多写三个 0)。
 """
 
@@ -44,10 +44,10 @@ def test_status_flags_stop_missing_on_exchange():
     assert any("止损单不在交易所" in s for s in got)
 
 
-def test_status_flags_duplicate_plan_orders():
+def test_status_flags_duplicate_protective_orders():
     got = _issues(pending={"BTCUSDT": [{"orderId": "oid-1"},
                                        {"orderId": "oid-2"}]})
-    assert any("多张计划单" in s for s in got)
+    assert any("多张保护单" in s for s in got)
 
 
 def test_status_flags_orphan_and_stale_positions():

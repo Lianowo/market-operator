@@ -141,8 +141,9 @@ class ArmConfig:
     harvest_fade_2leg: bool = False
     breakeven_on_reduce: bool = True
     reject_opp_lock_frac: float = 0.0
-    # v21 行情锚定缓冲(R 的倍数;0 ⇒ 纯计划口径,逐位旧行为)
-    opp_lock_max_giveback_r: float = 0.0
+    # v21.7 锁利口径已收敛为单一参数 `reject_opp_lock_frac`(符号=arming 口径,
+    # |frac| = 目标处锁住的行程比例);回吐预算 = (1−|frac|)·|target−entry|。
+    # 旧的 `opp_lock_max_giveback_r`(R 单位第二把尺子)已删除。
     # v21.6 出场推进粒度(False ⇒ 逐位旧行为:§8.2/§8.3 只在认知 bar 收盘推进)
     # True ⇒ 每根已收盘执行细 bar 也推进价格型出场(目标/锁利/移动防线),
     # 不影响路由、准入、开仓与任何时间类计数(见 position.on_bar.price_only)。
@@ -155,6 +156,21 @@ class ArmConfig:
     # pivot」,本开关把它们喂给同一根 bar 的价格型裁决;不加时间计数、不消费事件。
     # 与 exit_exec 正交:pivot_exec 只补 pivot,是否也提前 §8.2 仍由 exit_exec 决定。
     pivot_exec: bool = False
+
+
+def require_exec_pivots(pivot_exec: bool, frames) -> None:
+    """`pivot_exec` 的装配前置条件:帧上必须真有细周期 pivot 流。
+
+    `CampaignFrame.exec_pivots` 目前只有 `scripts/_diag_v21_scale.py` 会装配;
+    `scenario.build_frames`(验收/生产同源链)不装配。若开关打开而帧上没有数据,
+    回放逐位等于关闭 —— 这种"静默无效"最容易被读成"该机制没有价值",因此在这里
+    直接报错,把"没接上"和"没用"区分开。
+    """
+    if pivot_exec and not any(getattr(f, "exec_pivots", None) for f in frames):
+        raise ValueError(
+            "pivot_exec=True 但场景帧没有 exec_pivots:该字段只由 "
+            "scripts/_diag_v21_scale.py 装配。请改用 exit_exec,或先补齐细周期 "
+            "pivot 装配,否则该开关会静默无效。")
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -457,9 +473,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 harvest_fade_2leg=(arm.harvest_fade_2leg if arm is not None
                                    else False),
                 reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
-                                      else 0.0),
-                opp_lock_max_giveback_r=(arm.opp_lock_max_giveback_r
-                                         if arm is not None else 0.0)),
+                                      else 0.0)),
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 
@@ -510,6 +524,11 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     exit_exec = bool(arm.exit_exec) if arm is not None else False
     exit_exec_trail = bool(arm.exit_exec_trail) if arm is not None else True
     pivot_exec = bool(arm.pivot_exec) if arm is not None else False
+    # v21.7:`pivot_exec` 只在帧携带 `exec_pivots` 时才有意义 —— 该字段目前只有
+    # `scripts/_diag_v21_scale.py` 装配,`scenario.build_frames` 不装配。缺数据时
+    # 静默放行会产出"开关无效"的读数,而它极易被误读成"该机制无效"(v21.6 的
+    # pivot_exec 结论就来自手工装配的脚本,不是这条生产链)。宁可直接报错。
+    require_exec_pivots(pivot_exec, (st.frame for st in states.values()))
     for ts in full_ts:
         for key in keys:                       # 同 ts 按 campaign key 字典序
             st = states[key]

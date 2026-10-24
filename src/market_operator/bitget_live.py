@@ -39,8 +39,8 @@ EP_ALL_POSITION = "/api/v2/mix/position/all-position"
 EP_SET_LEVERAGE = "/api/v2/mix/account/set-leverage"
 EP_PLACE_ORDER = "/api/v2/mix/order/place-order"
 EP_CANCEL_ORDER = "/api/v2/mix/order/cancel-order"
-EP_PLACE_PLAN = "/api/v2/mix/order/place-plan-order"
-EP_CANCEL_PLAN = "/api/v2/mix/order/cancel-plan-order"
+EP_PLACE_TPSL = "/api/v2/mix/order/place-tpsl-order"   # 原生仓位级止盈/止损(TP/SL)
+EP_CANCEL_PLAN = "/api/v2/mix/order/cancel-plan-order"  # 计划单与 TPSL 共用(orderIdList)
 EP_ORDERS_PENDING = "/api/v2/mix/order/orders-pending"
 EP_PLAN_PENDING = "/api/v2/mix/order/orders-plan-pending"
 EP_FILLS = "/api/v2/mix/order/fills"
@@ -308,37 +308,50 @@ class BitgetLiveClient:
         return self._request("POST", EP_PLACE_ORDER, signed=True,
                              body=body) or {}
 
-    def place_stop_market_plan(self, symbol: str, *, trigger_price: float,
-                               size: float, plan_type: str,
-                               hold_side: str, client_oid: str,
-                               side: Optional[str] = None,
-                               trade_side: Optional[str] = None) -> dict:
-        """止损市价计划单(planType=loss_plan 平仓止损;hold_side=long/short)。
+    def place_tpsl(self, symbol: str, *, plan_type: str, trigger_price: float,
+                   hold_side: str, client_oid: str,
+                   trigger_type: str = "mark_price") -> dict:
+        """交易所原生止盈/止损(TPSL),**仓位级**(place-tpsl-order)。
 
-        hedge_mode 下 tradeSide 必填(Bitget 官方):平仓止损 = 'close'
-        (缺失即报 400172 "开仓方向不能为空");one-way 下省略。
+        planType 只接受 `pos_loss` / `pos_profit`:触发后由交易所按整仓市价
+        平仓,报文里不带 size —— 仓位级 TPSL 没有数量维度(带 size 会被当成
+        另一种单型)。`executePrice=0` = 触发后市价执行,`triggerType` 与本地
+        防线同口径(mark_price)。
 
-        planType 实测口径(2026-10-22):该端点只接受 normal_plan —— loss_plan
-        报 400172 "planType 类型不合法";止损语义由 triggerPrice +
-        orderType=market + tradeSide=close 表达,故 loss_plan 归一为 normal_plan。
+        与旧 place-plan-order 计划单的区别:计划单是独立委托(要 size/side/
+        tradeSide),部分减仓后仍按原数量触发,可能留下无仓可平的废单;仓位级
+        TPSL 随仓位生命周期管理,自动覆盖剩余仓位、平仓即失效。
         """
         self.require_credentials()
-        if plan_type == "loss_plan":
-            plan_type = "normal_plan"
+        if plan_type not in ("pos_loss", "pos_profit"):
+            raise ValueError("place_tpsl 只接受仓位级 pos_loss/pos_profit,"
+                             f"收到 {plan_type!r}")
         body = {
             "symbol": symbol, "productType": self.product_type,
-            "marginMode": "crossed", "marginCoin": "USDT",
-            "planType": plan_type, "triggerPrice": f"{trigger_price}",
-            "triggerType": "mark_price", "executePrice": "0",
-            "orderType": "market",          # 止损触发后市价执行(缺失 ⇒ 400172)
-            "holdSide": hold_side, "size": f"{size}",
-            "clientOid": client_oid}
-        if trade_side:
-            body["tradeSide"] = trade_side
-        if side:
-            body["side"] = side            # hedge 下亦必填(持仓方向):缺失 ⇒ 400172
-        return self._request("POST", EP_PLACE_PLAN, signed=True,
+            "marginCoin": "USDT", "planType": plan_type,
+            "triggerPrice": f"{trigger_price}", "triggerType": trigger_type,
+            "executePrice": "0",              # 0 = 触发后市价执行
+            "holdSide": hold_side, "clientOid": client_oid}
+        return self._request("POST", EP_PLACE_TPSL, signed=True,
                              body=body) or {}
+
+    def place_stop_loss(self, symbol: str, *, trigger_price: float,
+                        hold_side: str, client_oid: str,
+                        trigger_type: str = "mark_price") -> dict:
+        """整仓止损(pos_loss):触发后市价平掉该方向的全部持仓。"""
+        return self.place_tpsl(symbol, plan_type="pos_loss",
+                               trigger_price=trigger_price,
+                               hold_side=hold_side, client_oid=client_oid,
+                               trigger_type=trigger_type)
+
+    def place_take_profit(self, symbol: str, *, trigger_price: float,
+                          hold_side: str, client_oid: str,
+                          trigger_type: str = "mark_price") -> dict:
+        """整仓止盈(pos_profit):语义同 place_stop_loss,方向相反。"""
+        return self.place_tpsl(symbol, plan_type="pos_profit",
+                               trigger_price=trigger_price,
+                               hold_side=hold_side, client_oid=client_oid,
+                               trigger_type=trigger_type)
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
         self.require_credentials()
@@ -346,11 +359,17 @@ class BitgetLiveClient:
             "symbol": symbol, "productType": self.product_type,
             "orderId": str(order_id)}) or {}
 
-    def cancel_plan_order(self, symbol: str, order_id: str) -> dict:
+    def cancel_tpsl_order(self, symbol: str, order_id: str) -> dict:
+        """撤销在挂 TPSL(pos_loss/pos_profit;计划单同端点)。
+
+        Bitget 的 cancel-plan-order 只认 `orderIdList`(对象数组):单值
+        `orderId` 在 TPSL/计划单上不被接受,撤不掉 = 旧止损继续有效,会出现
+        "新单挂上、旧单未撤"的双保护(谁先触发不可控)。
+        """
         self.require_credentials()
         return self._request("POST", EP_CANCEL_PLAN, signed=True, body={
             "symbol": symbol, "productType": self.product_type,
-            "orderId": str(order_id)}) or {}
+            "orderIdList": [{"orderId": str(order_id)}]}) or {}
 
     def orders_pending(self, symbol: Optional[str] = None) -> list:
         self.require_credentials()
@@ -360,13 +379,16 @@ class BitgetLiveClient:
         return self._request("GET", EP_ORDERS_PENDING, signed=True,
                              params=params) or []
 
-    def plan_orders_pending(self, symbol: Optional[str] = None, *,
-                            plan_type: str = "normal_plan") -> list:
-        """在挂计划单。实测口径(2026-10-21):planType 必填且按单值校验 —
-        loss_plan 被 40812 拒、逗号多值经 %2C 后 40009 签名失败;normal_plan
-        可用(runner 对账只认自有 clientOid 前缀,异己单一律不碰)。"""
+    def tpsl_orders_pending(self, symbol: Optional[str] = None) -> list:
+        """在挂 TPSL / 计划单(planType=profit_loss,单值必填)。
+
+        实测口径(2026-10-21):planType 按单值校验 —— `loss_plan` 被 40812 拒、
+        逗号多值经 %2C 后 40009 签名失败;`profit_loss` 可用,返回行里可能同时
+        含 pos_loss/pos_profit 与旧式 loss_plan/profit_plan。归属按 clientOid
+        前缀判定,异己单一律不碰。
+        """
         self.require_credentials()
-        params = {"productType": self.product_type, "planType": plan_type}
+        params = {"productType": self.product_type, "planType": "profit_loss"}
         if symbol:
             params["symbol"] = symbol
         return self._request("GET", EP_PLAN_PENDING, signed=True,

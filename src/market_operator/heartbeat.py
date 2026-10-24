@@ -360,9 +360,9 @@ class HeartbeatGuard(threading.Thread):
     职责边界(绝不越过交易链路):
     ① 每 `write_seconds` 落一次心跳 —— 即使主循环正卡在某一步;
     ② 主循环停摆超过 `stall_seconds` ⇒ 告警(限频)并记录卡在哪一步;
-    ③ 停摆且持仓存在 ⇒ **只做保护**:核对交易所计划单,缺失则按本地防线
-       (`stops[symbol].trigger`,没有则 `invalid`)补挂;不下开仓单、不改策略、
-       不动仓位数量;
+    ③ 停摆且持仓存在 ⇒ **只做保护**:核对交易所原生仓位级 TPSL(缺失则按本地
+       防线 `stops[symbol].trigger`,没有则 `invalid` 补挂);不下开仓单、不改策略、
+       不动仓位数量;TPSL 无 size 维度,数量始终由交易所按整仓决定;
     ④ 停摆超过 `self_fence_seconds` 且仍有持仓 ⇒ 主动退出(退出码 3),
        由看护进程拉起 → 走掉线补做 + 交易所对账收敛事实。
        为什么敢退出:交易所侧止损是最后一道墙,而带病运行会持续错过
@@ -435,7 +435,7 @@ class HeartbeatGuard(threading.Thread):
 
     # -- 保护面(只保护不主出) -------------------------------------------
     def ensure_protection(self) -> dict:
-        """核对每个本地持仓在交易所是否仍有**自有**止损计划单,缺失即补挂。
+        """核对每个本地持仓在交易所是否仍有**自有**止损单(TPSL),缺失即补挂。
 
         返回 {checked, placed, missing, errors}。不改仓、不开仓、不改防线。
         """
@@ -448,7 +448,7 @@ class HeartbeatGuard(threading.Thread):
             return out
         try:
             ex_pos = client.positions()
-            raw = client.plan_orders_pending()
+            raw = client.tpsl_orders_pending()
         except Exception as e:                      # BitgetError / 网络
             out["errors"] += 1
             self._journal("hb_protect_error", {"why": str(e)[:160]})
@@ -482,30 +482,32 @@ class HeartbeatGuard(threading.Thread):
                 out["missing"] += 1
                 continue
             try:
-                from market_operator.broker import _floor_step
-                spec = runner._spec(sym)
-                size = _floor_step(float(ex.get("qty") or 0.0),
-                                   spec.size_step, spec.size_place)
                 trigger = runner.fit_price(sym, float(want), direction)
-                if size <= 0.0:
-                    out["missing"] += 1
-                    continue
-                resp = client.place_stop_market_plan(
-                    sym, trigger_price=trigger, size=size,
-                    plan_type="loss_plan",
-                    hold_side="long" if direction > 0 else "short",
-                    side=runner.close_side_of(direction),
-                    trade_side=runner.close_trade_side(),
+                resp = client.place_stop_loss(
+                    sym, trigger_price=trigger,
+                    hold_side=runner.stop_hold_side(direction),
                     client_oid=self._oid(sym, "stop"))
                 oid = str((resp or {}).get("orderId") or "")
                 if oid:
                     # 顺手纠正本地记录(赋值原子;主循环下一轮以交易所为准)
-                    runner.stops[sym] = {"trigger": trigger, "qty": size,
+                    runner.stops[sym] = {"trigger": trigger,
+                                         "qty": float(ex.get("qty") or 0.0),
                                          "order_id": oid, "by": "heartbeat"}
-                out["placed"] += 1
-                self._journal("hb_stop_placed",
-                              {"symbol": sym, "trigger": trigger,
-                               "qty": size, "order_id": oid})
+                    # 主循环的在挂快照已过期:不作废的话新 order_id 不在旧快照里,
+                    # 会被判"保护丢失"→ 主循环再挂一张、再撤一张,白折腾一轮。
+                    for attr, val in (("_stops_live_ids", None),
+                                      ("_stops_live_rows", None),
+                                      ("_stops_checked_at", 0.0)):
+                        if hasattr(runner, attr):
+                            setattr(runner, attr, val)
+                    out["placed"] += 1
+                    self._journal("hb_stop_placed",
+                                  {"symbol": sym, "trigger": trigger,
+                                   "order_id": oid})
+                else:
+                    out["errors"] += 1
+                    self._journal("hb_stop_error",
+                                  {"symbol": sym, "why": "无 orderId"})
             except Exception as e:
                 out["errors"] += 1
                 self._journal("hb_stop_error", {"symbol": sym,

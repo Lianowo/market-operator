@@ -2,7 +2,7 @@
 
 回答三个运维问题:
 ① 心跳是否新鲜(state.json 的 saved_at_utc 年龄);
-② 仓位与保护是否一致(本地 positions/stops ↔ 交易所持仓 ↔ 在挂计划单);
+② 仓位与保护是否一致(本地 positions/stops ↔ 交易所持仓 ↔ 在挂 TPSL/计划单);
 ③ 重启会发生什么(缺口段已收盘 2H bar 是否已越过当前防线,即补做是否会
    触发市价离场)。
 
@@ -102,12 +102,12 @@ def _read_exchange(cfg: dict):
         print(f"equity={bal['equity']:.4f} available={bal['available']:.4f} "
               f"unrealized={bal['unrealized_pl']:.4f}")
         ex_pos = {p["symbol"]: p for p in client.positions()}
-        raw = client.plan_orders_pending() or {}
+        raw = client.tpsl_orders_pending() or []
         rows = raw.get("entrustedList") if isinstance(raw, dict) else raw
         pending: dict = {}
         for r in rows or []:
             pending.setdefault(str(r.get("symbol")), []).append(r)
-        print(f"持仓 {len(ex_pos)} 个;在挂计划单 {len(rows or [])} 张"
+        print(f"持仓 {len(ex_pos)} 个;在挂 TPSL/计划单 {len(rows or [])} 张"
               f"({len(pending)} 个品种)")
         return client, ex_pos, pending, 0
     except (BitgetError, RuntimeError, OSError) as e:
@@ -155,7 +155,7 @@ def _print_positions(positions: dict, stops: dict, ex_pos: dict,
         elif len(pending.get(sym, [])) > 1:
             stop_txt = f"x{len(pending.get(sym, []))}"
             state = "重复止损单"
-            issues.append(f"{sym}: 同品种多张计划单")
+            issues.append(f"{sym}: 同品种多张保护单")
         else:
             stop_txt = "在挂"
         if (mark <= stop) if d > 0 else (mark >= stop):

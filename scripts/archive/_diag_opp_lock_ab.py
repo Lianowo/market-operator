@@ -1,16 +1,20 @@
-"""v21 对侧锁利口径 A/B:纯计划口径 vs 行情锚定(giveback_r 扫描)。
+"""v21 对侧锁利口径 A/B(**v21.6 存档诊断;口径已被 v21.7 回吐预算取代**)。
 
-背景:锁利只在**收盘**裁决,而收盘价常已走过 `opp_lock_px`(entry→target 行程
-比例)算出的位置 ⇒ 计划口径退化成"等回踩"的止盈单,实际锁到的 R 远小于名义值。
-本脚本用真实数据量化两件事:
-① 行情锚定(`opp_lock_live_px`,ref ∓ giveback_r·R)把"实际锁到的 R"抬高多少;
-② giveback_r 取 0 / 0.25 / 0.5 / 1.0 对净利、胜率、期望 R 的影响。
+历史背景:锁利只在**收盘**裁决,而收盘价常已走过 `opp_lock_px`(entry→target
+行程比例)算出的位置 ⇒ 计划口径退化成"等回踩"的止盈单,实际锁到的 R 远小于
+名义值。本脚本用真实数据量化了当时的两件事:行情锚定(`opp_lock_live_px`,
+ref ∓ giveback_r·R)抬高了多少"实际锁到的 R",以及 giveback_r 0/0.25/0.5/1.0
+对净利的影响 —— 结论(见 reports/opp_lock_ab.md 与 docs/v21-protocol.md §5):
+R 单位的第二把尺子与行程比例互相遮盖,0.25R 在 dev/test 均为负,已删除。
+
+现在锁利只有一个参数 `reject_opp_lock_frac`(回吐预算 =(1−|frac|)·span),
+故本脚本的臂改为 frac 扫描;重跑得到的是 v21.7 语义下的读数,与
+`reports/opp_lock_ab.md`(v21.6)不可直接比较。
 对照臂 `arm=None` = 旧 §8.2 触及减仓 50%(无锁利)。
 
 口径:M3c 帧(2h/4h 同周期,12h→2h,1d→4h)、full 段、cost 1.0x(E1/E3 家族)。
-产物:reports/opp_lock_ab.md
 
-    python scripts/_diag_opp_lock_ab.py
+    python scripts/archive/_diag_opp_lock_ab.py
 """
 from __future__ import annotations
 
@@ -32,8 +36,6 @@ from market_operator.campaign import (                          # noqa: E402
     ArmConfig, build_campaign_frame, run_campaigns,
 )
 from market_operator.position import PositionManager            # noqa: E402
-from market_operator.strategy_v6 import V6Params                # noqa: E402
-from market_operator.structure import Params                    # noqa: E402
 from market_operator.trigger import prepare_mic_cognition        # noqa: E402
 
 CONFIG = ROOT / "config" / "canonical.json"
@@ -50,28 +52,29 @@ def _num(txt):                                     # noqa: ANN001
 
 
 def _exit_hook(self, pos, ts, ref, reason):        # noqa: ANN001
-    """出场即快照 pos.log:统计锁利落地次数/名义锁住的 R(诊断用)。"""
-    hit = [s for s in pos.log if "|opp_" in s or "opp_break_lock" in s]
-    if any("_reject|" in s for s in hit):
-        LOCK_STATS["reject"] += 1
-    locked = [s for s in hit if "opp_break_lock|" in s or "opp_lock|" in s]
-    if locked:
+    """出场即快照 pos.log:统计锁利推进次数/实际锁到的 R(诊断用)。
+
+    v21.7 日志形如 `v21|opp_lock|峰值=… 预算=… 回吐=… ref=… invalid A->B`,
+    "计划/行情"两口径已合并为单一回吐预算 ⇒ 这里只统计实际落点、保护侧距离
+    与回吐占预算的比例。
+    """
+    if any(s.startswith("v21|opp_lock_armed|") for s in pos.log):
         LOCK_STATS["lock"] += 1
-        if pos.reduced:
-            d, e, R = pos.direction, pos.entry, pos.initial_risk
-            LOCK_STATS["locked_r"].append(d * (pos.invalid - e) / R)
-            # 同一事件的两种口径逐一对照(不受权益路径/容量门影响)
-            m = re.search(rf"计划={_NUM} 行情={_NUM} ref={_NUM} "
-                          rf"invalid [\d.]+->([\d.]+)", locked[-1])
-            if m:
-                plan_px, live_px = _num(m.group(1)), _num(m.group(2))
-                ref_px, lock_px = _num(m.group(3)), float(m.group(4))
-                if plan_px is not None:
-                    LOCK_STATS["plan_r"].append(d * (plan_px - e) / R)
-                if live_px is not None:
-                    LOCK_STATS["live_r"].append(d * (live_px - e) / R)
-                # 落地锁利价距"当下可见价"的保护侧距离(R):越小越有效
-                LOCK_STATS["dist_r"].append(d * (ref_px - lock_px) / R)
+    if any("lock_giveback_exhausted" in s for s in pos.log):
+        LOCK_STATS["reject"] += 1
+    locked = [s for s in pos.log if "v21|opp_lock|" in s]
+    if locked:
+        d, e, R = pos.direction, pos.entry, pos.initial_risk
+        LOCK_STATS["locked_r"].append(d * (pos.invalid - e) / R)
+        m = re.search(rf"预算={_NUM} 回吐={_NUM} ref={_NUM} "
+                      rf"invalid [\d.]+->([\d.]+)", locked[-1])
+        if m:
+            budget, giveback = _num(m.group(1)), _num(m.group(2))
+            if budget is not None and giveback is not None:
+                # 保护侧距离(budget − 回吐)与回吐占预算的比例
+                LOCK_STATS["plan_r"].append((budget - giveback) / R)
+                LOCK_STATS["live_r"].append(d * (float(m.group(4)) - e) / R)
+                LOCK_STATS["dist_r"].append(giveback / budget if budget else 0.0)
     return _orig_exit(self, pos, ts, ref, reason)
 
 
@@ -141,9 +144,9 @@ def run_arm(label, frames, raw_can, raw_v21, contracts, params, rp_base, rp_by_t
            "secs": round(time.time() - t0, 1)}
     print(f"{label:32s} N={row['n']:4d} net={row['net']:+8.2f} "
           f"gross={row['gross']:+8.2f} gR={row['gR']:+.3f} wr={row['wr']:.3f} "
-          f"lock={row['lock_n']:4d} reject={row['reject_n']:3d} "
-          f"lockedR={row['lock_r']:+.2f} 计划R={row['plan_r']:+.2f} "
-          f"行情R={row['live_r']:+.2f} 距现价R={row['dist_r']:+.2f} "
+          f"lock={row['lock_n']:4d} exhausted={row['reject_n']:3d} "
+          f"lockedR={row['lock_r']:+.2f} 保护侧R={row['plan_r']:+.2f} "
+          f"实际R={row['live_r']:+.2f} 回吐/预算={row['dist_r']:.3f} "
           f"({row['secs']}s)", flush=True)
     return row
 
@@ -164,13 +167,10 @@ def main() -> None:
 
     arms = [
         ("arm=None(旧§8.2 减仓50%)", None),
-        ("锁利 计划口径(giveback=0)", ArmConfig(reject_opp_lock_frac=-0.50)),
-        ("锁利 行情锚定 0.25R", ArmConfig(reject_opp_lock_frac=-0.50,
-                                          opp_lock_max_giveback_r=0.25)),
-        ("锁利 行情锚定 0.50R", ArmConfig(reject_opp_lock_frac=-0.50,
-                                          opp_lock_max_giveback_r=0.50)),
-        ("锁利 行情锚定 1.00R", ArmConfig(reject_opp_lock_frac=-0.50,
-                                          opp_lock_max_giveback_r=1.00)),
+        ("锁利 frac=0.25(预算 ¾span)", ArmConfig(reject_opp_lock_frac=-0.25)),
+        ("锁利 frac=0.50(预算 ½span)", ArmConfig(reject_opp_lock_frac=-0.50)),
+        ("锁利 frac=0.75(预算 ¼span)", ArmConfig(reject_opp_lock_frac=-0.75)),
+        ("锁利 frac=1.00(触价即平)", ArmConfig(reject_opp_lock_frac=-1.00)),
     ]
     rows = []
     for seg in ("dev", "test", "full"):

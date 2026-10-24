@@ -1,6 +1,6 @@
 {
   "version": "live-v21-2026-10-21",
-  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=250U:4%, <=600U:3%, <=1500U:2%, >1500U:1%) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利50% + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
+  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=250U:4%, <=600U:3%, <=1500U:2%, >1500U:1%) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利(峰值锚定回吐预算,frac 见 strategy.json 的 arm_config.reject_opp_lock_frac) + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
   "meta": {
     "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Dual-Bot Telegram K-Line Charts",
     "strategy_config": "config/strategy.json",
@@ -37,8 +37,7 @@
     "orders_per_hour": 30,
     "taker_fee": 0.0006,
     "maker_fee": 0.0002,
-    "slippage_per_side": 0.0002,
-    "min_notional_source": "contracts_minTradeUSDT"
+    "slippage_per_side": 0.0002
   },
   "loop": {
     "poll_seconds": 15,
@@ -46,16 +45,10 @@
     "universe_refresh_seconds": 7200,
     "api_error_max": 5,
     "max_consecutive_errors": 20,
-    "state_bar_tail": 24,
-    "campaigns_write_seconds": 120,
     "state_path": "runtime/live/state.json",
     "heartbeat_path": "runtime/live/heartbeat.json",
     "state_bar_tail": 24,
     "campaigns_write_seconds": 60,
-    "intent_keep_hours": 72,
-    "gap_recovery": {
-      "stop_check_seconds": 120
-    },
     "journal_dir": "logs",
     "journal_prefix": "live_",
     "gap_recovery": {
@@ -109,14 +102,12 @@
     "warmup_trigger_bars": 1800
   },
   "paper": {
-    "equity0": 104.0,
-    "symbols_mode": "core_only"
+    "equity0": 104.0
   },
   "symbols_core": [
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT",
     "DOGEUSDT"
-  ],
-  "note_size": "2026-10-21 v21 实盘配置:104USDT 起步 × 20x 杠杆 × 阶梯动态复利(4%->3%->2%->1%) × 各周期独立容量池(12%/TF, 总上限 50%) × 双机器人黑白K线推送"
+  ]
 }
