@@ -103,6 +103,40 @@ python scripts/_diag_balance.py            # v21.2 Pivot 平衡箱对照
 python scripts/_diag_balance_detect.py     # v21.3 六维框子识别器诊断
 python scripts/_diag_v21_backtest.py       # v21 M3c 多周期回测与成本压力验证
 python scripts/live_paper_check.py         # v21 实盘多周期装配与真网行情 paper 冒烟校验
-python -m pytest -q                        # 605 passed（全量回归 + v21 专项测试）
+python -m pytest -q                        # 570 passed, 1 skipped（全量回归 + v21 专项测试）
 ```
+
+## 8. 生产 `main` 合并口径（v21 分支）
+
+2026-10-24 把 `main` 合进 `refactor/domain-model`（合并提交 `b04e4c9`），再以
+`fix(live): port main heartbeat/guard into v21 runner`（`8a63992`）补齐线上安全面。
+**没有整文件替换 `scripts/live_runner.py`**：`main` 版依赖 `strategy_v6.V6Router`
+与 `routing.TieredParams`，本分支两者都没有，照搬会直接 ImportError。
+
+### 8.1 已移植（功能级）
+
+- **心跳文档 `heartbeat_doc()`**：三个时间事实分开写 —— `ts_ms`（心跳线程还活着）、
+  `loop_ts_ms`（主循环最后一次**成功**走完一步）、`step_started_ms`（卡在哪一步）。
+  看护据此区分「进程没了」与「进程在但没进展」。
+- **每步落盘**：`_save_state()` 内固定写 `heartbeat.json`（try/except 包裹，心跳失败
+  不得阻断交易链路）；启动 `_load_state()` 之后立刻写一次，避免看护把新进程误判为卡死。
+- **路径归属**：显式参数 → `state_path` 同目录 → `config.loop.heartbeat_path`（锚定
+  `ROOT`）。2026-10-24 的缺陷正是 cwd 相对路径让测试覆盖了生产
+  `runtime/live/heartbeat.json`；新增 `--heartbeat-path` 供沙盒指到临时目录。
+- **`HeartbeatGuard` 线程**：`main()` 里随主循环起动（live 自我熔断退出码 3，paper 关闭），
+  只做保护面 —— 核对交易所计划单、缺失则按本地防线补挂，不下开仓单、不改策略、不改仓位。
+- **锁利价双闸门**：`tighten_lock(direction, plan_px, live_px, ref_px, entry_px, min_buf)`
+  先对两个候选各过 `lock_is_protective` / `lock_is_profitable`，**再**在通过的候选里取更紧者。
+
+### 8.2 未移植（与 v21 路由层冲突）
+
+`main` 的 campaign/lifecycle 差异依赖 `strategy_v6` 路由决策链；v21 走
+`routing.MarketRouter` + `campaign.run_campaigns`。两者在「一步之内谁决定开仓」这一层
+语义不同，整段照搬会造出两套路由事实并存。等 v21 侧出现同名接缝（或明确下线 v6 路由）
+再谈这一块。
+
+### 8.3 收敛清单
+
+零引用模块/脚本清单与执行建议见 `reports/refactor_20261023/CLEANUP_PROPOSAL.md`
+（**只提案，未删除**）。
 
