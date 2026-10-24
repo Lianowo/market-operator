@@ -467,3 +467,26 @@ def test_price_only_leaves_trail_to_cognition_bars():
              new_pivots=[_pivot_high(97.0, known=2)])
     assert pos.invalid == pytest.approx(97.1)      # 97.0 + k_bm(0.1)·1
 
+
+def test_price_only_trail_runs_when_pivots_supplied():
+    """v21.6 `pivot_exec`:细尺度 pivot 一到,执行细 bar 上也能收紧 §8.3 防线。
+
+    这是 `exit_exec` 做不到的那一半 —— 有 pivot 才动 trail,且仍不推进时间计数。
+    """
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.0, 95.0, 95.5), ATR,
+             new_pivots=[_pivot_high(97.0, known=1)], price_only=True)
+    assert pos.invalid == pytest.approx(97.1)
+    assert pos.bars_held == 0
+
+
+def test_price_only_skip_trail_ignores_pivots():
+    """`skip_trail=True`(`exit_exec_trail=False`)时 pivot 一律不生效。"""
+    m = _mgr()
+    pos = _short(m)
+    m.on_bar("BTCUSDT", _bar(1, 99.0, 95.0, 95.5), ATR,
+             new_pivots=[_pivot_high(97.0, known=1)], price_only=True,
+             skip_trail=True)
+    assert pos.invalid == 101.0
+

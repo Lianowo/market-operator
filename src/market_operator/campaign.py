@@ -51,7 +51,7 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import pandas as pd
@@ -150,6 +150,11 @@ class ArmConfig:
     # exit_exec=True 时是否也把 §8.3 移动防线搬到执行细 bar(False ⇒ 只提前
     # §8.2 目标/锁利,trail 仍只在认知收盘推进)
     exit_exec_trail: bool = True
+    # v21.6 细尺度 pivot 提前推进§8.3(False ⇒ 逐位旧行为):
+    # 帧上 `CampaignFrame.exec_pivots` 给出「更细周期在该执行细 bar 收盘确认的
+    # pivot」,本开关把它们喂给同一根 bar 的价格型裁决;不加时间计数、不消费事件。
+    # 与 exit_exec 正交:pivot_exec 只补 pivot,是否也提前 §8.2 仍由 exit_exec 决定。
+    pivot_exec: bool = False
 
 
 def _lc(counters: dict, key: str, n: int = 1) -> None:
@@ -216,6 +221,9 @@ class CampaignFrame:
     close_edge: dict                          # 最末执行标签 → [认知 bar 索引]
     exec_index_of: dict                       # 认知 bar 索引 → 其区间细标签列表
     mic: Optional[object] = None              # v10:MicCognition(可选)
+    # v21.6:执行细 bar 标签 → 更细周期在该 bar 收盘确认的 pivot 列表
+    # (arm.pivot_exec 才消费;缺省空 ⇒ 逐位旧行为)
+    exec_pivots: dict = field(default_factory=dict)
 
 
 def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
@@ -501,6 +509,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     # v21.6 出场推进粒度开关(arm 缺省/False ⇒ 逐位旧行为)
     exit_exec = bool(arm.exit_exec) if arm is not None else False
     exit_exec_trail = bool(arm.exit_exec_trail) if arm is not None else True
+    pivot_exec = bool(arm.pivot_exec) if arm is not None else False
     for ts in full_ts:
         for key in keys:                       # 同 ts 按 campaign key 字典序
             st = states[key]
@@ -532,17 +541,23 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 #     等到认知收盘才收网。只碰持仓管理 —— 路由/准入/开仓、
                 #     事件消费与时间类计数(bars_held/§8.6/v19 半窗)全部不动,
                 #     ATR 沿用最近一次认知 bar 的冻结值。
-                if exit_exec:
+                if exit_exec or pivot_exec:
                     pm_pos = st.pos_mgr.positions.get(sym)
                     if (pm_pos is not None
                             and broker.position_of(key) is not None
                             and int(ts) > int(pm_pos.opened_ts)):
-                        _lc(counters, "exit_exec_ticks")
-                        m2 = st.pos_mgr.on_bar(sym, q, st.last_atr,
-                                               price_only=True,
-                                               skip_trail=not exit_exec_trail)
-                        broker.update_protective_invalid(key, pm_pos.invalid)
-                        _apply_mgmt(st, broker, m2, ts, counters, n_fill)
+                        # v21.6:细尺度 pivot 只在本执行细 bar 收盘才确认,
+                        # 逐根喂入才能提前推进§8.3(空列表 ⇒ 与旧路径等价)
+                        pv = f.exec_pivots.get(ts, ()) if pivot_exec else ()
+                        if exit_exec or pv:
+                            _lc(counters, "exit_exec_ticks" if exit_exec
+                                else "pivot_exec_ticks")
+                            m2 = st.pos_mgr.on_bar(sym, q, st.last_atr,
+                                                   new_pivots=pv,
+                                                   price_only=True,
+                                                   skip_trail=not exit_exec_trail)
+                            broker.update_protective_invalid(key, pm_pos.invalid)
+                            _apply_mgmt(st, broker, m2, ts, counters, n_fill)
                 # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
                 for i in f.close_edge.get(ts, ()):
                     _cognition_step(st, broker, i, counters, cap_skips,
