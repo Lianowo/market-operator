@@ -38,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from market_operator import aggregate as agg                       # noqa: E402
 from market_operator.campaign import run_campaigns                 # noqa: E402
 from market_operator.scenario import load_funding_rates            # noqa: E402
 from _diag_v21_abcd import Ctx, HTF, TF_ORDER, metrics             # noqa: E402
@@ -54,11 +55,26 @@ ARMS: dict = {
     "solo_1h_t30m":   (("1h",), {"1h": 1800}),
     "port_2h_1h":     (("1h", "2h"), {}),
     "port_2h_t1h_1h": (("1h", "2h"), {"2h": 3600}),
+    # v21.6 第二步:同尺子量 4h/12h/1d(配置里本就有 caps / router_params)
+    "solo_4h":        (("4h",), {}),
+    "solo_4h_t2h":    (("4h",), {"4h": 7200}),
+    "solo_12h":       (("12h",), {}),
+    "solo_1d":        (("1d",), {}),
 }
+# 细尺度 pivot 流来源(arm → 细周期);只有列在这里的臂才装配 exec_pivots
+PIVOT_FINE: dict = {
+    "solo_2h_piv1h": "1h",
+    "solo_4h_piv2h": "2h",
+    "solo_12h_piv4h": "4h",
+}
+ARMS["solo_2h_piv1h"] = (("2h",), {})
+ARMS["solo_4h_piv2h"] = (("4h",), {})
+ARMS["solo_12h_piv4h"] = (("12h",), {})
 
 
 def build(ctx: Ctx, frames: dict, *, segment: str, funding: str,
-          exit_exec: bool, exit_exec_trail: bool = True, cm: float = 1.0):
+          exit_exec: bool, exit_exec_trail: bool = True, cm: float = 1.0,
+          pivot_exec: bool = False):
     """一次回放。caps / rp_by_tf 对 `1h` 的取值口径见下(与 2h 同档,显式声明)。"""
     cfg = ctx.cfg
     caps = dict(cfg["tf_cap_by_tf"])
@@ -77,6 +93,8 @@ def build(ctx: Ctx, frames: dict, *, segment: str, funding: str,
     if exit_exec:
         arm = dc_replace(arm, exit_exec=True,
                          exit_exec_trail=exit_exec_trail)
+    if pivot_exec:
+        arm = dc_replace(arm, pivot_exec=True)
     rates = load_funding_rates(ctx.syms) if funding == "history" else None
     return run_campaigns(
         frames, segment=segment, dev_frac=float(cfg["dev_frac"]),
@@ -91,6 +109,31 @@ def build(ctx: Ctx, frames: dict, *, segment: str, funding: str,
         tf_cap_by_tf=caps, arm=arm, router_params=ctx.base_rp,
         enable_mic=True, router_params_by_tf=rp_btf,
         funding_rates=rates)
+
+
+def attach_pivot_exec(ctx: Ctx, frames: dict, fine_tf: str) -> dict:
+    """把细周期确认的 pivot 挂到战役帧的执行细 bar 上(arm.pivot_exec)。
+
+    映射按**墙钟时间**做,不用下标对齐:细周期 pivot 在其确认 bar 收盘时已知,
+    即 `fine_label + fine_tf`,该时刻落在哪根执行细 bar 的收盘上,就把 pivot
+    记在那根 bar 的标签上(`标签 = 收盘时刻 − ms_exec`)。只在目标标签确实是本帧
+    执行细 bar、且不是认知收盘时挂载 —— 认知收盘那一刻粗尺度自家的 pivot 由 ⑤
+    正常喂入,重复喂等于用两个锚点收同一段结构。
+    """
+    out = {}
+    for key, f in frames.items():
+        cog = ctx.cog_by[(f.symbol, fine_tf)]
+        fine_ms = agg.TF_HOURS[fine_tf] * 3_600_000
+        pe: dict = {}
+        for i, pvs in cog.pivots_by.items():
+            known = int(cog.bars[i][0]) + fine_ms
+            if known % f.ms_exec != 0:
+                continue                    # 没落在执行网格上(不同周期族拼错)
+            label = known - f.ms_exec
+            if label in f.exec_bars and label not in f.close_edge:
+                pe.setdefault(label, []).extend(pvs)
+        out[key] = dc_replace(f, exec_pivots=pe)
+    return out
 
 
 def summarize(res) -> dict:
@@ -117,6 +160,8 @@ def summarize(res) -> dict:
     out["tail"] = tail_stats(closed)
     out["exit_exec_ticks"] = int((m.get("counters") or {}).get(
         "exit_exec_ticks", 0))
+    out["pivot_exec_ticks"] = int((m.get("counters") or {}).get(
+        "pivot_exec_ticks", 0))
     out["trades"] = closed
     return out
 
@@ -141,6 +186,8 @@ def main() -> int:
     if unknown:
         raise SystemExit(f"unknown arms {unknown}; known={list(ARMS)}")
     tfs = sorted({tf for n in names for tf in ARMS[n][0]})
+    # 细尺度 pivot 流所需周期必须一起载入(cog_by 按 (sym, tf) 索引)
+    tfs = sorted(set(tfs) | {PIVOT_FINE[n] for n in names if n in PIVOT_FINE})
 
     t0 = time.time()
     ctx = Ctx(only=only, tfs=tfs, trig_map={})
@@ -164,6 +211,9 @@ def main() -> int:
     for name in names:
         arm_tfs, trig_map = ARMS[name]
         frames = ctx.frames_for(arm_tfs, trig_map)
+        fine_tf = PIVOT_FINE.get(name)
+        if fine_tf:
+            frames = attach_pivot_exec(ctx, frames, fine_tf)
         for seg in segs:
             for funding in fundings:
                 for cm in cms:
@@ -171,7 +221,7 @@ def main() -> int:
                         t1 = time.time()
                         res = build(ctx, frames, segment=seg, funding=funding,
                                     exit_exec=xexec, exit_exec_trail=xtrail,
-                                    cm=cm)
+                                    cm=cm, pivot_exec=bool(fine_tf))
                         s = summarize(res)
                         trades = s.pop("trades")
                         s["run_s"] = round(time.time() - t1, 1)
@@ -185,7 +235,7 @@ def main() -> int:
                               f"{cm:4.1f} | {s['n']:4d} {s['net']:+9.1f} "
                               f"{s['e_r']:+8.4f} {s['funding_total']:+8.1f} "
                               f"{s['dd_pct']:6.2f} | {gb_txt} "
-                              f"{s['exit_exec_ticks']:6d} | {tf_txt} "
+                              f"{s['exit_exec_ticks'] + s['pivot_exec_ticks']:6d} | {tf_txt} "
                               f"({s['run_s']}s)", flush=True)
                         if not xexec:
                             cols = ("campaign", "tf", "symbol", "direction",

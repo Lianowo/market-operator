@@ -1,0 +1,39 @@
+{
+ "note": "1h 观察周期执行帧 = 15m;2h/4h 执行帧 = 1h",
+ "arms": {
+  "solo_2h__dev__const__1": {
+   "n": 109,
+   "gross": 2.4925,
+   "cost": 28.9106,
+   "net": -19.9083,
+   "eq": 280.0917,
+   "wr": 0.4495,
+   "pf": 1.0276,
+   "dd_pct": 17.5512,
+   "e_r": -0.0902,
+   "by_tf": {
+    "2h": {
+     "n": 109,
+     "net": -19.91,
+     "e_r": -0.0902,
+     "funding": 2.87,
+     "give_back_r": 1.2035,
+     "hold_bars": 7.959
+    }
+   },
+   "funding_total": 2.87,
+   "tail": {
+    "mfe_r_mean": 1.1206,
+    "mae_r_mean": -0.6724,
+    "give_back_r_mean": 1.2035,
+    "mfe_ge_real_share": 1.0,
+    "top5_share": null,
+    "hold_bars_mean": 7.959,
+    "partial_legs": 0
+   },
+   "exit_exec_ticks": 0,
+   "pivot_exec_ticks": 0,
+   "run_s": 0.2
+  }
+ }
+}
