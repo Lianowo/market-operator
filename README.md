@@ -44,7 +44,10 @@ aggregate(多 TF 聚合) ◄─────────────────�
   已移除**,双臂实现冻结于 `research/rounds/v6/`。
 - **生产闭包**:`data`、`aggregate`、`structure`、`balance_detect`、`events`、`hypothesis`、
   `position`、`broker`、`campaign`、`routing`、`replay`、`split`、`trigger`、`scenario`、`bitget_live`、`tg`、`secrets_loader`(另有 `harvest`/`quality`/`repairs` 由 `campaign` 传递 import —— v18 决策语境钩子仍供历史路由复用;研究方法学 `research` 已不在闭包内)。
-- **退役实验件**:`strategy_v8`、`zonebio`、`quattro`、`aggtape`、`bandside`、`balance`、`flow_features`、`flow_study`、`tape_features` —— 只被各自的研究脚本与历史测试引用。`tests/test_layering.py` 把这条边界变成断言:生产闭包不得 import 退役模块,生产模块名不得含版本号,退役清单不得出现无人引用的孤儿。
+- **退役实验件**:`strategy_v8`、`zonebio`、`quattro`、`aggtape`、`bandside`、`balance`、`flow_features`、`flow_study`
+—— 只被各自的研究脚本与历史测试引用。`tests/test_layering.py` 把这条边界变成断言:生产闭包不得 import 退役模块,生产模块名不得含版本号,退役清单不得出现无人引用的孤儿。
+（`tape_features` 于 2026-10-24 随唯一 importer 归档到 `scripts/archive/`,已退出本清单。）
+
 
 
 ## 平衡箱统一架构与实盘引擎(当前活跃架构)

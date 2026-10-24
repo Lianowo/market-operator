@@ -20,6 +20,8 @@
 1. 记录：`scripts/tape_recorder.py`（已在仓）持续落 data/tape/*.jsonl;
 2. 特征：`market_operator/tape_features.py`（窗口 delta、CVD、超大单占比、
    价格效率 |move|/volume、区域接触时刻的吸收读数）;
+   ※ 2026-10-24:该模块与唯一 importer(`scripts/diagnose_current_btc.py`)一并
+   归档到 `scripts/archive/`(零引用退役件,见 `reports/refactor_20261023/CLEANUP_PROPOSAL.md`)。
 3. 接入：**只读注解**进决策日志（不改白名单/闸门），档案+自评留痕；
 4. 评估门槛：积累 ≥60 个区域接触事件（bar-event × tape-features 双全）后，
    单独冻结协议判定 tape 增量；此前一切"流能救命"言论禁入仓文档。

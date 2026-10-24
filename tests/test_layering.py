@@ -48,7 +48,8 @@ RETIRED = frozenset({
     "balance",       # scripts/_diag_balance.py(被 balance_detect 取代)
     "flow_features",  # v12 订单流研究件
     "flow_study",
-    "tape_features",  # 只读注解层,未进入任何判定
+    # tape_features:2026-10-24 随唯一 importer(scripts/diagnose_current_btc.py)
+    # 一起归档到 scripts/archive/ ⇒ 已从本清单移除(零引用不留在退役名单里)。
 })
 
 _VERSION_IN_NAME = re.compile(r"(^|_)v\d+(_|$)")
