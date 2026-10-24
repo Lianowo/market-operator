@@ -131,5 +131,5 @@ turtle_stop_atr·atr(初始防线 2.0·atr);**无固定目标**(target_1=None,
 | v6 A/B | docs/v6-protocol.md | 臂 A clamp2R:S1 区缘失效、room≥1.5R、target 钳 2R、减仓后禁保本;臂 B 即规范 turtle | research/rounds/v6/ |
 | PR#9/#10 | (设施) | opportunity 因果生命周期 / 15m 保护性止损 / sqlite 执行账本(前向设施,不入回放链) | research/rounds/external/ |
 | v7-v20 | docs/v7..v20-protocol.md | E8-E10 扩展事件、级联触发(trigger.py)、质量五问(quality.py)、收割婚配(harvest.py)、修复包(repairs.py)、阶梯配注(tiered.py)、生命周期(lifecycle.py)、逐笔流研究(aggtape.py) | src/market_operator/ & scripts/run_v*.py |
-| v21 (当前实盘架构) | docs/v21-protocol.md | `BalanceDetector` 六维平衡箱识别(`use_balance_detector=True`) + `ACCEPT`/`REJECT` 双原语 + M3c 高阶降档混合触发(`2h`/`4h` 同周期,`12h->2h`,`1d->4h`) + `REJECT` 箱体外缘结构止损 & 对侧突破锁利 50%(`reject_opp_lock_frac=-0.50`) + 各周期独立风险容量池(`tf_cap_by_tf`) + 阶梯动态复利与双 Bot 黑白 K 线图通知 | config/strategy.json & config/live.json |
+| v21 (当前实盘架构) | docs/v21-protocol.md | `BalanceDetector` 六维平衡箱识别(`use_balance_detector=True`) + `ACCEPT`/`REJECT` 双原语 + M3c 高阶降档混合触发(`2h`/`4h` 同周期,`12h->2h`,`1d->4h`) + `REJECT` 箱体外缘结构止损 & 对侧突破锁利(回吐预算,`reject_opp_lock_frac=-0.25`,v21.7) + 各周期独立风险容量池(`tf_cap_by_tf`) + 阶梯动态复利与双 Bot 黑白 K 线图通知 | config/strategy.json & config/live.json |
 
