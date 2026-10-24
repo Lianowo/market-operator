@@ -209,19 +209,26 @@ def opp_lock_live_px(direction: int, ref_px: float, giveback_r: float,
 
 
 def tighten_lock(direction: int, plan_px: Optional[float],
-                 live_px: Optional[float]) -> Optional[float]:
-    """合并两种口径:**取更贴近现价的一侧**(空头取更小 / 多头取更大)。
+                 live_px: Optional[float], ref_px: float,
+                 entry_px: float, min_buf: float = 0.0) -> Optional[float]:
+    """合并两种口径并过闸门:**取更贴近现价的一侧**(空头取更小 / 多头取更大)。
 
     `plan_px`(协议:至少锁到 entry→target 行程的 frac)与 `live_px`
-    (行情:不许回吐超过给予的缓冲)取紧者,保证锁利价既是有效的
-    (不会落到现价身后)、又不会比协议要求更松。
+    (行情:不许回吐超过给予的缓冲)先各自过两道闸门 ——
+    ① `lock_is_protective`(落在当下参考价 `ref_px` 的保护侧且留 `min_buf`),
+    ② `lock_is_profitable`(落在 `entry_px` 的盈利侧);
+    再在**通过闸门的候选**里取紧者。全部不通过 ⇒ `None`(调用方不得推进防线)。
+
+    先过滤再取紧,而不是先取紧再过滤:否则一个更紧但非法的候选(落在现价
+    盈利侧)会把合法的另一个一起顶掉。
     """
-    if plan_px is None:
-        return live_px
-    if live_px is None:
-        return plan_px
-    return (min(float(plan_px), float(live_px)) if direction < 0
-            else max(float(plan_px), float(live_px)))
+    cands = [float(px) for px in (plan_px, live_px)
+             if px is not None
+             and lock_is_protective(direction, float(px), ref_px, min_buf)
+             and lock_is_profitable(direction, float(px), entry_px)]
+    if not cands:
+        return None
+    return min(cands) if direction < 0 else max(cands)
 
 
 def fmt_px(px: Optional[float]) -> str:
@@ -455,10 +462,9 @@ class PositionManager:
                     live_px = opp_lock_live_px(pos.direction, c,
                                                self.opp_lock_max_giveback_r,
                                                pos.initial_risk)
-                    lock_px = tighten_lock(pos.direction, plan_px, live_px)
-                    if not (lock_is_protective(pos.direction, lock_px, c)
-                            and lock_is_profitable(pos.direction, lock_px,
-                                                   pos.entry)):
+                    lock_px = tighten_lock(pos.direction, plan_px, live_px,
+                                           c, pos.entry)
+                    if not lock_is_protective(pos.direction, lock_px, c):
                         # 落位闸门(1):算出的锁利价已落到现价盈利侧/身后
                         # (收盘虽破对侧,行情早已走远或已回抽越过锁利价)。
                         # 推进它等于把唯一保护单变成"止盈单",交易所立即触发
@@ -489,10 +495,9 @@ class PositionManager:
                         live_px = opp_lock_live_px(pos.direction, c,
                                                    self.opp_lock_max_giveback_r,
                                                    pos.initial_risk)
-                        lock_px = tighten_lock(pos.direction, plan_px, live_px)
-                        if not (lock_is_protective(pos.direction, lock_px, c)
-                                and lock_is_profitable(pos.direction, lock_px,
-                                                       pos.entry)):
+                        lock_px = tighten_lock(pos.direction, plan_px, live_px,
+                                               c, pos.entry)
+                        if not lock_is_protective(pos.direction, lock_px, c):
                             # 落位闸门(2):仅影线触及分支最易踩到"锁利价回落
                             # 到现价盈利侧"—— 极值刺到目标后收盘已反抽回 near
                             # entry,把防线推到 frac(<10%) 位只是把止损变成贴着

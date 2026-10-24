@@ -669,7 +669,12 @@ def test_save_state_splits_hot_and_campaigns(tmp_path):
 
 
 def test_campaigns_written_on_change_not_every_step(tmp_path):
-    """冷档只在变更/到档期时写:常态每步只落 22KB 热档,不做 6MB 全量重写。"""
+    """冷档只在变更/到档期时写:常态每步只落热档 + 小心跳,不做全量重写。
+
+    每步固定三笔原子写:state.json(热档)/ heartbeat.json(看护判活,<1KB,每步必写)
+    / campaigns.json(冷档,仅变更或到档期)。心跳不能跟着冷档档期走,否则看护会
+    把"正常但冷档未到档期"误判成停摆。
+    """
     r = _runner(tmp_path, _FakeClient(), _FakeTG())
     r.campaigns["BTCUSDT"] = _fake_campaign(40)
     writes: list[str] = []
@@ -677,14 +682,15 @@ def test_campaigns_written_on_change_not_every_step(tmp_path):
     r._write_json_atomic = lambda p, s: (writes.append(Path(p).name),
                                          orig(p, s))[1]
 
-    r._save_state()                       # 首次:dirty ⇒ 两档都写
-    assert writes == ["state.json", "campaigns.json"]
-    r._save_state()                       # 未变更且在档期内 ⇒ 只写热档
-    assert writes == ["state.json", "campaigns.json", "state.json"]
+    r._save_state()                       # 首次:dirty ⇒ 冷档也写
+    assert writes == ["state.json", "heartbeat.json", "campaigns.json"]
+    r._save_state()                       # 未变更且在档期内 ⇒ 只写热档 + 心跳
+    assert writes == ["state.json", "heartbeat.json", "campaigns.json",
+                      "state.json", "heartbeat.json"]
 
     r._touch_campaigns()                  # 防线推进/新 bar ⇒ 立即补写冷档
     r._save_state()
-    assert writes[-2:] == ["state.json", "campaigns.json"]
+    assert writes[-3:] == ["state.json", "heartbeat.json", "campaigns.json"]
 
 
 def test_campaigns_payload_keeps_only_tail_bars(tmp_path):

@@ -10,7 +10,7 @@ from market_operator.events import (
 )
 from market_operator.hypothesis import StructureView
 from market_operator.routing import (
-    ROUTE_BREAKOUT_ACCEPTED, ROUTE_BREAKOUT_ACCEPTED, ROUTE_LEVEL_REJECTED, ROUTE_LEVEL_REJECTED, WHITELIST_BALANCE,
+    ROUTE_BREAKOUT_ACCEPTED, ROUTE_LEVEL_REJECTED, WHITELIST_BALANCE,
     RouterParams, MarketRouter,
 )
 from market_operator.structure import (
@@ -368,7 +368,7 @@ def test_opp_lock_gate_and_market_anchor_in_on_bar():
     #    ⇒ 闸门拒绝推进,原结构止损不动、不置 reduced
     pm = PositionManager(Params(), allow_add=False, time_stop=False,
                          reject_opp_lock_frac=-0.50)
-    pos = pm.open("XUSDT", 1, 112.0, 106.0, 110.0, E3, 1000, 0)
+    pos = pm.open("XUSDT", 1, 112.0, 106.0, 110.0, LEVEL_REJECTED, 1000, 0)
     assert pm.on_bar("XUSDT", (2000, 111.0, 111.2, 110.3, 110.8, 1.0), 2.0) == []
     assert pos.invalid == 106.0
     assert pos.reduced is False
@@ -380,7 +380,7 @@ def test_opp_lock_gate_and_market_anchor_in_on_bar():
     pm2 = PositionManager(Params(), allow_add=False, time_stop=False,
                           reject_opp_lock_frac=-0.50,
                           opp_lock_max_giveback_r=0.25)
-    pos2 = pm2.open("XUSDT", -1, 324.02, 326.88, 322.66, E3, 1000, 0)
+    pos2 = pm2.open("XUSDT", -1, 324.02, 326.88, 322.66, LEVEL_REJECTED, 1000, 0)
     assert pm2.on_bar("XUSDT", (2000, 323.5, 323.9, 321.0, 321.33, 1.0), 2.0) == []
     assert abs(pos2.invalid - 322.045) < 1e-9
     assert pos2.reduced is True
@@ -390,7 +390,7 @@ def test_opp_lock_gate_and_market_anchor_in_on_bar():
     pm3 = PositionManager(Params(), allow_add=False, time_stop=False,
                           reject_opp_lock_frac=-0.50,
                           opp_lock_max_giveback_r=0.0)
-    pos3 = pm3.open("XUSDT", -1, 324.02, 326.88, 322.66, E3, 1000, 0)
+    pos3 = pm3.open("XUSDT", -1, 324.02, 326.88, 322.66, LEVEL_REJECTED, 1000, 0)
     pm3.on_bar("XUSDT", (2000, 323.5, 323.9, 321.0, 321.33, 1.0), 2.0)
     assert abs(pos3.invalid - 323.34) < 1e-9
 
@@ -398,7 +398,7 @@ def test_opp_lock_gate_and_market_anchor_in_on_bar():
     #    10% 计划锁利价落到多头现价**上方**(挂上即成交)⇒ 闸门拒绝
     pm4 = PositionManager(Params(), allow_add=False, time_stop=False,
                           reject_opp_lock_frac=0.10)
-    pos4 = pm4.open("XUSDT", 1, 100.0, 94.0, 110.0, E3, 1000, 0)
+    pos4 = pm4.open("XUSDT", 1, 100.0, 94.0, 110.0, LEVEL_REJECTED, 1000, 0)
     pm4.on_bar("XUSDT", (2000, 101.0, 110.5, 99.0, 99.2, 1.0), 2.0)
     assert pos4.invalid == 94.0
     assert pos4.reduced is False
@@ -694,12 +694,13 @@ def test_opp_lock_live_anchor_fixes_stale_plan_lock():
     live = opp_lock_live_px(-1, close, 0.25, invalid0 - entry)   # 空头 +0.25R
     assert abs(live - (close + 0.25 * 2.86)) < 1e-9
     assert live < plan                                  # 更贴近现价 = 更紧
-    assert tighten_lock(-1, plan, live) == live
-    assert tighten_lock(-1, plan, None) == plan         # 关闭 ⇒ 计划口径
-    assert tighten_lock(-1, None, live) == live
+    assert tighten_lock(-1, plan, live, close, entry) == live
+    assert tighten_lock(-1, plan, None, close, entry) == plan   # 关闭 ⇒ 计划口径
+    assert tighten_lock(-1, None, live, close, entry) == live
     # 多头镜像:plan 102.5 比 行情 104.5 更松 ⇒ 取更大(更贴近现价)者
     assert abs(tighten_lock(1, 102.5,
-                            opp_lock_live_px(1, 105.0, 0.25, 2.0)) - 104.5) < 1e-9
+                            opp_lock_live_px(1, 105.0, 0.25, 2.0),
+                            105.0, 100.0) - 104.5) < 1e-9
 
     pm = PositionManager(Params(), allow_add=False, breakeven_on_reduce=True,
                          time_stop=False, reject_opp_lock_frac=-0.50,
