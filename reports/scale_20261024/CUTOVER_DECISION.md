@@ -97,6 +97,48 @@ mfe 0.61R)预算仅 6e-5,现价已越过预算 ⇒ 首根子周期即
    重抓后的 baseline 与 `reports/*` 同批入库,别留"本地能过、仓库不能过"。
 2. **停旧并确认**:`Disable-ScheduledTask MarketOperatorLive` → 结束 supervisor
    → 结束 pid 49100 → 观察 `heartbeat.json` 连续 ≥3 个 tick 不再前进;
+---
+
+# 执行记录:2026-10-24 21:40–21:47(已切换,未跑 paper)
+
+> 决策人指示:提交 → 停旧 → 迁状态 → 清旧单 → 切,**跳过 paper**。
+
+| 时刻(本地) | 动作 | 证据 |
+|---|---|---|
+| 21:39 | 提交代码 `770d3ba`(锁利/TPSL/心跳)+ 文档与基线 `4f22178` | 全量 **594 passed / 1 skipped**;工作区干净 |
+| 21:40:2x | 禁用 `\MarketOperator\MarketOperatorLive`,kill supervisor 6824 → runner 49100 | 心跳冻结在 **21:40:28 / pid 49100**;进程列表为空 |
+| 21:41:20 | 迁移状态:refactor 旧簿记移入 `runtime/live/_pre_cutover_20261024/`,拷入生产 `state.json`(31061B)+`campaigns.json`(262765B) | `pm_positions` **12/12 重建**,`initial_risk` 全 >0,无缺失/多余;周期分布 1d/12h/2h/4h 各 3 |
+| 21:43:11 | 任务 WorkingDirectory → `D:\LiAn\Web3Code\market-operator`,启用并启动 | supervisor 19052 → runner 44300(21:43:14) |
+| 21:44:49 | 首次心跳(boot ≈95s,prefetch 173 战役) | `mode=live status=ok positions=12 stops=12` |
+| 21:45 首轮 | 新 runner 挂 **12 张 `pos_loss`**(整仓),触发价与旧单逐位一致 | journal:`12 stop_missing → 12 stop → reconcile ok ours=12/exchange=12` |
+| 21:46 | 撤 12 张旧 `normal_plan`(`orderIdList` 口径) | 撤后 **normal_plan 0 / profit_loss 12** |
+| 21:47+ | 稳态观察 | step 3→9 稳定,`status=ok`,零 crash/stop_error;旧树心跳仍冻结(无双 runner) |
+
+## 与备忘清单的差异(有意为之)
+
+- **先挂新单,再撤旧单**(备忘写的是先撤后挂):旧计划单对新代码不可见,若先撤会留下
+  裸奔窗口(新 runner 尚在 95 秒预热中)。实际顺序让「双保护」只持续约 1 分钟,
+  而不是「零保护」持续 1 分钟。事后确认 12 张旧单全部撤净、无孤儿。
+- **跳过 paper 金丝雀**:按指示执行;对应风险是首根子周期若触发 PHAUSDT 的
+  `giveback_exhausted`,会直接市价离场(该仓位本是预算内止损,非意外)。
+
+## 当前事实
+
+- 进程:`cmd 35352 → supervisor 19052 → runner 44300`,任务 `IgnoreNew`(3 分钟重触发不会双开)。
+- 交易所:12 张 `pos_loss`(size=0,仓位级)覆盖 12 个持仓;无 `normal_plan` 残留。
+- 状态:`campaigns.json` 的 `pm_positions` 已含 `armed` / `lock_off_logged`(新模式已落盘)。
+
+## 回滚(若需要)
+
+1. `Disable-ScheduledTask -TaskPath '\MarketOperator\' -TaskName 'MarketOperatorLive'`;
+   杀 runner 44300 与 supervisor 19052,确认心跳停走。
+2. 用 refactor 的 client 撤掉 **12 张 `pos_loss`**(否则回滚后与 main 的 `normal_plan` 双保护)。
+3. 任务 WorkingDirectory 改回 `D:\LiAn\Web3Code\market-operator-main`,启用并启动;
+   main 的 `runtime/live/state.json` 是 21:40:28 的副本(未被 refactor 写过),
+   持仓/防线事实完好,首轮会重新挂 `normal_plan`。
+4. 若不希望继续用 refactor 的锁利语义,直接弃用本次切换即可 —— 状态模式双向兼容
+   (main 的 `Position` 会过滤 `armed`/`lock_off_logged`,不会 TypeError)。
+
    确认无 `live_runner.lock` 占用。
 3. **清旧单**:用**老树**的 client 逐张 `cancel_plan_order(orderId)`,
    再 `plan_orders_pending(plan_type="normal_plan")` 复核为空(12→0)。
