@@ -110,9 +110,10 @@ Telegram 运营命令(`market_operator/tg_commands.py`)与人读输出共用同�
 (两者都只调 `ops`,不 import `live_runner`)。
 
 ```bash
-python scripts/mo.py bootstrap --layout auto      # 全新主机:布局→自检→启动→暖机→对账
+python scripts/mo.py bootstrap --update --layout auto  # 更新→布局→自检→启动→暖机→对账→TG
+python scripts/mo.py update [--check]             # git pull --ff-only + pip install -e .(拷贝部署自动跳过)
 python scripts/mo.py doctor [--exchange]          # 环境自检(默认不联网)
-python scripts/mo.py start | stop | restart       # 看护 → runner 整条链
+python scripts/mo.py start | stop | restart       # 看护 → runner 整条链(restart 连 TG 一起拉回)
 python scripts/mo.py status                       # 进程/心跳/持仓/权益/计数器
 python scripts/mo.py positions [--no-exchange]    # 本地账本 ↔ 交易所持仓
 python scripts/mo.py logs [live|err|sup|tg] -n 80 # 日志尾部(--list 列全部)
@@ -121,13 +122,28 @@ python scripts/mo.py package -o backup.zip        # 运行期产物 zip + sha256
 python scripts/mo.py migrate-data --dry-run       # 旧目录 → var/ 预演
 ```
 
+一台全新机器只需要 `bootstrap.cmd` / `bootstrap.sh`(内部就是 `mo bootstrap --update`):
+
+* **更新**:有 `.git` 就在工作区 `fetch` + `pull --ff-only`(分叉/本地改动一律失败,
+  绝不自动 merge/reset),随后 `pip install -e .`;代码是文件夹拷贝(没有 `.git`)则
+  `skipped`,不报错。`--check` 只 fetch 并报告落后几个提交(没有上游跟踪分支时在
+  `notes` 里说明"无法比较 behind",不会假装已是最新),不动工作区。更新失败时
+  **不会带着旧代码启动**(退出 1,信息里给出 `--force` 以便确认后跳过);输出/日志
+  里的 remote 凭据(`https://user:token@host`)一律脱敏。
+* **更新到新代码后进程还在跑旧模块**:`bootstrap --update` 发现代码有变化且服务在跑
+  时会先 `stop` 再继续,后面的 `start` 一定是新代码。
+* **目录**:所有数据/日志目录由 `paths.ensure_layout()` 自动创建,不存在就建,
+  不需要手工 `mkdir`(详见下面「目录布局」)。
+* **TG**:`bootstrap` / `restart` 结束时会显式拉起 TG 机器人(幂等;没有 token 按
+  `skipped` 处理,不影响实盘链路);`--no-tg` 可跳过,`--tg-wait` 控制等待秒数。
+
 ### Telegram 交互命令(只读运维台)
 
 两个机器人、两套菜单,由一个常驻进程长轮询提供服务。命令全部**只读**:启动 / 停止 /
 改配置 / 下单都不开放,`/help` 里也写明"写操作只在服务器执行"。
 
 ```bash
-python scripts/mo.py tg-sync             # 写菜单:逐 scope 先清旧版残留,写完 getMyCommands 自校验
+python scripts/mo.py tg-sync             # 写菜单:先清全局+逐 scope 旧残留,写完自校验
 python scripts/mo.py tg-sync --dry-run   # 只看现状(每个 scope 当前几条、要写几条)
 python scripts/mo.py tg-run              # 常驻长轮询;`--once` 只拉一轮(冒烟)
 ```
@@ -135,18 +151,28 @@ python scripts/mo.py tg-run              # 常驻长轮询;`--once` 只拉一轮
 | 机器人 | 角色 | 菜单 |
 |---|---|---|
 | `@lian_sniper_alert_bot` | public · 信号频道 | `/start` `/help` `/symbols` `/ping` `/id` |
-| `@LianowoBot2_bot` | ops · 运营台 | 上述 5 条 + `/status` `/positions` `/system` `/host` `/disk` `/doctor` `/logs` |
+| `@LianowoBot2_bot` | ops · 运营台 | 上述 5 条 + `/status` `/positions` `/orders` `/system` `/host` `/disk` `/doctor` `/logs` |
 
-`/logs` 接受参数:`/logs [live|err|sup|tg] [行数]`。运营命令只对
+`/logs` 接受参数:`/logs [live|err|sup|tg] [行数]`;`/orders` 只列**在挂**的委托与保护
+止损(`armed`),空仓时明确说"没有在挂"。运营命令只对
 `TELEGRAM_TRADE_CHAT_ID` / `TELEGRAM_OPS_CHAT_IDS` 白名单内的 chat 生效,未授权的
 chat 只有 `/id` 可用(先让它报出 id,再写进配置重启机器人);公开 bot 里发运营命令
 直接回"该命令不属于此机器人"。
 
-三条边界:`tg-run` 是**独立常驻进程**,看护不监管它、`mo restart` 也不会顺带拉起
-(但 `mo stop` 会停,`mo status` 的 `tg-bot pid/alive` 行能看出死活);菜单"注册即
-事实"——改了 `SPECS` 必须再跑一次 `tg-sync`,手机里才会变;两台机器/两份进程同时
-`getUpdates` 会被 Telegram 判 409,offset 落 `runtime/live/tg_bot_state.json`,
-只允许一个实例(单例锁 `tg_bot.lock`)。
+`tg-sync` 的清场范围包含**全局 scope**(`default` / `all_private_chats` /
+`all_group_chats` / `all_chat_administrators`)与已知 chat 的 `chat` /
+`chat_administrator` scope,每种各清 `""`/`zh`/`en` 三种语言:只清 `default` 时,
+老客户端缓存的全局菜单仍会弹出来 —— 那等于"点得到但无权执行"。全局 scope 只清不写
+(菜单只落在 `default` 与配置里的 chat),清完逐个 `getMyCommands` 复核,清不掉的
+残留会进 `residual` 并让 `--json` 的 `ok=false`。
+
+三件事一起看:`tg-run` 是**独立常驻进程**,看护不监管它 —— 但 `mo bootstrap` /
+`mo restart` 结束时会显式把它拉起(幂等、没有 token 按 `skipped` 处理,`--no-tg`
+可跳过),`mo stop` 会停,`mo status` 的 `tg-bot pid/alive` 行能看出死活;菜单在
+`tg-run` **启动时自动同步**(清场 → 写入 → 自校验,`--no-sync` 可跳过),所以改完
+`SPECS` 重启机器人就生效,`mo tg-sync` 用于"不重启、只刷菜单";升级后第一次启动也
+不需要人工再跑一次注册;两台机器/两份进程同时 `getUpdates` 会被 Telegram 判 409,
+offset 落 `runtime/live/tg_bot_state.json`,只允许一个实例(单例锁 `tg_bot.lock`)。
 
 ### 目录布局(`market_operator/paths.py`)
 

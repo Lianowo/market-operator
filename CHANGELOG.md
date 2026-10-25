@@ -1,5 +1,62 @@
 # Changelog
 
+## [Unreleased] — 2026-10-25 — 一条命令的可移植启动:代码同步 + TG 托管 + 全局菜单清场
+
+三条要求落到同一处:**新机器上一条命令就能把"代码→依赖→目录→服务→机器人"全拉
+起来**,而且拉起来的是新代码、机器人菜单与配置一致。策略与数据链路未改一行;新增
+行为全部在 `ops` / `cli` / `tg_commands` / `secrets_loader` 这一圈运维面上。
+
+- **新增代码同步 `ops.git_update()` 与 `mo update`**:`fetch` + `pull --ff-only`
+  (分叉/本地改动一律失败,绝不隐式 merge 或 reset),随后
+  `python -m pip install -e .`;没有 `.git` 的文件夹拷贝部署返回 `skipped` 而不是
+  报错。`--check` 只 `fetch` 并报 `behind` 提交数;没有上游跟踪分支时 `--check` 在
+  `notes` 里说明"无法比较 behind",真拉取则由 `git pull` 自己失败并把原因写进
+  `errors`(不会拿本地 `HEAD` 当"已是最新")。`--no-install` 供离线机器使用;
+  `--json` 返回 `branch/before/after/changed/dirty/behind/pull/install/notes/errors`。
+  git 与 pip 的输出统一过 `_scrub_git()`:`https://user:token@host` 会被改写成
+  `https://***@`,错误信息进 `mo` 输出/日志也不会带凭据。
+- **`mo bootstrap --update`(以及 `bootstrap.cmd` / `bootstrap.sh` 的默认路径)**:
+  更新 → 布局 → 自检 → 启动 → 暖机 → 对账 → TG 一条链。修掉一个隐蔽陷阱:**拉到
+  新代码时旧进程仍在跑旧模块**,所以 `--update` 发现 `changed` 且看护/runner 还活着
+  会先 `stop_all()` 再继续,后面的 `start` 必然加载新代码。更新或自检失败即停(退出
+  1,`--force` 可确认后继续),不会"拉取失败但装作启动成功"。
+- **TG 机器人纳入起停流程**:`bootstrap` 与 `restart` 结束时会显式
+  `ops.start_tg_bot()`(`_tg_pid()` 幂等:已在跑就直接报 `alive=true`;无 token 或
+  密钥未就绪按 `skipped`/`ok=false` 返回,不抛异常、不影响看护与 runner)。
+  `--no-tg` 跳过、`--tg-wait`(默认 10s)控制等待进 `tg.pid` 的时长;`restart` 在
+  TG 没起来时返回非零,`--json` 里能直接看到 `tg` 段。
+- **`tg-sync` 清场范围补全(真 bug)**:修前只清 `default`,于是 Telegram 客户端
+  缓存的 `all_private_chats` / `all_group_chats` / `all_chat_administrators` 以及
+  各 chat 的 `chat` / `chat_administrator` scope 仍会弹出旧菜单 —— "点得到但无权
+  执行",比没有菜单更糟。现在 `GLOBAL_SCOPES` + 已知 chat 的每个 scope × `""`/`zh`/
+  `en` 三种语言逐个 `deleteMyCommands`,全局 scope 只清不写;清完再 `getMyCommands`
+  复核,清不掉的进 `residual` 并让整份报告 `ok=false`(`--json`/人读输出都直接列
+  出是哪个 scope 哪条命令)。`--dry-run` 同样展示完整 scope 清单。
+- **修 bug:`TELEGRAM_OPS_CHAT_IDS` / `TELEGRAM_PUBLIC_CHAT_IDS` 从未被装载**:
+  `secrets_loader` 的 key map 里没有这两个键,`resolve_bots()` 的白名单分支永远是
+  空集 ⇒ 文档写的"多运营群/多公开群"怎么配都不生效,且不报错(只有 `TELEGRAM_TRADE_
+  CHAT_ID` 一个 chat 能用)。现已纳入别名映射与加载,`role_for_chat()` 能正确判定。
+- **新增 ops-only `/orders`(🧾 在挂委托)**:`ops.local_orders()` 只读本地 state 里
+  `status == "armed"` 的意图与保护止损,列方向/类型/数量/价格/到期/交易所 id,上限
+  20 行并给出总数;空仓时说"没有在挂"。**刻意不进 `PUBLIC_SPECS`**(持仓与挂单细节
+  只给运营白名单),`validate_specs()` 与 `tg-sync` 的自校验会继续保证公开 bot 拿不到。
+- **运行期目录自动创建**:`paths.ensure_layout()` 在 `bootstrap`/`doctor`/启动路径上
+  保证 `data/logs/runtime/reports`(portable 下 `var/*`)存在;**`cli.main()` 对每个
+  触碰运行期的子命令(`start/stop/restart/status/positions/warmup/logs/tg-sync/
+  tg-run/package/doctor`)入口先建目录**,所以全新主机上只跑 `mo start`(没跑
+  bootstrap)也不会因为父目录缺失而写失败;`bootstrap` 在全新主机仍自动选 `portable`。
+- **起停后菜单无需人工再注册(既有行为,本次显式验证)**:`run_bots(sync=True)`
+  在拉起长轮询前先跑 `sync_commands(..., purge=True)`(清场 → 写入 → 自校验),
+  而 `start_tg_bot()` 默认不传 `--no-sync` ⇒ "升级完重启机器人"就等于"菜单已注册";
+  `mo tg-sync` 留给"不重启、只刷菜单"的场景。这一条不涉及代码改动,但它是
+  "一条命令拉起系统"里最容易被漏掉的隐性前提,所以写进契约与测试。
+- **测试**:`tests/test_ops_paths.py` 增加 17 条(共 42 条),覆盖 ff-only 快进与
+  `behind`/无上游提示、拷贝部署跳过、remote 凭据脱敏、`start_tg_bot` 幂等/无 token
+  跳过/入口回退与日志落点、`restart_all` 连 TG 一起拉(与 `--no-tg` 留痕)、
+  `bootstrap --update/--no-tg` 的 CLI 编排、`local_orders` 只取 `armed`、`/orders`
+  接线、全局 scope 清场/干跑清单/残留、白名单装载,以及"不跑 bootstrap 时运行期命令
+  自动建目录"。全库 `683 passed, 1 skipped`;改动文件 `ruff check` 全绿。
+
 ## [Unreleased] — 2026-10-24 — 跨平台运维层:`mo` 命令台 + 运行期目录唯一事实源
 
 两件事同源:**换机器/换系统时,"路径"和"判活"都不该再靠人记**。修前 `scripts/
