@@ -467,10 +467,10 @@ class PositionManager:
         if pos is None:
             return []
         self.last = []
-        ts, o, h, l, c, _v = _bar_parts(bar)
+        ts, o, h, low, c, _v = _bar_parts(bar)
         if not price_only:
             pos.bars_held += 1
-        pos._best = min(pos._best, l) if pos.direction < 0 else max(pos._best, h)
+        pos._best = min(pos._best, low) if pos.direction < 0 else max(pos._best, h)
         if self.early_exit and not price_only:
             # v19 逆根计数:收盘全逆(d·(c−o)<0)+1,否则复位(恰 0 收平非逆)
             if pos.direction * (float(c) - float(o)) < 0.0:
@@ -511,18 +511,18 @@ class PositionManager:
             delta = float(pos.target_1) - float(pos.entry)
             # v20 S2 双格收割(缘前 25% 落袋 40%,缘收剩 60%;与 R4 互斥)
             if self.harvest_fade_2leg and pos.direction * delta > 0.0:
-                ladder_intents = self._s2_ladder(pos, ts, c, h, l)
+                ladder_intents = self._s2_ladder(pos, ts, c, h, low)
                 if ladder_intents and ladder_intents[-1].kind is OrderKind.EXIT:
                     return ladder_intents
             elif self.harvest_ladder3 and pos.direction * delta > 0.0:
-                ladder_intents = self._r4_ladder(pos, ts, c, h, l)
+                ladder_intents = self._r4_ladder(pos, ts, c, h, low)
                 if ladder_intents and ladder_intents[-1].kind is OrderKind.EXIT:
                     return ladder_intents
             else:
-                hit = (l <= pos.target_1) if pos.direction < 0 \
+                hit = (low <= pos.target_1) if pos.direction < 0 \
                     else (h >= pos.target_1)
                 if hit:
-                    extreme = l if pos.direction < 0 else h
+                    extreme = low if pos.direction < 0 else h
                     return [self._exit(
                         pos, ts, c,
                         f"v16|target|对面结构缘收割 target={pos.target_1:.8g} "
@@ -545,10 +545,10 @@ class PositionManager:
                 and not pos.harvest):
             frac_cfg = self.reject_opp_lock_frac
             if frac_cfg == 0.0:
-                hit = (l <= pos.target_1) if pos.direction < 0 \
+                hit = (low <= pos.target_1) if pos.direction < 0 \
                     else (h >= pos.target_1)
                 if hit and not pos.reduced:
-                    extreme = l if pos.direction < 0 else h
+                    extreme = low if pos.direction < 0 else h
                     if defer_reduce:
                         intents.append(self._defer_reduce(pos, ts, c, extreme))
                     else:
@@ -557,7 +557,7 @@ class PositionManager:
                 ld = opp_lock_step(
                     direction=pos.direction, entry=pos.entry,
                     target=pos.target_1, frac=frac_cfg, peak=pos._best,
-                    high=h, low=l, close=c, ref_px=c, armed=pos.armed)
+                    high=h, low=low, close=c, ref_px=c, armed=pos.armed)
                 if ld.action == "off":
                     # 参数域不成立(目标落在 entry 反侧/行程退化):不锁利、
                     # 不减仓,保持结构防线。只记一次,避免逐 bar 刷台账。
@@ -781,7 +781,7 @@ class PositionManager:
                            ref_price=float(ref), ts=ts)
 
     def _r4_ladder(self, pos: Position, ts: object, c: float, h: float,
-                   l: float) -> list[OrderIntent]:
+                   low: float) -> list[OrderIntent]:
         """v18 R4 三段收割(协议 §R4;调用前提:harvest ∧ target 方向一致)。
 
         缘前 25%/50% 各落袋 1/6 仓(以 OPEN 为 1.0;错段只判未做段,同一
@@ -796,7 +796,7 @@ class PositionManager:
             if pos.r4_stage >= stage:
                 continue
             lvl = float(pos.entry) + frac_lvl * delta
-            touched = (l <= lvl) if d < 0 else (h >= lvl)
+            touched = (low <= lvl) if d < 0 else (h >= lvl)
             if not touched:
                 continue
             pos.r4_stage = stage
@@ -811,9 +811,9 @@ class PositionManager:
             out.append(OrderIntent(kind=OrderKind.REDUCE, symbol=pos.symbol,
                                    qty_frac=qty, reason=reason,
                                    ref_price=float(c), ts=ts))
-        hit = (l <= pos.target_1) if d < 0 else (h >= pos.target_1)
+        hit = (low <= pos.target_1) if d < 0 else (h >= pos.target_1)
         if hit:
-            extreme = l if d < 0 else h
+            extreme = low if d < 0 else h
             out.append(self._exit(
                 pos, ts, c,
                 f"v16|target|R4|缘起收净 target={pos.target_1:.8g} "
@@ -826,7 +826,7 @@ class PositionManager:
         return self.trail_arm_gate and str(pos.event_id) in self.trail_arm_family
 
     def _s2_ladder(self, pos: Position, ts: object, c: float, h: float,
-                   l: float) -> list[OrderIntent]:
+                   low: float) -> list[OrderIntent]:
         """v20 S2 双格收割(任务书 §S2;调用前提:harvest ∧ target 方向一致)。
 
         缘前 s2_level(25%)落袋 s2_bank_frac(40%)仓(以 OPEN 为 1.0;同
@@ -840,7 +840,7 @@ class PositionManager:
         out: list[OrderIntent] = []
         if not pos.s2_banked:
             lvl = float(pos.entry) + self.s2_level * delta
-            touched = (l <= lvl) if d < 0 else (h >= lvl)
+            touched = (low <= lvl) if d < 0 else (h >= lvl)
             if touched:
                 pos.s2_banked = True
                 qty = min(self.s2_bank_frac, pos.size_frac)
@@ -856,9 +856,9 @@ class PositionManager:
                                        symbol=pos.symbol, qty_frac=qty,
                                        reason=reason, ref_price=float(c),
                                        ts=ts))
-        hit = (l <= pos.target_1) if d < 0 else (h >= pos.target_1)
+        hit = (low <= pos.target_1) if d < 0 else (h >= pos.target_1)
         if hit:
-            extreme = l if d < 0 else h
+            extreme = low if d < 0 else h
             out.append(self._exit(
                 pos, ts, c,
                 f"v16|target|S2|缘收剩 {1.0 - self.s2_bank_frac:.0%} 仓 "

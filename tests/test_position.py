@@ -26,8 +26,8 @@ def _short(mgr: PositionManager, invalid: float = 101.0,
                     target_1=target, event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
 
 
-def _bar(ts: int, h: float, l: float, c: float, o: float = 99.0):
-    return (ts, o, h, l, c, 1.0)
+def _bar(ts: int, h: float, low: float, c: float, o: float = 99.0):
+    return (ts, o, h, low, c, 1.0)
 
 
 def _pivot_high(price: float, known: int = 1) -> Pivot:
@@ -207,7 +207,7 @@ def test_86_no_exit_before_n_time_even_if_mfe_low():
 
 def test_86_exit_at_n_time_when_mfe_below_half_r():
     m = _mgr()
-    pos = _short(m, target=None)
+    _short(m, target=None)
     m.on_bar("BTCUSDT", _bar(1, 99.5, 98.9, 99.0), ATR)
     m.on_bar("BTCUSDT", _bar(2, 99.5, 98.9, 99.0), ATR)
     # bar3:low=98.2 ⇒ mfe=(99-98.2)/2=0.4R < 0.5R ⇒ 时间止损
@@ -219,7 +219,7 @@ def test_86_exit_at_n_time_when_mfe_below_half_r():
 
 def test_86_mfe_exactly_half_r_survives():
     m = _mgr()
-    pos = _short(m, target=None)
+    _short(m, target=None)
     m.on_bar("BTCUSDT", _bar(1, 99.5, 98.9, 99.0), ATR)
     m.on_bar("BTCUSDT", _bar(2, 99.5, 98.9, 99.0), ATR)
     # low=98.0 ⇒ mfe=(99-98)/2=0.5R,恰好 ⇒ 不出场(严格 <)
@@ -285,8 +285,8 @@ def test_84_add_rejected_when_worst_case_degrades():
 
 def test_84_add_rejected_when_mfe_below_1r():
     m = _mgr(allow_add=True)
-    pos = m.open("BTCUSDT", -1, entry=99.0, invalid=101.0, target_1=None,
-                 event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
+    m.open("BTCUSDT", -1, entry=99.0, invalid=101.0, target_1=None,
+           event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
     m.on_bar("BTCUSDT", _bar(1, 99.5, 98.5, 99.0), ATR)    # mfe=0.25R
     intents = m.on_bar("BTCUSDT", _bar(2, 99.5, 98.9, 99.0), ATR,
                        new_events=[_e4_short(98.0)])
@@ -380,7 +380,7 @@ def test_deferred_reduce_does_not_change_size_or_stop_before_fill():
 
 def test_pending_reduce_then_invalidation_exits_entire_live_position():
     m = _mgr()
-    pos = _short(m)
+    _short(m)
     m.on_bar("BTCUSDT", _bar(1, 99.5, 93.5, 98.0), ATR,
              defer_reduce=True)
     result = m.on_bar("BTCUSDT", _bar(2, 102.5, 97.0, 102.0), ATR,

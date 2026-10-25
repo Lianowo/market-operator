@@ -1667,8 +1667,8 @@ class LiveRunner:
                              else aggregate_bucket(cs.trig_bars[-trig_scale:],
                                                    bar[0] + base_ms - trig_ms))
                     k = len(cs.trig_bars) // trig_scale - 1
-                    ts, o, h, l, c, _v = t_bar
-                    emitted = cs.tracker.on_trigger_bar(k, ts, o, h, l, c)
+                    ts, o, h, low, c, _v = t_bar
+                    emitted = cs.tracker.on_trigger_bar(k, ts, o, h, low, c)
                     if emitted:
                         ctx = cs.tracker._ctx
                         view = StructureView(
@@ -1966,16 +1966,16 @@ class LiveRunner:
             return
         if pos_dict.get("tf_label", cs.tf_label) != cs.tf_label:
             return
-        ts, o, h, l, c = int(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4])
+        ts, o, h, low, c = int(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4])
         if int(pos_pm.opened_ts) > ts:
             return
 
         # 实时维护子周期极值 MFE
-        pos_pm._best = min(pos_pm._best, l) if pos_pm.direction < 0 else max(pos_pm._best, h)
+        pos_pm._best = min(pos_pm._best, low) if pos_pm.direction < 0 else max(pos_pm._best, h)
 
         # ① 固定 STOP 盘中触价结算
         stop = float(pos_pm.invalid)
-        breached = (l <= stop) if pos_pm.direction > 0 else (h >= stop)
+        breached = (low <= stop) if pos_pm.direction > 0 else (h >= stop)
         if breached:
             ref_px = min(o, stop) if pos_pm.direction > 0 else max(o, stop)
             self._sub_bar_close_out(
@@ -2002,14 +2002,14 @@ class LiveRunner:
                 ref_px = max(c, _mark) if pos_pm.direction < 0 else min(c, _mark)
             if frac_cfg == 0.0:
                 # 传统 §8.2 target_1 触及减仓 50%(仅一次;仅未启用锁利时)
-                hit = (l <= target) if pos_pm.direction < 0 else (h >= target)
+                hit = (low <= target) if pos_pm.direction < 0 else (h >= target)
                 if hit and not pos_pm.reduced:
-                    extreme = l if pos_pm.direction < 0 else h
+                    extreme = low if pos_pm.direction < 0 else h
                     self._exec_mgmt(cs, cs.pm._reduce(pos_pm, ts, c, extreme), bar)
             else:
                 ld = opp_lock_step(
                     direction=pos_pm.direction, entry=pos_pm.entry, target=target,
-                    frac=frac_cfg, peak=pos_pm._best, high=h, low=l, close=c,
+                    frac=frac_cfg, peak=pos_pm._best, high=h, low=low, close=c,
                     ref_px=ref_px, armed=pos_pm.armed)
                 if ld.action == "off":
                     if not pos_pm.lock_off_logged:
@@ -3318,7 +3318,7 @@ class LiveRunner:
     # ------------------------------------------------------------------
 
     def _paper_fill_pass(self, sym: str, bar) -> None:
-        ts, o, h, l, c, _v = bar
+        ts, o, h, low, c, _v = bar
         for oid, it in list(self.open_intents.items()):
             if it["status"] != "armed" or it["symbol"] != sym:
                 continue
@@ -3328,17 +3328,16 @@ class LiveRunner:
                     self.counters["expired_intents"] += 1
                     self._journal("expired", {"oid": oid, "symbol": sym})
                     continue
-                fill, mk = float(o), "market"    # TIMEOUT_TO_TAKER
+                fill = float(o)                  # TIMEOUT_TO_TAKER
                 self.counters["expired_intents"] += 1
             else:
-                mk = None
                 if it["kind"] == "market":
                     fill = float(o)
                 else:
                     lp = float(it["limit_price"])
                     # role=entry:direction=开仓方向;role=reduce:direction=平仓
                     # 单方向。两种角色同判:买单等低穿、卖单等高穿(严格,maker)
-                    if it["direction"] > 0 and l < lp:
+                    if it["direction"] > 0 and low < lp:
                         fill = lp
                     elif it["direction"] < 0 and h > lp:
                         fill = lp

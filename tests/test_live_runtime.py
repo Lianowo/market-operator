@@ -277,8 +277,8 @@ def test_reconcile_positions_buckets():
 # ---------------------------------------------------------------------------
 
 
-def _bar2h(label, o, h, l, c, v=1.0):
-    return (label, o, h, l, c, v)
+def _bar2h(label, o, h, low, c, v=1.0):
+    return (label, o, h, low, c, v)
 
 
 def test_aggregate_12h_partial_tail_and_hole():
@@ -858,7 +858,7 @@ def test_load_state_reads_cold_file(tmp_path, monkeypatch):
     monkeypatch.setattr(lr.LiveRunner, "_ensure_leverage",
                         lambda self, sym: None)
 
-    r2 = _runner(tmp_path, _FakeClient(), _FakeTG())
+    _runner(tmp_path, _FakeClient(), _FakeTG())    # 构造即读 campaigns.json(本测试的副作用)
 
     assert built["BTCUSDT"], "campaigns.json 未被读取"
     assert built["BTCUSDT"][-1][0] == NOW          # 切分锚来自冷档尾部 bar
