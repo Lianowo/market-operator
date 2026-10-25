@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from market_operator import paths                                    # noqa: E402
 from market_operator.replay import prepare_cognition          # noqa: E402
 from market_operator.bitget_live import BitgetLiveClient, BitgetError  # noqa: E402
 from market_operator.secrets_loader import load_secrets            # noqa: E402
@@ -110,7 +111,7 @@ def main(argv=None) -> None:
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     secrets = load_secrets()
     real = BitgetLiveClient(secrets)
-    tmp = ROOT / "runtime" / "live" / "paper_check"
+    tmp = paths.runtime_dir() / "live" / "paper_check"
     tmp.mkdir(parents=True, exist_ok=True)
     # 冒烟自清理:state/意图账每次重建(重跑不受上一轮污染)
     for p in [tmp / "state.json", tmp / "_probe_state.json"]:

@@ -33,10 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from market_operator import heartbeat as hb     # noqa: E402
+from market_operator import paths               # noqa: E402
 
-HB_PATH = ROOT / "runtime" / "live" / "heartbeat.json"
-RUNNER_LOG = ROOT / "logs" / "live_stdout.log"
-RUNNER_ERR = ROOT / "logs" / "live_stderr.log"
+HB_PATH = paths.runtime_dir() / "live" / "heartbeat.json"
+RUNNER_LOG = paths.log_dir() / "live_stdout.log"
+RUNNER_ERR = paths.log_dir() / "live_stderr.log"
 
 
 def _read_hb() -> dict:
@@ -69,9 +70,11 @@ def main(argv=None) -> int:
 
     doc = _read_hb()
     old = int(doc.get("pid") or 0)
-    spawn_argv = [sys.executable, "scripts/live_runner.py", "--mode", args.mode]
+    spawn_argv = [sys.executable, str(ROOT / "scripts" / "live_runner.py"),
+                  "--mode", args.mode]
 
-    print(f"仓库      : {ROOT}")
+    print(f"仓库      : {paths.app_home()}")
+    print(f"布局      : {paths.layout_mode()} · 心跳 {HB_PATH}")
     print(f"旧进程快照: {_snapshot(doc)}")
     print(f"新进程参数: {' '.join(spawn_argv)}")
     print(f"日志      : {RUNNER_LOG} / {RUNNER_ERR}")
@@ -93,7 +96,7 @@ def main(argv=None) -> int:
     else:
         print("旧进程不在(或心跳缺失),直接拉起")
 
-    new_pid = hb.spawn_detached(spawn_argv, cwd=ROOT,
+    new_pid = hb.spawn_detached(spawn_argv, cwd=paths.app_home(),
                                 stdout_path=RUNNER_LOG, stderr_path=RUNNER_ERR)
     print(f"新进程 pid={new_pid}")
     if not new_pid:

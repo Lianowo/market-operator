@@ -59,6 +59,7 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from market_operator import paths                                # noqa: E402
 from market_operator.bitget_live import (                        # noqa: E402
     BitgetError, BitgetLiveClient)
 from market_operator.broker import (                            # noqa: E402
@@ -489,7 +490,7 @@ class LiveRunner:
         self.equity: Optional[float] = \
             float(equity0) if equity0 is not None else None
         self.state_path = Path(state_path) if state_path else \
-            ROOT / self.loop_cfg["state_path"]
+            paths.resolve(self.loop_cfg["state_path"])
         # 冷数据同目录:热档 state.json(每步) + 冷档 campaigns.json(变更/60s)
         self.campaigns_path = self.state_path.with_name("campaigns.json")
         # 心跳路径归属(2026-10-24 缺陷修复,移植 main 14a22b5):修前只认 config
@@ -503,7 +504,7 @@ class LiveRunner:
             self.heartbeat_path = self.state_path.parent / "heartbeat.json"
         else:
             hb_rel = self.loop_cfg.get("heartbeat_path")
-            self.heartbeat_path = (ROOT / str(hb_rel) if hb_rel
+            self.heartbeat_path = (paths.resolve(str(hb_rel)) if hb_rel
                                    else self.state_path.parent / "heartbeat.json")
         self.started_ms = int(time.time() * 1000)
         self._loop_ts_ms = self.started_ms
@@ -513,7 +514,7 @@ class LiveRunner:
         self._campaigns_saved_at = 0.0
         self.candle_cache_dir = self.state_path.parent / "candles"
         self.journal_dir = Path(journal_dir) if journal_dir else \
-            ROOT / self.loop_cfg["journal_dir"]
+            paths.resolve(self.loop_cfg["journal_dir"])
 
         self.breaker = DailyLossBreaker(self.risk["max_daily_loss_frac"])
         self.rate = RateLimiter(self.risk["orders_per_hour"])
@@ -3149,7 +3150,9 @@ def main(argv=None) -> None:
     args = parse_args(argv)
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     cred_src = cfg.get("credentials_source")
-    cred_path = (ROOT / cred_src) if cred_src and (ROOT / cred_src).exists() else None
+    cred_path = paths.resolve_existing(cred_src) if cred_src else None
+    if cred_path is not None and not cred_path.exists():
+        cred_path = None
     secrets = load_secrets(cred_path, config_overrides=cfg.get("credentials"))
     client = BitgetLiveClient(secrets)
     if args.mode == "live":
@@ -3167,7 +3170,7 @@ def main(argv=None) -> None:
               f"[live_runner] 持仓模式={got_mode}(单边:side 表买卖方向)",
               flush=True)
     tg = TelegramNotifier(
-        secrets, dropped_log=ROOT / "runtime" / "live" / "tg_missed.jsonl",
+        secrets, dropped_log=paths.runtime_dir() / "live" / "tg_missed.jsonl",
         async_mode=True)
     # 通道路由如实播报:运营通道未单独配置时会与信号同房间(宁可如此,也不静默
     # 丢告警),启动时把这件事说清楚,免得日后误以为运营信息没有外泄面。

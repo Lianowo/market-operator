@@ -13,6 +13,12 @@
    这类读固定路径的闸门,也避免冻结证据变成巨大的 git 变更);
 ⑤ 预算默认 35GB(软 30GB),超出即非零退出;`--enforce` 供看护进程每日调用。
 
+运行期目录(数据/日志/runtime/报告)经 `market_operator.paths` 解析:legacy 布局
+下仍是仓库根旧目录(与修前逐字相同),portable 布局下是 `<repo>/var/...`(或
+`MARKET_OPERATOR_DATA_ROOT`)。白名单、热档判据、manifest 里存的都是**逻辑相对
+路径**(`logs/x.log`、`runtime/live/state.json`),两种布局写法一致,`--restore`
+因此可以跨布局还原。
+
 用法:
     python scripts/storage_gc.py                    # 只读盘点 + 计划 + 增长预测
     python scripts/storage_gc.py --apply            # 执行安全清理
@@ -36,12 +42,77 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "reports" / "_storage_manifest.jsonl"
+sys.path.insert(0, str(ROOT / "src"))
 
+from market_operator import paths                          # noqa: E402
+
+# 运行期目录(数据/日志/runtime/报告)一律经 `paths` 解析:legacy 下就是仓库根旧
+# 目录(行为零变化),portable 下是 `<repo>/var/...`。修前这里全部写死在仓库根,
+# portable 布局下 `var/logs` 无人治理 —— 而且**不报错**,预算闸门只会一直显示
+# "宽裕"(典型的静默错)。
+#
+# 白名单 / 热档 / manifest 里存的是**逻辑相对路径**(`logs/x.log`、
+# `runtime/live/state.json`),两种布局下写法一致 ⇒ manifest 与 `--restore`
+# 可以跨布局使用;只有和 git 跟踪集合比对时才用仓库相对路径(`repo_rel`)。
+#
 # 自动清理只允许落在这几个前缀下(白名单,防止误删源数据/配置/代码)
 AUTO_PREFIXES = ("logs", "runtime", ".pytest_cache", "reports")
 COLD_PREFIXES = ("reports",)
 NEVER_TOUCH = ("data", "config", "src", "tests", "docs", "research", ".git")
+
+
+def _ops_root() -> Path:
+    """运行期目录的物理根:legacy = 仓库根;portable = `<repo>/var`(或 data_root)。
+
+    测试会把 `ROOT` 指到临时目录,而 `paths.app_home()` 仍指向真实仓库 ——
+    只有两者一致才采纳布局,否则按 legacy 处理(临时目录里的语义一目了然)。
+    """
+    try:
+        if ROOT.resolve() == paths.app_home():
+            return paths.store_root() if paths.is_portable() else ROOT
+    except (OSError, ValueError):
+        pass
+    return ROOT
+
+
+def op(rel: str | Path) -> Path:
+    """逻辑相对路径 → 物理路径(`logs/x.log` 在 portable 下是 `var/logs/x.log`)。"""
+    p = Path(str(rel).replace("\\", "/"))
+    return p if p.is_absolute() else _ops_root() / p
+
+
+def op_rel(path: str | Path) -> str:
+    """物理路径 → 逻辑相对路径(跨布局稳定;白名单/manifest/输出都用它)。"""
+    p = Path(path)
+    for base in (_ops_root(), ROOT):
+        try:
+            return p.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return p.as_posix()
+
+
+def repo_rel(path: str | Path) -> str:
+    """物理路径 → 仓库相对路径(只用于和 `git ls-files` 的结果比对)。"""
+    try:
+        return Path(path).relative_to(ROOT).as_posix()
+    except ValueError:
+        return op_rel(path)
+
+
+def _scan_roots() -> list[Path]:
+    """盘点的物理根:仓库根 + portable 且数据根在仓外时的运行期根。"""
+    roots = [ROOT]
+    ops = _ops_root()
+    if ops != ROOT:
+        try:
+            ops.relative_to(ROOT)
+        except ValueError:
+            roots.append(ops)
+    return roots
+
+
+MANIFEST = op("reports") / "_storage_manifest.jsonl"
 
 
 def human(n: float) -> str:
@@ -172,13 +243,35 @@ def _sha256(path: Path, limit: int = 8 << 20) -> str:
     return h.hexdigest()
 
 
+def _split_store(entry: Path) -> dict[str, tuple[int, int]]:
+    """portable 下把 `var/` 拆成 `var/<类别>`(否则报告里只有一个 `var`,看不出增长源)。"""
+    out: dict[str, tuple[int, int]] = {}
+    for sub in sorted(entry.iterdir()):
+        if sub.is_dir():
+            out[f"var/{sub.name}"] = dir_size(sub)
+        elif sub.is_file():
+            out[f"var/{sub.name}"] = (sub.stat().st_size, 1)
+    return out
+
+
 def inventory() -> dict[str, tuple[int, int]]:
-    out = {}
+    out: dict[str, tuple[int, int]] = {}
+    store = _ops_root()
+    seen_store = store == ROOT
     for entry in sorted(ROOT.iterdir()):
+        try:
+            if not seen_store and entry.resolve() == store.resolve():
+                out.update(_split_store(entry))
+                seen_store = True
+                continue
+        except OSError:
+            pass
         if entry.is_dir():
             out[entry.name] = dir_size(entry)
         elif entry.is_file():
             out[entry.name] = (entry.stat().st_size, 1)
+    if not seen_store and store.exists():           # 数据根在仓库外
+        out.update(_split_store(store))
     return out
 
 
@@ -193,20 +286,26 @@ def print_report(inv: dict, budget_gb: float, soft_gb: float) -> float:
     print(f"  {'TOTAL':<22}{human(total):>11}")
     print()
     big = []
-    for p in ROOT.rglob("*"):
-        if p.is_file() and not _under(
-                p.relative_to(ROOT).as_posix(), (".git",)):
-            s = p.stat().st_size
+    for base in _scan_roots():
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            if ".git" in p.relative_to(base).parts:
+                continue
+            try:
+                s = p.stat().st_size
+            except OSError:
+                continue
             if s >= 8 << 20:
                 big.append((s, p))
-    big.sort(reverse=True)
+    big.sort(key=lambda t: -t[0])
     print(f"  ≥8MB 文件 {len(big)} 个(前 10;[…] 为不会自动压缩的原因):")
     code = _code_files()
     tracked = _tracked_files()
     for s, p in big[:10]:
-        rel = p.relative_to(ROOT).as_posix()
-        why = _protection(rel, code, tracked)
-        print(f"    {human(s):>10}  {rel}{('  [' + why + ']') if why else ''}")
+        why = _protection(repo_rel(p), code, tracked)
+        print(f"    {human(s):>10}  {op_rel(p)}"
+              f"{('  [' + why + ']') if why else ''}")
     print()
     gb = total / (1 << 30)
     status = "OK"
@@ -245,26 +344,27 @@ def growth_stats(days: float = 7.0) -> dict:
     horizon = now - max(1.0, days) * 86400.0
     per: dict[str, dict] = {}
     total = ops_total = 0
-    for p in ROOT.rglob("*"):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(ROOT).as_posix()
-        if rel.startswith(".git/"):
-            continue
-        try:
-            st = p.stat()
-        except OSError:
-            continue
-        if st.st_mtime < horizon:
-            continue
-        parts = rel.split("/")
-        key = "/".join(parts[:2]) if len(parts) > 1 else parts[0]
-        slot = per.setdefault(key, {"bytes": 0, "files": 0})
-        slot["bytes"] += st.st_size
-        slot["files"] += 1
-        total += st.st_size
-        if rel.startswith(OPS_PREFIXES):
-            ops_total += st.st_size
+    for base in _scan_roots():
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = op_rel(p)                     # 逻辑相对路径(portable 下不含 var/)
+            if ".git" in p.relative_to(base).parts:
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_mtime < horizon:
+                continue
+            parts = rel.split("/")
+            key = "/".join(parts[:2]) if len(parts) > 1 else parts[0]
+            slot = per.setdefault(key, {"bytes": 0, "files": 0})
+            slot["bytes"] += st.st_size
+            slot["files"] += 1
+            total += st.st_size
+            if rel.startswith(OPS_PREFIXES):
+                ops_total += st.st_size
     span = max(1.0, days)
     inv = inventory()
     size_gb = sum(v[0] for v in inv.values()) / (1 << 30)
@@ -341,7 +441,7 @@ def gzip_keep(path: Path, dry: bool, *, manifest: bool = True) -> tuple[bool, st
     if gz.exists():
         return False, "同名 .gz 已存在(跳过)"
     if dry:
-        return True, f"[dry] {path.relative_to(ROOT)} → {gz.name}"
+        return True, f"[dry] {op_rel(path)} → {gz.name}"
     try:
         with path.open("rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
             shutil.copyfileobj(src, dst, 1 << 20)
@@ -361,13 +461,13 @@ def gzip_keep(path: Path, dry: bool, *, manifest: bool = True) -> tuple[bool, st
                 fh.write(json.dumps({
                     "ts": datetime.now(timezone.utc)
                     .isoformat(timespec="seconds"),
-                    "orig": path.relative_to(ROOT).as_posix(),
+                    "orig": op_rel(path),
                     "size": path.stat().st_size,
                     "sha256": _sha256(path),
                 }, ensure_ascii=False) + "\n")
         before = path.stat().st_size
         path.unlink()
-        return True, (f"{path.relative_to(ROOT)} → .gz "
+        return True, (f"{op_rel(path)} → .gz "
                       f"({human(before)} → {human(gz.stat().st_size)})")
     except OSError as e:
         gz.unlink(missing_ok=True)
@@ -383,8 +483,8 @@ def restore_from_manifest(dry: bool) -> int:
         if not line.strip():
             continue
         rec = json.loads(line)
-        gz = ROOT / (rec["orig"] + ".gz")
-        orig = ROOT / rec["orig"]
+        gz = op(rec["orig"] + ".gz")
+        orig = op(rec["orig"])
         if not gz.exists() or orig.exists():
             continue
         print(("  [dry] " if dry else "  ") + f"还原 {rec['orig']}")
@@ -403,15 +503,16 @@ def apply_safe(dry: bool, args) -> list[str]:
     now = time.time()
 
     # ① 日志:jsonl 过保留期 → gz(无损);.gz 默认永不删除(0 = 永久保留)
-    for p in sorted((ROOT / "logs").glob("*.jsonl")):
-        rel = p.relative_to(ROOT).as_posix()
-        if is_hot(rel):
+    log_dir = op("logs")
+    rt_dir = op("runtime")
+    for p in sorted(log_dir.glob("*.jsonl")):
+        if is_hot(op_rel(p)):
             continue
         if (now - p.stat().st_mtime) / 86400 > args.log_days:
             ok, msg = gzip_keep(p, dry)
             acts.append(("✔ " if ok else "· ") + msg)
     if args.log_max_days > 0:
-        for p in sorted((ROOT / "logs").glob("*.gz")):
+        for p in sorted(log_dir.glob("*.gz")):
             if (now - p.stat().st_mtime) / 86400 > args.log_max_days:
                 if not dry:
                     p.unlink()
@@ -422,26 +523,26 @@ def apply_safe(dry: bool, args) -> list[str]:
     keep = 4 << 20
     for name in ("live_stdout.log", "live_stderr.log", "watchdog.log",
                  "storage_gc.log", "supervisor.log"):
-        p = ROOT / "logs" / name
+        p = log_dir / name
         if not p.exists() or p.stat().st_size <= cap:
             continue
         ok, msg = archive_and_truncate(p, keep, dry)
         acts.append(("✔ " if ok else "· ") + msg)
 
     # ③ 旧备份目录:打成 zip 后删除目录(可还原);归档本身也有上限
-    arch = ROOT / "runtime" / "_archive"
+    arch = rt_dir / "_archive"
     for z in sorted(arch.glob("*.zip")) if arch.exists() else []:
         if (now - z.stat().st_mtime) / 86400 > args.archive_max_days:
             if not dry:
                 z.unlink()
             acts.append(f"✔ 删除过期备份归档 {z.name}")
-    backup_dirs = sorted((ROOT / "runtime").glob("**/*_backup_*"))
+    backup_dirs = sorted(rt_dir.glob("**/*_backup_*"))
     # 单实例锁上线后 runner 会用 `_pre_<ts>/` 拍快照;与 *_backup_* 同等待遇
-    backup_dirs += sorted((ROOT / "runtime").glob("**/_pre_*"))
+    backup_dirs += sorted(rt_dir.glob("**/_pre_*"))
     for d in backup_dirs:
         if not d.is_dir():
             continue
-        if is_hot(d.relative_to(ROOT).as_posix()):
+        if is_hot(op_rel(d)):
             continue
         if (now - d.stat().st_mtime) / 86400 < args.backup_days:
             continue
@@ -452,7 +553,7 @@ def apply_safe(dry: bool, args) -> list[str]:
             acts.append(f"✔ 删除已归档的备份目录 {d.name}(zip 已存在)")
             continue
         if dry:
-            acts.append(f"[dry] {d.relative_to(ROOT)} → {zip_path.name}")
+            acts.append(f"[dry] {op_rel(d)} → {zip_path.name}")
             continue
         arch.mkdir(parents=True, exist_ok=True)
         shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=d)
@@ -461,32 +562,38 @@ def apply_safe(dry: bool, args) -> list[str]:
                     f"({human(zip_path.stat().st_size)})")
 
     # ④ 可再生缓存
-    for pat in ("**/__pycache__", ".pytest_cache"):
-        for d in list(ROOT.glob(pat)):
-            if not d.is_dir():
-                continue
-            if not dry:
-                shutil.rmtree(d, ignore_errors=True)
-            acts.append(f"✔ 清理缓存 {d.relative_to(ROOT)}")
+    for base in _scan_roots():
+        for pat in ("**/__pycache__", ".pytest_cache"):
+            for d in list(base.glob(pat)):
+                if not d.is_dir():
+                    continue
+                if not dry:
+                    shutil.rmtree(d, ignore_errors=True)
+                acts.append(f"✔ 清理缓存 {op_rel(d)}")
 
     # ⑤ 崩溃残留的半截临时文件(>24h)
-    for p in ROOT.glob("runtime/**/*.tmp"):
-        if (now - p.stat().st_mtime) / 3600 < 24:
+    for p in rt_dir.glob("**/*.tmp"):
+        try:
+            age_h = (now - p.stat().st_mtime) / 3600
+        except OSError:
+            continue
+        if age_h < 24:
             continue
         if not dry:
             p.unlink()
-        acts.append(f"✔ 删除陈留临时文件 {p.relative_to(ROOT)}")
+        acts.append(f"✔ 删除陈留临时文件 {op_rel(p)}")
 
     # ⑥ 已有 .gz 孪生体的原文件(无损去重,信息量不变)
     if args.dedupe_gz:
         tracked = _tracked_files()
-        for p in list(ROOT.glob("reports/**/*")) + list(ROOT.glob("data/**/*")):
+        cand = list(op("reports").rglob("*")) + list(op("data").rglob("*"))
+        for p in cand:
             if not p.is_file() or p.suffix == ".gz":
                 continue
             if p.stat().st_size < (4 << 20):
                 continue
-            rel = p.relative_to(ROOT).as_posix()
-            if rel in tracked:
+            rel = op_rel(p)
+            if repo_rel(p) in tracked:
                 # 冻结证据:即使有 .gz 孪生体也不删,避免 git 删除记录 + 引用落空
                 acts.append(f"· 跳过 {rel}:git 跟踪(冻结证据)")
                 continue
@@ -504,29 +611,29 @@ def apply_safe(dry: bool, args) -> list[str]:
     if args.compress_cold:
         code = _code_files()
         tracked = _tracked_files()
-        for p in sorted((ROOT / "reports").rglob("*")):
+        for p in sorted(op("reports").rglob("*")):
             if not p.is_file() or p.suffix in (".gz", ".md", ".jsonl"):
                 continue
             if p.stat().st_size < (args.cold_mb << 20):
                 continue
             if (now - p.stat().st_mtime) / 86400 < args.cold_days:
                 continue
-            rel = p.relative_to(ROOT).as_posix()
-            why = _protection(rel, code, tracked)
+            rel = op_rel(p)
+            why = _protection(repo_rel(p), code, tracked)
             if why:
                 acts.append(f"· 跳过 {rel}:{why}")
                 continue
             ok, msg = gzip_keep(p, dry)
             acts.append(("✔ " if ok else "· ") + msg)
     # ⑧ K 线缓存:旧明文 → gz(可选:`--gzip-candles`);退市/过期品种按年龄清理
-    candles = ROOT / "runtime" / "live" / "candles"
+    candles = rt_dir / "live" / "candles"
     if candles.exists():
         if getattr(args, "gzip_candles", False):
             for p in sorted(candles.glob("*.json")):
                 ok, msg = gzip_keep(p, dry, manifest=False)
                 acts.append(("✔ " if ok else "· ") + msg)
         live_syms: set[str] = set()
-        cold = ROOT / "runtime" / "live" / "campaigns.json"
+        cold = rt_dir / "live" / "campaigns.json"
         if cold.exists():
             try:
                 live_syms = set(json.loads(
@@ -634,7 +741,7 @@ def _write_growth_report(stats: dict, inv: dict, budget_gb: float,
                           for k, v in sorted(stats["per_bucket"].items())},
            "inventory": {k: [v[0], v[1]] for k, v in inv.items()}}
     try:
-        path = ROOT / "reports" / "_storage_growth.json"
+        path = op("reports") / "_storage_growth.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, ensure_ascii=False, indent=1),
                         encoding="utf-8")

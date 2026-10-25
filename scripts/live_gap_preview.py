@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from market_operator import paths                                    # noqa: E402
 from market_operator.bitget_live import BitgetLiveClient, BitgetError   # noqa: E402
 from market_operator.secrets_loader import load_secrets                 # noqa: E402
 
@@ -74,11 +75,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
-    state_path = ROOT / str((cfg.get("loop") or {})
-                            .get("state_path", "runtime/live/state.json"))
+    # 预演读的是 runner 真正在用的那份 state:布局由 paths 决定,不能写死仓库根,
+    # 否则 portable 下会读到一份空 state,给出"没有缺口"的假结论。
+    state_path = paths.resolve((cfg.get("loop") or {})
+                               .get("state_path", "runtime/live/state.json"))
     cred_src = cfg.get("credentials_source")
-    cred_path = ((ROOT / cred_src)
-                 if cred_src and (ROOT / cred_src).exists() else None)
+    cred_path = None
+    if cred_src:
+        cand = paths.resolve_existing(cred_src)
+        cred_path = cand if cand.exists() else None
     secrets = load_secrets(cred_path, config_overrides=cfg.get("credentials"))
     real = BitgetLiveClient(secrets)
     client = BlockedClient(real)

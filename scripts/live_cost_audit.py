@@ -25,12 +25,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from market_operator import paths                                        # noqa: E402
 from market_operator.bitget_live import BitgetLiveClient                  # noqa: E402
 from market_operator.secrets_loader import SecretsError, load_secrets    # noqa: E402
 
 MS_DAY = 86_400_000
 MS_H = 3_600_000
-OUT_DIR = ROOT / "reports" / "live_cost_audit_20261023"
+# 审计产物是"报告",归运行期类别:`reports/` 在 portable 布局下落到 var/reports/
+OUT_DIR = paths.resolve("reports") / "live_cost_audit_20261023"
 
 
 def cfg_costs() -> dict:
@@ -204,7 +206,8 @@ def _entry_drift_live(cli: BitgetLiveClient) -> list[tuple[str, float]]:
     import json as _json
     import glob as _glob
     mk, fl = {}, {}
-    for f in sorted(_glob.glob(str(ROOT / "logs" / "live_2026*.jsonl"))):
+    log_dir = paths.resolve_existing("logs")
+    for f in sorted(_glob.glob(str(log_dir / "live_2026*.jsonl"))):
         with open(f, encoding="utf-8") as fh:
             for ln in fh:
                 ln = ln.strip()
@@ -385,8 +388,8 @@ def main() -> int:
     print(f"[model] fee+slip={model_fee:.4f} USDT, funding={model_fund:.6f} USDT")
 
     # ---- 市场资金费率(交易所公开历史)+ 账本敏感性 ----
-    ledger_path = (ROOT / "reports" / "tf_trigger_exp" / "abcd_20261022"
-                   / "trades_a0__full__1.csv")
+    ledger_path = (paths.resolve_existing("reports") / "tf_trigger_exp"
+                   / "abcd_20261022" / "trades_a0__full__1.csv")
     ledger = _ledger_sensitivity(ledger_path) if ledger_path.exists() else {}
     if ledger:
         print("[ledger] " + json.dumps(ledger, ensure_ascii=False))
@@ -559,7 +562,8 @@ if __name__ == "__main__":
     print(f"[model] fee+slip={model_fee:.4f} USDT, funding={model_fund:.6f} USDT")
 
     # ---- 市场资金费率(公开历史)与账本敏感性 ----
-    ledger_path = ROOT / "reports" / "tf_trigger_exp" / "abcd_20261022" / "trades_a0__full__1.csv"
+    ledger_path = (paths.resolve_existing("reports") / "tf_trigger_exp"
+                   / "abcd_20261022" / "trades_a0__full__1.csv")
     ledger = _ledger_sensitivity(ledger_path) if ledger_path.exists() else {}
     if ledger:
         print("[ledger] " + json.dumps(ledger, ensure_ascii=False))

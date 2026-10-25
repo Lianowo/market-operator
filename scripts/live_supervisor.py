@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -42,14 +43,20 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from market_operator import paths                                # noqa: E402
 from market_operator import heartbeat as hb                     # noqa: E402
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "live.json"
-HB_PATH = ROOT / "runtime" / "live" / "heartbeat.json"
-STATE_PATH = ROOT / "runtime" / "live" / "supervisor.json"
-LOCK_PATH = ROOT / "runtime" / "live" / "supervisor.lock"
-LOG_DIR = ROOT / "logs"
+# 运行期路径一律走 paths:legacy 仍是仓库根旧目录(行为零变化),portable 则是
+# `<repo>/var/...`。看护与 `mo` CLI 必须读**同一个**心跳,否则判活会永久
+# "缺失" -> 反复拉起 runner。
+LIVE_DIR = paths.runtime_dir() / "live"
+HB_PATH = LIVE_DIR / "heartbeat.json"
+STATE_PATH = LIVE_DIR / "supervisor.json"
+LOCK_PATH = LIVE_DIR / "supervisor.lock"
+PID_PATH = LIVE_DIR / "supervisor.pid"
+LOG_DIR = paths.log_dir()
 RUNNER_LOG = LOG_DIR / "live_stdout.log"
 RUNNER_ERR = LOG_DIR / "live_stderr.log"
 CONSOLE_LOG = LOG_DIR / "supervisor.log"
@@ -106,10 +113,13 @@ class Supervisor:
         self.tg = None
         if notify:
             try:
+                cred_src = cfg.get("credentials_source")
+                cred_path = None
+                if cred_src:
+                    cand = paths.resolve_existing(cred_src)
+                    cred_path = cand if cand.exists() else None
                 secrets = load_secrets(
-                    (ROOT / cfg["credentials_source"])
-                    if cfg.get("credentials_source") else None,
-                    config_overrides=cfg.get("credentials"))
+                    cred_path, config_overrides=cfg.get("credentials"))
                 from market_operator.tg import TelegramNotifier
                 self.tg = TelegramNotifier(
                     secrets, dropped_log=LOG_DIR / "sup_tg_missed.jsonl",
@@ -235,6 +245,12 @@ class Supervisor:
     def run_once(self, *, dry: bool = False) -> hb.Decision:
         decision, doc, age = self.judge()
         pid = doc.get("pid")
+        # 必须先看 action:预算耗尽时 `decide()` 返回 action="give_up",而 kind 仍是
+        # STALLED / MISSING —— 若先判 kind,下面两个分支会无视预算无限重启
+        # (2026-10-25 实测:崩溃循环一小时重启 19 次,配置上限是 6)。
+        if decision.action == "give_up":
+            self._alert(f"实盘看护:{decision.reason};不再自动拉起,请人工介入")
+            return decision
         if decision.kind == hb.STALLED:
             if dry:
                 log_line("dry_stalled", {"reason": decision.reason, "pid": pid})
@@ -253,8 +269,6 @@ class Supervisor:
                     f"实盘看护:{decision.reason};"
                     + (f"已拉起 {new_pid}" if new_pid
                        else "拉起失败(详见 logs/live_stderr.log)"))
-        elif decision.action == "give_up":
-            self._alert(f"实盘看护:{decision.reason};不再自动拉起,请人工介入")
         elif decision.kind == hb.LATE:
             log_line("late", {"reason": decision.reason, "pid": pid})
         return decision
@@ -316,6 +330,12 @@ def main(argv=None) -> int:
         print("[supervisor] 已有看护实例在运行(单实例锁被占用),本次退出",
               flush=True)
         return 0
+    # 自己登记 pid:`mo status` / `mo stop` 对"非 mo 启动"的看护也要认得出来
+    # (迁移前只有 `mo start` 会写这个文件,手工/计划任务启动的看护在 CLI 里是隐形的)。
+    try:
+        hb.write_atomic(PID_PATH, str(os.getpid()))
+    except OSError:
+        pass
     global MIRROR
     MIRROR = CONSOLE_LOG          # 常驻模式:console 行同时落 logs/supervisor.log
     try:
@@ -324,6 +344,10 @@ def main(argv=None) -> int:
         log_line("crash", {"why": traceback.format_exc()[-1500:]})
         raise
     finally:
+        try:
+            PID_PATH.unlink()
+        except OSError:
+            pass
         lock.release()
     return 0
 

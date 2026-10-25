@@ -2,11 +2,15 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+.venv/
 data/tape/
 data/aggtrades/
 reports/flow_study_events_*.csv
 runtime/
 logs/
+var/
+# 布局是部署事实(含本机绝对路径),不进版本库
+config/paths.json
 config/secrets.env
 secrets.env
 reports/_storage_growth.json

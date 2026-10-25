@@ -17,9 +17,14 @@ setlocal
 rem Force UTF-8 for redirected stdout/stderr (default cp936 would mix encodings inside one log file).
 set PYTHONUTF8=1
 cd /d "%~dp0..\.."
-if not exist logs mkdir logs
+rem Resolve the log dir from paths (portable layout => var\logs); see live_runner.cmd.
+set "LOGDIR="
+for /f "usebackq delims=" %%d in (`python -c "import sys;sys.path.insert(0,'src');from market_operator import paths;print(paths.log_dir())" 2^>nul`) do set "LOGDIR=%%d"
+if not defined LOGDIR set "LOGDIR=logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 rem No redirection at all: the daemon mirrors its console lines into
-rem logs/supervisor.log itself and records tracebacks as kind=crash. Any
+rem <log dir>/supervisor.log itself (paths.log_dir()) and records tracebacks as
+rem kind=crash. Any
 rem redirect added here would collide with the open handle of the instance
 rem that is already running, and cmd would die at open time with a cryptic
 rem 'used by another process' and exit code 0 -- no log, no trace, no clue.

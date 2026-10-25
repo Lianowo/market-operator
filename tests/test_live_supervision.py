@@ -236,6 +236,27 @@ def test_supervisor_budget_exhausted_gives_up(sup):
     assert sup.restarts_left() == 0
 
 
+def test_supervisor_give_up_does_not_spawn(sup, monkeypatch):
+    """预算耗尽后 `run_once` 只能告警:kind 仍是 STALLED 也不能再拉。
+
+    修前 `run_once` 先判 `decision.kind` 再看 `decision.action`,而 `give_up` 的
+    kind 依然是 stalled/missing ⇒ 那个分支是死代码,预算形同虚设
+    (2026-10-25 实测崩溃循环一小时重启 19 次,配置上限 6)。
+    """
+    sup.allow_start = True
+    spawned = []
+    monkeypatch.setattr(supv.hb, "spawn_detached",
+                        lambda argv, **kw: spawned.append(list(argv)) or 9001)
+    now = time.time()
+    sup.state["restarts"] = [now - i for i in range(6)]
+    sup._save_state()
+    _write_hb(supv.HB_PATH, loop_ts_ms=hb.now_ms() - 400_000)
+
+    decision = sup.run_once()
+    assert decision.action == "give_up"
+    assert spawned == []                      # 一个进程都不许拉
+
+
 def test_supervisor_startup_grace_after_spawn(sup):
     now = time.time()
     sup.state["spawned_at_s"] = now

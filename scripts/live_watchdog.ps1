@@ -38,11 +38,28 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$StateFile = Join-Path $Repo 'runtime\live\state.json'
-$CmdFile = Join-Path $Repo 'tools\schedule\live_runner.cmd'
+# 运行期目录的唯一事实源是 `market_operator/paths.py`:向它问一次,而不是假设
+# `runtime\` / `logs\` 就在仓库根(portable 布局把两者都放到 `<repo>\var\`)。
+# 探测失败(未装依赖 / python 不在 PATH)就退回 legacy 旧路径 —— 与迁移前逐字相同。
+$SrcDir = Join-Path $Repo 'src'
+$RuntimeDir = $null
+$LogDir = $null
+try {
+    $probe = @(& python -c "import sys; sys.path.insert(0, r'$SrcDir'); from market_operator import paths as p; print(p.resolve('runtime')); print(p.resolve('logs'))" 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $probe.Count -ge 2 -and $probe[0] -and $probe[1]) {
+        $RuntimeDir, $LogDir = $probe[0], $probe[1]
+    }
+} catch { }
+if (-not $RuntimeDir) { $RuntimeDir = Join-Path $Repo 'runtime' }
+if (-not $LogDir) { $LogDir = Join-Path $Repo 'logs' }
+
+$StateFile = Join-Path $RuntimeDir 'live\state.json'
+$HeartbeatFile = Join-Path $RuntimeDir 'live\heartbeat.json'
+# 计划任务动作 = 看护入口(与线上实际注册的一致);`-Action start` 才直接拉 runner。
+$CmdFile = Join-Path $Repo 'tools\schedule\live_supervisor.cmd'
 $TaskPath = '\MarketOperator\'
 $TaskName = 'MarketOperatorLive'
-$LogFile = Join-Path $Repo 'logs\watchdog.log'
+$LogFile = Join-Path $LogDir 'watchdog.log'
 
 function Write-Log([string]$Msg) {
     $line = '{0} {1}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Msg
@@ -60,7 +77,19 @@ function Get-RunnerProc {
 }
 
 function Get-BeatAgeMinutes {
-    # 心跳 = state.json 的 saved_at_utc(UTC ISO,带 +00:00);读不到返回 $null
+    # 心跳年龄(分钟):优先 heartbeat.json 的 ts_ms / loop_ts_ms;读不到返回 $null
+    # 判活只认心跳文件(README「实盘运维」):state.json 在补做期间可能久不落盘,
+    # 而心跳线程是独立的。旧部署没有 heartbeat.json 时退回 state.json saved_at_utc。
+    if (Test-Path $HeartbeatFile) {
+        try {
+            $hb = Get-Content $HeartbeatFile -Raw -Encoding utf8 | ConvertFrom-Json
+            $ms = if ($hb.ts_ms) { [double]$hb.ts_ms } else { [double]$hb.loop_ts_ms }
+            if ($ms -gt 0) {
+                $now = [datetimeoffset]::UtcNow.ToUnixTimeMilliseconds()
+                return [math]::Round(($now - $ms) / 60000, 2)
+            }
+        } catch { return $null }
+    }
     if (-not (Test-Path $StateFile)) { return $null }
     try {
         $st = Get-Content $StateFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -103,7 +132,7 @@ function Start-Runner {
         Write-Log ("已在运行(PID {0}),不重复启动" -f ($procs.ProcessId -join ','))
         return
     }
-    $logs = Join-Path $Repo 'logs'
+    $logs = $LogDir
     if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Path $logs -Force | Out-Null }
     $p = Start-Process -FilePath 'python' `
         -ArgumentList 'scripts\live_runner.py', '--mode', 'live' `
@@ -172,7 +201,7 @@ function Invoke-Gc {
     # 每日存储治理:只清可再生产物(见 scripts\storage_gc.py 头部原则)
     $gc = Join-Path $Repo 'scripts\storage_gc.py'
     if (-not (Test-Path $gc)) { throw "找不到 $gc" }
-    $log = Join-Path $Repo 'logs\storage_gc.log'
+    $log = Join-Path $LogDir 'storage_gc.log'
     $out = & python $gc --apply --dedupe-gz 2>&1
     $out | Add-Content -Path $log -Encoding utf8
     $out | Select-Object -Last 12 | ForEach-Object { Write-Host $_ }

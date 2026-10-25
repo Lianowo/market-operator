@@ -1,5 +1,97 @@
 # Changelog
 
+## [Unreleased] — 2026-10-24 — 跨平台运维层:`mo` 命令台 + 运行期目录唯一事实源
+
+两件事同源:**换机器/换系统时,"路径"和"判活"都不该再靠人记**。修前 `scripts/
+live_*` 里 `ROOT / "runtime"` / `ROOT / "logs"` 硬编码在十几处,一旦把产物挪出
+仓库(打包部署、`var/` 布局),runner 写的心跳、看护读的心跳、CLI 报的心跳就会是
+三个不同文件 —— 判活永久"缺失",看护反复拉起;运维还要记一堆脚本名和参数。
+
+- **新增 `market_operator/paths.py`(运行期目录唯一事实源)**:`layout_mode()`
+  按 `MARKET_OPERATOR_LAYOUT` > `MARKET_OPERATOR_DATA_ROOT` > `config/paths.json`
+  > `var/.mo-layout.json` 标记 > legacy 默认解析;`resolve()` 只改写运行期类别
+  (`data/logs/runtime/reports` 等),`config/`、`scripts/` 永远锚定部署根;
+  `resolve_existing()` 只在"读"时回退旧目录,写路径始终严格 —— 迁移未完成时不会
+  把 state 劈成两半。`legacy` 行为零变化。
+- **`migrate_legacy()` 是可审计的迁移**:默认只搬 `logs`/`runtime`(`data` 需显式
+  `--include-data`),逐文件复制 + sha256 比对,**全部通过才**写 `var/MIGRATION.json`
+  与激活配置;心跳新鲜时拒绝迁移(`--force` 可演练);`--move` 只删除已校验且未被
+  git 跟踪的源文件。`activate_legacy()` 保留 `var/` 数据、删标记,可随时回滚。
+- **新增 `mo` 运维台(`cli.py` + `scripts/mo.py` + `__main__.py`)**:`bootstrap /
+  doctor / start / stop / restart / status / positions / warmup / logs / tg-sync /
+  tg-run / package / migrate-data / paths`,全部支持 `--json`。`doctor` 默认不联网
+  (可选 `--exchange` 做公共行情 + 只读账户);`warmup` 是沙盒导入,不写生产 state;
+  `package` 产出 zip + sha256 清单并可用 `--verify` 复核。
+- **`ops.py` 收敛进程/心跳/日志/打包动作**:`live_paths()` 一张表给出 state、
+  campaigns、heartbeat、candles、supervisor pid/lock/state、tg pid/state、日志;
+  启停一律"先停看护再停 runner"(否则看护会把 runner 立即拉回来);`redact()` 保证
+  错误信息不泄露密钥。修掉三处真 bug:`stop_all()` 的兜底 `find_pids(
+  "scripts/live_runner.py")` 在 Windows 上永远匹配不到(`\` 与 `/` 的差别),
+  改成按文件名 `live_runner.py` 匹配;`find_pids()` 会**匹配到自己的探针**
+  (`powershell -Command "... -like '*live_supervisor.py*'"` / `sh -c 'pgrep -f …'`),
+  `mo status` 因此报出一个转瞬即逝的 powershell pid 当看护(alive=True),
+  `mo stop` 还可能去杀它 —— 现在按镜像名/壳名排除探针;`mo` 在 cp936 控制台
+  (Windows 默认、未设 `PYTHONUTF8`)遇 emoji 会 `UnicodeEncodeError`,被 `main()`
+  兜底成一行 `ERROR ...` 并退出 1,`_soften_stdio()` 只放宽 `errors="replace"`
+  (中文照旧、个别 emoji 退化成 `?`),`mo status` 不再因为一个箭头整条失败。
+- **`supervisor_pid()` 只认看护自己**:`supervisor.json` 的 `spawned_pid` 是看护
+  拉起的 **runner 子进程**,修前被当成看护 pid —— `mo status` 把 runner 显示成看护、
+  `mo stop` 只杀 runner(看护下一轮又拉起来,看起来「停不掉」)、`mo doctor` 在
+  「看护已死但 runner 还活着」时误报健康。现在先读 `runtime/live/supervisor.pid`
+  (新版看护自己写),旧版没写该文件时按进程名 `live_supervisor.py` 兜底。
+- **看护的重启预算修成真的**:`run_once()` 原先把 `decision.kind` 判在
+  `decision.action` 之前,而预算耗尽时 `decide()` 返回的是 `action="give_up"` +
+  `kind=stalled/missing` 并存 ⇒ `give_up` 分支成了死代码,崩溃循环里看护一小时
+  重启 19 次(配置上限 6),「崩溃循环不会刷成无限重启」的承诺被刷没了。现在先认
+  `give_up`(只告警、不杀不拉),起不来就交人工;新增
+  `test_supervisor_give_up_does_not_spawn` 钉住「一个进程都不许拉」。
+- **`tg_commands.py` 与 CLI 共用 `ops`**:两套机器人菜单(`public` / `ops`)写入前
+  用 `validate_specs()` 校验命令名与描述,运营命令不落公开 Bot。修掉一处真 bug:
+  `_pos_rows()` 直接迭代心跳里的 `positions`(那是**数量**,逐笔明细在
+  `positions_detail`),一旦有仓位 `mo positions` / `/status` 就 `TypeError`;
+  现在优先读明细,缺失时回退本地账本。
+- **`scripts/live_runner.py` / `live_status.py` / `live_restart.py` /
+  `live_supervisor.py` 改走 `paths`**:state/心跳/journal/candles/tg_missed 与
+  凭据路径全部经 `paths.resolve()`(只读场景用 `resolve_existing`);看护自己登记
+  `runtime/live/supervisor.pid` 并在退出时清除 —— 手工或计划任务启动的看护,现在
+  `mo status|stop` 也认得出来。`live_restart.py` 以绝对路径拉起 runner、`cwd`
+  用 `app_home()`,不再依赖调用者的工作目录。
+- **测试 `tests/test_ops_paths.py`(22 例)**:布局优先级、`resolve` 只改写运行期
+  类别、`resolve_existing` 迁移前回退、`live_paths` 在 legacy/portable 下与 runner
+  同源、激活可逆、迁移 dry-run 零写入 / 校验后激活 / 心跳新鲜拒绝迁移、
+  `ensure_layout()` 幂等并补齐 `live/candles`、菜单唯一性、`_pos_rows` 不再迭代
+  int、`supervisor_pid` 不再把 `spawned_pid` 当看护、`find_pids` 不认自己的探针、
+  cp936 控制台下 `mo status` 不再被 emoji 打断、CLI 子命令全部可解析且不重名、
+  `status_snapshot` 报出的就是 runner 写的文件;四条硬编码护栏(`scripts/live_*.py`、
+  `scripts/*.ps1`、`scripts/storage_gc.py`、`tools/schedule/*.cmd`)。**另注:`heartbeat.read_heartbeat()` 只认带 `schema`/`ts_ms`
+  的文档**(否则返回 `{}`),测试里也按同口径构造心跳。
+- `.gitignore` 增 `var/` 与 `config/paths.json`(布局含本机绝对路径,属部署事实);
+  `pyproject` 增 `[project.scripts] mo = "market_operator.cli:main"`。
+- **已迁移的脚本**:`live_runner / live_status / live_restart / live_supervisor /
+  live_gap_preview / live_paper_check / live_cost_audit`,以及 Windows 垫片
+  `scripts/live_watchdog.ps1`(改为向 `paths.resolve('runtime'|'logs')` 问一次,
+  探测失败才退回旧路径;判活同时改为优先 `heartbeat.json` 的 `ts_ms`,旧部署无
+  心跳文件时回退 `state.json saved_at_utc`)。两条护栏防回退:
+  `test_live_scripts_do_not_hardcode_runtime_dirs` 扫 `scripts/live_*.py`,
+  `test_ops_shims_do_not_hardcode_runtime_dirs` 扫 `scripts/*.ps1`(仅放行显式兜底行)。
+- **`scripts/storage_gc.py` 也走 `paths`(收尾项)**:盘点 / 清理 / manifest 原先把
+  `logs`、`runtime`、`reports`、`data` 前缀钉在仓库根,portable 布局下 `var/logs`
+  **无人治理** —— 而且不报错,预算闸门只会一直显示「宽裕」。现在物理路径经
+  `paths.store_root()` 解析,而白名单、热档判据与 manifest 里存的是**逻辑相对路径**
+  (`logs/x.log`、`runtime/live/state.json`),两种布局写法一致,`--restore` 因此可
+  跨布局还原;`inventory()` 在 portable 下把 `var/` 拆成 `var/logs`、`var/runtime`
+  等分别列出(否则增长源被一个 `var` 吞掉)。legacy 行为逐字不变。
+  `tests/test_storage_gc.py` 增 4 例(现 11 例):`op()/op_rel()` 换算可逆、
+  portable 下 `var/logs` 真的被压缩而 legacy 残留目录不动、`inventory()` 按类别
+  拆分、manifest 不带 `var/` 前缀且能还原。
+- **`tools/schedule/*.cmd` 不再硬编码 `logs`**:原先是 `if not exist logs mkdir logs`
+  + `>>logs\*.log`,portable 下会凭空建一个空 `logs\`,脚本自己的日志也写到没人
+  盘点的位置。现在先 `for /f` 问一次 `paths.log_dir()`(legacy ⇒ `logs`、portable
+  ⇒ `var\logs`),python 不可用时才落到 `if not defined LOGDIR set "LOGDIR=logs"`
+  这一行兜底(与迁移前逐字相同)。护栏 `test_schedule_cmds_resolve_log_dir_via_paths`
+  扫 `tools/schedule/*.cmd`,`test_storage_gc_uses_paths_for_runtime_dirs` 扫
+  `scripts/storage_gc.py`。
+
 ## [Unreleased] — 2026-10-24 — 信号广播与容量闸门解耦 + 通知双通道 + 图表结构标注
 
 三件事同源：**信号是市场事实，执行是本账户状态**。修前两者被同一段代码绑死 ——

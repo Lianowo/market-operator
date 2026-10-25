@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,3 +125,70 @@ def test_apply_safe_never_touches_source_data(tmp_path, monkeypatch):
     assert not dedup.exists(), "有损判据未生效"
     assert not pyc.exists(), "缓存未清理"
     assert any("去重" in a for a in acts)
+
+
+# ---------------------------------------------------------------------------
+# 布局(portable):清理与 manifest 必须跟着 `paths` 走,而不是仓库根
+# ---------------------------------------------------------------------------
+
+
+def _portable(monkeypatch, tmp_path):
+    """把 storage_gc 钉到临时目录里的 portable 布局(<tmp>/var)。"""
+    monkeypatch.setattr(sg, "ROOT", tmp_path)
+    monkeypatch.setattr(sg, "_ops_root", lambda: tmp_path / "var")
+    monkeypatch.setattr(sg, "MANIFEST", tmp_path / "var" / "reports" / "_m.jsonl")
+
+
+def test_ops_root_and_logical_rels(tmp_path, monkeypatch):
+    """物理路径是 `var/...`,逻辑相对路径仍是 `logs/...`(白名单/热档判据跨布局稳定)。"""
+    _portable(monkeypatch, tmp_path)
+
+    assert sg.op("logs/storage_gc.log") == tmp_path / "var" / "logs" / "storage_gc.log"
+    logical = sg.op_rel(tmp_path / "var" / "runtime" / "live" / "state.json")
+    assert logical == "runtime/live/state.json"
+    assert sg.is_hot(logical), "portable 下热档判据必须仍然命中"
+
+
+def test_inventory_splits_store_in_portable(tmp_path, monkeypatch):
+    """报告里 `var` 要按类别拆开,否则看不见增长源(日志/数据各占多少)。"""
+    _portable(monkeypatch, tmp_path)
+    _write(tmp_path / "var" / "logs" / "a.log", b"x" * 10)
+    _write(tmp_path / "src" / "m.py", b"y" * 5)
+
+    inv = sg.inventory()
+
+    assert inv["var/logs"] == (10, 1)
+    assert inv["src"] == (5, 1)
+    assert "var" not in inv, "var 被整包算了一次,会与拆分后的类别重复计数"
+
+
+def test_portable_store_is_governed(tmp_path, monkeypatch):
+    """portable 下 `var/logs` 必须被治理:修前所有清理都钉在仓库根,`var/` 无人收。"""
+    _portable(monkeypatch, tmp_path)
+    stale = (time.time() - 20 * 86400,) * 2       # 超过默认 log_days=14
+    store_log = _write(tmp_path / "var" / "logs" / "audit.jsonl", b'{"x":1}\n' * 10)
+    legacy_log = _write(tmp_path / "logs" / "audit.jsonl", b'{"x":1}\n' * 10)
+    for p in (store_log, legacy_log):
+        os.utime(p, stale)
+
+    acts = sg.apply_safe(dry=False, args=_args())
+
+    assert not store_log.exists(), "portable 的日志目录没被治理"
+    assert store_log.with_name("audit.jsonl.gz").exists()
+    assert legacy_log.exists(), "legacy 残留目录不归 portable 的 gc 管"
+    assert any("audit.jsonl" in a for a in acts)
+
+
+def test_manifest_is_layout_independent(tmp_path, monkeypatch):
+    """manifest 存逻辑路径 ⇒ portable 下压缩的文件在 portable 下也能还原。"""
+    _portable(monkeypatch, tmp_path)
+    data = b"0123456789" * 5_000
+    orig = _write(tmp_path / "var" / "reports" / "big.csv", data)
+
+    ok, msg = sg.gzip_keep(orig, dry=False)
+    assert ok, msg
+    rec = json.loads(sg.MANIFEST.read_text(encoding="utf-8").strip())
+    assert rec["orig"] == "reports/big.csv", "manifest 不该带 var/ 前缀"
+
+    assert sg.restore_from_manifest(dry=False) == 1
+    assert orig.read_bytes() == data

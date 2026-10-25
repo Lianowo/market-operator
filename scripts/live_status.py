@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from market_operator import paths                                # noqa: E402
 from market_operator.bitget_live import BitgetLiveClient, BitgetError   # noqa: E402
 from market_operator.secrets_loader import load_secrets                 # noqa: E402
 
@@ -93,8 +94,9 @@ def _read_exchange(cfg: dict):
     print("=" * 78)
     try:
         cred_src = cfg.get("credentials_source")
-        cred_path = ((ROOT / cred_src)
-                     if cred_src and (ROOT / cred_src).exists() else None)
+        cred_path = paths.resolve_existing(cred_src) if cred_src else None
+        if cred_path is not None and not cred_path.exists():
+            cred_path = None
         secrets = load_secrets(cred_path,
                                config_overrides=cfg.get("credentials"))
         client = BitgetLiveClient(secrets)
@@ -249,8 +251,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
-    state_path = ROOT / str((cfg.get("loop") or {})
-                            .get("state_path", "runtime/live/state.json"))
+    state_path = paths.resolve((cfg.get("loop") or {})
+                               .get("state_path", "runtime/live/state.json"))
     now_ms = int(time.time() * 1000)
 
     st, rc = _print_state(state_path, now_ms)

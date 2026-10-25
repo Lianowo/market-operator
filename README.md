@@ -73,7 +73,7 @@ v1-v5 各轮与 v6 双臂 A/B 快照、PR#9/#10 前向设施已按轮次归档�
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest -q                       # 618 passed / 1 skipped(全量回归 + 各轮历史测试)
+python -m pytest -q                       # 634 passed / 1 skipped(全量回归 + 各轮历史测试)
 
 # v21 平衡箱与多周期混合触发回测诊断
 python scripts/_diag_v21_backtest.py
@@ -88,7 +88,7 @@ python scripts/live_status.py            # 本地↔交易所↔保护单三方�
 python scripts/live_gap_preview.py       # 只读预演掉线缺口补做(所有写操作被拦截)
 python scripts/storage_gc.py             # 存储盘点 + 预算判定(默认只读)
 python scripts/storage_gc.py --apply --dedupe-gz   # 安全清理(日志/备份/缓存/无损去重)
-powershell -File scripts/live_watchdog.ps1 -Action register   # 注册每 3 分钟拉起的计划任务
+powershell -File scripts/live_watchdog.ps1 -Action register   # 注册每 3 分钟拉起的计划任务(目录同样经 paths 解析)
 
 # 规范基线回放(产物 reports/backtest_v6_turtle.*)
 python scripts/run_backtest_v6.py
@@ -101,6 +101,50 @@ python research/rounds/v4/run_backtest_v4.py
 python research/rounds/v5/run_backtest_v5.py
 python research/rounds/v6/run_backtest_v6.py   # v6 A/B 双臂(复现判选)
 ```
+
+## 运维台 `mo`(跨平台一条命令)
+
+`scripts/mo.py`(等价 `python -m market_operator`,装包后直接 `mo`)把启停 / 自检 /
+对账 / 日志 / 打包 / 迁移收敛到同一张命令表:所有子命令都支持 `--json`,
+Telegram 运营命令(`market_operator/tg_commands.py`)与人读输出共用同一份数据
+(两者都只调 `ops`,不 import `live_runner`)。
+
+```bash
+python scripts/mo.py bootstrap --layout auto      # 全新主机:布局→自检→启动→暖机→对账
+python scripts/mo.py doctor [--exchange]          # 环境自检(默认不联网)
+python scripts/mo.py start | stop | restart       # 看护 → runner 整条链
+python scripts/mo.py status                       # 进程/心跳/持仓/权益/计数器
+python scripts/mo.py positions [--no-exchange]    # 本地账本 ↔ 交易所持仓
+python scripts/mo.py logs [live|err|sup|tg] -n 80 # 日志尾部(--list 列全部)
+python scripts/mo.py paths                        # 当前布局与各类目录占用
+python scripts/mo.py package -o backup.zip        # 运行期产物 zip + sha256
+python scripts/mo.py migrate-data --dry-run       # 旧目录 → var/ 预演
+```
+
+### 目录布局(`market_operator/paths.py`)
+
+运行期目录有唯一事实源,不再硬编码仓库根:默认 `legacy`(仍是 `data/ logs/
+runtime/ reports/`,行为零变化);全新主机 `bootstrap` 自动切 `portable`
+(`var/{data,logs,runtime,reports,...}`)。切换优先级:
+`MARKET_OPERATOR_LAYOUT` > `MARKET_OPERATOR_DATA_ROOT` > `config/paths.json` >
+`var/.mo-layout.json` 标记 > legacy。已有实盘换布局必须显式 `mo migrate-data`
+(复制 → 逐文件 sha256 → 全部通过才写激活配置;`--move` 只删已校验且未被 git
+跟踪的源文件)。`paths.resolve()` 只改写运行期类别,`config/`、`scripts/` 永远锚定
+部署根;写入严格,读取(`resolve_existing`)可在迁移未完成时回退旧目录 —— 不会把
+state 劈成两半。
+
+runner / 看护 / `mo` / TG 机器人全部走同一套 `resolve()`,portable 下心跳、state、
+日志只有一份;`live_supervisor.py` 自己登记 `runtime/live/supervisor.pid`,
+因此 `mo status|stop` 对"非 mo 启动"的看护同样有效。
+
+`scripts/storage_gc.py` 同样以 `paths` 为准:物理路径经 `paths.store_root()` 解析,
+白名单 / 热档判据 / manifest 里存的都是**逻辑相对路径**(`logs/x.log`、
+`runtime/live/state.json`),两种布局写法一致,portable 下 `var/logs`、`var/runtime`
+一样有人治理,`--restore` 也能跨布局还原(legacy 行为逐字不变)。
+`tools/schedule/*.cmd` 先 `for /f` 问一次 `paths.log_dir()` 再 `mkdir`/重定向,
+因此 portable 下不会再凭空多出一个空的 `logs\`;python 不在 PATH 时才退回
+`if not defined LOGDIR set "LOGDIR=logs"`。四个入口都有护栏禁止回退
+(`scripts/live_*.py`、`scripts/*.ps1`、`scripts/storage_gc.py`、`tools/schedule/*.cmd`)。
 
 ## 实盘运维(看护与存储治理)
 
@@ -163,7 +207,8 @@ python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文
    日志一个字都写不出来。所以常驻看护自己把 console 行镜像进
    `logs/supervisor.log`(异常记为 `kind=crash`),.cmd 只负责 `cd` 到仓库根再调
    python;`live_runner.cmd` / `storage_gc.cmd` 仍重定向,但写的是**无人长期持有**
-   的 `logs/live_runner_console.log`、`logs/storage_gc.log`。
+   的 `logs/live_runner_console.log`、`logs/storage_gc.log`(目录先向
+   `paths.log_dir()` 问,portable 下自动变成 `var/logs/...`)。
 3. **重复触发靠单实例锁变成"没跑就拉起"**。第二次触发的新实例抢不到
    `runtime/live/supervisor.lock` 就打印一行并 `exit 0`,既不影响在跑的实例,
    也不需要 `IgnoreNew`/上次结果之类的巧妙判断。

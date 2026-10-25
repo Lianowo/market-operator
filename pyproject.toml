@@ -12,6 +12,9 @@ dependencies = ["numpy>=1.26", "pandas>=2.0", "requests>=2.31"]
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[project.scripts]
+mo = "market_operator.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
