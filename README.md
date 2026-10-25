@@ -212,6 +212,21 @@ python scripts/storage_gc.py --restore --apply # 按 manifest 还原被压缩文
 3. **重复触发靠单实例锁变成"没跑就拉起"**。第二次触发的新实例抢不到
    `runtime/live/supervisor.lock` 就打印一行并 `exit 0`,既不影响在跑的实例,
    也不需要 `IgnoreNew`/上次结果之类的巧妙判断。
+4. **不要在实例运行中热改 `.cmd`,改完按"停 → 改 → 起"走**。`cmd.exe` 是**按字节
+   偏移逐行读取**批处理文件的:文件在执行途中被改写,它下一次读取就落在错位处,把
+   已经执行过的行再跑一遍。2026-10-25 踩到:在 `live_supervisor.cmd` 的 python 调用
+   行前面插了几行 `rem`,旧 `cmd.exe` 的偏移因此落回那行 —— `mo stop` 杀掉看护 4 秒
+   后又静悄悄起了一个,父进程仍是前一天启动的 `cmd.exe`(心跳/预算看起来都正常,
+   只有进程树能看出来)。顺序照抄:
+
+   ```bat
+   Disable-ScheduledTask -TaskPath '\MarketOperator\' -TaskName MarketOperatorLive
+   python scripts\mo.py stop
+   rem ...改 tools\schedule\*.cmd...
+   Enable-ScheduledTask  -TaskPath '\MarketOperator\' -TaskName MarketOperatorLive
+   Start-ScheduledTask   -TaskPath '\MarketOperator\' -TaskName MarketOperatorLive
+   ```
+
 
 ```bat
 C:\Windows\System32\cmd.exe /c tools\schedule\live_supervisor.cmd

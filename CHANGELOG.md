@@ -91,6 +91,20 @@ live_*` 里 `ROOT / "runtime"` / `ROOT / "logs"` 硬编码在十几处,一旦把
   这一行兜底(与迁移前逐字相同)。护栏 `test_schedule_cmds_resolve_log_dir_via_paths`
   扫 `tools/schedule/*.cmd`,`test_storage_gc_uses_paths_for_runtime_dirs` 扫
   `scripts/storage_gc.py`。
+- **运维留档(2026-10-25 实盘,替换看护进程)**:`runtime/live/supervisor.json` 里攒了
+  19 条重启记录(全是修复前 197s 崩溃循环的产物),把 1 小时窗口的预算耗到 0 —— 新
+  看护一启动就会 `give_up`,再断网只告警不拉起。处理:旧记录归档到
+  `restarts_archived_20261025T062137Z`、`restarts` 清空,并写一条
+  `actor=operator / kind=budget_reset` 审计(含 `left_before=1 → left_after=6`);
+  `spawned_*`/`last_restart_s` 一并清掉(指向已死的 47420)。随后用看护自己的
+  `start_runner()` 把 runner 拉回(占 1 次预算,余 5),再由计划任务以 `IgnoreNew`
+  属性接管进程树。审计三行同见 `logs/supervisor.jsonl`(`budget_reset`、
+  `started`, `manual_start`);持仓 9 笔 / 挂单 51 / 止损单 9 前后一致,`mo doctor`
+  `ok=10 warn=1 fail=0`。
+- **README 增第 4 条 `.cmd` 坑**(本次事故真因):`cmd.exe` 按**字节偏移**逐行读取
+  批处理,实例运行中改写 `.cmd` 会让它重跑已执行过的行 —— `mo stop` 后 4 秒又冒出
+  一个看护,父进程是前一天启动的 `cmd.exe`。入口脚本必须"停实例 → 改 → 再启动",
+  命令序列已写进 README。
 
 ## [Unreleased] — 2026-10-24 — 信号广播与容量闸门解耦 + 通知双通道 + 图表结构标注
 
