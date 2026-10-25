@@ -317,6 +317,27 @@ def test_84_add_only_once():
 # ---------------------------------------------------------------------------
 
 
+def test_retag_entry_rebuilds_r_basis_and_keeps_defense():
+    """实盘成交回执:entry 改为成交均价,R 基准随之重算,防线绝不放宽(§6a)。"""
+    mgr = _mgr()
+    pos = mgr.open("BTCUSDT", 1, entry=100.0, invalid=95.0, target_1=110.0,
+                   event_id="BREAKOUT_ACCEPTED", ts=0, index=0)
+    pos.invalid = 99.0                    # 已 trailing 收紧
+
+    assert mgr.retag_entry("BTCUSDT", 100.5)
+    assert pos.entry == 100.5
+    assert pos.initial_risk == pytest.approx(5.5)   # |100.5 − invalid0(95)|
+    assert pos.invalid == 99.0                      # 防线不动(不放宽)
+    assert pos.mfe_r == pytest.approx(0.0)          # 极值随新 entry 归一
+
+    # 成交价已越过防线 ⇒ 不校正(交给止损路径,不能把 R 记成负数)
+    assert not mgr.retag_entry("BTCUSDT", 94.0)
+    assert pos.entry == 100.5
+    # 仓已不在 ⇒ 不校正(绝不把回执记到下一仓头上)
+    mgr.positions.pop("BTCUSDT")
+    assert not mgr.retag_entry("BTCUSDT", 101.0)
+
+
 def test_full_lifecycle_qty_sums_to_flat():
     m = _mgr()
     _short(m)

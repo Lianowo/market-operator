@@ -409,6 +409,38 @@ class PositionManager:
         return self.open(symbol, hyp.direction, entry, hyp.invalid,
                          hyp.target_1, hyp.event_id, ts, index)
 
+    def retag_entry(self, symbol: str, fill_px: float) -> bool:
+        """实盘**成交回执**校正:把建仓均价改为交易所成交均价(§6a)。
+
+        实盘市价单下单瞬间拿不到成交价,只能先按参考价记账;回执到达后必须
+        回写,否则 `mfe_r`、锁利预算 `(1−frac)·|target−entry|`、保本判定
+        全部沿用参考价口径 —— 而参考价与真实成交价实测差 −120~+74 bps,
+        足以让 1R 与实际风险脱钩。
+
+        纪律:
+        * `invalid`/`invalid0` **不动** —— 防线是结构事实,不因成交滑点放宽;
+        * R 基准 `initial_risk` 随新 entry 重算(与 `invalid0` 配对);
+        * `_best` 只在新 entry 之外才需要重设,绝不让 MFE 因回写而变小到大
+          于已记录极值(那是同一段行情的既成事实)。
+        * 成交价已越过防线(`direction·(px−invalid) ≤ 0`)或仓位已不在 ⇒ 不校正。
+        """
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return False
+        px = float(fill_px)
+        if px <= 0.0 or pos.direction * (px - pos.invalid) <= 0.0:
+            return False
+        base = float(pos.invalid0 if pos.invalid0 is not None else pos.invalid)
+        risk = abs(px - base)
+        if risk <= 0.0:
+            return False
+        pos.entry = px
+        pos._entry0 = px
+        pos.initial_risk = risk
+        if pos._best is None or pos.direction * (pos._best - px) < 0.0:
+            pos._best = px
+        return True
+
     # -- 逐 bar 裁决 -----------------------------------------------------------
 
     def on_bar(self, symbol: str, bar, atr: float,

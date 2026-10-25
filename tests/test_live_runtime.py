@@ -20,6 +20,7 @@ import json
 import sys
 import time
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,58 @@ def test_daily_loss_breaker_threshold_and_reset():
     br.update(t0 + 86_400_000 * 2, 800.0)      # UTC 日界:新起点复位
     assert not br.tripped and not br.should_stop(750.0)
     assert br.should_stop(720.0)
+
+
+def test_daily_loss_breaker_anchors_pre_gap_equity_on_restart():
+    """跨日重启:日界锚取缺口前权益,而不是重启瞬间权益(否则缺口亏损被抹掉)。"""
+    t0 = 1_797_000_000_000                     # 某 UTC 日(08:00 UTC 前)
+    br = lr.DailyLossBreaker(0.05)
+    br.update(t0, 100.0)
+    br.update(t0 + 8 * 3600_000, 107.6)        # 当日最后一笔事实
+    assert br.start_equity == 100.0
+
+    # 停机跨日后再启动:state.json 只带回 day/start_equity/equity(→last_equity)
+    nxt = lr.DailyLossBreaker(0.05)
+    nxt.day, nxt.start_equity = br.day, br.start_equity
+    nxt.last_equity = br.last_equity
+    nxt.update(t0 + 86_400_000, 100.4)         # 重启瞬间权益已含缺口亏损
+
+    assert nxt.start_equity == pytest.approx(107.6)
+    assert not nxt.should_stop(102.3)          # -4.9%:当日预算仍在
+    assert nxt.should_stop(102.2)              # 恰 -5.0% inclusive:熔断
+
+    # 同日重启:锚不变(当日亏损必须继续累计)
+    same = lr.DailyLossBreaker(0.05)
+    same.day, same.start_equity = br.day, 100.0
+    same.update(t0 + 2 * 3600_000, 95.0)
+    assert same.start_equity == pytest.approx(100.0)
+
+    # 停机多日:上一笔权益已不可比 ⇒ 只能按重启权益起算
+    far = lr.DailyLossBreaker(0.05)
+    far.day, far.start_equity = br.day, br.start_equity
+    far.last_equity = br.last_equity
+    far.update(t0 + 3 * 86_400_000, 80.0)
+    assert far.start_equity == pytest.approx(80.0)
+
+
+def test_daily_report_uses_previous_day_close_not_new_anchor(tmp_path):
+    """日结必须报**昨日**锚/收盘:滚动后的新锚会把日盈亏算成 ≈0。"""
+    tg = _DailyTG()
+    r = _runner(tmp_path, _FakeClient(), tg)
+    t0 = 1_797_000_000_000
+    r.breaker.update(t0, 100.0)
+    r.breaker.update(t0 + 8 * 3600_000, 107.6)
+    r.equity = 107.7
+    r._daily_date = _utc_day(t0)
+
+    r.breaker.update(t0 + 86_400_000, 107.7)   # 主循环顺序:先滚 breaker
+    r._daily_tick(t0 + 86_400_000)
+
+    day, eq, pnl, _sig, _fills, _n, dd = tg.daily[-1]
+    assert day == _utc_day(t0)
+    assert eq == pytest.approx(107.6)          # 昨日最后一笔权益
+    assert pnl == pytest.approx(7.6)
+    assert dd == pytest.approx(-0.076)         # (anchor − close)/anchor
 
 
 def test_rate_limiter_hourly_cap():
@@ -371,6 +424,24 @@ class _FakeTG:
     def send_fill(self, sym, title, qty, price, **kw):
         self.fills.append({"symbol": sym, "title": title, "qty": qty,
                            "price": price, **kw})
+
+
+class _DailyTG(_FakeTG):
+    """记录日结上报(其余同 _FakeTG)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.daily: list[tuple] = []
+
+    def send_daily(self, date, equity, day_pnl, n_signals, n_fills,
+                   n_positions, drawdown_frac):
+        self.daily.append((date, equity, day_pnl, n_signals, n_fills,
+                           n_positions, drawdown_frac))
+        return True
+
+
+def _utc_day(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
 class _FakeClient:
@@ -1287,6 +1358,279 @@ def test_exit_settle_gives_up_after_deadline(tmp_path):
     assert r._exit_settle == {}
     assert r.counters["exit_settle_miss"] == 1
     assert _row(tmp_path, kind="exit_settle_miss")["ref_px"] == 100.0
+
+
+def _entry_rec(**kw) -> dict:
+    now = int(time.time() * 1000)
+    rec = {"oid": "E1", "order_id": "M1", "event_id": "EV1",
+           "ref_px": 100.0, "direction": 1, "submitted_ms": now - 1000,
+           "deadline_ms": now + 60_000}
+    rec.update(kw)
+    return rec
+
+
+def test_entry_settle_rewrites_entry_with_fill_vwap(tmp_path):
+    """P0 观测:市价开仓先按参考价记账 ⇒ 回执到达后按**该订单**成交均价回写。
+
+    只认 orderId 相同的成交(别人的单子不得算进来),同单多笔按 size 加权。
+    """
+    now = int(time.time() * 1000)
+    client = _FillClient()
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=95.0, direction=1)
+    r._entry_settle["BTCUSDT"] = _entry_rec()
+    client.fills = [
+        {"symbol": "BTCUSDT", "orderId": "M1", "price": "101.0", "size": "1",
+         "tradeSide": "open", "cTime": str(now - 900)},
+        {"symbol": "BTCUSDT", "orderId": "M1", "price": "101.4", "size": "3",
+         "tradeSide": "open", "cTime": str(now - 800)},
+        {"symbol": "BTCUSDT", "orderId": "OTHER", "price": "90.0", "size": "9",
+         "tradeSide": "open", "cTime": str(now - 700)},
+    ]
+
+    r._settle_entries(now)
+
+    assert r._entry_settle == {}
+    assert r.positions["BTCUSDT"]["entry"] == pytest.approx(101.3)  # 加权
+    row = _row(tmp_path, kind="entry_settle")
+    assert row["fill_px"] == pytest.approx(101.3)
+    assert row["fill_qty"] == pytest.approx(4.0)
+    assert row["applied"] is True
+    assert row["slip_bps"] == pytest.approx(130.0)   # 逆向漂移为正
+    assert any("开仓成交价" in a for a in r.tg.alerts)
+
+
+
+
+# ---------------------------------------------------------------------------
+# ⑩ 事件 × 方向期望值权重:只缩不放、永不归零、别名归一
+# ---------------------------------------------------------------------------
+
+
+def test_edge_size_multiplier_defaults_to_one():
+    """表缺失/键缺失 ⇒ 1.0(不改变现行行为)。"""
+    assert lr.edge_size_multiplier(None, "BREAKOUT_ACCEPTED", 1) == 1.0
+    assert lr.edge_size_multiplier({}, "BREAKOUT_ACCEPTED", 1) == 1.0
+    assert lr.edge_size_multiplier({"LEVEL_REJECTED|-1": 0.5},
+                                   "BREAKOUT_ACCEPTED", 1) == 1.0
+
+
+def test_edge_size_multiplier_normalizes_legacy_event_codes():
+    """配置写 E1 或 BREAKOUT_ACCEPTED 等价;方向不匹配不生效。"""
+    table = {"BREAKOUT_ACCEPTED|1": 0.35}
+    assert lr.edge_size_multiplier(table, "E1", 1) == pytest.approx(0.35)
+    assert lr.edge_size_multiplier(table, "E1", -1) == 1.0
+
+
+def test_edge_size_multiplier_only_shrinks_and_never_removes_direction():
+    """配置只能减少仓位:0/负/NaN/非法 ⇒ 1.0;放大夹回 1.0;下限 10%。"""
+    assert lr.edge_size_multiplier({"E1|1": 0.0}, "E1", 1) == 1.0
+    assert lr.edge_size_multiplier({"E1|1": -1.0}, "E1", 1) == 1.0
+    assert lr.edge_size_multiplier({"E1|1": float("nan")}, "E1", 1) == 1.0
+    assert lr.edge_size_multiplier({"E1|1": "oops"}, "E1", 1) == 1.0
+    assert lr.edge_size_multiplier({"E1|1": 3.0}, "E1", 1) == 1.0
+    assert lr.edge_size_multiplier({"E1|1": 0.01}, "E1", 1) == 0.1
+
+
+def test_live_config_edge_multiplier_is_bounded_and_keyed_validly():
+    """生产配置里的键必须能解析成 (事件, 方向),且落在 [10%, 100%]。"""
+    raw = json.loads((ROOT / "config" / "live.json").read_text(encoding="utf-8"))
+    table = raw["risk"]["edge_size_by_event_direction"]
+    for key in table:
+        ev, _, d = key.partition("|")
+        w = lr.edge_size_multiplier(table, ev, int(d))
+        assert 0.1 <= w <= 1.0, key
+
+
+def test_accept_long_sized_down_while_reject_long_kept(tmp_path):
+    """接线:同一套参数下 ACCEPT 多单缩到 0.35,REJECT 多单保持 1.0(方向不被封)。"""
+    cfg = _cfg_min()
+    cfg["risk"]["edge_size_by_event_direction"] = {"BREAKOUT_ACCEPTED|1": 0.35}
+    r = _runner(tmp_path, _FakeClient(), _FakeTG(), mode="paper", cfg=cfg)
+    r.equity = 104.0
+
+    r._submit_open(_campaign("BTCUSDT"), _decision(), NOW, mic=False)
+    accept = _decision()
+    accept.hyp.event_id = "E1"                      # 同方向,机制换成 ACCEPT
+    r._submit_open(_campaign("ETHUSDT"), accept, NOW + 1000, mic=False)
+
+    intents = {v["symbol"]: v for v in r.open_intents.values()}
+    assert intents["BTCUSDT"]["edge_mult"] == 1.0
+    assert intents["BTCUSDT"]["size_mult"] == pytest.approx(1.0)
+    assert intents["ETHUSDT"]["edge_mult"] == pytest.approx(0.35)
+    assert intents["ETHUSDT"]["size_mult"] == pytest.approx(0.35)
+    assert intents["ETHUSDT"]["qty"] < intents["BTCUSDT"]["qty"]
+
+
+def test_entry_settle_keeps_ref_when_fill_already_through_defense(tmp_path):
+    """成交价已越过防线 ⇒ 只留痕不覆盖 entry(防线/R 交给止损路径)。"""
+    now = int(time.time() * 1000)
+    client = _FillClient()
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=95.0, direction=1)
+    r._entry_settle["BTCUSDT"] = _entry_rec()
+    client.fills = [{"symbol": "BTCUSDT", "orderId": "M1", "price": "94.0",
+                     "size": "1", "tradeSide": "open", "cTime": str(now - 900)}]
+
+    r._settle_entries(now)
+
+    assert r.positions["BTCUSDT"]["entry"] == 100.0
+    row = _row(tmp_path, kind="entry_settle")
+    assert row["applied"] is False and row["fill_px"] == pytest.approx(94.0)
+
+
+def test_entry_settle_gives_up_after_deadline(tmp_path):
+    """超时仍无开仓回执 ⇒ 记 miss 并停手;仓位保留参考价口径。"""
+    now = int(time.time() * 1000)
+    r = _runner(tmp_path, _FillClient(), _FakeTG())
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=95.0, direction=1)
+    r._entry_settle["BTCUSDT"] = _entry_rec(deadline_ms=now - 1)
+
+    r._settle_entries(now)
+
+    assert r._entry_settle == {}
+    assert r.counters["entry_settle_miss"] == 1
+    assert r.positions["BTCUSDT"]["entry"] == 100.0
+    assert _row(tmp_path, kind="entry_settle_miss")["ref_px"] == 100.0
+
+
+def test_entry_settle_drops_record_when_position_is_gone(tmp_path):
+    """仓位已平(或已被新事件顶替)⇒ 回执作废,绝不记到下一仓头上。"""
+    now = int(time.time() * 1000)
+    client = _FillClient()
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=95.0, direction=1)
+    r.positions["BTCUSDT"]["event_id"] = "EV2"      # 已被新事件顶替
+    r._entry_settle["BTCUSDT"] = _entry_rec()
+    client.fills = [{"symbol": "BTCUSDT", "orderId": "M1", "price": "101.0",
+                     "size": "1", "tradeSide": "open", "cTime": str(now - 900)}]
+
+    r._settle_entries(now)
+
+    assert r._entry_settle == {}
+    assert r.positions["BTCUSDT"]["entry"] == 100.0
+    assert not [x for x in _journal_rows(tmp_path) if x["kind"] == "entry_settle"]
+
+
+def test_entry_journal_carries_tf_opened_ts_and_prices(tmp_path):
+    """开仓事实自解释:tf_label / opened_ts / ref_px / price_source 必须留痕。"""
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    it = {"oid": "E1", "symbol": "BTCUSDT", "tf_label": "4h", "direction": 1,
+          "qty": 1.0, "invalid": 95.0, "target_1": 110.0, "event_id": "EV1",
+          "route": "e3_market", "box_lo": None, "box_hi": None,
+          "ref_px": 100.0, "fill_price": 100.0, "fill_price_source": "ref"}
+
+    r._register_position("BTCUSDT", it, 100.0, NOW)
+
+    row = _row(tmp_path, kind="fill")
+    assert row["tf_label"] == "4h"
+    assert row["opened_ts"] == NOW
+    assert row["ref_px"] == pytest.approx(100.0)
+    assert row["price_source"] == "ref"
+    assert row["invalid"] == pytest.approx(95.0)
+    assert row["direction"] == 1 and row["event_id"] == "EV1"
+
+
+class _StopRejectClient(_FakeClient):
+    """保护止损挂单必被拒(实测 400:价格已穿越触发价)。"""
+
+    def place_stop_loss(self, symbol, **kw):
+        raise BitgetError("400 trigger price invalid")
+
+
+def test_manage_stops_place_reject_breached_exits_at_market(tmp_path):
+    """挂单被拒且现价已越线 ⇒ 立刻市价离场,而不是等下个 tick 重试裸奔。"""
+    client, tg = _StopRejectClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=94.0)
+
+    r._manage_stops(NOW)
+
+    assert [o["symbol"] for o in client.market_orders] == ["BTCUSDT"]
+    assert client.market_orders[0]["trade_side"] == "close"
+    assert "BTCUSDT" not in r.positions
+    assert r.counters["stop_errors"] == 1
+    assert r.counters["stop_place_breached"] == 1
+    assert _row(tmp_path, kind="stop_place_breached")["mark"] == pytest.approx(94.0)
+    assert any("市价离场" in a for a in tg.alerts)
+
+
+def test_manage_stops_place_reject_not_breached_keeps_position(tmp_path):
+    """挂单失败但未越线 ⇒ 保留仓位并告警(下轮继续尝试,不制造无谓市价单)。"""
+    client, tg = _StopRejectClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=99.0)
+
+    r._manage_stops(NOW)
+
+    assert client.market_orders == []
+    assert "BTCUSDT" in r.positions
+    assert r.counters["stop_errors"] == 1
+    assert r.counters.get("stop_place_breached", 0) == 0
+    assert any("保护止损挂单失败" in a for a in tg.alerts)
+
+
+class _NoPosStopClient(_FakeClient):
+    """保护止损挂单被拒:交易所已无该仓位(实测 43023「仓位不足」)。"""
+
+    def place_stop_loss(self, symbol, **kw):
+        raise BitgetError("bitget 400 code=43023: 仓位不足,不能设置止盈或者止损")
+
+
+def test_manage_stops_place_reject_no_position_only_drops_local_stop(tmp_path):
+    """43023「仓位不足」= 交易所已无仓 ⇒ 只丢本地止损,不发市价单、不告警。
+
+    实测 10-24 1000BONKUSDT 连续 4 次重试全为此因;若按"已越线"处理,会在
+    仓位并不存在时反复发平仓单并被拒,还误报"仓位仍在,人工核查"。
+    """
+    client, tg = _NoPosStopClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=94.0)
+
+    r._manage_stops(NOW)
+
+    assert client.market_orders == []
+    assert "BTCUSDT" in r.positions          # 仓位是否存在由 reconcile 判定
+    assert "BTCUSDT" not in r.stops
+    assert r.counters["stop_place_no_pos"] == 1
+    assert r.counters.get("stop_place_breached", 0) == 0
+    assert _row(tmp_path, kind="stop_place_no_pos")["trigger"] == pytest.approx(95.0)
+    assert tg.alerts == []
+
+
+class _StaleMarkStopClient(_FakeClient):
+    """挂单被拒,且报文里带了交易所标记价(本地 mark 已过期)。"""
+
+    def place_stop_loss(self, symbol, **kw):
+        raise BitgetError(
+            "bitget 400 code=45122: 多头仓位止损价格请<标记价格 94.5")
+
+
+def test_mark_from_reject():
+    """报文里的标记价要能被取出来(含中文/英文两种写法,取不到返回 None)。"""
+    assert lr._mark_from_reject(
+        "bitget 400 code=45122: 空头仓位止损价格请>标记价格 0.34387") == 0.34387
+    assert lr._mark_from_reject(
+        "code=45122: trigger price must be < mark price 94.5") == 94.5
+    assert lr._mark_from_reject("400 trigger price invalid") is None
+
+
+def test_manage_stops_place_reject_uses_exchange_mark_over_stale_local(tmp_path):
+    """本地 mark 尚未越线、但交易所报文已报越线 ⇒ 仍须市价离场。
+
+    本地 mark 只在 reconcile(≤2 分钟)刷新;挂单被拒恰恰发生在快速行情里,
+    用旧值判会得出\"没越线,继续重试\",于是整段裸奔。
+    """
+    client, tg = _StaleMarkStopClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=99.0)   # 本地:未越线
+
+    r._manage_stops(NOW)
+
+    assert [o["symbol"] for o in client.market_orders] == ["BTCUSDT"]
+    assert "BTCUSDT" not in r.positions
+    assert r.counters["stop_place_breached"] == 1
+    assert _row(tmp_path, kind="stop_place_breached")["mark"] == pytest.approx(94.5)
 
 
 def test_defense_title_separates_lock_from_trail():

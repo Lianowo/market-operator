@@ -177,6 +177,7 @@ OPS_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("help", "查看运营命令列表"),
     CommandSpec("status", "进程/心跳/权益/持仓概览"),
     CommandSpec("positions", "本地与交易所持仓对账"),
+    CommandSpec("orders", "在挂委托与保护性止损"),
     CommandSpec("system", "版本/布局/运行时长/计数器"),
     CommandSpec("host", "主机 CPU/内存/磁盘"),
     CommandSpec("disk", "磁盘与各类目录占用"),
@@ -456,7 +457,6 @@ def _pos_rows(cfg: dict) -> list[dict]:
 
 def cmd_status(ctx: CommandContext, args: list[str]) -> str:
     snap = ops.status_snapshot(ctx.cfg)
-    beat = ops.read_heartbeat(ctx.cfg)
     rows = _pos_rows(ctx.cfg)
     breaker = snap.get("breaker") or {}
     alive = snap["runner"]["alive"]
@@ -511,6 +511,32 @@ def cmd_positions(ctx: CommandContext, args: list[str]) -> str:
         lines.append(f"❌ {e}")
     return "\n".join(lines)
 
+
+
+def cmd_orders(ctx: CommandContext, args: list[str]) -> str:
+    rep = ops.local_orders(ctx.cfg)
+    intents = rep.get("intents") or []
+    stops = rep.get("stops") or []
+    lines = [f"🧾 在挂委托 · {rep['at_utc']}",
+             f"⏳ 委托 {len(intents)} 张 · 🛡️ 止损 {len(stops)} 张"]
+    if not intents:
+        lines.append("📭 无在挂委托")
+    for it in intents[:20]:
+        label = "入场" if it.get("role") == "entry" else "管理"
+        kind = "限价" if it.get("kind") == "limit" else "市价"
+        row = (f"· {_arrow(it.get('direction'))} {it.get('symbol')} "
+               f"· {label}{kind} · {_fmt_num(it.get('qty'))}")
+        if it.get("limit_price") is not None:
+            row += f" @ {_fmt_num(it.get('limit_price'))}"
+        lines.append(row)
+        lines.append(f"  到期 {_fmt_ms(it.get('expiry_ms'))} · "
+                     f"id {str(it.get('exchange_order_id') or '—')[:16]}")
+    for st in stops[:20]:
+        lines.append(f"· 🛡️ {st.get('symbol')} 触发 {_fmt_num(st.get('trigger'))}"
+                     f" · {_fmt_num(st.get('qty'))}")
+    if len(intents) > 20:
+        lines.append(f"…另有 {len(intents) - 20} 张未显示")
+    return "\n".join(lines)
 
 
 def cmd_system(ctx: CommandContext, args: list[str]) -> str:
@@ -638,7 +664,8 @@ HANDLERS: dict[str, dict[str, Callable[[CommandContext, list[str]], str]]] = {
     },
     "ops": {
         "start": cmd_start, "help": cmd_help, "status": cmd_status,
-        "positions": cmd_positions, "system": cmd_system, "host": cmd_host,
+        "positions": cmd_positions, "orders": cmd_orders,
+        "system": cmd_system, "host": cmd_host,
         "disk": cmd_disk, "doctor": cmd_doctor, "logs": cmd_logs,
         "symbols": cmd_symbols, "id": cmd_id,
     },
@@ -659,16 +686,47 @@ def _chat_scope(chat_id: str) -> dict:
     return {"type": "chat", "chat_id": chat_id}
 
 
+def _chat_admin_scope(chat_id: str) -> dict:
+    return {"type": "chat_administrators", "chat_id": chat_id}
+
+
+# Telegram 的全局 scope:旧版/DM/群组/群管都可能缓存着**整份旧命令表**。
+# 只清 `default` 时,客户端仍可能按更具体的 scope 命中残留 —— 必须逐个清空。
+GLOBAL_SCOPES: tuple[tuple[str, dict], ...] = (
+    ("default", _default_scope()),
+    ("all_private_chats", {"type": "all_private_chats"}),
+    ("all_group_chats", {"type": "all_group_chats"}),
+    ("all_chat_administrators", {"type": "all_chat_administrators"}),
+)
+
+# 清理后仍需为空(我们从不写全局覆盖,残留说明旧注册没清掉)。
+PURGE_ONLY_LABELS = ("all_private_chats", "all_group_chats",
+                     "all_chat_administrators")
+
+
 def _api_for(token: str, secrets: dict) -> TelegramAPI:
     return TelegramAPI(token, proxy=str(secrets.get("TELEGRAM_PROXY") or "")
                        or None)
 
 
+def _invalid_language(err: object) -> bool:
+    """Telegram 对不认识的语言码返回 400 invalid language code;按跳过处理。"""
+    return "invalid language code" in str(err).lower()
+
+
 def sync_commands(secrets: dict, *, purge: bool = True,
                   dry_run: bool = False) -> dict:
-    """把两套命令写进 Telegram,并清掉旧版残留(含语言覆盖)。
+    """把两套命令写进 Telegram,并清掉旧版残留(含全局 scope 与语言覆盖)。
 
-    串行执行:同一 token 的默认 scope 与 chat scope 必须落在同一机器人上;
+    执行顺序(每个 token 独立)
+    --------------------------
+    1. 清空:default / all_private_chats / all_group_chats /
+       all_chat_administrators,以及已知 chat 的 chat + chat_administrators
+       scope,逐语言 `deleteMyCommands`;
+    2. 写入:default(该 token 的主角色)+ 每个已知 chat 的 chat scope;
+    3. 复核:逐 scope `getMyCommands` 必须等于目标表;**只清不写**的全局
+       scope 必须为空,否则报错 —— 残留命令会让用户看到"可点但无权"的菜单。
+
     失败只记录,不影响其他 token。
     """
     bots, allowed = resolve_bots(secrets)
@@ -676,11 +734,13 @@ def sync_commands(secrets: dict, *, purge: bool = True,
     for bot in bots:
         token_roles.setdefault(bot.token, set()).add(bot.role)
     report: dict = {"at_utc": ops.utc_now_iso(), "bots": [],
-                    "errors": [], "ok": True, "dry_run": dry_run}
+                    "errors": [], "ok": True, "dry_run": dry_run,
+                    "purge": bool(purge)}
     for token, roles in token_roles.items():
         api = _api_for(token, secrets)
         entry: dict = {"roles": sorted(roles), "username": "",
-                       "scopes": [], "errors": []}
+                       "scopes": [], "purged": [], "residual": {},
+                       "errors": []}
         try:
             me = api.get_me()
             entry["username"] = str(me.get("username") or "")
@@ -691,6 +751,50 @@ def sync_commands(secrets: dict, *, purge: bool = True,
             report["bots"].append(entry)
             continue
         default_role = "public" if "public" in roles else "ops"
+        chats = sorted({chat for role in roles
+                        for chat in allowed.get(role, set()) if chat})
+
+        purge_targets: list[tuple[str, dict]] = list(GLOBAL_SCOPES)
+        for chat in chats:
+            purge_targets.append((f"chat:{chat}", _chat_scope(chat)))
+            purge_targets.append(
+                (f"chat_admin:{chat}", _chat_admin_scope(chat)))
+
+        if dry_run:
+            # 干跑也必须把"将要清哪些 scope"列全:只看 default 会漏掉客户端缓存的
+            # 全局菜单 —— 那正是"点得到但无权执行"的来源,清场前就得看得见。
+            for label, scope in purge_targets:
+                row: dict = {"label": label, "scope": scope, "purged": 0,
+                             "current": {}}
+                for lang in SYNC_LANGUAGES:
+                    key = lang or "default"
+                    try:
+                        row["current"][key] = [c.get("command") for c in
+                                               api.get_commands(scope, lang)]
+                    except TelegramError as e:
+                        row["current"][key] = f"ERR {e}"
+                entry["purged"].append(row)
+
+        if purge and not dry_run:
+            for label, scope in purge_targets:
+                row: dict = {"label": label, "scope": scope, "purged": 0}
+                for lang in SYNC_LANGUAGES:
+                    try:
+                        api.delete_commands(scope, lang)
+                        row["purged"] += 1
+                    except TelegramError as e:
+                        if _invalid_language(e):
+                            row.setdefault("skipped_languages", []).append(
+                                lang or "default")
+                            continue
+                        row.setdefault("errors", []).append(
+                            f"{lang or 'default'}: {e}")
+                for msg in row.get("errors", []):
+                    entry["errors"].append(f"purge {label}: {msg}")
+                    report["errors"].append(f"purge {label}: {msg}")
+                    report["ok"] = False
+                entry["purged"].append(row)
+
         scopes: list[tuple[dict, str, str]] = [
             (_default_scope(), default_role, "default")]
         for role in sorted(roles):
@@ -700,24 +804,17 @@ def sync_commands(secrets: dict, *, purge: bool = True,
         for scope, role, label in scopes:
             wanted = menu_payload(role)
             row = {"label": label, "role": role, "scope": scope,
-                   "commands": len(wanted), "purged": 0}
+                   "commands": len(wanted)}
             try:
                 if dry_run:
-                    row["current"] = len(api.get_commands(scope))
+                    row["current"] = [c.get("command")
+                                      for c in api.get_commands(scope)]
                     entry["scopes"].append(row)
                     continue
-                if purge:
-                    for lang in SYNC_LANGUAGES:
-                        try:
-                            api.delete_commands(scope, lang)
-                            row["purged"] += 1
-                        except TelegramError as e:
-                            row.setdefault("purge_errors", []).append(
-                                f"{lang or 'default'}:{e}")
                 api.set_commands(wanted, scope)
-                row["verified"] = [
-                    c.get("command") for c in api.get_commands(scope)]
-                if row["verified"] != [s.name for s in SPECS[role]]:
+                got = [c.get("command") for c in api.get_commands(scope)]
+                row["verified"] = got
+                if got != [s.name for s in SPECS[role]]:
                     raise TelegramError(f"{label} 校验不一致")
             except TelegramError as e:
                 row["error"] = str(e)
@@ -725,6 +822,27 @@ def sync_commands(secrets: dict, *, purge: bool = True,
                 report["errors"].append(f"{label}: {e}")
                 report["ok"] = False
             entry["scopes"].append(row)
+
+        if purge and not dry_run:
+            for label, scope in purge_targets:
+                if label not in PURGE_ONLY_LABELS and not label.startswith(
+                        "chat_admin:"):
+                    continue
+                try:
+                    got = [c.get("command")
+                           for c in api.get_commands(scope)]
+                except TelegramError as e:
+                    entry["residual"][label] = f"ERR {e}"
+                    entry["errors"].append(f"residual {label}: {e}")
+                    report["errors"].append(f"residual {label}: {e}")
+                    report["ok"] = False
+                    continue
+                if got:
+                    entry["residual"][label] = got
+                    msg = f"{label} 仍有残留命令:{','.join(got)}"
+                    entry["errors"].append(msg)
+                    report["errors"].append(msg)
+                    report["ok"] = False
         report["bots"].append(entry)
     return report
 

@@ -23,6 +23,7 @@ import argparse
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -297,7 +298,8 @@ def test_mo_parser_accepts_every_subcommand():
         ["doctor", "--exchange", "--require-live", "--min-free-gb", "2"],
         ["start", "--wait", "1"],
         ["stop"],
-        ["restart", "--warmup-first"],
+        ["restart", "--warmup-first", "--no-tg"],
+        ["update", "--check", "--no-install"],
         ["status"],
         ["warmup", "--symbols", "BTCUSDT", "--tf", "5m", "--bars", "10"],
         ["positions", "--no-exchange"],
@@ -436,6 +438,336 @@ def test_cli_status_survives_gbk_console(home, monkeypatch):
     assert "?" in text                       # emoji 降级,不炸整条命令
 
 
+
+def test_runtime_commands_create_dirs_without_bootstrap(home, capsys):
+    """全新主机上没有 bootstrap 也要能用:运行期命令入口自动建目录。"""
+    assert not (home / "runtime").exists()
+    rc = cli.main(["logs", "--list"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    for name in ("data", "logs", "runtime", "reports"):
+        assert (home / name).is_dir(), name
+    assert (home / "runtime" / "live").is_dir()
+
+
+def test_start_tg_bot_idempotent_and_skips_without_token(home, monkeypatch):
+    lp = ops.live_paths({})
+    lp["tg_pid"].parent.mkdir(parents=True, exist_ok=True)
+    lp["tg_pid"].write_text(str(os.getpid()), encoding="utf-8")
+    rep = ops.start_tg_bot({}, wait_s=0)
+    assert rep == {"ok": True, "started": False, "pid": os.getpid(),
+                   "alive": True, "why": "已在运行"}
+
+    lp["tg_pid"].unlink()
+    monkeypatch.setattr(ops, "load_telegram_secrets", lambda cfg: {})
+    rep = ops.start_tg_bot({}, wait_s=0)
+    assert rep["ok"] is True and rep["skipped"] is True
+    assert rep["started"] is False and "token" in rep["why"]
+
+    def _boom(cfg):
+        raise RuntimeError("secrets.env 不可读")
+    monkeypatch.setattr(ops, "load_telegram_secrets", _boom)
+    rep = ops.start_tg_bot({}, wait_s=0)
+    assert rep["ok"] is False and rep["skipped"] is True
+    assert "RuntimeError" in rep["why"]        # 不冒泡,但也不假装成功
+
+
+def test_start_tg_bot_spawns_with_cwd_and_log_files(home, monkeypatch):
+    """拉起机器人:入口缺失时退回 `-m market_operator`,日志落项目 logs/。"""
+    seen: dict = {}
+
+    def _spawn(argv, **kw):
+        seen.update(argv=argv, kw=kw)
+        return 4321
+
+    monkeypatch.setattr(ops, "load_telegram_secrets",
+                        lambda cfg: {"TELEGRAM_BOT_TOKEN": "123:abc"})
+    monkeypatch.setattr(ops.hb, "spawn_detached", _spawn)
+    monkeypatch.setattr(ops, "pid_alive", lambda pid: True)
+    rep = ops.start_tg_bot({}, wait_s=0)
+    assert rep["ok"] is True and rep["started"] is True
+    assert rep["pid"] == 4321
+    assert seen["argv"][1:3] == ["-m", "market_operator"]
+    assert seen["argv"][-1] == "tg-run"
+    assert "--no-sync" not in seen["argv"]      # 启动即同步菜单
+    assert seen["kw"]["cwd"] == paths.app_home()
+    assert seen["kw"]["stdout_path"].parent == paths.log_dir()
+
+
+def test_restart_all_restarts_tg_bot(home, monkeypatch):
+    """`stop_all` 会停 TG;旧 `restart_all` 只拉看护 ⇒ 命令区永久静默。"""
+    seen: dict = {}
+    monkeypatch.setattr(ops.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ops, "stop_all",
+                        lambda cfg, include_tg=True: seen.update(
+                            stop_tg=include_tg) or {"actions": [],
+                                                    "all_stopped": True})
+    monkeypatch.setattr(ops, "start_supervisor",
+                        lambda cfg, **kw: {"started": True, "pid": 1,
+                                           "alive": True, "heartbeat": True})
+
+    def _start_tg(cfg, **kw):
+        seen["tg_wait"] = kw.get("wait_s")
+        return {"ok": True, "started": True, "pid": 2, "alive": True}
+    monkeypatch.setattr(ops, "start_tg_bot", _start_tg)
+
+    rep = ops.restart_all({}, include_tg=True, tg_wait_s=3)
+    assert seen == {"stop_tg": True, "tg_wait": 3}
+    assert rep["tg"]["alive"] is True
+
+    rep = ops.restart_all({}, include_tg=False)
+    # 显式跳过:报告里留痕(而不是悄悄没有 tg 段),且绝不调用 start_tg_bot
+    assert rep["tg"]["skipped"] is True and rep["tg"]["why"] == "--no-tg"
+    assert seen == {"stop_tg": False, "tg_wait": 3}
+
+
+def test_local_orders_lists_only_armed_intents(home):
+    """`open_intents` 是历史表(filled/expired 都留着),面板只该显示还挂着的。"""
+    lp = ops.live_paths({})
+    lp["state"].parent.mkdir(parents=True)
+    lp["state"].write_text(json.dumps({
+        "open_intents": {
+            "o1": {"oid": "o1", "symbol": "ETHUSDT", "role": "entry",
+                   "kind": "limit", "direction": 1, "qty": 2,
+                   "limit_price": 3000.0, "expiry_ts": 1_700_000_000_000,
+                   "status": "armed", "exchange_order_id": "x1"},
+            "o2": {"oid": "o2", "symbol": "BTCUSDT", "role": "exit",
+                   "kind": "limit", "direction": -1, "qty": 0.1,
+                   "limit_price": 60000.0, "expiry_ts": 1_700_000_000_000,
+                   "status": "filled", "exchange_order_id": "x2"},
+        },
+        "stops": {"BTCUSDT": {"trigger": 61000.0, "qty": 0.1,
+                              "order_id": "s1"}},
+    }), encoding="utf-8")
+
+    rep = ops.local_orders({})
+    assert [r["symbol"] for r in rep["intents"]] == ["ETHUSDT"]
+    assert rep["stops"] == [{"symbol": "BTCUSDT", "trigger": 61000.0,
+                             "qty": 0.1, "order_id": "s1"}]
+
+
+def test_tg_orders_command_is_wired_into_ops_menu(monkeypatch):
+    names = {s.name for s in tg_commands.OPS_SPECS}
+    assert "orders" in names and "orders" not in {
+        s.name for s in tg_commands.PUBLIC_SPECS}
+    assert tg_commands.HANDLERS["ops"]["orders"] is tg_commands.cmd_orders
+
+    monkeypatch.setattr(tg_commands.ops, "local_orders", lambda cfg: {
+        "at_utc": "2026-10-25T00:00:00Z",
+        "intents": [{"oid": "o1", "symbol": "ETHUSDT", "role": "entry",
+                     "kind": "limit", "direction": 1, "qty": 2,
+                     "limit_price": 3000.0, "expiry_ms": 1_700_000_000_000,
+                     "exchange_order_id": "1234567890abcdef"}],
+        "stops": [{"symbol": "ETHUSDT", "trigger": 2900.0, "qty": 2}],
+    })
+    ctx = tg_commands.CommandContext(role="ops", chat_id="1", cfg={},
+                                     secrets={}, api=None)      # type: ignore[arg-type]
+    text = tg_commands.cmd_orders(ctx, [])
+    assert "在挂委托" in text and "ETHUSDT" in text
+    assert "入场限价" in text and "2,900" in text
+
+
+# ---------------------------------------------------------------------------
+# TG 菜单同步:全局 scope 必须清空 / 白名单必须真的装载
+# ---------------------------------------------------------------------------
+
+
+class _FakeTgAPI:
+    """只实现 sync 用到的 4 个方法;`protect` 模拟 Telegram 删不掉的 scope。"""
+
+    def __init__(self, *, protect=(), stale=None):
+        self.protect = set(protect)
+        self.store = dict(stale or {})
+        self.deleted: list[tuple] = []
+        self.set_scopes: list[str] = []
+
+    @staticmethod
+    def _key(scope: dict, lang: str) -> tuple:
+        return (str(scope.get("type")), str(scope.get("chat_id") or ""),
+                str(lang))
+
+    def get_me(self) -> dict:
+        return {"username": "bot"}
+
+    def get_commands(self, scope: dict, language: str = "") -> list[dict]:
+        return list(self.store.get(self._key(scope, language)) or [])
+
+    def delete_commands(self, scope: dict, language: str = "") -> None:
+        if str(scope.get("type")) in self.protect:
+            return
+        self.deleted.append(self._key(scope, language))
+        self.store[self._key(scope, language)] = []
+
+    def set_commands(self, commands: list[dict], scope: dict,
+                     language: str = "") -> None:
+        self.set_scopes.append(str(scope.get("type")))
+        self.store[self._key(scope, language)] = list(commands)
+
+
+_TWO_BOTS = {"TELEGRAM_BOT_TOKEN": "PUB", "TELEGRAM_CHAT_ID": "111",
+             "TELEGRAM_TRADE_BOT_TOKEN": "OPS",
+             "TELEGRAM_TRADE_CHAT_ID": "222"}
+
+
+def test_tg_sync_purges_every_scope_and_language(monkeypatch):
+    """只清 `default` 时,DM/群/群管 scope 的旧菜单仍会弹出来 —— 必须逐个清。"""
+    api = _FakeTgAPI()
+    monkeypatch.setattr(tg_commands, "_api_for",
+                        lambda token, secrets: api)
+    rep = tg_commands.sync_commands(_TWO_BOTS)
+    assert rep["ok"] is True and rep["errors"] == []
+
+    entry = rep["bots"][0]
+    labels = {row["label"] for row in entry["purged"]}
+    assert {"default", "all_private_chats", "all_group_chats",
+            "all_chat_administrators", "chat:111", "chat_admin:111"} <= labels
+    # 两个 token 都各清一遍:scope 数 × 语言数 × 机器人数
+    assert len(api.deleted) == (
+        sum(len(b["purged"]) for b in rep["bots"])
+        * len(tg_commands.SYNC_LANGUAGES))
+
+    assert ("all_group_chats", "", "zh") in api.deleted
+
+    # 全局 scope 只清不写;命令只写进 default 与已知 chat
+    assert "all_group_chats" not in api.set_scopes
+    assert "all_chat_administrators" not in api.set_scopes
+    assert "default" in api.set_scopes and "chat" in api.set_scopes
+    assert entry["residual"] == {}
+
+
+def test_tg_sync_dry_run_lists_global_scopes_without_writing(monkeypatch):
+    """干跑必须能看见"客户端缓存里到底还有哪些全局菜单",且一个写请求都不发。"""
+    stale = {("all_group_chats", "", "zh"): [{"command": "status"}]}
+    api = _FakeTgAPI(stale=stale)
+    monkeypatch.setattr(tg_commands, "_api_for",
+                        lambda token, secrets: api)
+    rep = tg_commands.sync_commands(_TWO_BOTS, dry_run=True)
+    assert rep["ok"] is True and rep["dry_run"] is True
+    assert api.deleted == [] and api.set_scopes == []
+
+    entry = rep["bots"][0]
+    labels = {row["label"] for row in entry["purged"]}
+    assert {"default", "all_private_chats", "all_group_chats",
+            "all_chat_administrators", "chat:111", "chat_admin:111"} <= labels
+    row = next(r for r in entry["purged"] if r["label"] == "all_group_chats")
+    assert row["current"]["zh"] == ["status"]
+    assert row["current"]["default"] == []
+
+
+def test_tg_sync_reports_residual_global_commands(monkeypatch):
+    """清不掉的残留必须报错:可点但无权的菜单比没有菜单更糟。"""
+    stale = {("all_private_chats", "", ""): [{"command": "status"}]}
+    api = _FakeTgAPI(protect={"all_private_chats"}, stale=stale)
+    monkeypatch.setattr(tg_commands, "_api_for",
+                        lambda token, secrets: api)
+    rep = tg_commands.sync_commands(_TWO_BOTS)
+    assert rep["ok"] is False
+    entry = next(b for b in rep["bots"] if b["roles"] == ["public"])
+    assert entry["residual"]["all_private_chats"] == ["status"]
+    assert any("all_private_chats" in e for e in rep["errors"])
+
+
+def test_cli_tg_sync_dry_run_prints_stale_scope(home, monkeypatch, capsys):
+    """干跑的人读输出必须点名"哪个 scope 里还留着哪条命令"。"""
+    api = _FakeTgAPI(stale={("all_group_chats", "", "zh"): [{"command": "status"}]})
+    monkeypatch.setattr(ops, "load_config", lambda path=None: {})
+    monkeypatch.setattr(cli, "_safe_secrets", lambda cfg: (_TWO_BOTS, ""))
+    monkeypatch.setattr(tg_commands, "_api_for", lambda token, secrets: api)
+    rc = cli.main(["tg-sync", "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "all_group_chats" in out and "current=" in out
+    assert "status" in out and api.set_scopes == []
+
+
+def test_secrets_loader_loads_telegram_whitelists(tmp_path):
+    """文档里的 `TELEGRAM_OPS_CHAT_IDS` / `_PUBLIC_CHAT_IDS` 必须真的被读。
+
+    修前 key map 里没有它们 ⇒ `resolve_bots()` 的白名单分支永远是空集,
+    多运营/多公开群怎么配都不生效(且不报错)。
+    """
+    from market_operator import secrets_loader
+    p = tmp_path / "secrets.env"
+    p.write_text("TELEGRAM_BOT_TOKEN=bt\nTELEGRAM_CHAT_ID=1\n"
+                 "TELEGRAM_OPS_CHAT_IDS='2, 3'\n"
+                 "TELEGRAM_PUBLIC_CHAT_IDS=-100,\n", encoding="utf-8")
+    got = secrets_loader.load_secrets(p, required=(), environ={})
+    assert got["TELEGRAM_OPS_CHAT_IDS"] == "2, 3"
+    assert got["TELEGRAM_PUBLIC_CHAT_IDS"] == "-100,"
+
+    _bots, allowed = tg_commands.resolve_bots(got)
+    assert allowed["ops"] == {"1", "2", "3"}
+    assert allowed["public"] == {"1", "-100"}
+    assert tg_commands.role_for_chat("3", allowed) == "ops"
+
+
+# ---------------------------------------------------------------------------
+# CLI:update 子命令与 bootstrap --update / TG 拉起
+# ---------------------------------------------------------------------------
+
+
+def test_cli_update_maps_flags(home, monkeypatch, capsys):
+    seen: dict = {}
+
+    def _fake(**kw):
+        seen.update(kw)
+        return {"ok": True, "skipped": True, "notes": ["非 git 工作区"]}
+
+    monkeypatch.setattr(ops, "git_update", _fake)
+    rc = cli.main(["update", "--check", "--no-install", "--timeout", "30",
+                   "--json"])
+    assert rc == 0
+    assert seen == {"check": True, "install": False, "timeout": 30.0}
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["skipped"] is True and doc["notes"] == ["非 git 工作区"]
+
+
+def test_bootstrap_runs_update_and_tg_bot(home, monkeypatch, capsys):
+    """`mo bootstrap --update` = 更新 → 自检 → 启动 → 暖机 → 对账 → TG。"""
+    calls: dict = {}
+
+    def _update(**kw):
+        calls["update"] = kw
+        return {"ok": True, "changed": False, "skipped": False}
+
+    def _tg(args, **kw):
+        calls["tg_wait"] = kw.get("wait_s")
+        return {"ok": True, "started": True, "pid": 2, "alive": True}
+
+    monkeypatch.setattr(ops, "git_update", _update)
+    monkeypatch.setattr(ops, "load_secrets", lambda cfg: {})
+    monkeypatch.setattr(ops, "doctor",
+                        lambda *a, **kw: {"ok": True, "checks": [],
+                                          "warnings": []})
+    monkeypatch.setattr(ops, "start_supervisor",
+                        lambda *a, **kw: {"started": True, "pid": 1,
+                                          "alive": True, "heartbeat": True})
+    monkeypatch.setattr(ops, "start_tg_bot", _tg)
+    monkeypatch.setattr(ops, "warmup", lambda *a, **kw: {"ok": True})
+    monkeypatch.setattr(ops, "positions_report",
+                        lambda *a, **kw: {"local": [], "mismatches": [],
+                                          "errors": []})
+
+    cfg_dir = home / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "live.json").write_text("{}", encoding="utf-8")
+
+    rc = cli.main(["bootstrap", "--layout", "legacy", "--update",
+                   "--no-exchange", "--tg-wait", "4", "--json"])
+    doc = json.loads(capsys.readouterr().out)
+    assert rc == 0, doc
+    assert doc["ok"] is True
+    assert doc["update"]["ok"] is True and calls["update"]["install"] is True
+    assert doc["tg"]["started"] is True and calls["tg_wait"] == 4.0
+
+    # --no-tg:明确不拉起机器人,结果里要能看出来是"跳过"而不是"失败"
+    rc = cli.main(["bootstrap", "--layout", "legacy", "--no-exchange",
+                   "--no-tg", "--json"])
+    doc = json.loads(capsys.readouterr().out)
+    assert rc == 0, doc
+    assert doc["tg"] == {"skipped": True, "why": "--no-tg"}
+
+
 # ---------------------------------------------------------------------------
 # 回归护栏:运维脚本里不再出现硬编码的运行期目录
 # ---------------------------------------------------------------------------
@@ -515,6 +847,99 @@ def test_schedule_cmds_resolve_log_dir_via_paths():
             if "if not exist logs" in low or "mkdir logs" in low or ">>logs\\" in low:
                 offenders.append(f"{cmd.name}:{i}: {line.strip()}")
     assert offenders == []
+
+
+# ---------------------------------------------------------------------------
+# 一条命令启动:代码同步 / TG 拉起 / restart 不把机器人落下
+# ---------------------------------------------------------------------------
+
+
+def test_git_update_skips_folder_copy_deployment(home):
+    """拷贝部署(没有 `.git`)必须 `skipped`,不是报错。
+
+    `mo bootstrap --update` 是**默认启动路径**;把"没有仓库"当失败会让
+    解压即用的机器永远起不来。
+    """
+    rep = ops.git_update(install=False)
+    assert rep["ok"] is True and rep["skipped"] is True
+    assert rep["is_repo"] is False and rep["changed"] is False
+    assert any("非 git 工作区" in n for n in rep["notes"])
+
+
+def test_scrub_git_redacts_remote_credentials():
+    """git 输出会带 remote URL;token 进日志/JSON 等于把仓库打出去。"""
+    raw = ("fatal: unable to access 'https://user:sekrit123@github.com/a/b.git/':\n"
+           "Could not resolve host")
+    out = ops._scrub_git(raw)
+    assert "sekrit123" not in out and "user:" not in out
+    assert "https://***@github.com" in out
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                   capture_output=True, text=True, encoding="utf-8",
+                   errors="replace")
+
+
+def _commit(repo: Path, name: str, text: str, msg: str) -> None:
+    (repo / name).write_text(text, encoding="utf-8")
+    _git(repo, "add", name)
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", msg)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git 不可用")
+def test_git_update_check_without_upstream_reports_note(home):
+    """没有上游跟踪分支时 `behind` 只能是 None —— 必须说出来,不能留一片空白。"""
+    _git(home, "init")
+    _commit(home, "a.txt", "v1", "c1")
+    rep = ops.git_update(check=True, install=False, timeout=30)
+    assert rep["ok"] is True and rep["is_repo"] is True
+    assert rep["behind"] is None
+    assert any("上游" in n for n in rep["notes"])
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git 不可用")
+def test_git_update_fast_forward_only_and_reports_behind(tmp_path, monkeypatch):
+    """`--ff-only`:能快进就快进,分叉时宁可失败也不隐式 merge/reset。"""
+    origin = tmp_path / "origin.git"
+    seed = tmp_path / "seed"
+    work = tmp_path / "app"
+    origin.mkdir()
+    _git(origin, "init", "--bare")
+    seed.mkdir()
+    _git(seed, "init")
+    _git(seed, "checkout", "-b", "main")
+    _commit(seed, "a.txt", "v1", "c1")
+    _git(seed, "remote", "add", "origin", str(origin))
+    _git(seed, "push", "-u", "origin", "main")
+    # 裸仓库 HEAD 默认指向 master;不指到 main,clone 出来是空工作区(无上游)
+    _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+    subprocess.run(["git", "clone", str(origin), str(work)], check=True,
+                   capture_output=True, text=True, encoding="utf-8",
+                   errors="replace")
+
+    monkeypatch.setenv(paths.HOME_ENV, str(work))
+    for key in _ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    _commit(seed, "a.txt", "v2", "c2")
+    _git(seed, "push", "origin", "main")
+    rep = ops.git_update(install=False, timeout=60)
+    assert rep["ok"] is True and rep["is_repo"] is True
+    assert rep["changed"] is True and rep["before"] != rep["after"]
+    assert (work / "a.txt").read_text(encoding="utf-8") == "v2"
+
+    # 已是最新:再拉一次不产生变更,也不会误报
+    again = ops.git_update(install=False, timeout=60)
+    assert again["ok"] is True and again["changed"] is False
+    assert any("已是最新" in n for n in again["notes"])
+
+    # check 模式:只 fetch 报告落后数,不改工作区
+    _commit(seed, "a.txt", "v3", "c3")
+    _git(seed, "push", "origin", "main")
+    chk = ops.git_update(check=True, install=False, timeout=60)
+    assert chk["ok"] is True and chk["behind"] == 1
+    assert (work / "a.txt").read_text(encoding="utf-8") == "v2"
 
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-Unix one-command bootstrap. Usage:
-#   ./bootstrap.sh            -> bootstrap
-#   ./bootstrap.sh doctor     -> any `mo` subcommand
+#   ./bootstrap.sh            -> bootstrap --update (pull + install + doctor + start + warmup + TG)
+#   ./bootstrap.sh doctor     -> any `mo` subcommand (no implicit update)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -30,6 +30,6 @@ if [ ! -f ".venv/.mo-ready" ]; then
 fi
 
 if [ "$#" -eq 0 ]; then
-  set -- bootstrap
+  set -- bootstrap --update
 fi
 exec "$VPY" scripts/mo.py "$@"

@@ -35,6 +35,10 @@ _KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "TELEGRAM_TRADE_BOT_TOKEN": ("TELEGRAM_TRADE_BOT_TOKEN", "TG_TRADE_BOT_TOKEN"),
     "TELEGRAM_TRADE_CHAT_ID": ("TELEGRAM_TRADE_CHAT_ID", "TG_TRADE_CHAT_ID"),
     "TELEGRAM_PROXY": ("TELEGRAM_PROXY",),          # 可选
+    # 白名单扩展(可选,CSV):运营/公开机器人各自额外认领的 chat id。
+    # 这两个键必须真的被装载 —— 否则 `resolve_bots()` 里的白名单分支永远为空。
+    "TELEGRAM_OPS_CHAT_IDS": ("TELEGRAM_OPS_CHAT_IDS",),
+    "TELEGRAM_PUBLIC_CHAT_IDS": ("TELEGRAM_PUBLIC_CHAT_IDS",),
 }
 
 REQUIRED_BITGET = ("BITGET_API_KEY", "BITGET_SECRET_KEY", "BITGET_PASSPHRASE")

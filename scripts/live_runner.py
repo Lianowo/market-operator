@@ -51,7 +51,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace as dc_replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -64,7 +64,7 @@ from market_operator.bitget_live import (                        # noqa: E402
     BitgetError, BitgetLiveClient)
 from market_operator.broker import (                            # noqa: E402
     ContractSpec, floor_step)
-from market_operator.events import EventDetector                # noqa: E402
+from market_operator.events import EventDetector, canonical_event_id  # noqa: E402
 from market_operator.heartbeat import (                          # noqa: E402
     SCHEMA as HB_SCHEMA, HeartbeatGuard, iso_utc)
 from market_operator.hypothesis import StructureView            # noqa: E402
@@ -260,21 +260,95 @@ def exit_label(*, executor: str, pnl: Optional[float],
     return "离场确认(交易所已无此仓)"
 
 
+_NO_POS_MARKS = ("43023", "仓位不足", "position is empty", "no position")
+
+
+def _mark_from_reject(msg: str) -> Optional[float]:
+    """从交易所拒单文本里取它自己报的**标记价**。
+
+    45122 报文形如 `... 空头仓位止损价格请>标记价格 0.34387`。用它判\"是否已越线\"
+    比本地 `pos["mark"]`(最多 2 分钟前 reconcile 的值)更准,也不必额外调行情。
+    取不到返回 `None`,调用方回退到本地 mark。
+    """
+    s = str(msg)
+    for key in ("标记价格", "mark price", "markPrice"):
+        i = s.rfind(key)
+        if i < 0:
+            continue
+        j = i + len(key)
+        while j < len(s) and not (s[j].isdigit() or s[j] == "."):
+            j += 1
+        k = j
+        while k < len(s) and (s[k].isdigit() or s[k] == "."):
+            k += 1
+        try:
+            v = float(s[j:k])
+        except ValueError:
+            continue
+        if v > 0:
+            return v
+    return None
+
+
+def _stop_reject_no_position(msg: str) -> bool:
+    """挂保护单被拒的原因是不是\"交易所已无该仓位\"。
+
+    实测(2026-10-24 1000BONKUSDT)连续 4 次 `code=43023 仓位不足` —— 本地还有
+    残影、交易所已平,重挂永远不会成功。这与"价格已穿越触发价"(45122)是两种
+    完全不同的处置:前者只能等 `reconcile` 收尾,对它发市价平仓只会再被拒一次,
+    还会误报"仓位仍在,人工核查"。
+    """
+    s = str(msg)
+    return any(k in s for k in _NO_POS_MARKS)
+
+
+def _utc_day_gap(prev: Optional[str], cur: str) -> Optional[int]:
+    """两个 `YYYY-MM-DD`(UTC 日)相隔几天;任一不可解析返回 None。
+
+    日损熔断用它判断"跨日重启是否只隔一夜":只有隔夜时,上一笔权益才是
+    日界权益的合理估计;停机多日时它已不具可比性。
+    """
+    try:
+        return (date.fromisoformat(str(cur))
+                - date.fromisoformat(str(prev))).days
+    except (TypeError, ValueError):
+        return None
+
+
 class DailyLossBreaker:
-    """日损熔断:UTC 日界内 (equity − start)/start ≤ −max_frac 即停;日界复位。"""
+    """日损熔断:UTC 日界内 (equity − start)/start ≤ −max_frac 即停;日界复位。
+
+    日界锚点 = **该日第一笔事实的权益**。进程连续运行时它就是上一笔 tick(≈ 日界
+    瞬间);崩溃跨日重启时不能用"重启瞬间权益" —— 那已经含掉线期间的亏损,等于
+    把缺口亏损从当日预算里抹掉(实测重启后锚 100.3977,而日界真实权益 ~107.6,
+    当天可再亏满 10%)。改用**上一日最后一笔权益**(缺口前的已知事实)为锚;
+    停机超过一日则无任何可比事实,只能按重启权益起算(如实在 daily 上报里体现)。
+    """
 
     def __init__(self, max_frac: float) -> None:
         self.max_frac = float(max_frac)
         self.day: Optional[str] = None
         self.start_equity: Optional[float] = None
         self.tripped = False
+        self.last_equity: Optional[float] = None   # 上一笔 tick 权益(日界锚来源)
+        # 上一日的收盘事实:日结上报要用**昨日**锚/收盘,而不是滚动后的新锚。
+        self.prev_day: Optional[str] = None
+        self.prev_start_equity: Optional[float] = None
+        self.prev_close_equity: Optional[float] = None
 
     def update(self, now_ms: int, equity: float) -> None:
         day = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc) \
             .strftime("%Y-%m-%d")
+        eq = float(equity)
         if day != self.day:
-            self.day, self.start_equity, self.tripped = \
-                day, float(equity), False
+            anchor = eq
+            if (self.start_equity is not None and self.last_equity is not None
+                    and _utc_day_gap(self.day, day) == 1):
+                anchor = float(self.last_equity)
+            self.prev_day, self.prev_start_equity = self.day, self.start_equity
+            self.prev_close_equity = self.last_equity
+            self.day, self.start_equity, self.tripped = day, anchor, False
+        self.last_equity = eq
 
     def should_stop(self, equity: float) -> bool:
         if self.start_equity in (None, 0.0):
@@ -303,6 +377,35 @@ class RateLimiter:
     def pending(self, now_s: Optional[float] = None) -> int:
         now_s = time.time() if now_s is None else float(now_s)
         return sum(1 for t in self.stamps if now_s - t < 3600.0)
+
+
+def edge_size_multiplier(table: Optional[dict], event_id: object,
+                         direction: int) -> float:
+    """事件 × 方向的**期望值权重**(1.0 = 不缩放)。
+
+    键 = ``"<canonical_event_id>|<±1>"``(写 ``E1`` 或 ``BREAKOUT_ACCEPTED``
+    等价,归一化只走 ``canonical_event_id`` 一处)。
+
+    口径(2026-10-25 实盘归因):
+    - 只允许**缩**,不允许放大 —— 放大等于拿实盘去赌一个只在回放里成立的
+      正期望,而回放的滑点/成交近似比实盘乐观。
+    - 下限固定 10%:**代码层面不允许把任何 (事件, 方向) 归零**。配置只能
+      决定"少做",不能决定"不能做",做多做空的能力不被配置剥夺。
+    - 表缺失 / 值非法(NaN、非数、≤0)⇒ 1.0,即完全不改变现行行为。
+    """
+    if not table:
+        return 1.0
+    # 两个探针:语义标识优先,其次是配置里原样写的别名(两者等价)
+    probe = (f"{canonical_event_id(event_id)}|{int(direction)}",
+             f"{event_id}|{int(direction)}")
+    raw = next((table[k] for k in probe if k in table), None)
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    if val != val or val <= 0.0:          # NaN / 非正数 ⇒ 不缩放
+        return 1.0
+    return min(max(val, 0.1), 1.0)
 
 
 def client_oid_of(prefix: str, symbol: str, event_id: str, side: str,
@@ -538,6 +641,7 @@ class LiveRunner:
                          "exit_submit_errors": 0,    # 决策型离场下单失败
                          "unprotected_stop_exits": 0,  # 防线触及但无交易所保护单
                          "exit_settle_miss": 0,      # 决策型离场成交回执始终未取到
+                         "entry_settle_miss": 0,     # 开仓成交回执始终未取到(仍按参考价)
                          "signal_notice_errors": 0}  # 信号广播自身异常(不影响决策)
         self._universe_at = 0.0
         self._reconcile_at = 0.0
@@ -555,6 +659,10 @@ class LiveRunner:
         # 先用参考价记账(宁可偏差也不静默),随后每步用权威成交价校正一次。
         # 键 = symbol(同一仓同一时刻只可能有一笔离场在结算)。
         self._exit_settle: dict[str, dict] = {}
+        # 开仓成交回执待结:市价开仓下单瞬间 fills 端点通常还没索引到,先用参考
+        # 价记账(宁可偏差也不静默),随后每步用**该订单号**的成交均价回写 entry。
+        # 键 = symbol(同一仓同一时刻只可能有一笔开仓在结算)。
+        self._entry_settle: dict[str, dict] = {}
         # 决策型离场**下单失败**的重试队列:失败绝不能等到下一根 2H bar(最长 2h 裸奔)。
         # 每步重试一次,上限 MAX_EXIT_SUBMIT_RETRIES,终态必须告警到人。
         self._exit_retry: dict[str, dict] = {}
@@ -675,6 +783,9 @@ class LiveRunner:
         self.breaker.tripped = bool(b.get("tripped"))
         if st.get("equity") and self.equity is None:
             self.equity = float(st["equity"])
+        # 跨日重启的日界锚估计源:上一笔 tick 权益(缺口前的已知事实)。
+        if st.get("equity") is not None:
+            self.breaker.last_equity = float(st["equity"])
         # 冷数据优先读 campaigns.json(新格式);缺失则回落到 state.json 内嵌
         # campaigns(旧格式),旧文件在下一次落盘时自动瘦身。
         saved_camps: dict = {}
@@ -1433,6 +1544,7 @@ class LiveRunner:
         if self.mode == "live":
             self._retry_exits(now_ms)       # 上次离场下单失败:本步立即重试
             self._settle_exits(now_ms)      # 决策型离场:用权威成交价校正回执
+            self._settle_entries(now_ms)    # 开仓:用权威成交均价校正 entry(§6a)
             self._sync_live_fills(now_ms)
         base_ms = 7200 * 1000
         for sym, cs in sorted(self.campaigns.items()):
@@ -2202,6 +2314,11 @@ class LiveRunner:
         risk_per_unit = abs(entry_ref - invalid)
         spec = self._spec(sym)
         size_mult = float(d.meta.get("size_mult") or 1.0)
+        # 事件 × 方向期望值权重(只缩不放;代码内下限 10%,见函数 docstring)
+        edge_mult = edge_size_multiplier(
+            self.risk.get("edge_size_by_event_direction"),
+            hyp.event_id, hyp.direction)
+        size_mult *= edge_mult
         equity = float(self.equity)
         eff_rf = self.current_risk_frac(equity)
         # ---- 与容量无关的结构事实:一次算清,信号与执行共用同一份 ----
@@ -2268,6 +2385,7 @@ class LiveRunner:
         self._notify_signal(
             (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
             size_note=f"风险档 {eff_rf:.2%} ×{size_mult:g}"
+                      f"{'' if edge_mult >= 1.0 else f'(edge×{edge_mult:g})'}"
                       f"{' · 降档触发' if mic else ''}",
             exec_status=self._signal_status_text(block, tf_label=cs.tf_label,
                                                 kind=d.kind),
@@ -2287,9 +2405,11 @@ class LiveRunner:
                   "role": "entry", "kind": d.kind, "direction": hyp.direction,
                   "qty": qty,
                   "limit_price": entry_ref if d.kind == "limit" else None,
+                  "ref_px": float(entry_ref),
                   "invalid": float(hyp.invalid),
                   "target_1": hyp.target_1, "event_id": hyp.event_id,
                   "route": d.route, "size_mult": size_mult,
+                  "edge_mult": edge_mult,
                   "box_lo": box_lo, "box_hi": box_hi,
                   "decision_ts": t, "mic": mic,
                   "expiry_ts": t + N_FILL_H * MS_1H, "status": "armed",
@@ -2326,12 +2446,14 @@ class LiveRunner:
                 self._api_note(e)
         self._journal("intent", {k: intent[k] for k in (
             "oid", "symbol", "role", "kind", "direction", "qty",
-            "limit_price", "event_id", "route", "decision_ts", "mic")})
+            "limit_price", "ref_px", "invalid", "tf_label", "event_id",
+            "route", "decision_ts", "mic", "size_mult", "edge_mult")})
 
     def _live_entry_filled(self, it: dict, *, side_fallback_price: float,
                            now_ms: int) -> None:
-        """live 市价开仓:下单即按参考价记账建仓(成交价差如实以对账暴露);
-        限价单留 armed 待 _sync_live_fills 确认。"""
+        """live 市价开仓:先按参考价记账建仓,再由 `_settle_entries` 用成交回执
+        校正 `entry`(参考价与成交价的差不再系统性污染 R);限价单留 armed 待
+        `_sync_live_fills` 确认(那条路径拿到的就是成交价)。"""
         if it["kind"] == "limit":
             return
         price = float(side_fallback_price)
@@ -2341,7 +2463,16 @@ class LiveRunner:
             it["status"] = "void"
             return
         it["status"], it["fill_price"], it["fill_ts"] = "filled", price, now_ms
+        it["ref_px"] = price
+        it["fill_price_source"] = "ref"
         self._register_position(it["symbol"], it, price, now_ms)
+        if self.mode == "live" and it.get("exchange_order_id"):
+            self._entry_settle[it["symbol"]] = {
+                "oid": it["oid"], "order_id": str(it["exchange_order_id"]),
+                "event_id": str(it.get("event_id")),
+                "ref_px": price, "direction": int(it["direction"]),
+                "submitted_ms": int(now_ms),
+                "deadline_ms": int(now_ms) + 180_000}
 
     def _register_position(self, sym: str, it: dict, price: float,
                            ts: int) -> None:
@@ -2375,8 +2506,19 @@ class LiveRunner:
             stop_price=float(it["invalid"]), target_price=it.get("target_1"),
             box_lo=it.get("box_lo"), box_hi=it.get("box_hi"),
             bars=chart_bars)
+        # 开仓事实必须**自解释**:口径归因(MFE/ATR、按 TF 分桶、参考价 vs 成交价)
+        # 全靠这一行,缺 `tf_label`/`opened_ts` 就只能靠事后猜。
         self._journal("fill", {"oid": it["oid"], "symbol": sym,
                                "qty": it["qty"], "price": price,
+                               "ref_px": float(it.get("ref_px") or price),
+                               "fill_px": float(it.get("fill_price") or price),
+                               "price_source": str(
+                                   it.get("fill_price_source") or "ref"),
+                               "invalid": float(it["invalid"]),
+                               "direction": int(it["direction"]),
+                               "tf_label": tf_lbl,
+                               "opened_ts": int(ts),
+                               "event_id": it["event_id"],
                                "role": "entry", "mode": self.mode})
 
     # ------------------------------------------------------------------
@@ -2557,6 +2699,8 @@ class LiveRunner:
                 it["qty"] = qty
                 it["status"], it["fill_price"], it["fill_ts"] = \
                     "filled", price, now_ms
+                it.setdefault("ref_px", float(it.get("limit_price") or price))
+                it["fill_price_source"] = "fills"
                 self._register_position(it["symbol"], it, price, now_ms)
             else:
                 self._live_close_filled(it, ref_price=price)
@@ -2709,13 +2853,48 @@ class LiveRunner:
             except BitgetError as e:
                 self.counters["stop_errors"] = \
                     self.counters.get("stop_errors", 0) + 1
+                why = str(e)
                 self._journal("stop_error", {"symbol": sym, "trigger": want,
                                              "qty": stop_qty,
-                                             "why": str(e)[:160]})
+                                             "why": why[:160]})
+                if _stop_reject_no_position(why):
+                    # 交易所已无该仓位(43023):本地是残影,不是"价格穿越"。
+                    # 丢本地止损记录即可,仓位是否真的消失由 `reconcile` 判定;
+                    # 此处发市价平仓只会再被拒一次并误报"仓位仍在"。
+                    self.stops.pop(sym, None)
+                    self.counters["stop_place_no_pos"] = \
+                        self.counters.get("stop_place_no_pos", 0) + 1
+                    self._journal("stop_place_no_pos",
+                                  {"symbol": sym, "trigger": want,
+                                   "qty": stop_qty, "why": why[:160]})
+                    continue
                 self._alert_throttled(
                     f"stop:{sym}",
-                    f"{sym} 保护止损挂单失败:{str(e)[:120]}"
+                    f"{sym} 保护止损挂单失败:{why[:120]}"
                     f"(当前无触发保护,人工介入;同类告警 30 分钟内不重复)")
+                # 挂单失败最常见的原因就是**价格已越过触发价**(交易所直接 400)。
+                # 这时重试永远不会成功,而"下个 tick 再试"= 整段裸奔:已越线即
+                # 市价离场(与 stop_missing_breached 同口径,同一条纪律)。
+                # 越线判定优先用**交易所报文里自己报的标记价**(比本地 2 分钟前的
+                # reconcile 值准),取不到才回退本地 mark。
+                mark = _mark_from_reject(why) or float(pos.get("mark") or 0.0)
+                breached = mark > 0.0 and (
+                    (int(pos["direction"]) > 0 and mark <= want)
+                    or (int(pos["direction"]) < 0 and mark >= want))
+                if breached:
+                    self.stops.pop(sym, None)
+                    self.counters["stop_place_breached"] = \
+                        self.counters.get("stop_place_breached", 0) + 1
+                    self._journal("stop_place_breached",
+                                  {"symbol": sym, "trigger": want,
+                                   "mark": mark, "why": str(e)[:160]})
+                    self._arm_close_intent(
+                        sym, pos, stop_qty, "market", None,
+                        f"STOP_PLACE_BREACHED|{want:.8g}", int(now_ms),
+                        role="exit", force=True)
+                    self.tg.send_alert(
+                        f"{sym} 保护止损挂单被拒({str(e)[:80]}),且现价 "
+                        f"{mark:.8g} 已越过防线 {want:.8g} → 市价离场")
         if live_ids is not None:
             # 快照有效才去重(刚换过单时快照已作废,留待下轮 TTL 重读)
             self._dedupe_stops(now_ms)
@@ -2872,6 +3051,111 @@ class LiveRunner:
                     f"{sym} 离场回执校正:成交 {px:.8g} ≠ 记账参考 {ref:.8g}"
                     f"(差 {abs(px - ref) / ref:.2%}),已实现 {pnl:+.2f} USDT")
 
+    def _settle_entries(self, now_ms: int) -> None:
+        """开仓成交回执结算:把 `entry` 从参考价校正为交易所成交均价(§6a)。
+
+        与 `_settle_exits` 同一套纪律 —— 记账**先落地**(下单即记,宁可偏差也不
+        静默漏记),这里只做校正并留痕:
+        * 命中 ⇒ 改 `positions.entry` 与 pm 的 R 基准,journal 记 `ref_px`/
+          `fill_px`/`slip_bps`(逆向漂移为正);偏离 ≥20 bps 补一条告警,
+          因为这正是实盘 R 与计划 R 脱钩的来源。
+        * 超时仍取不到 ⇒ 记 `entry_settle_miss` 后停手(不无限刷接口),
+          仓位保留参考价口径且 `price_source="ref"` 如实标注。
+        * 仓位已平/已被新事件顶替 ⇒ 直接出队(绝不把回执记到下一仓头上)。
+        """
+        for sym, rec in list(self._entry_settle.items()):
+            pos = self.positions.get(sym)
+            if pos is None or str(pos.get("event_id")) != str(rec["event_id"]):
+                self._entry_settle.pop(sym, None)
+                continue
+            fact = self._entry_fill_fact(sym, str(rec["order_id"]))
+            if fact is None:
+                if now_ms >= int(rec["deadline_ms"]):
+                    self._entry_settle.pop(sym, None)
+                    self.counters["entry_settle_miss"] = \
+                        self.counters.get("entry_settle_miss", 0) + 1
+                    self._journal("entry_settle_miss",
+                                  {"symbol": sym, "oid": rec["oid"],
+                                   "order_id": rec["order_id"],
+                                   "ref_px": float(rec["ref_px"]),
+                                   "event_id": rec["event_id"]})
+                continue
+            self._entry_settle.pop(sym, None)
+            px, ts, qty = float(fact[0]), fact[1], float(fact[2])
+            ref = float(rec["ref_px"])
+            d = int(rec["direction"])
+            slip_bps = (d * (px - ref) / ref * 1e4) if ref > 0.0 else 0.0
+            applied = self._apply_entry_fill(sym, px)
+            self._journal("entry_settle",
+                          {"symbol": sym, "oid": rec["oid"],
+                           "order_id": rec["order_id"],
+                           "event_id": rec["event_id"],
+                           "ref_px": ref, "fill_px": px,
+                           "fill_qty": qty, "fill_ts_ms": ts,
+                           "slip_bps": slip_bps, "applied": applied,
+                           "price_source": "fills"})
+            if applied and abs(slip_bps) >= 20.0:
+                self.tg.send_alert(
+                    f"{sym} 开仓成交价 {px:.8g} ≠ 信号参考价 {ref:.8g}"
+                    f"({slip_bps:+.0f} bps,逆向为正);entry 已按成交价重记,"
+                    f"实际 R 与计划 R 的偏差请以本条为准")
+
+    def _entry_fill_fact(self, sym: str, order_id: str
+                         ) -> Optional[tuple[float, Optional[int], float]]:
+        """该**开仓单**的成交 `(vwap, 成交时刻ms, 成交张数)`;取不到返回 None。
+
+        与 `_close_fill_fact` 同口径(按订单号锁定 + size 加权聚合),但开仓
+        不需要时间窗猜:订单号本身就是唯一事实,因此不按 `tradeSide` 过滤 ——
+        该字段随端点漂移,而 orderId 不会把别人的成交算进来。
+        """
+        oid = str(order_id or "")
+        if not oid:
+            return None
+        try:
+            res = self.client.recent_fills(sym, limit=100)
+        except BitgetError:
+            return None
+        rows = res if isinstance(res, list) else (
+            (res or {}).get("fillList") or (res or {}).get("fills") or [])
+        num = amt = 0.0
+        last_ts: Optional[int] = None
+        for r in rows:
+            if str(r.get("symbol")) != sym:
+                continue
+            if str(r.get("orderId") or "") != oid:
+                continue
+            try:
+                px, size = float(r.get("price")), float(r.get("size") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if px <= 0.0 or size <= 0.0:
+                continue
+            num += size * px
+            amt += size
+            ts = _fill_ts_ms(r)
+            if ts is not None and (last_ts is None or ts > last_ts):
+                last_ts = ts
+        if amt <= 0.0:
+            return None
+        return num / amt, last_ts, amt
+
+    def _apply_entry_fill(self, sym: str, fill_px: float) -> bool:
+        """把建仓均价校正为真实成交价(`positions` 与 pm 的 R 基准同步)。"""
+        pos = self.positions.get(sym)
+        if pos is None:
+            return False
+        px = float(fill_px)
+        d = int(pos["direction"])
+        inv = float(pos["invalid"])
+        if px <= 0.0 or d * (px - inv) <= 0.0:
+            return False        # 成交价已越过防线:交给止损路径,不覆盖
+        pos["entry"] = px
+        cs = self._get_cs_for(sym, pos.get("tf_label")) \
+            or self.campaigns.get(sym)
+        if cs is not None:
+            cs.pm.retag_entry(sym, px)
+        return True
+
     def _reconcile_closed(self, sym: str, pos: dict) -> None:
         """交易所已无此仓:以交易所为准清理本地事实,并**如实分型**离场。
 
@@ -3016,10 +3300,14 @@ class LiveRunner:
         if day != self._daily_date:
             self.api_halted, self._api_halt_alerted = False, False
             self._api_error_streak = 0       # 跨 UTC 日:熔断复位(fail-closed 且不永久停摆)
-            anchor = self.breaker.start_equity or self.equity
-            dd = (anchor - self.equity) / anchor if anchor else 0.0
-            self.tg.send_daily(self._daily_date, float(self.equity),
-                               float(self.equity) - float(anchor or 0),
+            # 昨日事实必须取 `prev_*`:此刻 breaker 已滚到新一天,直接用
+            # `start_equity` 会把"新日锚"当昨日基线 ⇒ 日报日盈亏恒 ≈ 0。
+            anchor = (self.breaker.prev_start_equity
+                      or self.breaker.start_equity or self.equity)
+            close = self.breaker.prev_close_equity or self.equity
+            dd = (anchor - close) / anchor if anchor else 0.0
+            self.tg.send_daily(self._daily_date, float(close),
+                               float(close) - float(anchor or 0),
                                self.counters["signals"], self.counters["fills"],
                                len(self.positions), dd)
             self._daily_date = day

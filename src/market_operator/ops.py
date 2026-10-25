@@ -20,16 +20,15 @@ import json
 import os
 import platform
 import re
-import shutil
 import socket
 import subprocess
 import sys
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Iterable, Optional
 
 from . import __version__, paths
 from . import heartbeat as hb
@@ -81,6 +80,19 @@ def load_secrets(cfg: dict):
     rel = cfg.get("credentials_source")
     p = paths.app_home() / str(rel) if rel else None
     return _load(p if p and p.exists() else None,
+                 config_overrides=cfg.get("credentials"))
+
+
+def load_telegram_secrets(cfg: dict) -> dict:
+    """只装载 Telegram 键(不要求 Bitget 三件套)。
+
+    用于"只想起 TG 运维机器人"的场景:bootstrap 在缺少交易凭证时仍应把
+    交互命令拉起,不能因为 Bitget 键缺失就整条 Telegram 链路消失。
+    """
+    from .secrets_loader import load_secrets as _load
+    rel = cfg.get("credentials_source")
+    p = paths.app_home() / str(rel) if rel else None
+    return _load(p if p and p.exists() else None, required=(),
                  config_overrides=cfg.get("credentials"))
 
 
@@ -582,6 +594,119 @@ def uptime_seconds(pid: object) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# 代码同步(git 拉取 / 拷贝部署两相兼容)
+# ---------------------------------------------------------------------------
+
+_GIT_URL_RE = re.compile(r"(?P<scheme>[a-z][a-z0-9+.-]*://)[^/@\s]+@")
+
+
+def _git(home: Path, args: list[str], *, timeout: float = 300.0):
+    """执行 git;任何异常都折叠成 CompletedProcess,绝不冒泡到运维命令。"""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(home), *args], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=max(5.0, timeout))
+    except (OSError, subprocess.SubprocessError) as e:
+        return subprocess.CompletedProcess(args, 127, "", f"{type(e).__name__}: {e}")
+
+
+def _scrub_git(text: object, *, lines: int = 20) -> str:
+    """git 输出可能带 remote 里的 token(`https://user:token@host`),必须脱敏。"""
+    raw = str(text or "")
+    raw = _GIT_URL_RE.sub(lambda m: f"{m.group('scheme')}***@", raw)
+    rows = [r for r in raw.strip().splitlines() if r.strip()]
+    return "\n".join(rows[-max(1, lines):])
+
+
+def git_update(*, check: bool = False, install: bool = True,
+               timeout: float = 300.0) -> dict:
+    """一条命令同步代码:git 工作区 `pull --ff-only`;拷贝部署则安全跳过。
+
+    设计口径
+    --------
+    * 只在**有 `.git` 且不是浅克隆异常**时动 git;拷贝过去的代码文件夹
+      (没有 `.git`)直接 `skipped`,不会把运维命令变成报错;
+    * 只用 `--ff-only`:本地有未提交改动/分叉时宁可失败,也不做隐式 merge
+      或 reset —— 生产目录不允许被自动改写;
+    * `pull` 后默认 `pip install -e .`(pyproject 可能变了);`--no-install`
+      可在离线机器上跳过;
+    * 返回值里的 git 输出统一走 `_scrub_git`,防止 remote URL 里的凭据泄漏。
+    """
+    home = paths.app_home()
+    rep: dict = {
+        "ok": True, "home": str(home), "is_repo": False, "check": bool(check),
+        "skipped": False, "branch": "", "before": "", "after": "",
+        "changed": False, "dirty": 0, "behind": None, "install": None,
+        "pull": None, "errors": [], "notes": [],
+    }
+    if not (home / ".git").exists():
+        rep["skipped"] = True
+        rep["notes"].append("非 git 工作区(代码文件夹拷贝部署):跳过拉取")
+        return rep
+    inside = _git(home, ["rev-parse", "--is-inside-work-tree"], timeout=30)
+    if inside.returncode != 0:
+        rep["ok"] = False
+        rep["errors"].append("git 不可用或目录损坏: "
+                             + _scrub_git(inside.stderr or inside.stdout, lines=3))
+        return rep
+    rep["is_repo"] = True
+    rep["branch"] = _git(home, ["rev-parse", "--abbrev-ref", "HEAD"],
+                         timeout=30).stdout.strip()
+    rep["before"] = _git(home, ["rev-parse", "--short", "HEAD"],
+                         timeout=30).stdout.strip()
+    dirty = _git(home, ["status", "--porcelain"], timeout=60).stdout
+    rep["dirty"] = len([r for r in dirty.splitlines() if r.strip()])
+
+    if check:
+        fetch = _git(home, ["fetch", "--all", "--prune"], timeout=timeout)
+        if fetch.returncode != 0:
+            rep["ok"] = False
+            rep["errors"].append("git fetch 失败: "
+                                 + _scrub_git(fetch.stderr or fetch.stdout, lines=5))
+            return rep
+        behind = _git(home, ["rev-list", "--count", "HEAD..@{u}"], timeout=60)
+        if behind.returncode == 0:
+            try:
+                rep["behind"] = int((behind.stdout or "0").strip() or 0)
+            except ValueError:
+                rep["behind"] = None
+        else:
+            rep["notes"].append("当前分支没有上游跟踪分支,无法报告 behind")
+        return rep
+
+    pull = _git(home, ["pull", "--ff-only"], timeout=timeout)
+    rep["pull"] = {"rc": pull.returncode,
+                   "out": _scrub_git((pull.stdout or "") + "\n" + (pull.stderr or ""))}
+    if pull.returncode != 0:
+        rep["ok"] = False
+        rep["errors"].append("git pull --ff-only 失败(本地改动/无上游/认证): "
+                             + _scrub_git(pull.stderr or pull.stdout, lines=5))
+        return rep
+    rep["after"] = _git(home, ["rev-parse", "--short", "HEAD"],
+                        timeout=30).stdout.strip()
+    rep["changed"] = bool(rep["before"] and rep["after"]
+                          and rep["before"] != rep["after"])
+    if not rep["changed"]:
+        rep["notes"].append("已是最新")
+    if install:
+        try:
+            pip = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-e", "."],
+                cwd=str(home), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=max(60.0, timeout))
+            rep["install"] = {"rc": pip.returncode,
+                              "out": _scrub_git((pip.stdout or "")
+                                                + "\n" + (pip.stderr or ""), lines=8)}
+            if pip.returncode != 0:
+                rep["ok"] = False
+                rep["errors"].append("依赖安装失败(可用 --no-install 跳过并手动执行)")
+        except (OSError, subprocess.SubprocessError) as e:
+            rep["ok"] = False
+            rep["errors"].append(f"依赖安装异常: {type(e).__name__}")
+    return rep
+
+
+# ---------------------------------------------------------------------------
 # 进程控制 / 状态
 # ---------------------------------------------------------------------------
 
@@ -632,7 +757,7 @@ def status_snapshot(cfg: dict) -> dict:
         "supervisor": {"pid": sup_pid, "alive": bool(sup_pid),
                        "restarts_left": _restarts_left(cfg)},
         # TG 机器人是**独立常驻进程**(`mo tg-run`),既不在看护的监管范围里,
-        # 也不会被 `restart` 顺带拉起;不报出来就只能靠人猜"命令为什么没回"。
+        # 也不由看护拉起;不报出来就只能靠人猜"命令为什么没回"。
         "tg_bot": {"pid": tg_pid, "alive": bool(tg_pid)},
         "positions": len(state.get("positions") or {}),
         "stops": len(state.get("stops") or {}),
@@ -689,6 +814,60 @@ def start_supervisor(cfg: dict, *, cfg_file: Path | None = None,
             "stdout": str(out), "stderr": str(err)}
 
 
+def start_tg_bot(cfg: dict, *, cfg_file: Path | None = None,
+                 wait_s: float = 10.0, sync: bool = True) -> dict:
+    """脱离会话启动 Telegram 机器人(`mo tg-run`),幂等。
+
+    机器人是独立常驻进程,不属于看护范围;所以"一条命令把系统拉起来"必须
+    显式包含它,否则 bootstrap 完成后命令区仍然是死的。缺 token 时按**跳过**
+    处理(不影响实盘链路),启动失败才报 ok=False。
+    """
+    pid = _tg_pid(cfg)
+    if pid:
+        return {"ok": True, "started": False, "pid": pid, "alive": True,
+                "why": "已在运行"}
+    try:
+        secrets = load_telegram_secrets(cfg)
+    except Exception as e:                       # noqa: BLE001 - 运维命令不冒泡
+        return {"ok": False, "started": False, "skipped": True,
+                "why": f"密钥读取失败: {type(e).__name__}"}
+    tokens = {str(secrets.get(k) or "").strip()
+              for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_TRADE_BOT_TOKEN")}
+    tokens.discard("")
+    if not tokens:
+        return {"ok": True, "started": False, "skipped": True,
+                "why": "未配置 Telegram bot token"}
+    cfg_path = Path(cfg_file) if cfg_file else config_path()
+    entry = paths.app_home() / "scripts" / "mo.py"
+    # 部署包里可能没有 scripts/(纯 wheel 安装) ⇒ 退回 `python -m market_operator`,
+    # 两者都是同一入口,别让"机器人在起停流程里被静默漏掉"。
+    argv = [sys.executable, str(entry)] if entry.is_file() else [
+        sys.executable, "-m", "market_operator"]
+    argv += ["--config", str(cfg_path), "tg-run"]
+    if not sync:
+        argv.append("--no-sync")
+    out = paths.log_dir() / "tg_bot_stdout.log"
+    err = paths.log_dir() / "tg_bot_stderr.log"
+    try:
+        spawned = hb.spawn_detached(argv, cwd=paths.app_home(),
+                                    stdout_path=out, stderr_path=err)
+    except OSError as e:
+        return {"ok": False, "started": False,
+                "why": f"spawn 失败: {type(e).__name__}: {e}"}
+    if not spawned:
+        return {"ok": False, "started": False, "why": "spawn 未返回 pid"}
+    deadline = time.time() + max(0.0, wait_s)
+    while time.time() < deadline:
+        if _tg_pid(cfg) or not pid_alive(spawned):
+            break
+        time.sleep(0.5)
+    pid_file = _tg_pid(cfg)
+    return {"ok": True, "started": True, "pid": pid_file or spawned,
+            "alive": pid_alive(pid_file or spawned),
+            "synced": bool(sync),
+            "stdout": str(out), "stderr": str(err)}
+
+
 def stop_all(cfg: dict, *, timeout: float = 15.0,
              include_tg: bool = True) -> dict:
     """先停看护(防止它把 runner 再拉起来),再停 runner 与 TG 机器人。"""
@@ -730,15 +909,26 @@ def stop_all(cfg: dict, *, timeout: float = 15.0,
 
 
 def restart_all(cfg: dict, *, cfg_file: Path | None = None,
-                warmup_first: bool = False, **warmup_kw) -> dict:
-    stopped = stop_all(cfg)
+                warmup_first: bool = False, include_tg: bool = True,
+                tg_wait_s: float = 10.0, **warmup_kw) -> dict:
+    """重启整条运行链。
+
+    `stop_all` 会停掉 TG 机器人;旧实现只拉看护,导致 `mo restart` 之后
+    交互命令永久静默。这里把 TG 一起拉回来(缺 token 则跳过)。
+    """
+    stopped = stop_all(cfg, include_tg=include_tg)
     time.sleep(1.5)
     report: dict = {"stop": stopped}
     if warmup_first:
         report["warmup"] = warmup(cfg, **warmup_kw)
     report["start"] = start_supervisor(cfg, cfg_file=cfg_file)
+    if include_tg:
+        report["tg"] = start_tg_bot(cfg, cfg_file=cfg_file, wait_s=tg_wait_s)
+    else:
+        # 显式跳过也要留痕:`restart --no-tg` 不会停旧机器人,别让人以为它重启了
+        report["tg"] = {"started": False, "skipped": True, "why": "--no-tg",
+                        "ok": True}
     return report
-
 
 
 def log_files() -> list[dict]:
@@ -761,7 +951,6 @@ def log_files() -> list[dict]:
                              timespec="seconds")})
     rows.sort(key=lambda r: r["mtime"], reverse=True)
     return rows
-
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +978,39 @@ def local_positions(cfg: dict) -> list[dict]:
         })
     rows.sort(key=lambda r: r["symbol"])
     return rows
+
+
+def local_orders(cfg: dict) -> dict:
+    """在挂委托 + 保护性止损(只读本地 state,不访问交易所)。
+
+    `open_intents` 里保留历史(持有 filled/expired/canceled),这里只露
+    `status=armed` 的,也就是"现在真的还挂在盘口上"的那一批。
+    """
+    state = read_state(cfg)
+    intents: list[dict] = []
+    for oid, it in (state.get("open_intents") or {}).items():
+        if not isinstance(it, dict) or it.get("status") != "armed":
+            continue
+        intents.append({
+            "oid": str(it.get("oid") or oid),
+            "symbol": it.get("symbol"),
+            "role": it.get("role"),
+            "kind": it.get("kind"),
+            "direction": int(it.get("direction") or 0),
+            "qty": float(it.get("qty") or 0.0),
+            "limit_price": it.get("limit_price"),
+            "expiry_ms": it.get("expiry_ts"),
+            "exchange_order_id": it.get("exchange_order_id"),
+        })
+    intents.sort(key=lambda r: (str(r["symbol"]), str(r["role"])))
+    stops: list[dict] = []
+    for sym, st in (state.get("stops") or {}).items():
+        if not isinstance(st, dict):
+            continue
+        stops.append({"symbol": sym, "trigger": st.get("trigger"),
+                      "qty": st.get("qty"), "order_id": st.get("order_id")})
+    stops.sort(key=lambda r: str(r["symbol"]))
+    return {"at_utc": utc_now_iso(), "intents": intents, "stops": stops}
 
 
 def position_mismatches(local: list[dict], exchange: list[dict]) -> list[str]:

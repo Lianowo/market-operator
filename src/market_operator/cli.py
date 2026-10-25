@@ -10,8 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
-from pathlib import Path
 from typing import Optional, Sequence
 
 from . import __version__, ops, paths, tg_commands
@@ -37,14 +35,27 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--config", default=None, help="config/live.json 路径")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("bootstrap", help="一条命令:布局→自检→启动→暖机→对账")
+    p = sub.add_parser("bootstrap",
+                       help="一条命令:更新→布局→自检→启动→暖机→对账→TG")
     p.add_argument("--layout", choices=("auto", "legacy", "portable"),
                    default="auto", help="auto=全新主机自动 portable")
+    p.add_argument("--update", action="store_true",
+                   help="先 git pull --ff-only + 安装依赖(拷贝部署自动跳过)")
+    p.add_argument("--no-install", action="store_true",
+                   help="--update 时不执行 pip install -e .")
     p.add_argument("--no-start", action="store_true")
     p.add_argument("--no-warmup", action="store_true")
     p.add_argument("--no-exchange", action="store_true")
+    p.add_argument("--no-tg", action="store_true", help="不启动 Telegram 机器人")
+    p.add_argument("--tg-wait", type=float, default=10.0)
     p.add_argument("--force", action="store_true", help="自检失败也继续")
     p.add_argument("--bars", type=int, default=300)
+    _add_json(p)
+
+    p = sub.add_parser("update", help="git 拉取代码并按需安装依赖")
+    p.add_argument("--check", action="store_true", help="只 fetch 并报告落后提交数")
+    p.add_argument("--no-install", action="store_true")
+    p.add_argument("--timeout", type=float, default=300.0)
     _add_json(p)
 
     p = sub.add_parser("doctor", help="环境自检(默认不联网)")
@@ -61,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--wait", type=float, default=20.0)
         if name == "restart":
             p.add_argument("--warmup-first", action="store_true")
+            p.add_argument("--no-tg", action="store_true",
+                           help="重启后不拉起 TG 机器人")
+            p.add_argument("--tg-wait", type=float, default=10.0)
         _add_json(p)
 
     p = sub.add_parser("status", help="进程/心跳/持仓快照")
@@ -280,15 +294,53 @@ def _safe_secrets(cfg: dict) -> tuple[dict, Optional[str]]:
         return {}, f"{type(e).__name__}: {e}"
 
 
+def _print_update(rep: dict) -> None:
+    if rep.get("skipped"):
+        print(f"更新跳过:{'; '.join(rep.get('notes') or [])}")
+        return
+    print(f"更新 branch={rep.get('branch')} {rep.get('before') or '?'}"
+          f" -> {rep.get('after') or '?'} changed={rep.get('changed')}"
+          f" dirty={rep.get('dirty')}")
+    if rep.get("behind") is not None:
+        print(f"落后上游 {rep['behind']} 个提交")
+    for note in rep.get("notes") or []:
+        print(f"NOTE {note}")
+    for err in rep.get("errors") or []:
+        print(f"ERROR {err}")
+
+
 def cmd_bootstrap(args, cfg: dict) -> int:
+    update_rep = None
+    if getattr(args, "update", False):
+        update_rep = ops.git_update(
+            install=not getattr(args, "no_install", False))
+        if not args.json:
+            _print_update(update_rep)
+        if not update_rep.get("ok") and not args.force:
+            msg = "代码更新失败:已停止(加 --force 可继续)。"
+            if args.json:
+                print(json.dumps({"update": update_rep, "ok": False},
+                                 ensure_ascii=False, indent=2, default=str))
+            else:
+                print(msg)
+            return 1
+        # 拉到新代码后旧进程仍在跑旧模块:必须重启才能生效。
+        if update_rep.get("changed") and not args.no_start:
+            running = ops.supervisor_pid(cfg) or ops._runner_pid(cfg)
+            if running:
+                stopped = ops.stop_all(cfg)
+                if not args.json:
+                    print(f"检测到运行中进程,已停止以加载新代码 "
+                          f"(all_stopped={stopped['all_stopped']})")
     layout = _apply_layout(args.layout)
     if not args.json:
         print(f"布局 {layout['before']} -> {layout['after']} "
               f"[{layout['action']}] · store={layout['report']['store_root']}")
 
     doc = ops.doctor(cfg, cfg_file=ops.config_path(args.config))
-    result: dict = {"layout": layout, "doctor": doc, "start": None,
-                    "warmup": None, "positions": None, "ok": True}
+    result: dict = {"update": update_rep, "layout": layout, "doctor": doc,
+                    "start": None, "tg": None, "warmup": None,
+                    "positions": None, "ok": True}
 
     def _emit(step: str, rep: dict) -> None:
         if not args.json:
@@ -297,6 +349,10 @@ def cmd_bootstrap(args, cfg: dict) -> int:
             elif step == "start":
                 print(f"启动 started={rep.get('started')} pid={rep.get('pid')} "
                       f"alive={rep.get('alive')} heartbeat={rep.get('heartbeat')}"
+                      + (f" why={rep.get('why')}" if rep.get("why") else ""))
+            elif step == "tg":
+                print(f"TG started={rep.get('started')} pid={rep.get('pid')} "
+                      f"alive={rep.get('alive')}"
                       + (f" why={rep.get('why')}" if rep.get("why") else ""))
             elif step == "warmup":
                 _print_warmup(rep)
@@ -342,6 +398,18 @@ def cmd_bootstrap(args, cfg: dict) -> int:
         _emit("positions", result["positions"])
         if result["positions"].get("errors"):
             result["ok"] = False
+
+    if args.no_start:
+        result["tg"] = {"skipped": True, "why": "--no-start"}
+    elif args.no_tg:
+        result["tg"] = {"skipped": True, "why": "--no-tg"}
+    else:
+        result["tg"] = ops.start_tg_bot(
+            cfg, cfg_file=ops.config_path(args.config),
+            wait_s=getattr(args, "tg_wait", 10.0))
+    _emit("tg", result["tg"])
+    if result["tg"].get("ok") is False:
+        result["ok"] = False
 
     if secret_err and not args.json:
         print(f"提示:密钥未就绪({secret_err})")
@@ -392,7 +460,9 @@ def cmd_stop(args, cfg: dict) -> int:
 
 def cmd_restart(args, cfg: dict) -> int:
     rep = ops.restart_all(cfg, cfg_file=ops.config_path(args.config),
-                          warmup_first=args.warmup_first)
+                          warmup_first=args.warmup_first,
+                          include_tg=not args.no_tg,
+                          tg_wait_s=getattr(args, "tg_wait", 10.0))
     if args.json:
         print(json.dumps(rep, ensure_ascii=False, indent=2, default=str))
     else:
@@ -402,7 +472,22 @@ def cmd_restart(args, cfg: dict) -> int:
         st = rep["start"]
         print(f"start started={st.get('started')} pid={st.get('pid')} "
               f"alive={st.get('alive')} heartbeat={st.get('heartbeat')}")
-    return 0 if rep["start"].get("alive") else 1
+        tg = rep.get("tg") or {}
+        print(f"tg started={tg.get('started')} pid={tg.get('pid')} "
+              f"alive={tg.get('alive')}"
+              + (f" why={tg.get('why')}" if tg.get("why") else ""))
+    tg_ok = (rep.get("tg") or {}).get("ok", True)
+    return 0 if (rep["start"].get("alive") and tg_ok) else 1
+
+
+def cmd_update(args, cfg: dict) -> int:
+    rep = ops.git_update(check=args.check, install=not args.no_install,
+                         timeout=args.timeout)
+    if args.json:
+        print(json.dumps(rep, ensure_ascii=False, indent=2, default=str))
+    else:
+        _print_update(rep)
+    return 0 if rep.get("ok") else 1
 
 
 def cmd_status(args, cfg: dict) -> int:
@@ -484,18 +569,33 @@ def cmd_tg_sync(args, cfg: dict) -> int:
         print(f"tg-sync dry_run={rep['dry_run']} ok={rep['ok']}")
         for bot in rep.get("bots") or []:
             print(f"@{bot.get('username') or '?'} roles={bot['roles']}")
+            purged = bot.get("purged") or []
+            if purged:
+                total = sum(int(p.get("purged", 0)) for p in purged)
+                print(f"  purge scopes={len(purged)} calls={total}")
+                for p in purged:
+                    cur = p.get("current") or {}
+                    stale = {k: v for k, v in cur.items() if v}
+                    if (p.get("errors") or p.get("skipped_languages")
+                            or stale):
+                        note = ",".join(p.get("skipped_languages") or [])
+                        print(f"    {p['label']:<22} purged={p['purged']}"
+                              + (f" skipped={note}" if note else "")
+                              + (f" current={stale}" if stale else "")
+                              + (f" errors={len(p.get('errors') or [])}"
+                                 if p.get("errors") else ""))
             for sc in bot.get("scopes") or []:
-                extra = f" purged={sc.get('purged', 0)}"
+                extra = ""
                 if sc.get("current") is not None:
                     extra += f" current={sc['current']}"
                 if sc.get("verified") is not None:
                     extra += f" verified={len(sc['verified'])}"
                 print(f"  {sc['label']:<22} {sc['role']:<6} "
                       f"commands={sc['commands']}{extra}")
-                for e in sc.get("purge_errors") or []:
-                    print(f"    PURGE {e}")
                 if sc.get("error"):
                     print(f"    ERROR {sc['error']}")
+            for label, residual in (bot.get("residual") or {}).items():
+                print(f"    RESIDUAL {label}: {residual}")
         for e in rep.get("errors") or []:
             print(f"ERROR {e}")
     return 0 if rep.get("ok") else 1
@@ -586,6 +686,7 @@ def cmd_paths(args, cfg: dict) -> int:
 
 HANDLERS = {
     "bootstrap": cmd_bootstrap,
+    "update": cmd_update,
     "doctor": cmd_doctor,
     "start": cmd_start,
     "stop": cmd_stop,
@@ -601,7 +702,12 @@ HANDLERS = {
     "paths": cmd_paths,
 }
 
-_NO_CONFIG_CMDS = {"paths", "package", "migrate-data", "logs"}
+_NO_CONFIG_CMDS = {"paths", "package", "migrate-data", "logs", "update"}
+
+# 触碰运行期(写 state / 心跳 / 日志 / 偏移)的子命令:入口先把目录建好。
+# 全新主机只跑 `mo start`、没跑过 bootstrap 时,缺目录会让第一个写动作失败。
+_RUNTIME_CMDS = {"start", "restart", "stop", "status", "positions", "warmup",
+                 "logs", "tg-sync", "tg-run", "package", "doctor"}
 
 
 def _soften_stdio() -> None:
@@ -631,6 +737,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if cfg_err is not None and args.cmd not in _NO_CONFIG_CMDS:
         print(f"ERROR 配置不可用:{cfg_err}", file=sys.stderr)
         return 2
+    if args.cmd in _RUNTIME_CMDS:
+        try:
+            paths.ensure_layout()
+        except OSError as e:                      # noqa: BLE001 给可执行的提示
+            print(f"ERROR 运行期目录不可创建({paths.layout_mode()}):{e}",
+                  file=sys.stderr)
+            return 2
     fn = HANDLERS[args.cmd]
     try:
         return int(fn(args, cfg))

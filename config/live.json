@@ -35,6 +35,10 @@
       "1d": 0.12
     },
     "max_daily_loss_frac": 0.1,
+    "edge_size_by_event_direction": {
+      "BREAKOUT_ACCEPTED|1": 0.35
+    },
+    "edge_size_note": "事件 × 方向期望值权重(只缩不放,代码内下限 10%,永不归零 ⇒ 不剥夺任何方向)。依据 2026-10-25 实盘归因:实盘 E1/ACCEPT 多 4 笔胜率 25%、净 −14.82 USDT;回放 book4 全期 198 笔胜率 26%、净 −22.93(−0.098R),两源一致。E3/REJECT 多(回放 515 笔 +56.97,+0.179R)与 E3 空(实盘 10 笔 +27.28、胜率 70%)保持 1.0。置空 {} 即回到 2026-10-25 前行为。",
     "orders_per_hour": 30,
     "taker_fee": 0.0006,
     "maker_fee": 0.0002,

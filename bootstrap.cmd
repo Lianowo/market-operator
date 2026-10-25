@@ -1,7 +1,7 @@
 @echo off
 rem Cross-Windows one-command bootstrap. Double-click or run:
-rem   bootstrap.cmd            -> bootstrap
-rem   bootstrap.cmd doctor     -> any `mo` subcommand
+rem   bootstrap.cmd            -> bootstrap --update (pull + install + doctor + start + warmup + TG)
+rem   bootstrap.cmd doctor     -> any `mo` subcommand (no implicit update)
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -40,7 +40,7 @@ if not exist ".venv\.mo-ready" (
 )
 
 if "%~1"=="" (
-  "%VPY%" scripts\mo.py bootstrap
+  "%VPY%" scripts\mo.py bootstrap --update
 ) else (
   "%VPY%" scripts\mo.py %*
 )
