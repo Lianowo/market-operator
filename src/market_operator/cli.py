@@ -151,6 +151,8 @@ def _print_status(snap: dict, cfg: dict) -> None:
           f"status={runner.get('status')}")
     print(f"supervisor pid={sup.get('pid')} alive={sup.get('alive')} "
           f"restarts_left={sup.get('restarts_left')}")
+    tg = snap.get("tg_bot") or {}
+    print(f"tg-bot  pid={tg.get('pid')} alive={tg.get('alive')}")
     eq = snap.get("equity")
     print(f"持仓={snap.get('positions')} 挂单={snap.get('open_intents')} "
           f"止损={snap.get('stops')} 权益={eq}")

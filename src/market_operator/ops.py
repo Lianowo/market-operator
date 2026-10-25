@@ -621,6 +621,7 @@ def status_snapshot(cfg: dict) -> dict:
     doc = read_heartbeat(cfg)
     age = hb.beat_age_seconds(doc)
     sup_pid, runner_pid = supervisor_pid(cfg), _runner_pid(cfg)
+    tg_pid = _tg_pid(cfg)
     counters = state.get("counters") or {}
     return {
         "at_utc": utc_now_iso(),
@@ -630,6 +631,9 @@ def status_snapshot(cfg: dict) -> dict:
                    "status": doc.get("status")},
         "supervisor": {"pid": sup_pid, "alive": bool(sup_pid),
                        "restarts_left": _restarts_left(cfg)},
+        # TG 机器人是**独立常驻进程**(`mo tg-run`),既不在看护的监管范围里,
+        # 也不会被 `restart` 顺带拉起;不报出来就只能靠人猜"命令为什么没回"。
+        "tg_bot": {"pid": tg_pid, "alive": bool(tg_pid)},
         "positions": len(state.get("positions") or {}),
         "stops": len(state.get("stops") or {}),
         "equity": state.get("equity", doc.get("equity")),

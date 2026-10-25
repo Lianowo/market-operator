@@ -242,6 +242,19 @@ def test_tg_menus_unique_and_ops_only_commands_stay_out_of_public():
         ["start", "help"]
 
 
+def test_tg_sync_languages_are_the_ones_telegram_accepts():
+    """`zh-hans` 之类 Telegram 直接 400 —— 留在列表里等于每次 sync 白打一圈 API。
+
+    2026-10-25 实测:`getMyCommands` / `deleteMyCommands` 带 `zh-hans`、
+    `zh-hant`、`zh-tw` 全部 `HTTP 400 invalid language code`,只有空串与 `zh`
+    能用;`zh-hans` 因此也从没被写进去过(`setMyCommands` 同样会被拒),
+    删掉它不会漏清任何旧菜单。
+    """
+    langs = set(tg_commands.SYNC_LANGUAGES)
+    assert "" in langs and "zh" in langs
+    assert not (langs & {"zh-hans", "zh-hant", "zh-tw"})
+
+
 def test_positions_rows_read_detail_not_count(monkeypatch):
     doc = {"positions": 2,
            "positions_detail": [{"symbol": "BTCUSDT", "direction": -1,
@@ -321,6 +334,32 @@ def test_status_snapshot_shows_layout_and_same_files(home):
     assert snap["runner"]["heartbeat_age_s"] < 60.0
     assert snap["positions"] == 1
     assert snap["counters"]["signals"] == 3
+
+
+def test_status_snapshot_reports_tg_bot_pid(home):
+    """TG 机器人不在看护监管内、`restart` 也不拉它:不单独报出来只能靠人猜。
+
+    2026-10-25 现场就是"命令没回、日志里却全是绿的" —— 进程根本没起。
+    """
+    lp = ops.live_paths({})
+    lp["tg_pid"].parent.mkdir(parents=True, exist_ok=True)
+    assert ops.status_snapshot({})["tg_bot"] == {"pid": None, "alive": False}
+
+    lp["tg_pid"].write_text(str(os.getpid()), encoding="utf-8")   # 一定活着
+    assert ops.status_snapshot({})["tg_bot"] == {"pid": os.getpid(),
+                                                 "alive": True}
+
+    lp["tg_pid"].write_text("999999", encoding="utf-8")           # 死 pid 不算活
+    assert ops.status_snapshot({})["tg_bot"] == {"pid": None, "alive": False}
+
+
+def test_status_text_prints_tg_bot_line(home, capsys):
+    lp = ops.live_paths({})
+    lp["tg_pid"].parent.mkdir(parents=True, exist_ok=True)
+    lp["tg_pid"].write_text(str(os.getpid()), encoding="utf-8")
+    cli._print_status(ops.status_snapshot({}), {})
+    out = capsys.readouterr().out
+    assert f"tg-bot  pid={os.getpid()} alive=True" in out
 
 
 @pytest.mark.skipif(os.name != "nt", reason="探针自匹配是 Windows 的特有形态")

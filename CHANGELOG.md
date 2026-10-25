@@ -105,6 +105,17 @@ live_*` 里 `ROOT / "runtime"` / `ROOT / "logs"` 硬编码在十几处,一旦把
   批处理,实例运行中改写 `.cmd` 会让它重跑已执行过的行 —— `mo stop` 后 4 秒又冒出
   一个看护,父进程是前一天启动的 `cmd.exe`。入口脚本必须"停实例 → 改 → 再启动",
   命令序列已写进 README。
+- **TG 交互命令补实测与两处修正(2026-10-25)**:两个 bot 都能连通,但**菜单从未
+  同步** —— 公开 bot 默认 scope 残留 8 条旧命令(chat scope 11 条)、运营 bot 一条
+  都没有;`tg-sync` 后四组 scope 全部 `verified`(5 / 5 / 11 / 11)。`SYNC_LANGUAGES`
+  去掉 `zh-hans`:Telegram 对 `zh-hans` / `zh-hant` / `zh-tw` 一律
+  `HTTP 400 invalid language code`(实测 `getMyCommands` 同样被拒,即这些语言下
+  根本写不进菜单,删掉不会漏清旧残留)。`mo status` 增 `tg-bot pid/alive`:TG 是
+  **独立常驻进程**,看护不监管、`restart` 不拉,不单独报出来就只能对着"命令没回、
+  日志全绿"猜(本次现场就是进程根本没起)。补 3 个离线测试
+  (`SYNC_LANGUAGES` 白名单 / `status_snapshot` 的 `tg_bot` 三态 / `_print_status`
+  那行);README 增"Telegram 交互命令"一节:命令表、chat 白名单规则、
+  "改 `SPECS` 必须重跑 `tg-sync`"与 `getUpdates` 单实例(409)边界。
 
 ## [Unreleased] — 2026-10-24 — 信号广播与容量闸门解耦 + 通知双通道 + 图表结构标注
 

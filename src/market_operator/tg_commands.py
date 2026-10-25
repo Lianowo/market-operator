@@ -33,7 +33,11 @@ TG_FILE_API = "https://api.telegram.org/file/bot{token}/{path}"
 HTTP_TIMEOUT_S = 35
 POLL_TIMEOUT_S = 25
 SEND_LIMIT = 3900
-SYNC_LANGUAGES = ("", "zh", "zh-hans", "en")
+SYNC_LANGUAGES = ("", "zh", "en")
+# 清理旧菜单时按语言逐条打 `deleteMyCommands`。Telegram 只认它自己那份语言表:
+# `zh` 合法,而 `zh-hans` / `zh-hant` / `zh-tw` 一律 HTTP 400
+# "invalid language code"(2026-10-25 实测 getMyCommands / deleteMyCommands 都拒),
+# 所以别往里加 —— 加了只会每次 sync 白打一圈 API,再把 PURGE 失败刷进报告。
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
 

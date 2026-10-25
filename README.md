@@ -121,6 +121,33 @@ python scripts/mo.py package -o backup.zip        # 运行期产物 zip + sha256
 python scripts/mo.py migrate-data --dry-run       # 旧目录 → var/ 预演
 ```
 
+### Telegram 交互命令(只读运维台)
+
+两个机器人、两套菜单,由一个常驻进程长轮询提供服务。命令全部**只读**:启动 / 停止 /
+改配置 / 下单都不开放,`/help` 里也写明"写操作只在服务器执行"。
+
+```bash
+python scripts/mo.py tg-sync             # 写菜单:逐 scope 先清旧版残留,写完 getMyCommands 自校验
+python scripts/mo.py tg-sync --dry-run   # 只看现状(每个 scope 当前几条、要写几条)
+python scripts/mo.py tg-run              # 常驻长轮询;`--once` 只拉一轮(冒烟)
+```
+
+| 机器人 | 角色 | 菜单 |
+|---|---|---|
+| `@lian_sniper_alert_bot` | public · 信号频道 | `/start` `/help` `/symbols` `/ping` `/id` |
+| `@LianowoBot2_bot` | ops · 运营台 | 上述 5 条 + `/status` `/positions` `/system` `/host` `/disk` `/doctor` `/logs` |
+
+`/logs` 接受参数:`/logs [live|err|sup|tg] [行数]`。运营命令只对
+`TELEGRAM_TRADE_CHAT_ID` / `TELEGRAM_OPS_CHAT_IDS` 白名单内的 chat 生效,未授权的
+chat 只有 `/id` 可用(先让它报出 id,再写进配置重启机器人);公开 bot 里发运营命令
+直接回"该命令不属于此机器人"。
+
+三条边界:`tg-run` 是**独立常驻进程**,看护不监管它、`mo restart` 也不会顺带拉起
+(但 `mo stop` 会停,`mo status` 的 `tg-bot pid/alive` 行能看出死活);菜单"注册即
+事实"——改了 `SPECS` 必须再跑一次 `tg-sync`,手机里才会变;两台机器/两份进程同时
+`getUpdates` 会被 Telegram 判 409,offset 落 `runtime/live/tg_bot_state.json`,
+只允许一个实例(单例锁 `tg_bot.lock`)。
+
 ### 目录布局(`market_operator/paths.py`)
 
 运行期目录有唯一事实源,不再硬编码仓库根:默认 `legacy`(仍是 `data/ logs/
