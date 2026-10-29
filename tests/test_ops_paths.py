@@ -521,6 +521,54 @@ def test_restart_all_restarts_tg_bot(home, monkeypatch):
     assert seen == {"stop_tg": False, "tg_wait": 3}
 
 
+def test_invalidate_stale_heartbeat_removes_dead_runner_beat(home, monkeypatch):
+    """重启前必须作废「已死 runner 的心跳」,否则看护白等满 stale_seconds。
+
+    `mo restart` 先杀 runner 再启看护:心跳文件是「刚写过、但没有进程」的假活
+    证据 ⇒ 看护判 `late` 而不是 `missing`,要等 300s 才拉起 runner,期间无人
+    管理持仓(生产实测每次重启都有 ~5 分钟 pid=null)。
+    """
+    lp = ops.live_paths({})
+    lp["heartbeat"].parent.mkdir(parents=True, exist_ok=True)
+    lp["heartbeat"].write_text(json.dumps({
+        "pid": 999999, "ts_ms": int(time.time() * 1000), "status": "ok"}))
+    monkeypatch.setattr(ops, "pid_alive", lambda pid: False)
+
+    rep = ops._invalidate_stale_heartbeat({})
+    assert rep["removed"] is True
+    assert not lp["heartbeat"].exists()
+
+
+def test_invalidate_stale_heartbeat_keeps_live_runner_beat(home, monkeypatch):
+    """runner 仍存活时必须保留心跳 —— 否则新看护会再拉起一个 runner(双开下单)。"""
+    lp = ops.live_paths({})
+    lp["heartbeat"].parent.mkdir(parents=True, exist_ok=True)
+    lp["heartbeat"].write_text(json.dumps({
+        "pid": 4242, "ts_ms": int(time.time() * 1000), "status": "ok"}))
+    monkeypatch.setattr(ops, "pid_alive", lambda pid: True)
+
+    rep = ops._invalidate_stale_heartbeat({})
+    assert rep["removed"] is False
+    assert "仍存活" in rep["why"]
+    assert lp["heartbeat"].exists()
+
+
+def test_start_supervisor_resets_stale_heartbeat_and_reports_it(home, monkeypatch):
+    """`start_supervisor` 拉起看护前作废死心跳,并在报告里留痕。"""
+    lp = ops.live_paths({})
+    lp["heartbeat"].parent.mkdir(parents=True, exist_ok=True)
+    lp["heartbeat"].write_text(json.dumps({
+        "pid": 777777, "ts_ms": int(time.time() * 1000), "status": "ok"}))
+    monkeypatch.setattr(ops, "supervisor_pid", lambda cfg: None)
+    monkeypatch.setattr(ops, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(ops.hb, "spawn_detached", lambda argv, **kw: 5150)
+
+    rep = ops.start_supervisor({}, wait_s=0)
+    assert rep["started"] is True and rep["pid"] == 5150
+    assert rep["heartbeat_reset"]["removed"] is True
+    assert not lp["heartbeat"].exists()
+
+
 def test_local_orders_lists_only_armed_intents(home):
     """`open_intents` 是历史表(filled/expired 都留着),面板只该显示还挂着的。"""
     lp = ops.live_paths({})

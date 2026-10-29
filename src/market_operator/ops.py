@@ -784,6 +784,33 @@ def _restarts_left(cfg: dict) -> Optional[int]:
     return max(0, int(sup.get("max_restarts_per_hour", 6)) - len(recent))
 
 
+def _invalidate_stale_heartbeat(cfg: dict) -> dict:
+    """启动看护前作废「已死进程留下的心跳」。
+
+    为什么必须显式作废:`live_supervisor` 的判活只看心跳文件 ——
+    `ts_ms` 新 ⇒ 正常;存在但过期 ⇒ 等 `stale_seconds` 再重启。`mo restart`
+    先杀 runner 再启看护,留下的心跳是「刚写过、但没有进程」的假活证据,
+    于是看护会白等满 `stale_seconds`(生产 300s)才拉起 runner:每次重启都
+    有 5 分钟无人管理窗口,日志里表现为"重启后 status 一直是 pid=null"。
+
+    只作废「pid 已死」的心跳:runner 仍存活时(例如只杀了看护)必须保留,
+    否则新看护会再拉起第二个 runner —— 双开下单是比白等严重得多的事故。
+    """
+    lp = live_paths(cfg)
+    doc = read_heartbeat(cfg)
+    if not doc:
+        return {"removed": False, "why": "无心跳文件"}
+    pid = doc.get("pid")
+    if pid and pid_alive(pid):
+        return {"removed": False, "why": f"runner {pid} 仍存活,心跳保留"}
+    try:
+        lp["heartbeat"].unlink()
+    except OSError as e:
+        return {"removed": False, "why": f"删除心跳失败: {type(e).__name__}"}
+    return {"removed": True,
+            "why": f"runner {pid} 已不在,心跳作废(免看护白等 stale_seconds)"}
+
+
 def start_supervisor(cfg: dict, *, cfg_file: Path | None = None,
                      wait_s: float = 20.0) -> dict:
     """脱离会话启动看护(由看护拉起 runner),返回 pid 与首个心跳观测。"""
@@ -791,6 +818,9 @@ def start_supervisor(cfg: dict, *, cfg_file: Path | None = None,
     pid = supervisor_pid(cfg)
     if pid:
         return {"started": False, "pid": pid, "why": "已在运行"}
+    # 已在运行的看护不会被本函数影响;走到这里说明「现在就要拉起 runner」,
+    # 所以已死进程留下的心跳必须作废(否则白等 stale_seconds,见函数注释)。
+    heartbeat = _invalidate_stale_heartbeat(cfg)
     cfg_path = Path(cfg_file) if cfg_file else config_path()
     argv = [sys.executable,
             str(paths.app_home() / "scripts" / "live_supervisor.py"),
@@ -811,7 +841,9 @@ def start_supervisor(cfg: dict, *, cfg_file: Path | None = None,
     return {"started": bool(pid), "pid": pid,
             "alive": pid_alive(pid),
             "heartbeat": bool(beat),
+            "heartbeat_reset": heartbeat,
             "stdout": str(out), "stderr": str(err)}
+
 
 
 def start_tg_bot(cfg: dict, *, cfg_file: Path | None = None,
