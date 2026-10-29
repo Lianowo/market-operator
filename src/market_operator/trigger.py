@@ -356,15 +356,36 @@ class MicTracker:
     def on_trigger_bar(self, a: int, ts: object, o: float, h: float,
                        l: float, c: float) -> list[MarketEvent]:
         ctx = self._ctx
+        prev_c = getattr(self, "_prev_trig_close", None)
+        self._prev_trig_close = c
         if ctx is None or ctx.atr <= 0.0:
             return []
         p = self.p
+        scale_sqrt = max(1.0, (self.scale ** 0.5))
         bm, rj = ctx.bm, ctx.rj
+        rj_trig = rj / scale_sqrt
+
         res_role = ZoneRole.RESISTANCE
+        rng = max(h - l, 1e-12)
         events: list[MarketEvent] = []
 
-        # ① 破位登记(=认知 A4 的 trigger 收盘版):episode 终结、回踩武装、
-        # candidate 注册(同 zone 先去旧 —— 同 events.py _zone_events A4)
+        # 细周期 A2 实时触碰开 _MicEpisode (仅在平衡箱模式下启用, 消除等大周期收盘的 10~20h 入场迟缓!)
+        if p.use_balance_detector and prev_c is not None:
+            for z in ctx.zones:
+                if z.state is not ZoneState.ACTIVE or id(z) in self._broken:
+                    continue
+                if any(ep.zone is z for ep in self._episodes):
+                    continue
+                res = z.role is res_role
+                front_out = (prev_c < z.lo) if res else (prev_c > z.hi)
+                if front_out and h >= z.lo and l <= z.hi:
+                    ex = h if res else l
+                    ep = _MicEpisode(zone=z, opened=a, ex=ex, ex_index=a)
+                    if (h > z.hi + bm) if res else (l < z.lo - bm):
+                        ep.puncture_index = a
+                    self._episodes.append(ep)
+
+        # ① 破位登记
         for z in ctx.zones:
             if z.state is not ZoneState.ACTIVE or id(z) in self._broken:
                 continue
@@ -375,31 +396,48 @@ class MicTracker:
             self._broken.add(id(z))
             self._episodes = [ep for ep in self._episodes if ep.zone is not z]
             self._candidates = [cd for cd in self._candidates if cd.zone is not z]
-            self._candidates.append(_MicCandidate(
-                zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=a))
-            if id(z) not in self._adopted_retests:
+            cd_new = _MicCandidate(zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=a)
+            cd_new._start_close = c
+            self._candidates.append(cd_new)
+            if not p.use_balance_detector and id(z) not in self._adopted_retests:
                 self._adopted_retests.add(id(z))
                 self._retests.append(_MicRetest(zone=z, armed=False,
                                                 extreme=None, started=a))
 
-        # ② BREAKOUT_ACCEPTED 推进:任一 trigger 收盘未在外侧即作废;第 N_a_mic 根收盘发射
+        # ② BREAKOUT_ACCEPTED 推进
         kept_cd: list[_MicCandidate] = []
+        req_count = p.n_a if p.use_balance_detector else self.n_a_mic
         for cd in self._candidates:
-            hold = (c > cd.hi) if cd.role is res_role else (c < cd.lo)
+            hold = ((c > cd.hi + bm) if cd.role is res_role else (c < cd.lo - bm)) if p.use_balance_detector else ((c > cd.hi) if cd.role is res_role else (c < cd.lo))
             if a > cd.started:
                 if not hold:
                     continue
                 cd.count += 1
-            if cd.count >= self.n_a_mic:
+            if cd.count >= req_count:
                 direction = +1 if cd.role is res_role else -1
                 ref = cd.hi if cd.role is res_role else cd.lo
-                events.append(self._mk(BREAKOUT_ACCEPTED, direction, ts, a, {
-                    "zone": cd.zone.clone(), "ref": ref,
-                    "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                    "started": cd.started}))
+                if p.use_balance_detector:
+                    ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                    start_c = getattr(cd, "_start_close", c)
+                    not_counter = (ctx.regime is not Regime.TREND_DOWN) if direction > 0 else (ctx.regime is not Regime.TREND_UP)
+                    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
+                    progressing = (c >= start_c and c > o and close_pos >= 0.50) if direction > 0 else (c <= start_c and c < o and close_pos >= 0.50)
+                    not_climax = ext_dist <= 1.50 * ctx.atr
+                    if not_counter and progressing and not_climax:
+                        events.append(self._mk(BREAKOUT_ACCEPTED, direction, ts, a, {
+                            "zone": cd.zone.clone(), "ref": ref,
+                            "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                            "started": cd.started, "sub_kind": "A1_REAL"}))
+                else:
+                    events.append(self._mk(BREAKOUT_ACCEPTED, direction, ts, a, {
+                        "zone": cd.zone.clone(), "ref": ref,
+                        "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                        "started": cd.started}))
                 continue
             kept_cd.append(cd)
         self._candidates = kept_cd
+
+
 
         # ③ episode 判定(BREAKOUT_FAILED 先于 LEVEL_REJECTED;§8.4 次序启发式镜像 events.py)
         survivors: list[_MicEpisode] = []
@@ -419,21 +457,33 @@ class MicTracker:
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = a
             fired: Optional[MarketEvent] = None
-            if (not p.use_balance_detector
-                    and ep.puncture_index is not None
-                    and a - ep.puncture_index < self.n_f_mic):
-
-                returned = (c < z.hi) if res else (c > z.lo)
-                if returned:
-                    direction = -1 if res else +1
-                    fired = self._reject(BREAKOUT_FAILED, direction, ep, z, ts, a, bm, edge)
-            if fired is None and (extreme_first or ep.ex_index < a) \
-                    and a - ep.ex_index <= self.n_f_mic:
-                retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
-                if retreat >= rj:
-                    direction = -1 if res else +1
-                    fired = self._reject(LEVEL_REJECTED, direction, ep, z, ts, a, bm, edge)
-                    new_e3.append(fired)
+            close_pos = (h - c) / rng if res else (c - l) / rng
+            if p.use_balance_detector:
+                if (extreme_first or ep.ex_index < a) and a - ep.ex_index <= self.n_f_mic:
+                    real_retreat = (ep.ex - c) if res else (c - ep.ex)
+                    back_inside = (c <= z.lo) if res else (c >= z.hi)
+                    against_trend = (ctx.regime is Regime.TREND_UP) if res else (ctx.regime is Regime.TREND_DOWN)
+                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.45)
+                    if real_retreat >= rj_trig and back_inside and close_pos >= 0.45 and bar_dir_ok:
+                        direction = -1 if res else +1
+                        inv_rej = (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
+                        fired = self._mk(LEVEL_REJECTED, direction, ts, a, {
+                            "zone": z.clone(), "ref": edge, "invalid": inv_rej,
+                            "ex": ep.ex, "ex_index": ep.ex_index, "sub_kind": "R1_MIC"})
+                        new_e3.append(fired)
+            else:
+                if ep.puncture_index is not None and a - ep.puncture_index < self.n_f_mic:
+                    returned = (c < z.hi) if res else (c > z.lo)
+                    if returned:
+                        direction = -1 if res else +1
+                        fired = self._reject(BREAKOUT_FAILED, direction, ep, z, ts, a, bm, edge)
+                if fired is None and (extreme_first or ep.ex_index < a) \
+                        and a - ep.ex_index <= self.n_f_mic:
+                    retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
+                    if retreat >= rj:
+                        direction = -1 if res else +1
+                        fired = self._reject(LEVEL_REJECTED, direction, ep, z, ts, a, bm, edge)
+                        new_e3.append(fired)
             if fired is not None:
                 events.append(fired)
                 # v8 EDGE_RECLAIMED:伴随 BREAKOUT_FAILED 发射(与 events.py 同序:BREAKOUT_FAILED 紧随其伴随 EDGE_RECLAIMED)
@@ -446,8 +496,10 @@ class MicTracker:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, a
-                survivors.append(ep)
+                if not p.use_balance_detector or (a - ep.opened) <= (p.n_f + 1):
+                    survivors.append(ep)
         self._episodes = survivors
+
 
         # ④ RANGE_ROTATED 合成(A8;regime/band 取冻结语境)
         events.extend(self._range_rotation(ts, a, c, ctx, new_e3))

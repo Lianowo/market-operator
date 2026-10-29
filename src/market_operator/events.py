@@ -402,11 +402,14 @@ class EventDetector:
                 else:
                     self._episodes = [ep for ep in self._episodes if ep.zone is not z]
                 self._candidates = [cd for cd in self._candidates if cd.zone is not z]
-                self._candidates.append(_AcceptCandidate(
-                    zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=t))
-
+                cd_new = _AcceptCandidate(
+                    zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=t)
+                cd_new._start_close = c
+                self._candidates.append(cd_new)
 
         events: list[MarketEvent] = []
+        rng = max(h - l, 1e-12)
+        cur_regime = s.regime()
 
         # BREAKOUT_ACCEPTED 推进(A4):任一收盘未在外侧即作废;第 N_a 根收盘发射。
         kept: list[_AcceptCandidate] = []
@@ -420,16 +423,36 @@ class EventDetector:
                 direction = +1 if cd.role is res_role else -1
                 ref = cd.hi if cd.role is res_role else cd.lo
                 ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-                sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
-                events.append(MarketEvent(
-                    id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
-                    attrs={"zone": cd.zone.clone(), "ref": ref,
-                           "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                           "started": cd.started, "sub_kind": sub_kind},
-                ))
+                if p.use_balance_detector:
+                    # 拍卖市场真实接受三要素(纯第一性原理):
+                    # ① 绝不逆大级别反向趋势追单: 多头突破要求当前非 TREND_DOWN; 空头突破要求当前非 TREND_UP
+                    not_counter = (cur_regime is not Regime.TREND_DOWN) if direction > 0 else (cur_regime is not Regime.TREND_UP)
+                    # ② 确认 K 线必须比破位首根继续推进(c >= start_c), 且收盘在强势区(非冲高回落大阴线假站稳)
+                    start_c = getattr(cd, "_start_close", c)
+                    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
+                    progressing = (c >= start_c and c > o and close_pos >= 0.50) if direction > 0 else (c <= start_c and c < o and close_pos >= 0.50)
+                    # ③ 未极端透支高潮 (距离突破口 <= 1.5 * ATR)
+                    not_climax = ext_dist <= 1.50 * atr
+                    if not_counter and progressing and not_climax:
+                        sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
+                        events.append(MarketEvent(
+                            id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
+                            attrs={"zone": cd.zone.clone(), "ref": ref,
+                                   "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                                   "started": cd.started, "sub_kind": sub_kind},
+                        ))
+                else:
+                    events.append(MarketEvent(
+                        id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
+                        attrs={"zone": cd.zone.clone(), "ref": ref,
+                               "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                               "started": cd.started},
+                    ))
                 continue
             kept.append(cd)
         self._candidates = kept
+
+
 
         # BREAKOUT_FAILED(A5)/ LEVEL_REJECTED(A6):逐 episode 判;每 episode 至多产出其一(A3)。
         survivors: list[_Episode] = []
@@ -438,27 +461,23 @@ class EventDetector:
             res = z.role is res_role
             fired: Optional[MarketEvent] = None
             edge = z.hi if res else z.lo
-            # §8.4 路径启发式:本 bar 极值是否先于回退(模块 docstring A6 条款)
             extreme_first = (c < o) if res else (c >= o)
 
-            # 先序情形:先以本 bar 极值推进 ex
             if extreme_first:
                 new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                 if new_ex != ep.ex:
                     ep.ex, ep.ex_index = new_ex, t
 
-            # A5 刺穿登记(同一 episode 只记第一次)
             if ep.puncture_index is None:
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = t
 
             closed_outside = (c > z.hi + bm) if res else (c < z.lo - bm)
+            close_pos = (h - c) / rng if res else (c - l) / rng
 
-            # v22 R3 假突破吞没收复:此前有 1~2 根收盘越过外沿(outside_closes>=1),本根收盘反向砸回内沿(z.lo / z.hi)以内 -> 发射 LEVEL_REJECTED(R3_TRAP)
-            if (p.use_balance_detector
-                    and ep.outside_closes >= 1
-                    and ep.outside_closes <= 2
-                    and ((c < z.lo) if res else (c > z.hi))):
+            # v22 R3 假突破吞没收复:此前有 1~2 根收盘越过外沿,本根收盘反向砸回内沿以内 -> 发射 LEVEL_REJECTED(R3_TRAP)
+            if (p.use_balance_detector and 1 <= ep.outside_closes <= 2
+                    and ((c < z.lo and close_pos >= 0.50) if res else (c > z.hi and close_pos >= 0.50))):
                 direction = -1 if res else +1
                 inv_r3 = (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
                 fired = _reject(
@@ -473,7 +492,7 @@ class EventDetector:
                 z.last_change_known = t
                 self._candidates = [cd for cd in self._candidates if cd.zone is not z]
 
-            # BREAKOUT_FAILED:刺穿起 ≤ N_f 根内收盘回到带内(破位则 episode 已在上文终结)
+            # BREAKOUT_FAILED:刺穿起 ≤ N_f 根内收盘回到带内
             if fired is None and not p.use_balance_detector and ep.puncture_index is not None and t - ep.puncture_index < n_f:
                 returned = (c < z.hi) if res else (c > z.lo)
                 if returned:
@@ -481,23 +500,31 @@ class EventDetector:
                     fired = _reject(BREAKOUT_FAILED, direction, z, t, ts, bm,
                                     {"puncture_index": ep.puncture_index}, edge)
 
-            # LEVEL_REJECTED(R1 影线拒绝 / R2 带内受阻回落):自 ex 向正面回退 ≥ k_rj*atr
+            # LEVEL_REJECTED(R1 真实收盘抽离拒绝 vs 历史单带回退)
             if fired is None and ep.outside_closes == 0 and z.state is ZoneState.ACTIVE \
-                    and (extreme_first or ep.ex_index < t) \
-                    and t - ep.ex_index <= n_f:
-                retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
-                if retreat >= rj:
-                    direction = -1 if res else +1
-                    extra_rej: dict = {"ex": ep.ex, "ex_index": ep.ex_index}
-                    if p.use_balance_detector:
-                        extra_rej["invalid"] = (
-                            (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
-                        )
-                        extra_rej["sub_kind"] = (
-                            "R1_WICK" if ep.puncture_index is not None else "R2_STALL"
-                        )
-                    fired = _reject(LEVEL_REJECTED, direction, z, t, ts, bm,
-                                    extra_rej, edge)
+                    and (extreme_first or ep.ex_index < t) and t - ep.ex_index <= n_f:
+                if p.use_balance_detector:
+                    real_retreat = (ep.ex - c) if res else (c - ep.ex)
+                    back_inside = (c <= z.lo) if res else (c >= z.hi)
+                    against_trend = (cur_regime is Regime.TREND_UP) if res else (cur_regime is Regime.TREND_DOWN)
+                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.45)
+                    if real_retreat >= rj and back_inside and close_pos >= 0.45 and bar_dir_ok:
+                        direction = -1 if res else +1
+                        extra_rej: dict = {
+                            "ex": ep.ex, "ex_index": ep.ex_index,
+                            "invalid": (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm),
+                            "sub_kind": "R1_WICK" if ep.puncture_index is not None else "R2_STALL",
+                        }
+                        fired = _reject(LEVEL_REJECTED, direction, z, t, ts, bm,
+                                        extra_rej, edge)
+                else:
+                    retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
+                    if retreat >= rj:
+                        direction = -1 if res else +1
+                        fired = _reject(LEVEL_REJECTED, direction, z, t, ts, bm,
+                                        {"ex": ep.ex, "ex_index": ep.ex_index}, edge)
+
+
 
             if fired is not None:                        # A3:episode 终结,去重
                 events.append(fired)
