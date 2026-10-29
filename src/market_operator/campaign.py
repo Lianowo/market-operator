@@ -370,7 +370,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   slippage_by_symbol: Optional[dict] = None,
                   symbol_stop_risk_frac: Optional[dict] = None,
                   reserve_by_tf: Optional[dict] = None,
+                  directional_cap_frac: Optional[float] = None,
                   ) -> BacktestResult:
+
     """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
     docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 routing docstring)。
 
@@ -489,7 +491,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     funding_rates=funding_rates,
                     slippage_by_symbol=slippage_by_symbol,
                     symbol_stop_risk_frac=symbol_stop_risk_frac,
-                    reserve_by_tf=reserve_by_tf)
+                    reserve_by_tf=reserve_by_tf,
+                    directional_stop_risk_frac=directional_cap_frac)
+
     equity_rows: list = []
     cap_skips: list = []
     # go_events/mic_go_events 的口径见 _count_go(送入路由的次数,非去重后事件数)
@@ -945,16 +949,37 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             qty_full, d.intent.ref_price, risk_per_unit,
             taker_fee=broker.taker_fee, slippage=broker.slippage,
             include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
+        cap_blocked = False
+        skip_reason = "PORTFOLIO_CAP"
         if broker.risk_budget.is_active and (
                 qty_full <= 0.0 or used + delta > cap_frac * equity + 1e-9):
+            cap_blocked = True
+            skip_reason = "TF_CAP" if pool == "tf" else "PORTFOLIO_CAP"
+
+        # v22:同向净风险上限 (directional_cap_frac, §6.4)
+        dir_cap = broker.risk_budget.directional_cap_frac
+        if not cap_blocked and dir_cap is not None and dir_cap > 0.0:
+            dir_used = capacity.outstanding_exposure(
+                broker.positions, broker.last_mark,
+                direction=int(d.hyp.direction),
+                taker_fee=broker.taker_fee, slippage=broker.slippage
+            ).measure(include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
+            if dir_used + delta > dir_cap * equity + 1e-9:
+                cap_blocked = True
+                skip_reason = "DIRECTIONAL_CAP"
+                cap_frac = dir_cap
+                used = dir_used
+
+        if cap_blocked:
             counters["portfolio_cap_skips"] += 1
             cap_skips.append({
                 "ts": t, "campaign": key, "event_id": d.hyp.event_id,
                 "direction": d.hyp.direction, "route": d.route,
-                "reason_code": "TF_CAP" if pool == "tf" else "PORTFOLIO_CAP",
+                "reason_code": skip_reason,
                 "worst_case": used + delta, "budget_frac": cap_frac,
                 "equity": equity})
             continue
+
 
         counters["open_intents"] += 1
         if arm is not None and _arm_route(st, broker, d, arm, t, fill_after,

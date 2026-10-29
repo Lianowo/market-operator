@@ -143,6 +143,7 @@ PROCESS_REJECTED = "PROCESS_REJECTED"    # 过程式拒绝:试探失败密度确
 # 配置里的极简原语(箱体边缘两件事),指向具体事件标识。
 ACCEPT = BREAKOUT_ACCEPTED   # 箱体边缘突破接受(顺迁移)
 REJECT = LEVEL_REJECTED      # 箱体边缘试探拒绝(箱内回归)
+CONSUMED = "CONSUMED"        # 边界超时粘连钝化淘汰态(非交易垃圾回收态)
 
 #: 历史编号 → 语义名。**只**用于读取 2026-10 之前的配置与报告;
 #: 新代码、新配置不得使用键名侧的内容,也不得反向映射。
@@ -159,7 +160,9 @@ LEGACY_EVENT_CODES = {
     "E10": PROCESS_REJECTED,
     "ACCEPT": BREAKOUT_ACCEPTED,
     "REJECT": LEVEL_REJECTED,
+    "CONSUMED": CONSUMED,
 }
+
 
 #: 全部事件标识(顺序 = 检测优先序:同 bar 竞争时靠前者优先)。
 EVENT_IDENTIFIERS = (
@@ -210,6 +213,8 @@ class _Episode:
     ex: float                 # episode 内进入极值(A6);阻力=最高 high,支撑=最低 low
     ex_index: int
     puncture_index: Optional[int] = None  # A5 刺穿 bar
+    outside_closes: int = 0   # v22 R3:episode 期间收盘越过外沿(hi+bm / lo-bm)的根数
+
     # --- v9 过程量(docs/v9-protocol.md §1,默认关;非 v9 字段以上不读) ---
     occ_count: int = 0        # episode 内收盘越出远缘的根数(occ 的分子)
     close_sum: float = 0.0    # episode 内收盘价累计(centroid 的均值分子)
@@ -295,6 +300,8 @@ class EventDetector:
         self._candidates: list[_AcceptCandidate] = []
         self._e4: list[_E4Candidate] = []
         self._prev_regime: Regime = Regime.TRANSITION
+        self.consumed_episodes: int = 0
+
 
     # -- 主入口 ---------------------------------------------------------------
 
@@ -327,7 +334,8 @@ class EventDetector:
         res_role = ZoneRole.RESISTANCE
 
         # A3 收尸:zone 离开 ACTIVE(破位/翻转/消亡)即 episode 终结;
-        # 被合并取代(A3 未列为结束条件)则续绑到包含旧边界的同向 ACTIVE 区间。
+        # v22 R3 扩展:当 use_balance_detector=True 时,允许 1~2 根收盘假突破
+        # (只要未发生 > 1.25*ATR 单边逃逸且在 <= n_f 窗口内)暂保 _Episode 观察吞没收复!
         live = {id(z): z for z in s._zones.zones}
         kept_eps: list[_Episode] = []
         for ep in self._episodes:
@@ -335,6 +343,14 @@ class EventDetector:
             if z is not None:
                 if z.state is ZoneState.ACTIVE:
                     kept_eps.append(ep)
+                elif (p.use_balance_detector
+                      and z.state in (ZoneState.BROKEN, ZoneState.RETESTED)
+                      and ep.outside_closes <= 2
+                      and (t - (ep.puncture_index if ep.puncture_index is not None else ep.opened)) <= n_f):
+                    res = z.role is res_role
+                    escape = (ep.ex - z.hi) if res else (z.lo - ep.ex)
+                    if escape <= 1.25 * atr:
+                        kept_eps.append(ep)
                 continue
             for z2 in s._zones.zones:
                 if z2.role is ep.zone.role and z2.state is ZoneState.ACTIVE \
@@ -345,8 +361,14 @@ class EventDetector:
         self._episodes = kept_eps
 
         # A2 新触碰开 episode(前收在正面之外,且本 bar [low,high] 与带相交)。
+        # v22:若当根同时触碰并直接收盘破位(z 在当根刚转为 BROKEN),同样开启 _Episode 供 R3 假突破观察。
         for z in s._zones.zones:
-            if z.state is not ZoneState.ACTIVE:
+            just_broken = (
+                p.use_balance_detector
+                and z.state is ZoneState.BROKEN
+                and z.last_change_known == t
+            )
+            if z.state is not ZoneState.ACTIVE and not just_broken:
                 continue
             if any(ep.zone is z for ep in self._episodes):
                 continue
@@ -369,13 +391,20 @@ class EventDetector:
                 self._episodes.append(ep)
 
         # A4 破位候选登记:本 bar 收盘破位(结构已把 zone 置为 BROKEN)。
-        # 破位即 episode 终结、BREAKOUT_FAILED/LEVEL_REJECTED 竞争终止(A5/A6);候选 bar = 第 1 根。
+        # v22:若 use_balance_detector=True 且极值未逃逸(>1.25*ATR),暂不销毁 _Episode 供 R3 观察。
         for z in s._zones.zones:
             if z.state is ZoneState.BROKEN and z.last_change_known == t:
-                self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+                if p.use_balance_detector:
+                    res = z.role is res_role
+                    escape = (h - z.hi) if res else (z.lo - l)
+                    if escape > 1.25 * atr:
+                        self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+                else:
+                    self._episodes = [ep for ep in self._episodes if ep.zone is not z]
                 self._candidates = [cd for cd in self._candidates if cd.zone is not z]
                 self._candidates.append(_AcceptCandidate(
                     zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=t))
+
 
         events: list[MarketEvent] = []
 
@@ -390,11 +419,13 @@ class EventDetector:
             if cd.count >= n_a:
                 direction = +1 if cd.role is res_role else -1
                 ref = cd.hi if cd.role is res_role else cd.lo
+                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
                 events.append(MarketEvent(
                     id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
                     attrs={"zone": cd.zone.clone(), "ref": ref,
                            "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                           "started": cd.started},
+                           "started": cd.started, "sub_kind": sub_kind},
                 ))
                 continue
             kept.append(cd)
@@ -421,22 +452,52 @@ class EventDetector:
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = t
 
+            closed_outside = (c > z.hi + bm) if res else (c < z.lo - bm)
+
+            # v22 R3 假突破吞没收复:此前有 1~2 根收盘越过外沿(outside_closes>=1),本根收盘反向砸回内沿(z.lo / z.hi)以内 -> 发射 LEVEL_REJECTED(R3_TRAP)
+            if (p.use_balance_detector
+                    and ep.outside_closes >= 1
+                    and ep.outside_closes <= 2
+                    and ((c < z.lo) if res else (c > z.hi))):
+                direction = -1 if res else +1
+                inv_r3 = (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
+                fired = _reject(
+                    LEVEL_REJECTED, direction, z, t, ts, bm,
+                    {"ex": ep.ex, "ex_index": ep.ex_index,
+                     "puncture_index": ep.puncture_index,
+                     "outside_closes": ep.outside_closes,
+                     "sub_kind": "R3_TRAP", "invalid": inv_r3},
+                    edge,
+                )
+                z.state = ZoneState.ACTIVE
+                z.last_change_known = t
+                self._candidates = [cd for cd in self._candidates if cd.zone is not z]
+
             # BREAKOUT_FAILED:刺穿起 ≤ N_f 根内收盘回到带内(破位则 episode 已在上文终结)
-            if ep.puncture_index is not None and t - ep.puncture_index < n_f:
+            if fired is None and not p.use_balance_detector and ep.puncture_index is not None and t - ep.puncture_index < n_f:
                 returned = (c < z.hi) if res else (c > z.lo)
                 if returned:
                     direction = -1 if res else +1
                     fired = _reject(BREAKOUT_FAILED, direction, z, t, ts, bm,
                                     {"puncture_index": ep.puncture_index}, edge)
 
-            # LEVEL_REJECTED:自 ex 向正面回退 ≥ k_rj*atr;后序 bar 不许对本 bar 新建 ex 判回退
-            if fired is None and (extreme_first or ep.ex_index < t) \
+            # LEVEL_REJECTED(R1 影线拒绝 / R2 带内受阻回落):自 ex 向正面回退 ≥ k_rj*atr
+            if fired is None and ep.outside_closes == 0 and z.state is ZoneState.ACTIVE \
+                    and (extreme_first or ep.ex_index < t) \
                     and t - ep.ex_index <= n_f:
                 retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
                 if retreat >= rj:
                     direction = -1 if res else +1
+                    extra_rej: dict = {"ex": ep.ex, "ex_index": ep.ex_index}
+                    if p.use_balance_detector:
+                        extra_rej["invalid"] = (
+                            (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
+                        )
+                        extra_rej["sub_kind"] = (
+                            "R1_WICK" if ep.puncture_index is not None else "R2_STALL"
+                        )
                     fired = _reject(LEVEL_REJECTED, direction, z, t, ts, bm,
-                                    {"ex": ep.ex, "ex_index": ep.ex_index}, edge)
+                                    extra_rej, edge)
 
             if fired is not None:                        # A3:episode 终结,去重
                 events.append(fired)
@@ -451,14 +512,21 @@ class EventDetector:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, t
-                # v9 PROCESS_ACCEPTED/PROCESS_REJECTED:老轨道未发射的 episode 才进入过程判定(模块
-                # docstring v9[§2 判定与同 bar 竞争]条款;本 bar 老轨道已发
-                # ⇒ episode 终结,不再判)
+                if closed_outside:
+                    ep.outside_closes += 1
+                    if p.use_balance_detector and ep.outside_closes > 2:
+                        continue
+                # v9 PROCESS_ACCEPTED/PROCESS_REJECTED:老轨道未发射的 episode 才进入过程判定
                 if self.enable_e9e10:
                     proc = self._process_verdict(ep, z, res, t, ts, h, l, c, atr)
                     if proc is not None:
                         events.append(proc)
+                # v22 CONSUMED 钝化淘汰态:存续超过 N_f + 1 根 K 线仍未决出胜负,淘汰销毁不交易
+                if p.use_balance_detector and (t - ep.opened) > (n_f + 1):
+                    self.consumed_episodes += 1
+                    continue
                 survivors.append(ep)
+
         self._episodes = survivors
 
         events.extend(self._range_rotation(

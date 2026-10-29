@@ -316,7 +316,8 @@ class Broker:
                  funding_rates: Optional[dict] = None,
                  slippage_by_symbol: Optional[dict] = None,
                  symbol_stop_risk_frac: Optional[dict] = None,
-                 reserve_by_tf: Optional[dict] = None) -> None:
+                 reserve_by_tf: Optional[dict] = None,
+                 directional_stop_risk_frac: Optional[float] = None) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
         self.initial_equity = float(equity)
@@ -335,6 +336,7 @@ class Broker:
         if portfolio_stop_risk_frac is not None and not (0 < portfolio_stop_risk_frac <= 1):
             raise ValueError("portfolio_stop_risk_frac must be in (0,1]")
         self.portfolio_stop_risk_frac = portfolio_stop_risk_frac
+        self.directional_stop_risk_frac = directional_stop_risk_frac
         self.tf_stop_risk_frac_by_tf = (
             {str(k): float(v) for k, v in tf_stop_risk_frac_by_tf.items()}
             if tf_stop_risk_frac_by_tf else None
@@ -349,11 +351,13 @@ class Broker:
                               if reserve_by_tf else None)
         self.risk_budget = capacity.RiskBudget(
             portfolio_frac=portfolio_stop_risk_frac,
+            directional_cap_frac=directional_stop_risk_frac,
             per_timeframe_frac=self.tf_stop_risk_frac_by_tf or {},
             symbol_frac=({str(k): float(v)
                           for k, v in symbol_stop_risk_frac.items()}
                          if symbol_stop_risk_frac else {}),
             mode=capacity_mode)
+
         # A1 真实资金费率表:{symbol: [(ts, rate), ...]};None ⇒ 常数近似
         self.funding_rates = _normalize_funding_table(funding_rates)
         # E1 分标的滑点:{symbol: 每边比例};缺省 = 全局 slippage

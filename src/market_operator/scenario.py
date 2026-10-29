@@ -155,8 +155,10 @@ class ScenarioSettings:
     trigger_seconds_by_timeframe: Mapping[str, Optional[int]]
     tf_cap_by_timeframe: Mapping[str, float]
     portfolio_cap_frac: float
+    directional_cap_frac: Optional[float]
     capacity_mode: str
     risk_frac: float
+
     leverage_cap: float
     dev_frac: float
     n_fill: int
@@ -243,8 +245,12 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
         trigger_seconds_by_timeframe=trigger,
         tf_cap_by_timeframe=dict(raw.get("tf_cap_by_tf", {})),
         portfolio_cap_frac=float(raw.get("portfolio_cap_frac", 0.03)),
+        directional_cap_frac=(float(raw["directional_cap_frac"])
+                              if "directional_cap_frac" in raw and raw["directional_cap_frac"] is not None
+                              else None),
         capacity_mode=str(raw.get("capacity_mode",
                                   capacity.ADMISSION_FULL_COST)),
+
         risk_frac=float(raw["risk_frac"]),
         leverage_cap=float(raw["leverage_cap"]),
         dev_frac=float(raw["dev_frac"]),
@@ -390,7 +396,9 @@ class ScenarioRunner:
             router_params_by_timeframe: Optional[Mapping[str, RouterParams]] = None,
             tf_cap_by_timeframe: Optional[Mapping[str, float]] = None,
             capacity_mode: Optional[str] = None,
+            directional_cap_frac: Optional[float] = None,
             arm: Optional[ArmConfig] = None) -> ScenarioOutcome:
+
         """按场景回放。所有可替换项缺省为配置值(即"现行语义")。"""
         settings = self.settings
         costs = settings.costs.scaled(cost_multiplier)
@@ -415,7 +423,11 @@ class ScenarioRunner:
             params=settings.structure,
             n_fill=settings.n_fill,
             portfolio_cap_frac=settings.portfolio_cap_frac,
+            directional_cap_frac=(settings.directional_cap_frac
+                                  if directional_cap_frac is None
+                                  else directional_cap_frac),
             tf_cap_by_tf=dict(settings.tf_cap_by_timeframe
+
                               if tf_cap_by_timeframe is None
                               else tf_cap_by_timeframe),
             capacity_mode=settings.capacity_mode if capacity_mode is None

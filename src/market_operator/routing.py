@@ -76,7 +76,10 @@ def _event_provenance(ev: MarketEvent) -> dict:
 
 ROUTE_BREAKOUT_ACCEPTED = "breakout_accepted_market"
 ROUTE_LEVEL_REJECTED = "level_rejected_market"
+ROUTE_BREAKOUT_ACCEPTED_LIMIT = "breakout_accepted_limit"
+ROUTE_LEVEL_REJECTED_LIMIT = "level_rejected_limit"
 ROUTE_BREAKOUT_FAILED = "breakout_failed_market"
+
 ROUTE_TREND_RESUMED = "trend_resumed_market"
 ROUTE_RANGE_ROTATED = "range_rotated_market"
 ROUTE_EDGE_RECLAIMED = "edge_reclaimed_market"
@@ -139,6 +142,9 @@ class RouterParams:
     reject_use_struct_stop: bool = False  # True 时 REJECT 使用箱体外缘结构止损(替代 2.0*ATR)
     accept_use_struct_stop: bool = False  # True 时 ACCEPT 使用箱体正缘结构止损(替代 2.0*ATR)
     max_target_r: Optional[float] = None  # C1:目标 R 上限(None = 不截断,现行行为)
+    max_confirm_stop_atr: float = 1.2     # v22:紧凑市价确认的最大止损宽度(ATR 倍数;超出转 50%/内沿回抽 Limit)
+    allow_pullback_limit: bool = True     # True 时过伸确认转回抽 Limit;False 时严格要求当根入场满足 min_box_rr 且具备对侧目标
+
 
 
 @dataclass(frozen=True)
@@ -292,15 +298,98 @@ class MarketRouter:
             symbol, ev, view, c, atr, ROUTE_STRUCTURE_BROKEN_STRONG,
             "STRONG 破位,市价次开盘")
 
-    # -- 市价入口(BREAKOUT_ACCEPTED / STRONG-STRUCTURE_BROKEN) ----------------------------------------------
+    # -- 市价/回抽限价双轨入口(BREAKOUT_ACCEPTED / LEVEL_REJECTED / STRONG-STRUCTURE_BROKEN) --
 
     def _route_market(self, symbol: str, ev: MarketEvent, view: StructureView,
                       close: float, atr: float, route: str,
                       tag: str) -> Optional[RouteDecision]:
         side = "long" if ev.direction > 0 else "short"
+        p = self.params
+        cid = canonical_event_id(ev.id)
+        zone = ev.attrs.get("zone")
+
+        # v22 轨道 C: A2 过伸突破转翻转边界前缘 Limit 挂单(当显式传入 A2_OVEREXTENDED 且开启回抽限价时)
+        if (cid == BREAKOUT_ACCEPTED
+                and p.allow_pullback_limit
+                and ev.attrs.get("sub_kind") == "A2_OVEREXTENDED"
+                and (p.accept_use_struct_stop or p.min_box_rr > 0.0)
+                and zone is not None):
+            limit_px = float(zone.hi if ev.direction > 0 else zone.lo)
+            ev_inv = ev.attrs.get("invalid")
+            invalid = float(ev_inv) if (p.accept_use_struct_stop and ev_inv is not None) else (
+                limit_px - ev.direction * p.turtle_stop_atr * atr
+            )
+            dist_lim = ev.direction * (limit_px - invalid)
+            if dist_lim >= p.k_is * atr:
+                hyp = Hypothesis(
+                    event_id=ev.id, direction=ev.direction, ts=ev.ts,
+                    known_index=ev.known_index, entry=limit_px,
+                    invalid=invalid, target_1=None, r_mult=None, regime=view.regime,
+                )
+                reason = (f"{ev.id}|{side} {ROUTE_BREAKOUT_ACCEPTED_LIMIT} "
+                          f"A2过伸突破回踩前缘限价 limit_px={limit_px:.8g} invalid={invalid:.8g}")
+                self._bump("a2_retest_limit_armed")
+                return RouteDecision(
+                    kind="limit", route=ROUTE_BREAKOUT_ACCEPTED_LIMIT,
+                    intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
+                                       reason=reason, ref_price=float(close), ts=ev.ts),
+                    hyp=hyp, limit_price=limit_px,
+                    meta={"a2_retest_limit": True, **_event_provenance(ev)},
+                )
+
         hyp = self._gates(symbol, ev, view, close, atr, route)
         if hyp is None:
             return None
+
+        # v22 轨道 B:当配置了 min_box_rr > 0 且允许回抽挂单时,确认 K 线过长自动转为 50%/内沿 RestingLimitOrder
+        if (cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED)
+                and p.allow_pullback_limit
+                and p.reject_use_struct_stop and p.min_box_rr > 0.0
+                and zone is not None and atr > 0.0):
+            stop_dist = abs(float(close) - float(hyp.invalid))
+            opp = getattr(zone, "box_opposite", None)
+            room = ev.direction * (float(opp) - float(close)) if opp is not None else None
+            rr_thresh = p.min_box_rr
+            need_pullback = (
+                (p.max_confirm_stop_atr > 0.0 and stop_dist > p.max_confirm_stop_atr * atr)
+                or (room is not None and stop_dist > 0.0 and (room / stop_dist) < rr_thresh)
+            )
+            if need_pullback:
+                inner_edge = float(zone.lo if ev.direction < 0 else zone.hi)
+                half_pb = 0.5 * (float(close) + inner_edge)
+                limit_px = half_pb
+                dist_lim = ev.direction * (limit_px - float(hyp.invalid))
+                if opp is not None and dist_lim > 0.0:
+                    room_lim = ev.direction * (float(opp) - limit_px)
+                    if (room_lim / dist_lim) < rr_thresh or (
+                        p.max_confirm_stop_atr > 0.0 and dist_lim > p.max_confirm_stop_atr * atr
+                    ):
+                        if ev.direction * (float(close) - inner_edge) > 0.0:
+                            limit_px = inner_edge
+                            dist_lim = ev.direction * (limit_px - float(hyp.invalid))
+                if dist_lim >= p.k_is * atr and ev.direction * (float(close) - limit_px) > 0.0:
+                    target_1 = hyp.target_1
+                    r_mult = (ev.direction * (float(target_1) - limit_px) / dist_lim
+                              if target_1 is not None and dist_lim > 0.0 else hyp.r_mult)
+                    hyp_lim = Hypothesis(
+                        event_id=ev.id, direction=ev.direction, ts=ev.ts,
+                        known_index=ev.known_index, entry=float(limit_px),
+                        invalid=float(hyp.invalid), target_1=target_1,
+                        r_mult=r_mult, regime=view.regime,
+                    )
+                    reason = (f"{ev.id}|{side} {ROUTE_LEVEL_REJECTED_LIMIT} "
+                              f"确认K线过长转50%/内沿回抽限价 entry_ref={close:.8g} "
+                              f"limit_px={limit_px:.8g} invalid={hyp.invalid:.8g} "
+                              f"target_1={target_1} r_mult={r_mult}")
+                    self._bump("pullback_limit_armed")
+                    return RouteDecision(
+                        kind="limit", route=ROUTE_LEVEL_REJECTED_LIMIT,
+                        intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
+                                           reason=reason, ref_price=float(close), ts=ev.ts),
+                        hyp=hyp_lim, limit_price=float(limit_px),
+                        meta={"pullback_limit": True, **_event_provenance(ev)},
+                    )
+
         reason = (f"{ev.id}|{side} {route} {tag} entry_ref={close:.8g} "
                   f"invalid={hyp.invalid:.8g} target_1={hyp.target_1} "
                   f"r_mult={hyp.r_mult}")
@@ -309,6 +398,7 @@ class MarketRouter:
             intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
                                reason=reason, ref_price=float(close), ts=ev.ts),
             hyp=hyp, meta=_event_provenance(ev))
+
 
     # -- WEAK-STRUCTURE_BROKEN → FLIP_RETESTED(同 episode 前缘限价,v4 G3 / v5 §1 语义,双向) -------------
 
@@ -401,15 +491,33 @@ class MarketRouter:
                 return None
         if p.min_box_rr > 0.0 and zone is not None:
             opp = getattr(zone, "box_opposite", None)
+            if opp is None and not p.allow_pullback_limit and cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED):
+                self._bump("restraint_rr_reject")
+                return None
             if opp is not None and dist > 0.0:
                 if cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED):
                     room = ev.direction * (float(opp) - close)
-                else:
+                elif p.allow_pullback_limit:
                     box_span = abs(float(opp) - (zone.hi if ev.direction > 0 else zone.lo))
                     room = box_span
-                if (room / dist) < p.min_box_rr:
-                    self._bump("restraint_rr_reject")
-                    return None
+                else:
+                    room = None
+                if room is not None and (room / dist) < p.min_box_rr:
+                    can_pullback = False
+                    if p.allow_pullback_limit and cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED) and p.reject_use_struct_stop:
+                        inner_edge = float(zone.lo if ev.direction < 0 else zone.hi)
+                        for cand_px in (0.5 * (close + inner_edge), inner_edge):
+                            d_cand = ev.direction * (cand_px - invalid)
+                            r_cand = ev.direction * (float(opp) - cand_px)
+                            if (ev.direction * (close - cand_px) > 0.0
+                                    and d_cand >= p.k_is * atr
+                                    and (r_cand / d_cand) >= p.min_box_rr):
+                                can_pullback = True
+                                break
+                    if not can_pullback:
+                        self._bump("restraint_rr_reject")
+                        return None
+
         if p.zone_cooldown_bars > 0 and zone is not None:
             zkey = (symbol, round(float(zone.lo), 6), round(float(zone.hi), 6), ev.direction)
             last_b = self._zone_last_bar.get(zkey)

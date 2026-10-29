@@ -338,9 +338,10 @@ class ZoneBook:
         self._last_low_close: Optional[float] = None
         self._bal_det = None
         if params.use_balance_detector:
-            from .balance_detect import BalanceDetector, BalanceParams
-            self._bal_det = BalanceDetector(
-                BalanceParams(quality_min=params.balance_quality_min))
+            from .true_balance import TrueBalanceDetector, TrueBalanceParams
+            self._bal_det = TrueBalanceDetector(
+                TrueBalanceParams(quality_min=params.balance_quality_min))
+
 
     # -- §4.1 生成与合并 ----------------------------------------------------
 
@@ -481,13 +482,88 @@ class ZoneBook:
         下沿 ``[lo_ext, lo_ext + w]`` → SUPPORT;若与场内已有 ACTIVE 区匹配
         (距离 ≤ tol)则原位保留(不打断存活 episode)。
         """
-        self._bal_det.push((ts, o, h, l, c, v), atr_val)
+        bracket = self._bal_det.push((ts, o, h, l, c, v), atr_val)
         if atr_val <= 0.0:
             return
         w = self.p.k_zw * atr_val
         tol = max(self.p.tol_atr * atr_val, 0.5 * atr_val)
+        if bracket is not None and hasattr(bracket, "mode"):
+            alive_ids: set[int] = set()
+            for role, lvl in (
+                (ZoneRole.SUPPORT, bracket.support),
+                (ZoneRole.RESISTANCE, bracket.resistance),
+            ):
+                if lvl is None or int(lvl.rotations) < self.p.box_min_rotations:
+                    continue
+                if getattr(lvl, "source_kind", "BOX_EDGE") != "BOX_EDGE":
+                    continue
+
+                zlo = float(min(lvl.outer, lvl.inner))
+                zhi = float(max(lvl.outer, lvl.inner))
+                opp = float(lvl.opposite) if lvl.opposite is not None else None
+                qual = float(lvl.quality)
+                w_atr = float(lvl.width_atr)
+                rot = int(lvl.rotations)
+                matched = None
+                for z in self.zones:
+                    if z.role is not role:
+                        continue
+                    if z.state not in (ZoneState.ACTIVE, ZoneState.BROKEN, ZoneState.RETESTED):
+                        continue
+                    ref_edge = z.hi if role is ZoneRole.RESISTANCE else z.lo
+                    new_edge = zhi if role is ZoneRole.RESISTANCE else zlo
+                    in_edge = z.lo if role is ZoneRole.RESISTANCE else z.hi
+                    new_in = zlo if role is ZoneRole.RESISTANCE else zhi
+                    if abs(ref_edge - new_edge) <= tol or abs(in_edge - new_in) <= tol:
+                        matched = z
+                        break
+                if matched is not None:
+                    matched.lo = zlo
+                    matched.hi = zhi
+                    bm_now = self.p.k_bm * atr_val
+                    still_out = (c > zhi + bm_now) if role is ZoneRole.RESISTANCE else (c < zlo - bm_now)
+                    if bracket.mode == "IN_BOX" and not still_out and matched.state is not ZoneState.ACTIVE:
+                        matched.state = ZoneState.ACTIVE
+                        matched._retest_extreme = None
+                    matched.last_change_known = index
+                    if opp is not None:
+                        matched.box_opposite = opp
+                    matched.box_quality = max(matched.box_quality, qual)
+                    if w_atr > 0.0:
+                        matched.box_width_atr = w_atr
+                    matched.box_rotations = max(matched.box_rotations, rot)
+                    alive_ids.add(id(matched))
+                else:
+                    nz = Zone(
+                        lo=zlo, hi=zhi, role=role,
+                        touches=max(1, rot),
+                        origin_known=int(getattr(lvl, "origin_index", index)),
+                        last_change_known=index,
+                        box_opposite=opp,
+                        box_quality=qual,
+                        box_width_atr=w_atr,
+                        box_rotations=rot,
+                    )
+                    self.zones.append(nz)
+                    alive_ids.add(id(nz))
+            active_by_role: dict[ZoneRole, Zone] = {}
+            other_zones: list[Zone] = []
+            for z in self.zones:
+                if z.state is ZoneState.ACTIVE:
+                    if id(z) in alive_ids or (index - z.last_change_known <= self.p.box_keep_active_bars):
+                        prev_z = active_by_role.get(z.role)
+                        if (prev_z is None
+                                or (id(z) in alive_ids and id(prev_z) not in alive_ids)
+                                or z.last_change_known >= prev_z.last_change_known):
+                            active_by_role[z.role] = z
+                elif index - z.last_change_known <= self.p.box_keep_broken_bars:
+                    other_zones.append(z)
+            self.zones = list(active_by_role.values()) + other_zones
+            return
+
         boxes = [b for b in self._bal_det.score()
-                 if b.rotations >= self.p.box_min_rotations]
+                 if b.rotations >= self.p.box_min_rotations] if hasattr(self._bal_det, "score") else []
+
         if boxes:
             alive_ids: set[int] = set()
             for box in boxes:
@@ -597,7 +673,14 @@ class ZoneBook:
         ex = z._retest_extreme
         ex = min(ex, l) if up else max(ex, h)
         z._retest_extreme = ex
+        # v22:当开启真平衡箱检测时,若当根直接反向砸穿回内沿以内,属于假突破收复而非回踩拒绝翻转
+        if self.p.use_balance_detector and ((c < z.lo) if up else (c > z.hi)):
+            if index - z.last_change_known > 2:
+                z.state = ZoneState.DEAD
+                z.last_change_known = index
+            return
         # 回踩被拒绝(§4.2,回退度量同 A6):自回踩极值向远侧回退 ≥ k_rj*atr
+
         # → FLIPPED:旧区 DEAD,同边界反向新区继承 touches/rejects/origin
         if ((h - ex >= rj) or (c - ex >= rj)) if up else ((ex - l >= rj) or (ex - c >= rj)):
             flipped = Zone(

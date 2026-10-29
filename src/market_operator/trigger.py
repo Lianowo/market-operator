@@ -419,8 +419,10 @@ class MicTracker:
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = a
             fired: Optional[MarketEvent] = None
-            if ep.puncture_index is not None \
-                    and a - ep.puncture_index < self.n_f_mic:
+            if (not p.use_balance_detector
+                    and ep.puncture_index is not None
+                    and a - ep.puncture_index < self.n_f_mic):
+
                 returned = (c < z.hi) if res else (c > z.lo)
                 if returned:
                     direction = -1 if res else +1

@@ -543,6 +543,7 @@ class PositionManager:
         #    `reduced` 这个"一次性额度"标志)。
         if (pos.target_1 is not None and not pos.pending_reduce
                 and not pos.harvest):
+
             frac_cfg = self.reject_opp_lock_frac
             if frac_cfg == 0.0:
                 hit = (low <= pos.target_1) if pos.direction < 0 \

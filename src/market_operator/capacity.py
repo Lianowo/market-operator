@@ -108,6 +108,7 @@ class RiskBudget:
     """
 
     portfolio_frac: Optional[float] = None
+    directional_cap_frac: Optional[float] = None
     per_timeframe_frac: Mapping[str, float] = field(default_factory=dict)
     symbol_frac: Mapping[str, float] = field(default_factory=dict)
     mode: str = ADMISSION_FULL_COST
@@ -115,7 +116,9 @@ class RiskBudget:
     def __post_init__(self) -> None:
         if self.mode not in MODES:
             raise ValueError(f"capacity mode 必须是 {MODES},收到 {self.mode!r}")
-        checks = [("portfolio_frac", self.portfolio_frac)]
+        checks = [("portfolio_frac", self.portfolio_frac),
+                  ("directional_cap_frac", self.directional_cap_frac)]
+
         checks += [(f"per_timeframe_frac[{tf}]", frac)
                    for tf, frac in self.per_timeframe_frac.items()]
         checks += [(f"symbol_frac[{sym}]", frac)
@@ -135,7 +138,9 @@ class RiskBudget:
     @property
     def is_active(self) -> bool:
         return (self.portfolio_frac is not None
+                or self.directional_cap_frac is not None
                 or bool(self.per_timeframe_frac) or bool(self.symbol_frac))
+
 
     def pools(self, timeframe: Optional[str], *,
               moment: str,
@@ -221,17 +226,17 @@ def _scope_matches(symbol: str, scope: Optional[str],
 def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *,
                          timeframe: Optional[str] = None,
                          scope: Optional[str] = None,
+                         direction: Optional[int] = None,
                          taker_fee: float = 0.0,
                          slippage: float = 0.0) -> Exposure:
-    """全部未平仓仓位的最坏情景;``scope``/``timeframe`` 非 None 时只算该范围。
-
-    ``scope="sym:BTCUSDT"`` 用于标的池(B1):同一标的的不同周期仓位合并计入,
-    因为它们的止损被同一根价格路径触发,相关风险是标的级的而非周期级的。
-    """
+    """全部未平仓仓位的最坏情景;``scope``/``timeframe``/``direction`` 非 None 时只算该范围。"""
     total = Exposure()
     for symbol, pos in positions.items():
+        if direction is not None and getattr(pos, "direction", None) != direction:
+            continue
         if not _scope_matches(symbol, scope, timeframe):
             continue
+
         mark = marks.get(symbol, pos.entry)
         total = total + position_exposure(
             pos.qty, pos.direction, mark, pos.invalid,
