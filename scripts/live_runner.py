@@ -70,6 +70,8 @@ from market_operator.heartbeat import (                          # noqa: E402
 from market_operator.hypothesis import StructureView            # noqa: E402
 from market_operator.position import (                          # noqa: E402
     Position, PositionManager, opp_lock_step)
+from market_operator import adopt as adopt_mod                   # noqa: E402
+
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
 from market_operator.routing import RouterParams, MarketRouter      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
@@ -621,6 +623,12 @@ class LiveRunner:
 
         self.breaker = DailyLossBreaker(self.risk["max_daily_loss_frac"])
         self.rate = RateLimiter(self.risk["orders_per_hour"])
+        # 接管交易所既有仓位(扩展层,默认关;见 `market_operator/adopt.py`)。
+        # 开关放在 `config/live.json` 的 `adopt_external_positions.enabled`,
+        # **不读策略配置** —— 接管是运维/执行面的事,不是策略参数。
+        _adopt_cfg = cfg.get("adopt_external_positions") or {}
+        self.adopt_enabled = bool(_adopt_cfg.get("enabled"))
+
         self.universe_enabled = bool(universe_enabled)
         self.campaigns: dict[str, CampaignState] = {}
         self.extra_campaigns: dict[tuple[str, str], CampaignState] = {}
@@ -2475,8 +2483,15 @@ class LiveRunner:
                 "deadline_ms": int(now_ms) + 180_000}
 
     def _register_position(self, sym: str, it: dict, price: float,
-                           ts: int) -> None:
+                           ts: int, *, origin: str = "strategy") -> None:
+        """建仓事实入库 + pm 建仓(策略链路与"接管"共用同一份持仓格式)。
+
+        `origin="adopted"`:交易所既有仓位的接管(见 `market_operator/adopt.py`)。
+        差异只有记账口径 —— 它不是本系统的成交,所以**不计入 `fills`**、不发
+        "开仓"成交单(避免把接管伪装成本系统信号),而是发一条明确的接管告警。
+        """
         tf_lbl = it.get("tf_label") or str(self.cog_cfg.get("main_tf_label") or "12h")
+
         cs = self._get_cs_for(sym, tf_lbl) or self.campaigns.get(sym)
         if cs is not None and not it.get("tf_label"):
             tf_lbl = cs.tf_label
@@ -2496,30 +2511,50 @@ class LiveRunner:
                                len(cs.cog_bars))
                 except ValueError as e:
                     self.tg.send_alert(f"{sym} pm 建仓拒绝:{e}")
-        self.counters["fills"] += 1
+        if origin == "adopted":
+            self.counters["adopted"] = self.counters.get("adopted", 0) + 1
+        else:
+            self.counters["fills"] += 1
         chart_bars = (cs.trig_bars[-45:] if (cs and it.get("mic") and cs.trig_bars)
                       else (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None)))
-        self.tg.send_fill(
-            sym, f"开仓({self.mode})", it["qty"], price,
-            note=f"{it['event_id']} {it['route']}",
-            tf_label=tf_lbl, direction=it["direction"],
-            stop_price=float(it["invalid"]), target_price=it.get("target_1"),
-            box_lo=it.get("box_lo"), box_hi=it.get("box_hi"),
-            bars=chart_bars)
+        if origin == "adopted":
+            # 接管不是本系统信号:用告警通道说清"这是交易所既有仓位 + 按什么
+            # 结构价挂的保护",绝不伪装成一次"开仓成交"(会污染信号/胜率归因)。
+            self.tg.send_alert(
+                f"🛠 {sym} 接管交易所既有仓位 dir={it['direction']} "
+                f"qty={it['qty']} @ {price:.8g} —— 已按新策略结构挂保护:"
+                f"失效 {float(it['invalid']):.8g}"
+                f"({'struct' if it.get('stop_source') == 'structure' else 'atr'})"
+                f", 目标 {it.get('target_1')}；此后由 §8 统一管理")
+        else:
+            self.tg.send_fill(
+                sym, f"开仓({self.mode})", it["qty"], price,
+                note=f"{it['event_id']} {it['route']}",
+                tf_label=tf_lbl, direction=it["direction"],
+                stop_price=float(it["invalid"]), target_price=it.get("target_1"),
+                box_lo=it.get("box_lo"), box_hi=it.get("box_hi"),
+                bars=chart_bars)
         # 开仓事实必须**自解释**:口径归因(MFE/ATR、按 TF 分桶、参考价 vs 成交价)
         # 全靠这一行,缺 `tf_label`/`opened_ts` 就只能靠事后猜。
-        self._journal("fill", {"oid": it["oid"], "symbol": sym,
-                               "qty": it["qty"], "price": price,
-                               "ref_px": float(it.get("ref_px") or price),
-                               "fill_px": float(it.get("fill_price") or price),
-                               "price_source": str(
-                                   it.get("fill_price_source") or "ref"),
-                               "invalid": float(it["invalid"]),
-                               "direction": int(it["direction"]),
-                               "tf_label": tf_lbl,
-                               "opened_ts": int(ts),
-                               "event_id": it["event_id"],
-                               "role": "entry", "mode": self.mode})
+        self._journal("adopt" if origin == "adopted" else "fill",
+                      {"oid": it["oid"], "symbol": sym,
+                       "qty": it["qty"], "price": price,
+                       "ref_px": float(it.get("ref_px") or price),
+                       "fill_px": float(it.get("fill_price") or price),
+                       "price_source": str(
+                           it.get("fill_price_source") or "ref"),
+                       "invalid": float(it["invalid"]),
+                       "direction": int(it["direction"]),
+                       "tf_label": tf_lbl,
+                       "opened_ts": int(ts),
+                       "event_id": it["event_id"],
+                       "role": "entry", "mode": self.mode,
+                       "origin": origin,
+                       "stop_source": it.get("stop_source"),
+                       "target_source": it.get("target_source"),
+                       "risk_atr": it.get("risk_atr"),
+                       "adopted_breached": it.get("adopted_breached")})
+
 
     # ------------------------------------------------------------------
     # §8 持仓管理意图(REDUCE/EXIT;canonical:目标减仓=target_1 限价 maker,
@@ -3228,6 +3263,88 @@ class LiveRunner:
             price_label=("成交价" if px is not None else "参考价(无成交回执)"))
 
 
+    def _adopt_exchange_only(self, ex_pos: list) -> None:
+        """接管"交易所独有仓位"(扩展层;策略链路零改动)。
+
+        为什么要有:旧实现对异己仓一律"绝不动作",它既没有交易所侧保护止损,
+        也不进入 §8 持仓管理 —— 风险留在账本之外,只能靠人盯告警。接管做的事
+        只有两件:①按**已有结构事实**算一个与策略同源的失效价;②用与策略完全
+        相同的持仓格式建档(于是 `_manage_stops` 挂 TPSL、`on_bar` 做结构出场
+        都自动生效)。
+
+        边界(缺一不可,否则宁可不接管也要留痕):
+        - 只在 live 模式、且 `adopt_external_positions.enabled` 为真时执行;
+        - 同标的本地已有仓位 ⇒ 不接管(状态模型是 symbol→单仓,hedge_mode 下
+          反手侧会互相覆盖);
+        - 该标的没有战役/拿不到 ATR ⇒ 不接管,并如实告警"无结构可用";
+        - 接管后若现价已越过失效价,记 `adopted_breached` 并告警:下一根认知
+          bar 收盘仍在外侧时由 §8.1 正常出场,不另造就地强平路径。
+        """
+        if not self.adopt_enabled or self.mode != "live":
+            return
+        now_ms = int(time.time() * 1000)
+        for p in ex_pos:
+            sym = str(p.get("symbol") or "")
+            d = int(p.get("direction") or 0)
+            if not sym or d not in (1, -1):
+                continue
+            if sym in self.positions:
+                continue
+            cs = (self._get_cs_for(sym, str(self.cog_cfg.get("main_tf_label") or "12h"))
+                  or self.campaigns.get(sym))
+            if cs is None:
+                self._journal("adopt_skipped", {"symbol": sym, "direction": d,
+                                                "why": "无战役(不在交易宇宙)"})
+                self._alert_throttled(
+                    f"adopt:{sym}",
+                    f"{sym} 交易所独有仓位无法接管:该标的无战役/无结构事实"
+                    f"(不在宇宙),人工核查")
+                continue
+            try:
+                atr = float(cs.detector.structure.atr())
+                zones = list(cs.detector.structure.zones)
+            except Exception as e:                      # noqa: BLE001
+                self._journal("adopt_skipped", {"symbol": sym, "direction": d,
+                                                "why": f"结构读取失败:{type(e).__name__}"})
+                continue
+            struct = adopt_mod.structure_from_zones(
+                atr=atr, zones=zones,
+                k_bm=float(self.rp.k_bm), k_is=float(self.rp.k_is),
+                turtle_stop_atr=float(self.rp.turtle_stop_atr))
+            entry = float(p.get("entry_price") or 0.0)
+            mark = float(p.get("mark_price") or 0.0) or entry
+            ad = adopt_mod.propose(symbol=sym, direction=d, entry=entry,
+                                   mark=mark, structure=struct)
+            if ad is None:
+                self._journal("adopt_skipped", {"symbol": sym, "direction": d,
+                                                "why": "ATR/均价不可用"})
+                self._alert_throttled(
+                    f"adopt:{sym}",
+                    f"{sym} 交易所独有仓位无法接管:ATR 或持仓均价不可用"
+                    f"(entry={entry}, atr={atr}),人工核查")
+                continue
+            qty = float(p.get("qty") or 0.0)
+            it = {
+                "oid": f"{self.OID_PREFIX}adopt{sym}{now_ms}",
+                "symbol": sym, "role": "entry", "kind": "market",
+                "direction": d, "qty": qty, "limit_price": None,
+                "ref_px": ad.entry, "invalid": ad.invalid,
+                "target_1": ad.target_1,
+                "tf_label": cs.tf_label, "event_id": "ADOPTED",
+                "route": "adopt_external", "decision_ts": now_ms,
+                "mic": False, "size_mult": 1.0, "edge_mult": 1.0,
+                "stop_source": ad.stop_source,
+                "target_source": ad.target_source,
+                "risk_atr": round(float(ad.risk_atr), 4),
+                "adopted_breached": bool(ad.already_breached),
+            }
+            self._register_position(sym, it, ad.entry, now_ms, origin="adopted")
+            if ad.already_breached:
+                self.tg.send_alert(
+                    f"{sym} 接管时现价已越过结构失效位 "
+                    f"{ad.invalid:.8g}(现价 {mark:.8g})—— 下一根认知 bar 收盘"
+                    f"仍在外侧则按 §8.1 出场")
+
     def _reconcile(self) -> None:
         try:
             ex_pos = self.client.positions()
@@ -3270,7 +3387,12 @@ class LiveRunner:
                     f"qty:{sym}",
                     f"{sym} 持仓数量以交易所为准修正 {ours} -> {p['qty']}"
                     f"(下单精度须取自合约规格)")
+        # ② 交易所独有仓位:先尝试**按结构接管**(默认开,见 config/live.json 的
+        # adopt_external_positions)。接管成功后它已进入 self.positions,下一行
+        # 的对账就不再把它报成 exchange_only —— "不触碰"从默认行为变成真接管。
+        self._adopt_exchange_only(ex_pos)
         mismatches = reconcile_positions(self.positions, ex_pos)
+
         for m in mismatches:
             self.counters["reconcile_alerts"] += 1
             self._journal("reconcile", {"mismatch": m})

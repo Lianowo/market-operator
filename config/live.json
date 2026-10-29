@@ -109,6 +109,10 @@
   "paper": {
     "equity0": 104.0
   },
+  "adopt_external_positions": {
+    "enabled": true,
+    "note": "接管交易所既有仓位(含非本系统所开),按与其他仓位完全相同的结构语义挂保护与出场。扩展层:只改执行/对账面(scripts/live_runner.py + market_operator/adopt.py),不动策略链路(events/routing/position/structure/trigger/campaign)。失效价 = 最近支撑/阻力外沿 ∓ k_bm·ATR;无结构或距离 < k_is·ATR 时退回 turtle_stop_atr·ATR;目标 = 对侧内沿。接管不计入 fills、不伪装成开仓成交,只发告警并在 journal 落 origin=adopted。置 enabled=false 即回到旧行为(仅告警、绝不动作)。"
+  },
   "symbols_core": [
     "BTCUSDT",
     "ETHUSDT",
