@@ -87,33 +87,59 @@ def main() -> None:
         rpm = {k: replace(v, **over) for k, v in base_rpm.items()}
         return rp, rpm
 
+    want = {a.upper() for a in sys.argv[1:]} or None
+
+    def _pick(name: str) -> bool:
+        return want is None or name.upper() in want
+
     print("=" * 132)
     print(f"{'变体':34s} | {'dev净利':>10s} | {'test净利':>10s} | "
           f"{'full@1.0x (N, WR, PF)':>30s} | {'去Top10':>10s} | {'full@1.5x':>10s}")
     print("-" * 132)
-    evaluate("0. 生产当前(config/strategy.json)", runner.frames, runner,
-             base_rp, base_rpm, st.arm)
-
-    evaluate("V1 拆 impulse: 1.2 -> 0.0", runner.frames, runner,
-             *_var(min_bar_impulse_atr=0.0), st.arm)
-    evaluate("V2 拆 cooldown: 4/3 -> 0", runner.frames, runner,
-             *_var(zone_cooldown_bars=0), st.arm)
-    evaluate("V3 拆 rotations: 3/3/1/2 -> 0", runner.frames, runner,
-             *_var(min_box_rotations=0), st.arm)
-    evaluate("V4 ACCEPT 用结构失效 (非2ATR)", runner.frames, runner,
-             *_var(accept_use_struct_stop=True), st.arm)
-
-    events_mod._reject = _tight_reject
-    try:
-        evaluate("V5 invalid 锚 ep.ex (非箱体外沿)", runner.frames, runner,
+    if _pick("V0"):
+        evaluate("V0 生产当前(config/strategy.json)", runner.frames, runner,
                  base_rp, base_rpm, st.arm)
-        evaluate("V6 = V4 + V5", runner.frames, runner,
+    if _pick("V1"):
+        evaluate("V1 拆 impulse: 1.2 -> 0.0", runner.frames, runner,
+                 *_var(min_bar_impulse_atr=0.0), st.arm)
+    if _pick("V2"):
+        evaluate("V2 拆 cooldown: 4/3 -> 0", runner.frames, runner,
+                 *_var(zone_cooldown_bars=0), st.arm)
+    if _pick("V3"):
+        evaluate("V3 拆 rotations: 3/3/1/2 -> 0", runner.frames, runner,
+                 *_var(min_box_rotations=0), st.arm)
+    if _pick("V4"):
+        evaluate("V4 ACCEPT 用结构失效 (非2ATR)", runner.frames, runner,
                  *_var(accept_use_struct_stop=True), st.arm)
-        evaluate("V7 = V1+V2+V3+V4+V5 全拆", runner.frames, runner,
-                 *_var(min_bar_impulse_atr=0.0, zone_cooldown_bars=0,
-                       min_box_rotations=0, accept_use_struct_stop=True), st.arm)
-    finally:
-        events_mod._reject = ORIG_REJECT
+    if not want or want & {"V5", "V6", "V7"}:
+        events_mod._reject = _tight_reject
+        try:
+            # 认知帧(事件)在 ScenarioRunner 构造时就已算好并缓存 —— 事后打补丁
+            # 不会影响已缓存的事件流,必须**重建**才能让 V5 真正生效。
+            runner2 = sc.ScenarioRunner(tuple(raw["symbols"]),
+                                        sc.PRODUCTION_CONFIG, progress=False)
+            st2 = runner2.settings
+
+            def _var2(**over) -> tuple:
+                rp = replace(st2.router, **over)
+                rpm = {k: replace(v, **over)
+                       for k, v in st2.router_by_timeframe.items()}
+                return rp, rpm
+
+            if _pick("V5"):
+                evaluate("V5 invalid 锚 ep.ex (非箱体外沿)", runner2.frames,
+                         runner2, st2.router, dict(st2.router_by_timeframe),
+                         st2.arm)
+            if _pick("V6"):
+                evaluate("V6 = V4 + V5", runner2.frames, runner2,
+                         *_var2(accept_use_struct_stop=True), st2.arm)
+            if _pick("V7"):
+                evaluate("V7 = V1+V2+V3+V4+V5 全拆", runner2.frames, runner2,
+                         *_var2(min_bar_impulse_atr=0.0, zone_cooldown_bars=0,
+                                min_box_rotations=0,
+                                accept_use_struct_stop=True), st2.arm)
+        finally:
+            events_mod._reject = ORIG_REJECT
 
 
 if __name__ == "__main__":
