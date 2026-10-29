@@ -170,3 +170,72 @@ def test_tpsl_orders_pending_reports_exchange_error(monkeypatch):
     with pytest.raises(BitgetError) as ei:
         _client(_Bad()).tpsl_orders_pending()
     assert "40812" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# 重试必须重签:ACCESS-TIMESTAMP 不得跨重试复用
+# ---------------------------------------------------------------------------
+
+def test_signed_retry_regenerates_access_timestamp(monkeypatch):
+    """40008(时间戳过期)重试时必须用**新**时间戳重新签名。
+
+    2026-10-29 实盘事故:签名 headers 只在重试循环外生成一次,6 次退避共
+    22.5s 全部复用同一过期时间戳 ⇒ 每次都是 40008,一次瞬时抖动被放大成
+    「启动必崩 + 烧掉看护重启预算」。这里用递增时钟把该语义钉死。
+    """
+    import market_operator.bitget_live as bl
+
+    monkeypatch.setattr(bl.time, "sleep", lambda *_: None)
+    seen_ts: list[str] = []
+
+    class _Flaky:
+        """前两次返回 40008,第三次成功。"""
+
+        def __init__(self):
+            self.n = 0
+
+        def get(self, url, headers=None, timeout=None):
+            seen_ts.append((headers or {}).get("ACCESS-TIMESTAMP"))
+            self.n += 1
+            code = "40008" if self.n < 3 else "00000"
+
+            class _R:
+                status_code = 200
+
+                def json(self_inner):
+                    return {"code": code, "msg": "timestamp expired",
+                            "data": {"ok": 1}}
+            return _R()
+
+    clock = iter(range(1_700_000_000_000, 1_700_000_100_000, 1_000))
+    client = bl.BitgetLiveClient(SECRETS, session=_Flaky(), max_retries=3,
+                                 clock=lambda: next(clock))
+
+    assert client._request("GET", "/api/v2/mix/account/account",
+                           params={"symbol": "BTCUSDT"}, signed=True) == {"ok": 1}
+    assert len(seen_ts) == 3, "40008 必须触发重试"
+    assert len(set(seen_ts)) == 3, (
+        f"每次重试都要重签时间戳,实际复用: {seen_ts}")
+
+
+def test_signed_retry_does_not_sleep_after_last_attempt(monkeypatch):
+    """重试预算用尽后不得再多睡一轮退避(白等 RETRY_BACKOFF_S*N)。"""
+    import market_operator.bitget_live as bl
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(bl.time, "sleep", lambda s: sleeps.append(s))
+
+    class _AlwaysFail:
+        def get(self, url, headers=None, timeout=None):
+            class _R:
+                status_code = 400
+
+                def json(self_inner):
+                    return {"code": "40404", "msg": "bad"}
+            return _R()
+
+    client = bl.BitgetLiveClient(SECRETS, session=_AlwaysFail(), max_retries=3)
+    with pytest.raises(BitgetError):
+        client._request("GET", "/api/v2/mix/account/account", signed=True)
+    assert len(sleeps) == 2, f"3 次尝试只应有 2 次退避,实际 {sleeps}"
+

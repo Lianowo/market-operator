@@ -109,10 +109,13 @@ class BitgetLiveClient:
         qs = self.query_string(params or {})
         path_q = f"{path}?{qs}" if qs else path
         body_s = json.dumps(body, separators=(",", ":")) if body else ""
-        headers = self._headers(method, path_q, body_s) if signed else {}
         url = f"{self.base_url}{path_q}"
         last_err: Optional[Exception] = None
         for attempt in range(self.max_retries):
+            # ACCESS-TIMESTAMP 必须**每次重试重新生成**:时间戳在重试之间过期会让
+            # 交易所稳定返回 40008,把一次瞬时抖动放大成整轮必然失败(2026-10-29
+            # 实盘踩到:签名只用一次时间戳 + 6 次退避共 22.5s ⇒ 全部 40008 崩启动)。
+            headers = self._headers(method, path_q, body_s) if signed else {}
             try:
                 if method.upper() == "GET":
                     resp = self.session.get(url, headers=headers,
@@ -124,12 +127,18 @@ class BitgetLiveClient:
                 payload = resp.json()
                 if resp.status_code == 200 and payload.get("code") == "00000":
                     return payload.get("data")
+                code = str(payload.get("code"))
                 last_err = BitgetError(
-                    f"bitget {resp.status_code} code={payload.get('code')}: "
+                    f"bitget {resp.status_code} code={code}: "
                     f"{str(payload.get('msg'))[:160]}")
+                # 时间戳/签名类错误(40008/40009/40012)属于可重签错误:
+                # 不消耗重试预算的语义留在这里显式标注,重签由下一轮 _headers 完成。
+                if code in ("40008", "40009", "40012") and attempt + 1 < self.max_retries:
+                    continue
             except (requests.RequestException, ValueError) as e:
                 last_err = e
-            time.sleep(RETRY_BACKOFF_S * (attempt + 1))
+            if attempt + 1 < self.max_retries:
+                time.sleep(RETRY_BACKOFF_S * (attempt + 1))
         self.api_errors += 1
         raise BitgetError(f"{method} {path} failed after {self.max_retries} "
                           f"tries: {type(last_err).__name__} {last_err}")
