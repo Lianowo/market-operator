@@ -1,6 +1,6 @@
 {
   "version": "live-v21-2026-10-21",
-  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=250U:4%, <=600U:3%, <=1500U:2%, >1500U:1%) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利(峰值锚定回吐预算,frac 见 strategy.json 的 arm_config.reject_opp_lock_frac) + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
+  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=1000U:5%, <=5000U:4%, <=10000U:3%, <=50000U:2%, >50000U:1%, 配置上界10亿U) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利(峰值锚定回吐预算,frac 见 strategy.json 的 arm_config.reject_opp_lock_frac) + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
   "meta": {
     "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Dual-Bot Telegram K-Line Charts",
     "strategy_config": "config/strategy.json",
@@ -19,11 +19,12 @@
     "note": "账户持仓模式(Bitget posMode)。hedge_mode:下单须带 tradeSide,side 表持仓方向(开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close),杠杆逐侧设置;one_way_mode:省略 tradeSide,side 表买卖方向。启动时与交易所实测值比对,不一致即 fail-closed 拒绝启动。"
   },
   "risk": {
-    "risk_frac": 0.04,
+    "risk_frac": 0.05,
     "dynamic_risk_tiers": [
-      [250.0, 0.04],
-      [600.0, 0.03],
-      [1500.0, 0.02],
+      [1000.0, 0.05],
+      [5000.0, 0.04],
+      [10000.0, 0.03],
+      [50000.0, 0.02],
       [1000000000.0, 0.01]
     ],
     "leverage_cap": 20,

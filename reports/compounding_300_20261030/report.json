@@ -1,0 +1,5017 @@
+{
+  "created_utc": "2026-10-30T14:40:04.498775+00:00",
+  "head": "80d5ee47d7e32e28a11ccc051b6386b2ebec7277",
+  "equity0": 300.0,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "DOGEUSDT"
+  ],
+  "risk": {
+    "risk_frac": 0.04,
+    "dynamic_risk_tiers": [
+      [
+        3000.0,
+        0.04
+      ],
+      [
+        10000.0,
+        0.03
+      ],
+      [
+        100000.0,
+        0.02
+      ],
+      [
+        1000000000.0,
+        0.01
+      ]
+    ],
+    "leverage_cap": 20,
+    "portfolio_cap_frac": 0.5,
+    "tf_cap_by_tf": {
+      "2h": 0.12,
+      "4h": 0.12,
+      "12h": 0.12,
+      "1d": 0.12
+    },
+    "max_daily_loss_frac": 0.1,
+    "edge_size_by_event_direction": {},
+    "edge_size_note": "**2026-10-30 根治移除 0.35 掩蔽权重:** 此前 ACCEPT|LONG 净亏(-15.37U)的根因是 structure.py 一刀切丢弃了 FLIPPED_BOX_EDGE,导致「跌破平衡箱挖坑后重新向上突破进入平衡箱」的真多头突破被全部拦掉,只剩下箱顶追涨。补齐 box_reentry_enabled(突破进入平衡箱)后,ACCEPT|LONG 在 1.0 原生权重下直接由 -15.37U 翻正至 +81.01U(全策略 dev +249.02 / test +145.17 / full +520.70 / 去Top10 +148.40 / 1.5x +258.98 五项全优),故彻底清空 0.35 权重补丁。",
+    "orders_per_hour": 30,
+    "taker_fee": 0.0006,
+    "maker_fee": 0.0002,
+    "slippage_per_side": 0.0002
+  },
+  "scenarios": {
+    "full_1x": {
+      "start_utc": "2024-10-15T20:00:00+00:00",
+      "end_utc": "2026-10-19T03:00:00+00:00",
+      "equity_end": 15239.791938939416,
+      "cash_end": 15179.235404644303,
+      "unrealized_end": 63.63466555968064,
+      "unsettled_funding_end": 3.0781312645677996,
+      "equity_profit": 14939.791938939416,
+      "return_frac": 49.79930646313139,
+      "multiple": 50.79930646313139,
+      "max_drawdown_frac": 0.5871578065236492,
+      "max_drawdown_usdt": 5222.1608592907705,
+      "min_equity": 235.61700775582668,
+      "max_equity": 16632.13842394163,
+      "n_opened": 692,
+      "n_open_end": 4,
+      "closed": {
+        "n": 688,
+        "wins": 306,
+        "losses": 382,
+        "breakeven": 0,
+        "net": 14891.787002335068,
+        "winrate": 0.44476744186046513,
+        "profit_factor": 1.4496245540926502,
+        "average_win": 156.90287659419403,
+        "average_loss": -86.70286187300604,
+        "payoff_ratio": 1.8096620250437658,
+        "expectancy": 21.64503924758004,
+        "median_net": -10.958888171963068,
+        "best": 2000.5302194478968,
+        "worst": -343.54082196716405
+      },
+      "concentration": {
+        "top_10pct": {
+          "n": 69,
+          "wins": 69,
+          "losses": 0,
+          "breakeven": 0,
+          "net": 35564.62918960984,
+          "winrate": 1.0,
+          "profit_factor": null,
+          "average_win": 515.4294085450701,
+          "average_loss": null,
+          "payoff_ratio": null,
+          "expectancy": 515.4294085450701,
+          "median_net": 351.2265643633168,
+          "best": 2000.5302194478968,
+          "worst": 183.23732289113286,
+          "share_of_net": 2.3882042621233586
+        },
+        "remaining_90pct": {
+          "n": 619,
+          "wins": 237,
+          "losses": 382,
+          "breakeven": 0,
+          "net": -20672.84218727477,
+          "winrate": 0.38287560581583197,
+          "profit_factor": 0.37582927765326846,
+          "average_win": 52.52173438064783,
+          "average_loss": -86.70286187300604,
+          "payoff_ratio": 0.6057670213651838,
+          "expectancy": -33.39716023792371,
+          "median_net": -23.10345218317701,
+          "best": 182.58482504849383,
+          "worst": -343.54082196716405,
+          "share_of_net": -1.3882042621233583
+        },
+        "without_top_10_trades": {
+          "n": 678,
+          "wins": 296,
+          "losses": 382,
+          "breakeven": 0,
+          "net": 1700.2285643137345,
+          "winrate": 0.4365781710914454,
+          "profit_factor": 1.0513346390171496,
+          "average_win": 117.63757364797988,
+          "average_loss": -86.70286187300604,
+          "payoff_ratio": 1.3567899733261861,
+          "expectancy": 2.5077117467754197,
+          "median_net": -11.401017141050168,
+          "best": 937.7819271587867,
+          "worst": -343.54082196716405
+        }
+      },
+      "streaks": {
+        "longest_win": 10,
+        "longest_loss": 12
+      },
+      "buckets": {
+        "tf": {
+          "12h": {
+            "n": 126,
+            "wins": 52,
+            "losses": 74,
+            "breakeven": 0,
+            "net": 5480.517729623626,
+            "winrate": 0.4126984126984127,
+            "profit_factor": 1.6913443706600577,
+            "average_win": 257.8433023364765,
+            "average_loss": -107.12613502531283,
+            "payoff_ratio": 2.40691314286239,
+            "expectancy": 43.49617245733037,
+            "median_net": -24.268931017184475,
+            "best": 1780.8018745550764,
+            "worst": -343.54082196716405
+          },
+          "1d": {
+            "n": 59,
+            "wins": 21,
+            "losses": 38,
+            "breakeven": 0,
+            "net": 3337.8672751136796,
+            "winrate": 0.3559322033898305,
+            "profit_factor": 1.9174748457876676,
+            "average_win": 332.1890236733494,
+            "average_loss": -95.73953215859628,
+            "payoff_ratio": 3.4697163876157795,
+            "expectancy": 56.57402161209627,
+            "median_net": -33.825986259965056,
+            "best": 1271.1450573029292,
+            "worst": -234.18405628693432
+          },
+          "2h": {
+            "n": 308,
+            "wins": 139,
+            "losses": 169,
+            "breakeven": 0,
+            "net": 4510.0504608245255,
+            "winrate": 0.4512987012987013,
+            "profit_factor": 1.3444415606091766,
+            "average_win": 126.64643866176363,
+            "average_loss": -77.47813321396816,
+            "payoff_ratio": 1.6346088039061213,
+            "expectancy": 14.643020976703003,
+            "median_net": -8.472636285591786,
+            "best": 2000.5302194478968,
+            "worst": -315.284297466335
+          },
+          "4h": {
+            "n": 195,
+            "wins": 94,
+            "losses": 101,
+            "breakeven": 0,
+            "net": 1563.3515367732375,
+            "winrate": 0.48205128205128206,
+            "profit_factor": 1.184765971139149,
+            "average_win": 106.64472388511828,
+            "average_loss": -83.77477731116713,
+            "payoff_ratio": 1.2729932243090858,
+            "expectancy": 8.017187368067885,
+            "median_net": -3.990050111741043,
+            "best": 1074.6097745779298,
+            "worst": -256.30876745106804
+          }
+        },
+        "symbol": {
+          "BTCUSDT": {
+            "n": 164,
+            "wins": 75,
+            "losses": 89,
+            "breakeven": 0,
+            "net": 1574.9257604309173,
+            "winrate": 0.4573170731707317,
+            "profit_factor": 1.186388250947041,
+            "average_win": 133.6617452223402,
+            "average_loss": -94.94050709263591,
+            "payoff_ratio": 1.407847391123822,
+            "expectancy": 9.603205856286081,
+            "median_net": -11.857657681663879,
+            "best": 1727.10360916983,
+            "worst": -343.54082196716405
+          },
+          "DOGEUSDT": {
+            "n": 169,
+            "wins": 74,
+            "losses": 95,
+            "breakeven": 0,
+            "net": 3209.3474085629473,
+            "winrate": 0.4378698224852071,
+            "profit_factor": 1.4213290104416647,
+            "average_win": 146.30469696272903,
+            "average_loss": -80.18105438609474,
+            "payoff_ratio": 1.8246791350264615,
+            "expectancy": 18.990221352443474,
+            "median_net": -10.201635691452113,
+            "best": 998.6478376911597,
+            "worst": -256.66242640581004
+          },
+          "ETHUSDT": {
+            "n": 184,
+            "wins": 75,
+            "losses": 109,
+            "breakeven": 0,
+            "net": 3515.2451411941643,
+            "winrate": 0.4076086956521739,
+            "profit_factor": 1.3764611226687369,
+            "average_win": 171.37133096074902,
+            "average_loss": -85.66609798955974,
+            "payoff_ratio": 2.0004568316118974,
+            "expectancy": 19.104593158663935,
+            "median_net": -15.103463409914927,
+            "best": 1271.1450573029292,
+            "worst": -315.284297466335
+          },
+          "SOLUSDT": {
+            "n": 171,
+            "wins": 82,
+            "losses": 89,
+            "breakeven": 0,
+            "net": 6592.2686921470395,
+            "winrate": 0.47953216374269003,
+            "profit_factor": 1.8543653443545884,
+            "average_win": 174.4908774249968,
+            "average_loss": -86.69644108654717,
+            "payoff_ratio": 2.012664824970224,
+            "expectancy": 38.551278901444675,
+            "median_net": -5.040194982630056,
+            "best": 2000.5302194478968,
+            "worst": -260.0676445537554
+          }
+        },
+        "event_id": {
+          "BREAKOUT_ACCEPTED": {
+            "n": 182,
+            "wins": 84,
+            "losses": 98,
+            "breakeven": 0,
+            "net": 5631.3959783345,
+            "winrate": 0.46153846153846156,
+            "profit_factor": 1.7862928454362856,
+            "average_win": 152.3018276796767,
+            "average_loss": -73.0811994567178,
+            "payoff_ratio": 2.0840083196756667,
+            "expectancy": 30.941736144695053,
+            "median_net": -6.417759676013974,
+            "best": 2000.5302194478968,
+            "worst": -268.7845273080655
+          },
+          "LEVEL_REJECTED": {
+            "n": 506,
+            "wins": 222,
+            "losses": 284,
+            "breakeven": 0,
+            "net": 9260.391024000568,
+            "winrate": 0.43873517786561267,
+            "profit_factor": 1.356737804283044,
+            "average_win": 158.6438140213087,
+            "average_loss": -91.40329467862664,
+            "payoff_ratio": 1.7356465604341647,
+            "expectancy": 18.30116803162168,
+            "median_net": -11.44815373884914,
+            "best": 1780.8018745550764,
+            "worst": -343.54082196716405
+          }
+        },
+        "direction": {
+          "-1": {
+            "n": 354,
+            "wins": 156,
+            "losses": 198,
+            "breakeven": 0,
+            "net": 7951.492772742711,
+            "winrate": 0.4406779661016949,
+            "profit_factor": 1.48403547983458,
+            "average_win": 156.2755937403702,
+            "average_loss": -82.96717096340929,
+            "payoff_ratio": 1.8835834936361981,
+            "expectancy": 22.461843990798616,
+            "median_net": -10.958888171963068,
+            "best": 1780.8018745550764,
+            "worst": -260.0676445537554
+          },
+          "1": {
+            "n": 334,
+            "wins": 150,
+            "losses": 184,
+            "breakeven": 0,
+            "net": 6940.294229592358,
+            "winrate": 0.4491017964071856,
+            "profit_factor": 1.4157609165495546,
+            "average_win": 157.55525076217083,
+            "average_loss": -90.72279013441994,
+            "payoff_ratio": 1.736666724300787,
+            "expectancy": 20.77932404069568,
+            "median_net": -10.849578768485628,
+            "best": 2000.5302194478968,
+            "worst": -343.54082196716405
+          }
+        },
+        "entry_mode": {
+          "limit": {
+            "n": 49,
+            "wins": 15,
+            "losses": 34,
+            "breakeven": 0,
+            "net": 2232.3984825275493,
+            "winrate": 0.30612244897959184,
+            "profit_factor": 1.6350850348173285,
+            "average_win": 383.1677282480885,
+            "average_loss": -103.38580709393466,
+            "payoff_ratio": 3.7061927455859442,
+            "expectancy": 45.559152704643864,
+            "median_net": -37.805631345932774,
+            "best": 1074.6097745779298,
+            "worst": -228.00505776325733
+          },
+          "market": {
+            "n": 639,
+            "wins": 291,
+            "losses": 348,
+            "breakeven": 0,
+            "net": 12659.388519807519,
+            "winrate": 0.45539906103286387,
+            "profit_factor": 1.427604385357851,
+            "average_win": 145.2397399110036,
+            "average_loss": -85.07291894912221,
+            "payoff_ratio": 1.7072382340361931,
+            "expectancy": 19.811249639761375,
+            "median_net": -8.702543578444946,
+            "best": 2000.5302194478968,
+            "worst": -343.54082196716405
+          }
+        },
+        "exit_reason_code": {
+          "PROTECTIVE_STOP": {
+            "n": 609,
+            "wins": 234,
+            "losses": 375,
+            "breakeven": 0,
+            "net": 2111.4252263011927,
+            "winrate": 0.3842364532019704,
+            "profit_factor": 1.0642475280909944,
+            "average_win": 149.46726087968133,
+            "average_loss": -87.63710351878464,
+            "payoff_ratio": 1.7055248847612092,
+            "expectancy": 3.467036496389479,
+            "median_net": -23.10345218317701,
+            "best": 2000.5302194478968,
+            "worst": -343.54082196716405
+          },
+          "v21": {
+            "n": 66,
+            "wins": 65,
+            "losses": 1,
+            "breakeven": 0,
+            "net": 12247.840942517541,
+            "winrate": 0.9848484848484849,
+            "profit_factor": 9729.889296798065,
+            "average_win": 188.44769010976157,
+            "average_loss": -1.258914616959256,
+            "payoff_ratio": 149.69060456612408,
+            "expectancy": 185.57334761390214,
+            "median_net": 83.42805972415617,
+            "best": 1780.8018745550764,
+            "worst": -1.258914616959256
+          },
+          "§8.5": {
+            "n": 13,
+            "wins": 7,
+            "losses": 6,
+            "breakeven": 0,
+            "net": 532.5208335163336,
+            "winrate": 0.5384615384615384,
+            "profit_factor": 3.085695550292243,
+            "average_win": 112.54876212049163,
+            "average_loss": -42.553416887851306,
+            "payoff_ratio": 2.644881900250494,
+            "expectancy": 40.96314103971797,
+            "median_net": 4.119391572813366,
+            "best": 219.05145952351307,
+            "worst": -84.9229525472898
+          }
+        }
+      },
+      "fees": 3637.885172405025,
+      "funding": 283.0509137177831,
+      "slippage_embedded": 1187.3807314074309,
+      "holding_hours_mean": 58.80087209302326,
+      "holding_hours_median": 23.0,
+      "capacity_skips": 38,
+      "counters": {
+        "go_events": 0,
+        "open_intents": 900,
+        "opens_filled": 642,
+        "min_size_skips": 0,
+        "liquidations": 0,
+        "limits_armed": 268,
+        "limit_fills_entry": 50,
+        "limit_expired": 158,
+        "limit_min_size_skips": 0,
+        "reduce_limits_armed": 0,
+        "reduce_limit_fills": 0,
+        "reduce_timeout_taker": 0,
+        "resting_canceled": 0,
+        "e1_priority_cancels": 6,
+        "portfolio_cap_skips": 38,
+        "protective_stop_fills": 609,
+        "mic_go_events": 0,
+        "watch_entries_armed": 268,
+        "watch_canceled_played_out": 43,
+        "virtual_entry_triggers": 11,
+        "virtual_entry_fills": 11,
+        "f1_reject_level_rejected_market": 208,
+        "level_rejected_signals": 1964,
+        "dup": 916,
+        "breakout_accepted_signals": 759,
+        "restraint_departure_reset_reject": 123,
+        "deadzone_watch_armed": 102,
+        "restraint_coarse_echo_reject": 44,
+        "accept_watch_armed": 178,
+        "restraint_struct_impulse_reject": 1322,
+        "e1_cancel_orders": 6,
+        "campaigns": {
+          "BTCUSDT@12h": {
+            "f1_reject_level_rejected_market": 13,
+            "level_rejected_signals": 75,
+            "dup": 58,
+            "breakout_accepted_signals": 28,
+            "restraint_departure_reset_reject": 16,
+            "deadzone_watch_armed": 11,
+            "restraint_coarse_echo_reject": 10,
+            "accept_watch_armed": 4
+          },
+          "BTCUSDT@1d": {
+            "f1_reject_level_rejected_market": 13,
+            "level_rejected_signals": 39,
+            "restraint_departure_reset_reject": 8,
+            "restraint_coarse_echo_reject": 3,
+            "dup": 37,
+            "breakout_accepted_signals": 16,
+            "accept_watch_armed": 4,
+            "deadzone_watch_armed": 3
+          },
+          "BTCUSDT@2h": {
+            "f1_reject_level_rejected_market": 9,
+            "level_rejected_signals": 208,
+            "restraint_struct_impulse_reject": 170,
+            "breakout_accepted_signals": 75,
+            "deadzone_watch_armed": 8,
+            "accept_watch_armed": 17,
+            "dup": 42,
+            "restraint_departure_reset_reject": 13
+          },
+          "BTCUSDT@4h": {
+            "restraint_struct_impulse_reject": 112,
+            "level_rejected_signals": 122,
+            "dup": 66,
+            "breakout_accepted_signals": 74,
+            "accept_watch_armed": 11,
+            "f1_reject_level_rejected_market": 14,
+            "e1_cancel_orders": 3,
+            "deadzone_watch_armed": 4,
+            "restraint_departure_reset_reject": 2,
+            "restraint_coarse_echo_reject": 4
+          },
+          "DOGEUSDT@12h": {
+            "level_rejected_signals": 57,
+            "dup": 64,
+            "restraint_departure_reset_reject": 11,
+            "f1_reject_level_rejected_market": 15,
+            "restraint_coarse_echo_reject": 5,
+            "deadzone_watch_armed": 4,
+            "breakout_accepted_signals": 25,
+            "accept_watch_armed": 7
+          },
+          "DOGEUSDT@1d": {
+            "breakout_accepted_signals": 12,
+            "f1_reject_level_rejected_market": 5,
+            "level_rejected_signals": 16,
+            "dup": 27,
+            "restraint_departure_reset_reject": 4,
+            "deadzone_watch_armed": 2,
+            "accept_watch_armed": 1,
+            "restraint_coarse_echo_reject": 1
+          },
+          "DOGEUSDT@2h": {
+            "restraint_struct_impulse_reject": 176,
+            "level_rejected_signals": 230,
+            "breakout_accepted_signals": 67,
+            "restraint_departure_reset_reject": 13,
+            "f1_reject_level_rejected_market": 7,
+            "dup": 35,
+            "accept_watch_armed": 15,
+            "deadzone_watch_armed": 8
+          },
+          "DOGEUSDT@4h": {
+            "restraint_struct_impulse_reject": 189,
+            "level_rejected_signals": 225,
+            "dup": 72,
+            "f1_reject_level_rejected_market": 21,
+            "deadzone_watch_armed": 8,
+            "breakout_accepted_signals": 72,
+            "accept_watch_armed": 16,
+            "restraint_coarse_echo_reject": 8,
+            "restraint_departure_reset_reject": 3,
+            "e1_cancel_orders": 2
+          },
+          "ETHUSDT@12h": {
+            "level_rejected_signals": 44,
+            "f1_reject_level_rejected_market": 13,
+            "dup": 96,
+            "breakout_accepted_signals": 19,
+            "restraint_coarse_echo_reject": 1,
+            "accept_watch_armed": 7,
+            "deadzone_watch_armed": 4,
+            "restraint_departure_reset_reject": 2
+          },
+          "ETHUSDT@1d": {
+            "f1_reject_level_rejected_market": 19,
+            "level_rejected_signals": 40,
+            "dup": 56,
+            "restraint_departure_reset_reject": 6,
+            "deadzone_watch_armed": 6,
+            "restraint_coarse_echo_reject": 1,
+            "breakout_accepted_signals": 9,
+            "accept_watch_armed": 1
+          },
+          "ETHUSDT@2h": {
+            "restraint_struct_impulse_reject": 196,
+            "level_rejected_signals": 264,
+            "f1_reject_level_rejected_market": 17,
+            "restraint_departure_reset_reject": 10,
+            "breakout_accepted_signals": 78,
+            "dup": 72,
+            "deadzone_watch_armed": 11,
+            "accept_watch_armed": 33
+          },
+          "ETHUSDT@4h": {
+            "breakout_accepted_signals": 88,
+            "restraint_struct_impulse_reject": 159,
+            "level_rejected_signals": 201,
+            "dup": 73,
+            "accept_watch_armed": 20,
+            "f1_reject_level_rejected_market": 26,
+            "restraint_coarse_echo_reject": 8,
+            "restraint_departure_reset_reject": 10,
+            "deadzone_watch_armed": 4
+          },
+          "SOLUSDT@12h": {
+            "deadzone_watch_armed": 5,
+            "level_rejected_signals": 43,
+            "dup": 67,
+            "breakout_accepted_signals": 25,
+            "f1_reject_level_rejected_market": 7,
+            "restraint_coarse_echo_reject": 1,
+            "accept_watch_armed": 8,
+            "restraint_departure_reset_reject": 11
+          },
+          "SOLUSDT@1d": {
+            "breakout_accepted_signals": 7,
+            "dup": 36,
+            "level_rejected_signals": 15,
+            "deadzone_watch_armed": 2,
+            "f1_reject_level_rejected_market": 3,
+            "accept_watch_armed": 2,
+            "restraint_departure_reset_reject": 2
+          },
+          "SOLUSDT@2h": {
+            "restraint_struct_impulse_reject": 183,
+            "level_rejected_signals": 225,
+            "breakout_accepted_signals": 91,
+            "accept_watch_armed": 21,
+            "deadzone_watch_armed": 16,
+            "dup": 61,
+            "f1_reject_level_rejected_market": 9,
+            "restraint_departure_reset_reject": 5
+          },
+          "SOLUSDT@4h": {
+            "f1_reject_level_rejected_market": 17,
+            "level_rejected_signals": 160,
+            "restraint_struct_impulse_reject": 137,
+            "deadzone_watch_armed": 6,
+            "breakout_accepted_signals": 73,
+            "accept_watch_armed": 11,
+            "dup": 54,
+            "restraint_departure_reset_reject": 7,
+            "restraint_coarse_echo_reject": 2,
+            "e1_cancel_orders": 1
+          }
+        }
+      },
+      "monthly_full_execution_window": [
+        {
+          "month": "2024-10",
+          "equity_end": 266.1471951524039,
+          "pnl": -33.852804847596076,
+          "return_frac": -0.11284268282532028
+        },
+        {
+          "month": "2024-11",
+          "equity_end": 278.9969603082121,
+          "pnl": 12.8497651558082,
+          "return_frac": 0.048280670958978256
+        },
+        {
+          "month": "2024-12",
+          "equity_end": 258.74336960983976,
+          "pnl": -20.253590698372363,
+          "return_frac": -0.07259430595945537
+        },
+        {
+          "month": "2025-01",
+          "equity_end": 843.4140748453876,
+          "pnl": 584.6707052355479,
+          "return_frac": 2.259654831415295
+        },
+        {
+          "month": "2025-02",
+          "equity_end": 1081.4068497599205,
+          "pnl": 237.9927749145329,
+          "return_frac": 0.28217785547171603
+        },
+        {
+          "month": "2025-03",
+          "equity_end": 862.2669872826802,
+          "pnl": -219.13986247724029,
+          "return_frac": -0.20264330906160877
+        },
+        {
+          "month": "2025-04",
+          "equity_end": 1078.0440386204627,
+          "pnl": 215.7770513377825,
+          "return_frac": 0.2502438972153802
+        },
+        {
+          "month": "2025-05",
+          "equity_end": 1154.055687718762,
+          "pnl": 76.01164909829936,
+          "return_frac": 0.07050885341898372
+        },
+        {
+          "month": "2025-06",
+          "equity_end": 1852.297333074255,
+          "pnl": 698.2416453554929,
+          "return_frac": 0.6050328877419398
+        },
+        {
+          "month": "2025-07",
+          "equity_end": 1881.5413130011439,
+          "pnl": 29.24397992688887,
+          "return_frac": 0.01578795121318488
+        },
+        {
+          "month": "2025-08",
+          "equity_end": 1678.0242689456225,
+          "pnl": -203.5170440555214,
+          "return_frac": -0.10816506799465508
+        },
+        {
+          "month": "2025-09",
+          "equity_end": 2363.436237921401,
+          "pnl": 685.4119689757783,
+          "return_frac": 0.40846368056789384
+        },
+        {
+          "month": "2025-10",
+          "equity_end": 2237.1162881338773,
+          "pnl": -126.31994978752346,
+          "return_frac": -0.05344758100968261
+        },
+        {
+          "month": "2025-11",
+          "equity_end": 3062.557150877094,
+          "pnl": 825.4408627432167,
+          "return_frac": 0.3689753935106208
+        },
+        {
+          "month": "2025-12",
+          "equity_end": 2345.436510761564,
+          "pnl": -717.12064011553,
+          "return_frac": -0.23415747193816505
+        },
+        {
+          "month": "2026-01",
+          "equity_end": 6826.415817592396,
+          "pnl": 4480.979306830832,
+          "return_frac": 1.9105097436109477
+        },
+        {
+          "month": "2026-02",
+          "equity_end": 7780.809505192891,
+          "pnl": 954.3936876004955,
+          "return_frac": 0.13980890017583203
+        },
+        {
+          "month": "2026-03",
+          "equity_end": 6170.27716659117,
+          "pnl": -1610.5323386017217,
+          "return_frac": -0.20698776104553862
+        },
+        {
+          "month": "2026-04",
+          "equity_end": 5267.742240334895,
+          "pnl": -902.534926256275,
+          "return_frac": -0.14627137515686173
+        },
+        {
+          "month": "2026-05",
+          "equity_end": 4267.712578387318,
+          "pnl": -1000.0296619475766,
+          "return_frac": -0.18984028001415654
+        },
+        {
+          "month": "2026-06",
+          "equity_end": 6018.093514208272,
+          "pnl": 1750.3809358209537,
+          "return_frac": 0.41014499071125066
+        },
+        {
+          "month": "2026-07",
+          "equity_end": 4280.749180289574,
+          "pnl": -1737.3443339186979,
+          "return_frac": -0.28868682911240195
+        },
+        {
+          "month": "2026-08",
+          "equity_end": 11254.996184995185,
+          "pnl": 6974.247004705611,
+          "return_frac": 1.6292117830257538
+        },
+        {
+          "month": "2026-09",
+          "equity_end": 12698.0014695525,
+          "pnl": 1443.0052845573155,
+          "return_frac": 0.12821019757261976
+        },
+        {
+          "month": "2026-10",
+          "equity_end": 15239.791938939416,
+          "pnl": 2541.790469386915,
+          "return_frac": 0.2001724819044688
+        }
+      ],
+      "segment_bounds": {
+        "BTCUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "BTCUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "BTCUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "BTCUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "DOGEUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "ETHUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "SOLUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        }
+      },
+      "standard_metrics": {
+        "segment": "full",
+        "cost_multiplier": 1.0,
+        "ts_lo": 1728950400000,
+        "ts_hi": 1792375200000,
+        "span_days": 734.0833333333334,
+        "equity_start": 300.0,
+        "equity_end": 15254.645638939417,
+        "net_pnl": 14879.235404644287,
+        "return_pct": 49.59745134881429,
+        "ann_return": 6.062784238602887,
+        "max_dd_usdt": 5222.1608592907705,
+        "max_dd_pct": 0.5871578065236492,
+        "peak_ts": 1771138800000,
+        "trough_ts": 1786914000000,
+        "dd_days": 182.58333333333334,
+        "n_trades": 692,
+        "n_closed": 688,
+        "n_open_end": 4,
+        "winrate": 0.44476744186046513,
+        "profit_factor": 1.4496245540926502,
+        "payoff_ratio": 1.8096620250437658,
+        "expectancy_usdt": 21.501785266827003,
+        "expectancy_r": 0.25411608530032254,
+        "holding": {
+          "median_h": 23.0,
+          "p90_h": 143.0
+        },
+        "exposure_ratio": 0.8493664412750724,
+        "fees_total": 3637.885172405025,
+        "slippage_total": 1187.3807314074309,
+        "funding_total": 283.0509137177831,
+        "by_direction": {
+          "-1": {
+            "n": 356,
+            "net": 7946.37399156174,
+            "expectancy": 22.321275257195897,
+            "winrate": 0.43820224719101125
+          },
+          "1": {
+            "n": 336,
+            "net": 6932.861413082545,
+            "expectancy": 20.633516110364717,
+            "winrate": 0.44642857142857145
+          }
+        },
+        "by_regime": {
+          "TRANSITION": {
+            "n": 322,
+            "net": 6033.794546570713,
+            "expectancy": 18.738492380654385,
+            "winrate": 0.43167701863354035
+          },
+          "RANGE": {
+            "n": 76,
+            "net": 2131.163450834555,
+            "expectancy": 28.041624353086252,
+            "winrate": 0.4473684210526316
+          },
+          "TREND_DOWN": {
+            "n": 153,
+            "net": 2748.916824748952,
+            "expectancy": 17.96677663234609,
+            "winrate": 0.43790849673202614
+          },
+          "TREND_UP": {
+            "n": 141,
+            "net": 3965.360582490067,
+            "expectancy": 28.123124698511113,
+            "winrate": 0.46808510638297873
+          }
+        },
+        "by_symbol": {
+          "ETHUSDT": {
+            "n": 185,
+            "net": 3510.1268282562673,
+            "expectancy": 18.97365853111496,
+            "winrate": 0.40540540540540543
+          },
+          "DOGEUSDT": {
+            "n": 169,
+            "net": 3209.3474085629487,
+            "expectancy": 18.990221352443484,
+            "winrate": 0.4378698224852071
+          },
+          "BTCUSDT": {
+            "n": 166,
+            "net": 1569.3372785436536,
+            "expectancy": 9.453839027371407,
+            "winrate": 0.45180722891566266
+          },
+          "SOLUSDT": {
+            "n": 172,
+            "net": 6590.423889281418,
+            "expectancy": 38.31641796093848,
+            "winrate": 0.47674418604651164
+          }
+        },
+        "monthly": [
+          {
+            "month": "2024-10",
+            "equity_end": 266.1471951524039,
+            "pnl": -33.852804847596076
+          },
+          {
+            "month": "2024-11",
+            "equity_end": 278.9969603082121,
+            "pnl": 12.8497651558082
+          },
+          {
+            "month": "2024-12",
+            "equity_end": 258.74336960983976,
+            "pnl": -20.253590698372363
+          },
+          {
+            "month": "2025-01",
+            "equity_end": 843.4140748453876,
+            "pnl": 584.6707052355479
+          },
+          {
+            "month": "2025-02",
+            "equity_end": 1081.4068497599205,
+            "pnl": 237.9927749145329
+          },
+          {
+            "month": "2025-03",
+            "equity_end": 862.2669872826802,
+            "pnl": -219.13986247724029
+          },
+          {
+            "month": "2025-04",
+            "equity_end": 1078.0440386204627,
+            "pnl": 215.7770513377825
+          },
+          {
+            "month": "2025-05",
+            "equity_end": 1154.055687718762,
+            "pnl": 76.01164909829936
+          },
+          {
+            "month": "2025-06",
+            "equity_end": 1852.297333074255,
+            "pnl": 698.2416453554929
+          },
+          {
+            "month": "2025-07",
+            "equity_end": 1881.5413130011439,
+            "pnl": 29.24397992688887
+          },
+          {
+            "month": "2025-08",
+            "equity_end": 1678.0242689456225,
+            "pnl": -203.5170440555214
+          },
+          {
+            "month": "2025-09",
+            "equity_end": 2363.436237921401,
+            "pnl": 685.4119689757783
+          },
+          {
+            "month": "2025-10",
+            "equity_end": 2237.1162881338773,
+            "pnl": -126.31994978752346
+          },
+          {
+            "month": "2025-11",
+            "equity_end": 3062.557150877094,
+            "pnl": 825.4408627432167
+          },
+          {
+            "month": "2025-12",
+            "equity_end": 2345.436510761564,
+            "pnl": -717.12064011553
+          },
+          {
+            "month": "2026-01",
+            "equity_end": 6826.415817592396,
+            "pnl": 4480.979306830832
+          },
+          {
+            "month": "2026-02",
+            "equity_end": 7780.809505192891,
+            "pnl": 954.3936876004955
+          },
+          {
+            "month": "2026-03",
+            "equity_end": 6170.27716659117,
+            "pnl": -1610.5323386017217
+          },
+          {
+            "month": "2026-04",
+            "equity_end": 5267.742240334895,
+            "pnl": -902.534926256275
+          },
+          {
+            "month": "2026-05",
+            "equity_end": 4267.712578387318,
+            "pnl": -1000.0296619475766
+          },
+          {
+            "month": "2026-06",
+            "equity_end": 6018.093514208272,
+            "pnl": 1750.3809358209537
+          },
+          {
+            "month": "2026-07",
+            "equity_end": 4280.749180289574,
+            "pnl": -1737.3443339186979
+          },
+          {
+            "month": "2026-08",
+            "equity_end": 11254.996184995185,
+            "pnl": 6974.247004705611
+          },
+          {
+            "month": "2026-09",
+            "equity_end": 12698.0014695525,
+            "pnl": 1443.0052845573155
+          },
+          {
+            "month": "2026-10",
+            "equity_end": 15254.645638939417,
+            "pnl": 2556.6441693869165
+          }
+        ],
+        "counters": {
+          "go_events": 0,
+          "open_intents": 900,
+          "opens_filled": 642,
+          "min_size_skips": 0,
+          "liquidations": 0,
+          "limits_armed": 268,
+          "limit_fills_entry": 50,
+          "limit_expired": 158,
+          "limit_min_size_skips": 0,
+          "reduce_limits_armed": 0,
+          "reduce_limit_fills": 0,
+          "reduce_timeout_taker": 0,
+          "resting_canceled": 0,
+          "e1_priority_cancels": 6,
+          "portfolio_cap_skips": 38,
+          "protective_stop_fills": 609,
+          "mic_go_events": 0,
+          "watch_entries_armed": 268,
+          "watch_canceled_played_out": 43,
+          "virtual_entry_triggers": 11,
+          "virtual_entry_fills": 11,
+          "f1_reject_level_rejected_market": 208,
+          "level_rejected_signals": 1964,
+          "dup": 916,
+          "breakout_accepted_signals": 759,
+          "restraint_departure_reset_reject": 123,
+          "deadzone_watch_armed": 102,
+          "restraint_coarse_echo_reject": 44,
+          "accept_watch_armed": 178,
+          "restraint_struct_impulse_reject": 1322,
+          "e1_cancel_orders": 6,
+          "campaigns": {
+            "BTCUSDT@12h": {
+              "f1_reject_level_rejected_market": 13,
+              "level_rejected_signals": 75,
+              "dup": 58,
+              "breakout_accepted_signals": 28,
+              "restraint_departure_reset_reject": 16,
+              "deadzone_watch_armed": 11,
+              "restraint_coarse_echo_reject": 10,
+              "accept_watch_armed": 4
+            },
+            "BTCUSDT@1d": {
+              "f1_reject_level_rejected_market": 13,
+              "level_rejected_signals": 39,
+              "restraint_departure_reset_reject": 8,
+              "restraint_coarse_echo_reject": 3,
+              "dup": 37,
+              "breakout_accepted_signals": 16,
+              "accept_watch_armed": 4,
+              "deadzone_watch_armed": 3
+            },
+            "BTCUSDT@2h": {
+              "f1_reject_level_rejected_market": 9,
+              "level_rejected_signals": 208,
+              "restraint_struct_impulse_reject": 170,
+              "breakout_accepted_signals": 75,
+              "deadzone_watch_armed": 8,
+              "accept_watch_armed": 17,
+              "dup": 42,
+              "restraint_departure_reset_reject": 13
+            },
+            "BTCUSDT@4h": {
+              "restraint_struct_impulse_reject": 112,
+              "level_rejected_signals": 122,
+              "dup": 66,
+              "breakout_accepted_signals": 74,
+              "accept_watch_armed": 11,
+              "f1_reject_level_rejected_market": 14,
+              "e1_cancel_orders": 3,
+              "deadzone_watch_armed": 4,
+              "restraint_departure_reset_reject": 2,
+              "restraint_coarse_echo_reject": 4
+            },
+            "DOGEUSDT@12h": {
+              "level_rejected_signals": 57,
+              "dup": 64,
+              "restraint_departure_reset_reject": 11,
+              "f1_reject_level_rejected_market": 15,
+              "restraint_coarse_echo_reject": 5,
+              "deadzone_watch_armed": 4,
+              "breakout_accepted_signals": 25,
+              "accept_watch_armed": 7
+            },
+            "DOGEUSDT@1d": {
+              "breakout_accepted_signals": 12,
+              "f1_reject_level_rejected_market": 5,
+              "level_rejected_signals": 16,
+              "dup": 27,
+              "restraint_departure_reset_reject": 4,
+              "deadzone_watch_armed": 2,
+              "accept_watch_armed": 1,
+              "restraint_coarse_echo_reject": 1
+            },
+            "DOGEUSDT@2h": {
+              "restraint_struct_impulse_reject": 176,
+              "level_rejected_signals": 230,
+              "breakout_accepted_signals": 67,
+              "restraint_departure_reset_reject": 13,
+              "f1_reject_level_rejected_market": 7,
+              "dup": 35,
+              "accept_watch_armed": 15,
+              "deadzone_watch_armed": 8
+            },
+            "DOGEUSDT@4h": {
+              "restraint_struct_impulse_reject": 189,
+              "level_rejected_signals": 225,
+              "dup": 72,
+              "f1_reject_level_rejected_market": 21,
+              "deadzone_watch_armed": 8,
+              "breakout_accepted_signals": 72,
+              "accept_watch_armed": 16,
+              "restraint_coarse_echo_reject": 8,
+              "restraint_departure_reset_reject": 3,
+              "e1_cancel_orders": 2
+            },
+            "ETHUSDT@12h": {
+              "level_rejected_signals": 44,
+              "f1_reject_level_rejected_market": 13,
+              "dup": 96,
+              "breakout_accepted_signals": 19,
+              "restraint_coarse_echo_reject": 1,
+              "accept_watch_armed": 7,
+              "deadzone_watch_armed": 4,
+              "restraint_departure_reset_reject": 2
+            },
+            "ETHUSDT@1d": {
+              "f1_reject_level_rejected_market": 19,
+              "level_rejected_signals": 40,
+              "dup": 56,
+              "restraint_departure_reset_reject": 6,
+              "deadzone_watch_armed": 6,
+              "restraint_coarse_echo_reject": 1,
+              "breakout_accepted_signals": 9,
+              "accept_watch_armed": 1
+            },
+            "ETHUSDT@2h": {
+              "restraint_struct_impulse_reject": 196,
+              "level_rejected_signals": 264,
+              "f1_reject_level_rejected_market": 17,
+              "restraint_departure_reset_reject": 10,
+              "breakout_accepted_signals": 78,
+              "dup": 72,
+              "deadzone_watch_armed": 11,
+              "accept_watch_armed": 33
+            },
+            "ETHUSDT@4h": {
+              "breakout_accepted_signals": 88,
+              "restraint_struct_impulse_reject": 159,
+              "level_rejected_signals": 201,
+              "dup": 73,
+              "accept_watch_armed": 20,
+              "f1_reject_level_rejected_market": 26,
+              "restraint_coarse_echo_reject": 8,
+              "restraint_departure_reset_reject": 10,
+              "deadzone_watch_armed": 4
+            },
+            "SOLUSDT@12h": {
+              "deadzone_watch_armed": 5,
+              "level_rejected_signals": 43,
+              "dup": 67,
+              "breakout_accepted_signals": 25,
+              "f1_reject_level_rejected_market": 7,
+              "restraint_coarse_echo_reject": 1,
+              "accept_watch_armed": 8,
+              "restraint_departure_reset_reject": 11
+            },
+            "SOLUSDT@1d": {
+              "breakout_accepted_signals": 7,
+              "dup": 36,
+              "level_rejected_signals": 15,
+              "deadzone_watch_armed": 2,
+              "f1_reject_level_rejected_market": 3,
+              "accept_watch_armed": 2,
+              "restraint_departure_reset_reject": 2
+            },
+            "SOLUSDT@2h": {
+              "restraint_struct_impulse_reject": 183,
+              "level_rejected_signals": 225,
+              "breakout_accepted_signals": 91,
+              "accept_watch_armed": 21,
+              "deadzone_watch_armed": 16,
+              "dup": 61,
+              "f1_reject_level_rejected_market": 9,
+              "restraint_departure_reset_reject": 5
+            },
+            "SOLUSDT@4h": {
+              "f1_reject_level_rejected_market": 17,
+              "level_rejected_signals": 160,
+              "restraint_struct_impulse_reject": 137,
+              "deadzone_watch_armed": 6,
+              "breakout_accepted_signals": 73,
+              "accept_watch_armed": 11,
+              "dup": 54,
+              "restraint_departure_reset_reject": 7,
+              "restraint_coarse_echo_reject": 2,
+              "e1_cancel_orders": 1
+            }
+          }
+        }
+      }
+    },
+    "dev_1x": {
+      "start_utc": "2024-10-15T20:00:00+00:00",
+      "end_utc": "2026-10-19T03:00:00+00:00",
+      "equity_end": 6302.509295724432,
+      "cash_end": 6302.509295724432,
+      "unrealized_end": 0.0,
+      "unsettled_funding_end": 0,
+      "equity_profit": 6002.509295724432,
+      "return_frac": 20.00836431908144,
+      "multiple": 21.00836431908144,
+      "max_drawdown_frac": 0.3571922106885051,
+      "max_drawdown_usdt": 2591.4554975043447,
+      "min_equity": 235.61700775582668,
+      "max_equity": 8893.964793228777,
+      "n_opened": 446,
+      "n_open_end": 0,
+      "closed": {
+        "n": 446,
+        "wins": 202,
+        "losses": 244,
+        "breakeven": 0,
+        "net": 6002.509295724435,
+        "winrate": 0.452914798206278,
+        "profit_factor": 1.4040760339218057,
+        "average_win": 103.25450415217611,
+        "average_loss": -60.88073993038992,
+        "payoff_ratio": 1.6960126350342601,
+        "expectancy": 13.458541021803667,
+        "median_net": -7.298428714225834,
+        "best": 1780.8018745550764,
+        "worst": -272.0818433112229
+      },
+      "concentration": {
+        "top_10pct": {
+          "n": 45,
+          "wins": 45,
+          "losses": 0,
+          "breakeven": 0,
+          "net": 15840.135785883878,
+          "winrate": 1.0,
+          "profit_factor": null,
+          "average_win": 352.0030174640862,
+          "average_loss": null,
+          "payoff_ratio": null,
+          "expectancy": 352.0030174640862,
+          "median_net": 196.10412799350095,
+          "best": 1780.8018745550764,
+          "worst": 113.97025385571581,
+          "share_of_net": 2.6389189929562873
+        },
+        "remaining_90pct": {
+          "n": 401,
+          "wins": 157,
+          "losses": 244,
+          "breakeven": 0,
+          "net": -9837.626490159442,
+          "winrate": 0.3915211970074813,
+          "profit_factor": 0.3377521134071038,
+          "average_win": 31.95715957232928,
+          "average_loss": -60.88073993038992,
+          "payoff_ratio": 0.5249141125562632,
+          "expectancy": -24.532734389425045,
+          "median_net": -11.55287167605195,
+          "best": 112.20511841647536,
+          "worst": -272.0818433112229,
+          "share_of_net": -1.6389189929562868
+        },
+        "without_top_10_trades": {
+          "n": 436,
+          "wins": 192,
+          "losses": 244,
+          "breakeven": 0,
+          "net": -3095.2884620146488,
+          "winrate": 0.44036697247706424,
+          "profit_factor": 0.79163182863112,
+          "average_win": 61.247979588544226,
+          "average_loss": -60.88073993038992,
+          "payoff_ratio": 1.0060321155520482,
+          "expectancy": -7.09928546333635,
+          "median_net": -8.805930820270017,
+          "best": 352.9801275404535,
+          "worst": -272.0818433112229
+        }
+      },
+      "streaks": {
+        "longest_win": 10,
+        "longest_loss": 9
+      },
+      "buckets": {
+        "tf": {
+          "12h": {
+            "n": 75,
+            "wins": 34,
+            "losses": 41,
+            "breakeven": 0,
+            "net": 2743.259312460942,
+            "winrate": 0.4533333333333333,
+            "profit_factor": 1.996132773453518,
+            "average_win": 161.68142988492568,
+            "average_loss": -67.16851960064709,
+            "payoff_ratio": 2.407101285635125,
+            "expectancy": 36.57679083281256,
+            "median_net": -7.745586648469684,
+            "best": 1780.8018745550764,
+            "worst": -264.8240596051956
+          },
+          "1d": {
+            "n": 34,
+            "wins": 11,
+            "losses": 23,
+            "breakeven": 0,
+            "net": 1678.6770005210822,
+            "winrate": 0.3235294117647059,
+            "profit_factor": 1.8955921778563052,
+            "average_win": 323.004870663718,
+            "average_loss": -81.49463377303549,
+            "payoff_ratio": 3.963510917335911,
+            "expectancy": 49.37285295650241,
+            "median_net": -29.96847340969141,
+            "best": 1271.1450573029292,
+            "worst": -234.18405628693432
+          },
+          "2h": {
+            "n": 210,
+            "wins": 94,
+            "losses": 116,
+            "breakeven": 0,
+            "net": 540.3694544010748,
+            "winrate": 0.44761904761904764,
+            "profit_factor": 1.0821787949993902,
+            "average_win": 75.70109977658593,
+            "average_loss": -56.68563728101727,
+            "payoff_ratio": 1.3354546831907368,
+            "expectancy": 2.5731878781003563,
+            "median_net": -6.960577783532761,
+            "best": 998.6478376911597,
+            "worst": -272.0818433112229
+          },
+          "4h": {
+            "n": 127,
+            "wins": 63,
+            "losses": 64,
+            "breakeven": 0,
+            "net": 1040.2035283413363,
+            "winrate": 0.49606299212598426,
+            "profit_factor": 1.2849029103936134,
+            "average_win": 74.46482962463692,
+            "average_loss": -57.04813653141859,
+            "payoff_ratio": 1.3052981946855755,
+            "expectancy": 8.190578963317607,
+            "median_net": -1.3790589010552627,
+            "best": 1051.2182622826813,
+            "worst": -256.30876745106804
+          }
+        },
+        "symbol": {
+          "BTCUSDT": {
+            "n": 106,
+            "wins": 48,
+            "losses": 58,
+            "breakeven": 0,
+            "net": -1051.2787261134083,
+            "winrate": 0.4528301886792453,
+            "profit_factor": 0.7095908498424613,
+            "average_win": 53.514854550858225,
+            "average_loss": -62.41365076818281,
+            "payoff_ratio": 0.857422276892974,
+            "expectancy": -9.91772383125857,
+            "median_net": -11.617796263761416,
+            "best": 349.72603564117225,
+            "worst": -272.0818433112229
+          },
+          "DOGEUSDT": {
+            "n": 103,
+            "wins": 45,
+            "losses": 58,
+            "breakeven": 0,
+            "net": 2088.2728022772703,
+            "winrate": 0.4368932038834951,
+            "profit_factor": 1.6163204477432358,
+            "average_win": 121.70140975440552,
+            "average_loss": -58.4188040805341,
+            "payoff_ratio": 2.0832574659801706,
+            "expectancy": 20.274493225992916,
+            "median_net": -8.74563014965564,
+            "best": 998.6478376911597,
+            "worst": -256.66242640581004
+          },
+          "ETHUSDT": {
+            "n": 119,
+            "wins": 50,
+            "losses": 69,
+            "breakeven": 0,
+            "net": 1515.8499048002063,
+            "winrate": 0.42016806722689076,
+            "profit_factor": 1.333085364868233,
+            "average_win": 121.33570168869235,
+            "average_loss": -65.9555823135422,
+            "payoff_ratio": 1.8396578035181619,
+            "expectancy": 12.73823449411938,
+            "median_net": -10.71212215624962,
+            "best": 1271.1450573029292,
+            "worst": -264.8240596051956
+          },
+          "SOLUSDT": {
+            "n": 118,
+            "wins": 59,
+            "losses": 59,
+            "breakeven": 0,
+            "net": 3449.665314760367,
+            "winrate": 0.5,
+            "profit_factor": 2.046722434602774,
+            "average_win": 114.32793723585618,
+            "average_loss": -55.85903359584996,
+            "payoff_ratio": 2.046722434602774,
+            "expectancy": 29.234451820003112,
+            "median_net": -0.632376720504924,
+            "best": 1780.8018745550764,
+            "worst": -236.97070475639399
+          }
+        },
+        "event_id": {
+          "BREAKOUT_ACCEPTED": {
+            "n": 125,
+            "wins": 59,
+            "losses": 66,
+            "breakeven": 0,
+            "net": 2539.071496587032,
+            "winrate": 0.472,
+            "profit_factor": 1.7113385375110743,
+            "average_win": 103.5338850862461,
+            "average_loss": -54.08223823487103,
+            "payoff_ratio": 1.91437870297849,
+            "expectancy": 20.312571972696254,
+            "median_net": -4.093836322829342,
+            "best": 1051.2182622826813,
+            "worst": -264.8240596051956
+          },
+          "LEVEL_REJECTED": {
+            "n": 321,
+            "wins": 143,
+            "losses": 178,
+            "breakeven": 0,
+            "net": 3463.4377991374035,
+            "winrate": 0.4454828660436137,
+            "profit_factor": 1.3068934598069113,
+            "average_win": 103.13923509546193,
+            "average_loss": -63.401532693896925,
+            "payoff_ratio": 1.6267624884309804,
+            "expectancy": 10.789525854010602,
+            "median_net": -10.294169834950079,
+            "best": 1780.8018745550764,
+            "worst": -272.0818433112229
+          }
+        },
+        "direction": {
+          "-1": {
+            "n": 232,
+            "wins": 100,
+            "losses": 132,
+            "breakeven": 0,
+            "net": 5222.984659933622,
+            "winrate": 0.43103448275862066,
+            "profit_factor": 1.69923616574402,
+            "average_win": 126.92542036697911,
+            "average_loss": -56.587555884577945,
+            "payoff_ratio": 2.2429917387821066,
+            "expectancy": 22.51286491350699,
+            "median_net": -10.227923821783717,
+            "best": 1780.8018745550764,
+            "worst": -234.18405628693432
+          },
+          "1": {
+            "n": 214,
+            "wins": 102,
+            "losses": 112,
+            "breakeven": 0,
+            "net": 779.5246357908134,
+            "winrate": 0.4766355140186916,
+            "profit_factor": 1.105550225391427,
+            "average_win": 80.04772354942808,
+            "average_loss": -65.9405639843826,
+            "payoff_ratio": 1.2139375023905865,
+            "expectancy": 3.642638485003801,
+            "median_net": -4.994802051114966,
+            "best": 998.6478376911597,
+            "worst": -272.0818433112229
+          }
+        },
+        "entry_mode": {
+          "limit": {
+            "n": 29,
+            "wins": 9,
+            "losses": 20,
+            "breakeven": 0,
+            "net": -262.0503577906708,
+            "winrate": 0.3103448275862069,
+            "profit_factor": 0.8213417328199297,
+            "average_win": 133.8575957522415,
+            "average_loss": -73.33843597804221,
+            "payoff_ratio": 1.8252038507109551,
+            "expectancy": -9.03621923416106,
+            "median_net": -36.17606338580131,
+            "best": 389.5777455089134,
+            "worst": -228.00505776325733
+          },
+          "market": {
+            "n": 417,
+            "wins": 193,
+            "losses": 224,
+            "breakeven": 0,
+            "net": 6264.559653515106,
+            "winrate": 0.4628297362110312,
+            "profit_factor": 1.4679188804027459,
+            "average_win": 101.82741697911607,
+            "average_loss": -59.768445640420964,
+            "payoff_ratio": 1.7036985969441194,
+            "expectancy": 15.022924828573396,
+            "median_net": -6.217694466338674,
+            "best": 1780.8018745550764,
+            "worst": -272.0818433112229
+          }
+        },
+        "exit_reason_code": {
+          "PROTECTIVE_STOP": {
+            "n": 401,
+            "wins": 162,
+            "losses": 239,
+            "breakeven": 0,
+            "net": 1396.142561309395,
+            "winrate": 0.40399002493765584,
+            "profit_factor": 1.0950759151915104,
+            "average_win": 99.26324417002911,
+            "average_loss": -61.441435122323526,
+            "payoff_ratio": 1.615574961301055,
+            "expectancy": 3.4816522725920076,
+            "median_net": -11.408710988257425,
+            "best": 1271.1450573029292,
+            "worst": -272.0818433112229
+          },
+          "v21": {
+            "n": 35,
+            "wins": 35,
+            "losses": 0,
+            "breakeven": 0,
+            "net": 4212.093799447744,
+            "winrate": 1.0,
+            "profit_factor": null,
+            "average_win": 120.34553712707839,
+            "average_loss": null,
+            "payoff_ratio": null,
+            "expectancy": 120.34553712707839,
+            "median_net": 32.60600306466474,
+            "best": 1780.8018745550764,
+            "worst": 1.615375416140627
+          },
+          "§8.5": {
+            "n": 10,
+            "wins": 5,
+            "losses": 5,
+            "breakeven": 0,
+            "net": 394.2729349672969,
+            "winrate": 0.5,
+            "profit_factor": 3.3138415886296766,
+            "average_win": 112.93409674942299,
+            "average_loss": -34.079509755963606,
+            "payoff_ratio": 3.3138415886296766,
+            "expectancy": 39.427293496729696,
+            "median_net": 19.47422809210374,
+            "best": 194.66768973489513,
+            "worst": -60.12926652183867
+          }
+        }
+      },
+      "fees": 1250.171503473093,
+      "funding": 123.94692135222641,
+      "slippage_embedded": 409.29646267137684,
+      "holding_hours_mean": 55.74887892376682,
+      "holding_hours_median": 22.0,
+      "capacity_skips": 35,
+      "counters": {
+        "go_events": 0,
+        "open_intents": 597,
+        "opens_filled": 417,
+        "min_size_skips": 0,
+        "liquidations": 0,
+        "limits_armed": 188,
+        "limit_fills_entry": 29,
+        "limit_expired": 113,
+        "limit_min_size_skips": 0,
+        "reduce_limits_armed": 0,
+        "reduce_limit_fills": 0,
+        "reduce_timeout_taker": 0,
+        "resting_canceled": 0,
+        "e1_priority_cancels": 4,
+        "portfolio_cap_skips": 35,
+        "protective_stop_fills": 401,
+        "mic_go_events": 0,
+        "watch_entries_armed": 188,
+        "watch_canceled_played_out": 33,
+        "virtual_entry_triggers": 9,
+        "virtual_entry_fills": 9,
+        "f1_reject_level_rejected_market": 132,
+        "level_rejected_signals": 1281,
+        "dup": 560,
+        "breakout_accepted_signals": 533,
+        "restraint_departure_reset_reject": 84,
+        "deadzone_watch_armed": 67,
+        "restraint_coarse_echo_reject": 28,
+        "accept_watch_armed": 132,
+        "restraint_struct_impulse_reject": 878,
+        "e1_cancel_orders": 4,
+        "campaigns": {
+          "BTCUSDT@12h": {
+            "f1_reject_level_rejected_market": 7,
+            "level_rejected_signals": 55,
+            "dup": 29,
+            "breakout_accepted_signals": 17,
+            "restraint_departure_reset_reject": 14,
+            "deadzone_watch_armed": 8,
+            "restraint_coarse_echo_reject": 9,
+            "accept_watch_armed": 3
+          },
+          "BTCUSDT@1d": {
+            "f1_reject_level_rejected_market": 7,
+            "level_rejected_signals": 25,
+            "restraint_departure_reset_reject": 6,
+            "restraint_coarse_echo_reject": 3,
+            "dup": 19,
+            "breakout_accepted_signals": 12,
+            "accept_watch_armed": 4,
+            "deadzone_watch_armed": 1
+          },
+          "BTCUSDT@2h": {
+            "f1_reject_level_rejected_market": 7,
+            "level_rejected_signals": 138,
+            "restraint_struct_impulse_reject": 119,
+            "breakout_accepted_signals": 54,
+            "deadzone_watch_armed": 7,
+            "accept_watch_armed": 13,
+            "dup": 27,
+            "restraint_departure_reset_reject": 8
+          },
+          "BTCUSDT@4h": {
+            "restraint_struct_impulse_reject": 75,
+            "level_rejected_signals": 77,
+            "dup": 46,
+            "breakout_accepted_signals": 53,
+            "accept_watch_armed": 8,
+            "f1_reject_level_rejected_market": 4,
+            "e1_cancel_orders": 2,
+            "deadzone_watch_armed": 3,
+            "restraint_departure_reset_reject": 1,
+            "restraint_coarse_echo_reject": 2
+          },
+          "DOGEUSDT@12h": {
+            "level_rejected_signals": 36,
+            "dup": 35,
+            "restraint_departure_reset_reject": 10,
+            "f1_reject_level_rejected_market": 9,
+            "restraint_coarse_echo_reject": 2,
+            "deadzone_watch_armed": 3,
+            "breakout_accepted_signals": 19,
+            "accept_watch_armed": 6
+          },
+          "DOGEUSDT@1d": {
+            "breakout_accepted_signals": 8,
+            "f1_reject_level_rejected_market": 3,
+            "level_rejected_signals": 9,
+            "dup": 9,
+            "restraint_departure_reset_reject": 3,
+            "deadzone_watch_armed": 2,
+            "accept_watch_armed": 1,
+            "restraint_coarse_echo_reject": 1
+          },
+          "DOGEUSDT@2h": {
+            "restraint_struct_impulse_reject": 120,
+            "level_rejected_signals": 159,
+            "breakout_accepted_signals": 45,
+            "restraint_departure_reset_reject": 10,
+            "f1_reject_level_rejected_market": 4,
+            "dup": 25,
+            "accept_watch_armed": 11,
+            "deadzone_watch_armed": 6
+          },
+          "DOGEUSDT@4h": {
+            "restraint_struct_impulse_reject": 123,
+            "level_rejected_signals": 146,
+            "dup": 40,
+            "f1_reject_level_rejected_market": 15,
+            "deadzone_watch_armed": 5,
+            "breakout_accepted_signals": 49,
+            "accept_watch_armed": 11,
+            "restraint_coarse_echo_reject": 6,
+            "restraint_departure_reset_reject": 3,
+            "e1_cancel_orders": 2
+          },
+          "ETHUSDT@12h": {
+            "level_rejected_signals": 20,
+            "f1_reject_level_rejected_market": 4,
+            "dup": 58,
+            "breakout_accepted_signals": 13,
+            "restraint_coarse_echo_reject": 1,
+            "accept_watch_armed": 4,
+            "deadzone_watch_armed": 1
+          },
+          "ETHUSDT@1d": {
+            "f1_reject_level_rejected_market": 12,
+            "level_rejected_signals": 26,
+            "dup": 24,
+            "restraint_departure_reset_reject": 4,
+            "deadzone_watch_armed": 3,
+            "restraint_coarse_echo_reject": 1,
+            "breakout_accepted_signals": 2
+          },
+          "ETHUSDT@2h": {
+            "restraint_struct_impulse_reject": 131,
+            "level_rejected_signals": 178,
+            "f1_reject_level_rejected_market": 15,
+            "restraint_departure_reset_reject": 5,
+            "breakout_accepted_signals": 63,
+            "dup": 45,
+            "deadzone_watch_armed": 8,
+            "accept_watch_armed": 28
+          },
+          "ETHUSDT@4h": {
+            "breakout_accepted_signals": 60,
+            "restraint_struct_impulse_reject": 104,
+            "level_rejected_signals": 126,
+            "dup": 45,
+            "accept_watch_armed": 15,
+            "f1_reject_level_rejected_market": 21,
+            "restraint_coarse_echo_reject": 1,
+            "restraint_departure_reset_reject": 4,
+            "deadzone_watch_armed": 2
+          },
+          "SOLUSDT@12h": {
+            "deadzone_watch_armed": 3,
+            "level_rejected_signals": 30,
+            "dup": 43,
+            "breakout_accepted_signals": 17,
+            "f1_reject_level_rejected_market": 3,
+            "restraint_coarse_echo_reject": 1,
+            "accept_watch_armed": 5,
+            "restraint_departure_reset_reject": 10
+          },
+          "SOLUSDT@1d": {
+            "breakout_accepted_signals": 4,
+            "dup": 33,
+            "level_rejected_signals": 8,
+            "deadzone_watch_armed": 1,
+            "f1_reject_level_rejected_market": 1
+          },
+          "SOLUSDT@2h": {
+            "restraint_struct_impulse_reject": 119,
+            "level_rejected_signals": 146,
+            "breakout_accepted_signals": 67,
+            "accept_watch_armed": 16,
+            "deadzone_watch_armed": 9,
+            "dup": 43,
+            "f1_reject_level_rejected_market": 8,
+            "restraint_departure_reset_reject": 3
+          },
+          "SOLUSDT@4h": {
+            "f1_reject_level_rejected_market": 12,
+            "level_rejected_signals": 102,
+            "restraint_struct_impulse_reject": 87,
+            "deadzone_watch_armed": 5,
+            "breakout_accepted_signals": 50,
+            "accept_watch_armed": 7,
+            "dup": 39,
+            "restraint_departure_reset_reject": 3,
+            "restraint_coarse_echo_reject": 1
+          }
+        }
+      },
+      "monthly_full_execution_window": [
+        {
+          "month": "2024-10",
+          "equity_end": 266.1471951524039,
+          "pnl": -33.852804847596076,
+          "return_frac": -0.11284268282532028
+        },
+        {
+          "month": "2024-11",
+          "equity_end": 278.9969603082121,
+          "pnl": 12.8497651558082,
+          "return_frac": 0.048280670958978256
+        },
+        {
+          "month": "2024-12",
+          "equity_end": 258.74336960983976,
+          "pnl": -20.253590698372363,
+          "return_frac": -0.07259430595945537
+        },
+        {
+          "month": "2025-01",
+          "equity_end": 843.4140748453876,
+          "pnl": 584.6707052355479,
+          "return_frac": 2.259654831415295
+        },
+        {
+          "month": "2025-02",
+          "equity_end": 1081.4068497599205,
+          "pnl": 237.9927749145329,
+          "return_frac": 0.28217785547171603
+        },
+        {
+          "month": "2025-03",
+          "equity_end": 862.2669872826802,
+          "pnl": -219.13986247724029,
+          "return_frac": -0.20264330906160877
+        },
+        {
+          "month": "2025-04",
+          "equity_end": 1078.0440386204627,
+          "pnl": 215.7770513377825,
+          "return_frac": 0.2502438972153802
+        },
+        {
+          "month": "2025-05",
+          "equity_end": 1154.055687718762,
+          "pnl": 76.01164909829936,
+          "return_frac": 0.07050885341898372
+        },
+        {
+          "month": "2025-06",
+          "equity_end": 1852.297333074255,
+          "pnl": 698.2416453554929,
+          "return_frac": 0.6050328877419398
+        },
+        {
+          "month": "2025-07",
+          "equity_end": 1881.5413130011439,
+          "pnl": 29.24397992688887,
+          "return_frac": 0.01578795121318488
+        },
+        {
+          "month": "2025-08",
+          "equity_end": 1678.0242689456225,
+          "pnl": -203.5170440555214,
+          "return_frac": -0.10816506799465508
+        },
+        {
+          "month": "2025-09",
+          "equity_end": 2363.436237921401,
+          "pnl": 685.4119689757783,
+          "return_frac": 0.40846368056789384
+        },
+        {
+          "month": "2025-10",
+          "equity_end": 2237.1162881338773,
+          "pnl": -126.31994978752346,
+          "return_frac": -0.05344758100968261
+        },
+        {
+          "month": "2025-11",
+          "equity_end": 3062.557150877094,
+          "pnl": 825.4408627432167,
+          "return_frac": 0.3689753935106208
+        },
+        {
+          "month": "2025-12",
+          "equity_end": 2345.436510761564,
+          "pnl": -717.12064011553,
+          "return_frac": -0.23415747193816505
+        },
+        {
+          "month": "2026-01",
+          "equity_end": 6826.415817592396,
+          "pnl": 4480.979306830832,
+          "return_frac": 1.9105097436109477
+        },
+        {
+          "month": "2026-02",
+          "equity_end": 7780.809505192891,
+          "pnl": 954.3936876004955,
+          "return_frac": 0.13980890017583203
+        },
+        {
+          "month": "2026-03",
+          "equity_end": 6302.509295724432,
+          "pnl": -1478.300209468459,
+          "return_frac": -0.18999311170410293
+        },
+        {
+          "month": "2026-04",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-05",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-06",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-07",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-08",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-09",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-10",
+          "equity_end": 6302.509295724432,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        }
+      ],
+      "segment_bounds": {
+        "BTCUSDT@12h": {
+          "lo": 0,
+          "hi": 1027,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1773316800000
+        },
+        "BTCUSDT@1d": {
+          "lo": 0,
+          "hi": 514,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1773273600000
+        },
+        "BTCUSDT@2h": {
+          "lo": 0,
+          "hi": 6160,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773367200000
+        },
+        "BTCUSDT@4h": {
+          "lo": 0,
+          "hi": 3080,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773360000000
+        },
+        "DOGEUSDT@12h": {
+          "lo": 0,
+          "hi": 1027,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1773316800000
+        },
+        "DOGEUSDT@1d": {
+          "lo": 0,
+          "hi": 514,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1773273600000
+        },
+        "DOGEUSDT@2h": {
+          "lo": 0,
+          "hi": 6160,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773367200000
+        },
+        "DOGEUSDT@4h": {
+          "lo": 0,
+          "hi": 3080,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773360000000
+        },
+        "ETHUSDT@12h": {
+          "lo": 0,
+          "hi": 1027,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1773316800000
+        },
+        "ETHUSDT@1d": {
+          "lo": 0,
+          "hi": 514,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1773273600000
+        },
+        "ETHUSDT@2h": {
+          "lo": 0,
+          "hi": 6160,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773367200000
+        },
+        "ETHUSDT@4h": {
+          "lo": 0,
+          "hi": 3080,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773360000000
+        },
+        "SOLUSDT@12h": {
+          "lo": 0,
+          "hi": 1027,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1773316800000
+        },
+        "SOLUSDT@1d": {
+          "lo": 0,
+          "hi": 514,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1773273600000
+        },
+        "SOLUSDT@2h": {
+          "lo": 0,
+          "hi": 6160,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773367200000
+        },
+        "SOLUSDT@4h": {
+          "lo": 0,
+          "hi": 3080,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1773360000000
+        }
+      },
+      "standard_metrics": {
+        "segment": "dev",
+        "cost_multiplier": 1.0,
+        "ts_lo": 1728950400000,
+        "ts_hi": 1773367200000,
+        "span_days": 514.0833333333334,
+        "equity_start": 300.0,
+        "equity_end": 6863.525633705691,
+        "net_pnl": 6002.509295724435,
+        "return_pct": 20.00836431908145,
+        "ann_return": 8.243911088945747,
+        "max_dd_usdt": 2148.1261095230866,
+        "max_dd_pct": 0.2415262663461986,
+        "peak_ts": 1771138800000,
+        "trough_ts": 1773363600000,
+        "dd_days": 25.75,
+        "n_trades": 446,
+        "n_closed": 446,
+        "n_open_end": 0,
+        "winrate": 0.452914798206278,
+        "profit_factor": 1.4040760339218057,
+        "payoff_ratio": 1.6960126350342604,
+        "expectancy_usdt": 13.458541021803667,
+        "expectancy_r": 0.249615542426691,
+        "holding": {
+          "median_h": 22.0,
+          "p90_h": 116.0
+        },
+        "exposure_ratio": 0.8184917606948616,
+        "fees_total": 1250.171503473093,
+        "slippage_total": 409.29646267137684,
+        "funding_total": 123.94692135222641,
+        "by_direction": {
+          "-1": {
+            "n": 232,
+            "net": 5222.9846599336215,
+            "expectancy": 22.512864913506988,
+            "winrate": 0.43103448275862066
+          },
+          "1": {
+            "n": 214,
+            "net": 779.5246357908138,
+            "expectancy": 3.6426384850038027,
+            "winrate": 0.4766355140186916
+          }
+        },
+        "by_regime": {
+          "TRANSITION": {
+            "n": 212,
+            "net": 4132.792142642849,
+            "expectancy": 19.494302559636083,
+            "winrate": 0.4386792452830189
+          },
+          "RANGE": {
+            "n": 48,
+            "net": 441.54833831719924,
+            "expectancy": 9.198923714941651,
+            "winrate": 0.5
+          },
+          "TREND_DOWN": {
+            "n": 95,
+            "net": -1062.190581420025,
+            "expectancy": -11.180953488631841,
+            "winrate": 0.4631578947368421
+          },
+          "TREND_UP": {
+            "n": 91,
+            "net": 2490.3593961844117,
+            "expectancy": 27.36658677125727,
+            "winrate": 0.45054945054945056
+          }
+        },
+        "by_symbol": {
+          "ETHUSDT": {
+            "n": 119,
+            "net": 1515.8499048002056,
+            "expectancy": 12.738234494119375,
+            "winrate": 0.42016806722689076
+          },
+          "DOGEUSDT": {
+            "n": 103,
+            "net": 2088.2728022772703,
+            "expectancy": 20.274493225992916,
+            "winrate": 0.4368932038834951
+          },
+          "BTCUSDT": {
+            "n": 106,
+            "net": -1051.2787261134083,
+            "expectancy": -9.917723831258568,
+            "winrate": 0.4528301886792453
+          },
+          "SOLUSDT": {
+            "n": 118,
+            "net": 3449.6653147603665,
+            "expectancy": 29.234451820003105,
+            "winrate": 0.5
+          }
+        },
+        "monthly": [
+          {
+            "month": "2024-10",
+            "equity_end": 266.1471951524039,
+            "pnl": -33.852804847596076
+          },
+          {
+            "month": "2024-11",
+            "equity_end": 278.9969603082121,
+            "pnl": 12.8497651558082
+          },
+          {
+            "month": "2024-12",
+            "equity_end": 258.74336960983976,
+            "pnl": -20.253590698372363
+          },
+          {
+            "month": "2025-01",
+            "equity_end": 843.4140748453876,
+            "pnl": 584.6707052355479
+          },
+          {
+            "month": "2025-02",
+            "equity_end": 1081.4068497599205,
+            "pnl": 237.9927749145329
+          },
+          {
+            "month": "2025-03",
+            "equity_end": 862.2669872826802,
+            "pnl": -219.13986247724029
+          },
+          {
+            "month": "2025-04",
+            "equity_end": 1078.0440386204627,
+            "pnl": 215.7770513377825
+          },
+          {
+            "month": "2025-05",
+            "equity_end": 1154.055687718762,
+            "pnl": 76.01164909829936
+          },
+          {
+            "month": "2025-06",
+            "equity_end": 1852.297333074255,
+            "pnl": 698.2416453554929
+          },
+          {
+            "month": "2025-07",
+            "equity_end": 1881.5413130011439,
+            "pnl": 29.24397992688887
+          },
+          {
+            "month": "2025-08",
+            "equity_end": 1678.0242689456225,
+            "pnl": -203.5170440555214
+          },
+          {
+            "month": "2025-09",
+            "equity_end": 2363.436237921401,
+            "pnl": 685.4119689757783
+          },
+          {
+            "month": "2025-10",
+            "equity_end": 2237.1162881338773,
+            "pnl": -126.31994978752346
+          },
+          {
+            "month": "2025-11",
+            "equity_end": 3062.557150877094,
+            "pnl": 825.4408627432167
+          },
+          {
+            "month": "2025-12",
+            "equity_end": 2345.436510761564,
+            "pnl": -717.12064011553
+          },
+          {
+            "month": "2026-01",
+            "equity_end": 6826.415817592396,
+            "pnl": 4480.979306830832
+          },
+          {
+            "month": "2026-02",
+            "equity_end": 7780.809505192891,
+            "pnl": 954.3936876004955
+          },
+          {
+            "month": "2026-03",
+            "equity_end": 6863.525633705691,
+            "pnl": -917.2838714872005
+          }
+        ],
+        "counters": {
+          "go_events": 0,
+          "open_intents": 597,
+          "opens_filled": 417,
+          "min_size_skips": 0,
+          "liquidations": 0,
+          "limits_armed": 188,
+          "limit_fills_entry": 29,
+          "limit_expired": 113,
+          "limit_min_size_skips": 0,
+          "reduce_limits_armed": 0,
+          "reduce_limit_fills": 0,
+          "reduce_timeout_taker": 0,
+          "resting_canceled": 0,
+          "e1_priority_cancels": 4,
+          "portfolio_cap_skips": 35,
+          "protective_stop_fills": 401,
+          "mic_go_events": 0,
+          "watch_entries_armed": 188,
+          "watch_canceled_played_out": 33,
+          "virtual_entry_triggers": 9,
+          "virtual_entry_fills": 9,
+          "f1_reject_level_rejected_market": 132,
+          "level_rejected_signals": 1281,
+          "dup": 560,
+          "breakout_accepted_signals": 533,
+          "restraint_departure_reset_reject": 84,
+          "deadzone_watch_armed": 67,
+          "restraint_coarse_echo_reject": 28,
+          "accept_watch_armed": 132,
+          "restraint_struct_impulse_reject": 878,
+          "e1_cancel_orders": 4,
+          "campaigns": {
+            "BTCUSDT@12h": {
+              "f1_reject_level_rejected_market": 7,
+              "level_rejected_signals": 55,
+              "dup": 29,
+              "breakout_accepted_signals": 17,
+              "restraint_departure_reset_reject": 14,
+              "deadzone_watch_armed": 8,
+              "restraint_coarse_echo_reject": 9,
+              "accept_watch_armed": 3
+            },
+            "BTCUSDT@1d": {
+              "f1_reject_level_rejected_market": 7,
+              "level_rejected_signals": 25,
+              "restraint_departure_reset_reject": 6,
+              "restraint_coarse_echo_reject": 3,
+              "dup": 19,
+              "breakout_accepted_signals": 12,
+              "accept_watch_armed": 4,
+              "deadzone_watch_armed": 1
+            },
+            "BTCUSDT@2h": {
+              "f1_reject_level_rejected_market": 7,
+              "level_rejected_signals": 138,
+              "restraint_struct_impulse_reject": 119,
+              "breakout_accepted_signals": 54,
+              "deadzone_watch_armed": 7,
+              "accept_watch_armed": 13,
+              "dup": 27,
+              "restraint_departure_reset_reject": 8
+            },
+            "BTCUSDT@4h": {
+              "restraint_struct_impulse_reject": 75,
+              "level_rejected_signals": 77,
+              "dup": 46,
+              "breakout_accepted_signals": 53,
+              "accept_watch_armed": 8,
+              "f1_reject_level_rejected_market": 4,
+              "e1_cancel_orders": 2,
+              "deadzone_watch_armed": 3,
+              "restraint_departure_reset_reject": 1,
+              "restraint_coarse_echo_reject": 2
+            },
+            "DOGEUSDT@12h": {
+              "level_rejected_signals": 36,
+              "dup": 35,
+              "restraint_departure_reset_reject": 10,
+              "f1_reject_level_rejected_market": 9,
+              "restraint_coarse_echo_reject": 2,
+              "deadzone_watch_armed": 3,
+              "breakout_accepted_signals": 19,
+              "accept_watch_armed": 6
+            },
+            "DOGEUSDT@1d": {
+              "breakout_accepted_signals": 8,
+              "f1_reject_level_rejected_market": 3,
+              "level_rejected_signals": 9,
+              "dup": 9,
+              "restraint_departure_reset_reject": 3,
+              "deadzone_watch_armed": 2,
+              "accept_watch_armed": 1,
+              "restraint_coarse_echo_reject": 1
+            },
+            "DOGEUSDT@2h": {
+              "restraint_struct_impulse_reject": 120,
+              "level_rejected_signals": 159,
+              "breakout_accepted_signals": 45,
+              "restraint_departure_reset_reject": 10,
+              "f1_reject_level_rejected_market": 4,
+              "dup": 25,
+              "accept_watch_armed": 11,
+              "deadzone_watch_armed": 6
+            },
+            "DOGEUSDT@4h": {
+              "restraint_struct_impulse_reject": 123,
+              "level_rejected_signals": 146,
+              "dup": 40,
+              "f1_reject_level_rejected_market": 15,
+              "deadzone_watch_armed": 5,
+              "breakout_accepted_signals": 49,
+              "accept_watch_armed": 11,
+              "restraint_coarse_echo_reject": 6,
+              "restraint_departure_reset_reject": 3,
+              "e1_cancel_orders": 2
+            },
+            "ETHUSDT@12h": {
+              "level_rejected_signals": 20,
+              "f1_reject_level_rejected_market": 4,
+              "dup": 58,
+              "breakout_accepted_signals": 13,
+              "restraint_coarse_echo_reject": 1,
+              "accept_watch_armed": 4,
+              "deadzone_watch_armed": 1
+            },
+            "ETHUSDT@1d": {
+              "f1_reject_level_rejected_market": 12,
+              "level_rejected_signals": 26,
+              "dup": 24,
+              "restraint_departure_reset_reject": 4,
+              "deadzone_watch_armed": 3,
+              "restraint_coarse_echo_reject": 1,
+              "breakout_accepted_signals": 2
+            },
+            "ETHUSDT@2h": {
+              "restraint_struct_impulse_reject": 131,
+              "level_rejected_signals": 178,
+              "f1_reject_level_rejected_market": 15,
+              "restraint_departure_reset_reject": 5,
+              "breakout_accepted_signals": 63,
+              "dup": 45,
+              "deadzone_watch_armed": 8,
+              "accept_watch_armed": 28
+            },
+            "ETHUSDT@4h": {
+              "breakout_accepted_signals": 60,
+              "restraint_struct_impulse_reject": 104,
+              "level_rejected_signals": 126,
+              "dup": 45,
+              "accept_watch_armed": 15,
+              "f1_reject_level_rejected_market": 21,
+              "restraint_coarse_echo_reject": 1,
+              "restraint_departure_reset_reject": 4,
+              "deadzone_watch_armed": 2
+            },
+            "SOLUSDT@12h": {
+              "deadzone_watch_armed": 3,
+              "level_rejected_signals": 30,
+              "dup": 43,
+              "breakout_accepted_signals": 17,
+              "f1_reject_level_rejected_market": 3,
+              "restraint_coarse_echo_reject": 1,
+              "accept_watch_armed": 5,
+              "restraint_departure_reset_reject": 10
+            },
+            "SOLUSDT@1d": {
+              "breakout_accepted_signals": 4,
+              "dup": 33,
+              "level_rejected_signals": 8,
+              "deadzone_watch_armed": 1,
+              "f1_reject_level_rejected_market": 1
+            },
+            "SOLUSDT@2h": {
+              "restraint_struct_impulse_reject": 119,
+              "level_rejected_signals": 146,
+              "breakout_accepted_signals": 67,
+              "accept_watch_armed": 16,
+              "deadzone_watch_armed": 9,
+              "dup": 43,
+              "f1_reject_level_rejected_market": 8,
+              "restraint_departure_reset_reject": 3
+            },
+            "SOLUSDT@4h": {
+              "f1_reject_level_rejected_market": 12,
+              "level_rejected_signals": 102,
+              "restraint_struct_impulse_reject": 87,
+              "deadzone_watch_armed": 5,
+              "breakout_accepted_signals": 50,
+              "accept_watch_armed": 7,
+              "dup": 39,
+              "restraint_departure_reset_reject": 3,
+              "restraint_coarse_echo_reject": 1
+            }
+          }
+        }
+      }
+    },
+    "test_1x": {
+      "start_utc": "2024-10-15T20:00:00+00:00",
+      "end_utc": "2026-10-19T03:00:00+00:00",
+      "equity_end": 1309.8752905567947,
+      "cash_end": 1299.4606788821945,
+      "unrealized_end": 10.938471860545924,
+      "unsettled_funding_end": 0.5238601859458,
+      "equity_profit": 1009.8752905567947,
+      "return_frac": 3.3662509685226487,
+      "multiple": 4.366250968522649,
+      "max_drawdown_frac": 0.6208976733084529,
+      "max_drawdown_usdt": 265.04855795797107,
+      "min_equity": 160.1145747367536,
+      "max_equity": 1541.1548098345254,
+      "n_opened": 234,
+      "n_open_end": 4,
+      "closed": {
+        "n": 230,
+        "wins": 102,
+        "losses": 128,
+        "breakeven": 0,
+        "net": 1001.6071474401319,
+        "winrate": 0.4434782608695652,
+        "profit_factor": 1.746576221900196,
+        "average_win": 22.972625502712674,
+        "average_loss": -10.48125510809813,
+        "payoff_ratio": 2.1917819255218145,
+        "expectancy": 4.354813684522313,
+        "median_net": -2.310617913209021,
+        "best": 121.19528793101153,
+        "worst": -60.24874830490709
+      },
+      "concentration": {
+        "top_10pct": {
+          "n": 23,
+          "wins": 23,
+          "losses": 0,
+          "breakeven": 0,
+          "net": 1503.0606863216417,
+          "winrate": 1.0,
+          "profit_factor": null,
+          "average_win": 65.35046462268008,
+          "average_loss": null,
+          "payoff_ratio": null,
+          "expectancy": 65.35046462268008,
+          "median_net": 54.949901135616045,
+          "best": 121.19528793101153,
+          "worst": 38.92805261467977,
+          "share_of_net": 1.5006489222477146
+        },
+        "remaining_90pct": {
+          "n": 207,
+          "wins": 79,
+          "losses": 128,
+          "breakeven": 0,
+          "net": -501.4535388815098,
+          "winrate": 0.38164251207729466,
+          "profit_factor": 0.6262274191298964,
+          "average_win": 10.634773607025961,
+          "average_loss": -10.48125510809813,
+          "payoff_ratio": 1.0146469575775536,
+          "expectancy": -2.422480864161883,
+          "median_net": -3.5387947343049033,
+          "best": 35.10988429308252,
+          "worst": -60.24874830490709,
+          "share_of_net": -0.5006489222477146
+        },
+        "without_top_10_trades": {
+          "n": 220,
+          "wins": 92,
+          "losses": 128,
+          "breakeven": 0,
+          "net": 116.93983029613443,
+          "winrate": 0.41818181818181815,
+          "profit_factor": 1.0871644106327192,
+          "average_win": 15.853700914485817,
+          "average_loss": -10.48125510809813,
+          "payoff_ratio": 1.5125765713150874,
+          "expectancy": 0.5315446831642474,
+          "median_net": -2.9655616134479326,
+          "best": 56.96313168343587,
+          "worst": -60.24874830490709
+        }
+      },
+      "streaks": {
+        "longest_win": 6,
+        "longest_loss": 11
+      },
+      "buckets": {
+        "tf": {
+          "12h": {
+            "n": 45,
+            "wins": 18,
+            "losses": 27,
+            "breakeven": 0,
+            "net": 346.7171603853071,
+            "winrate": 0.4,
+            "profit_factor": 2.0636112186167717,
+            "average_win": 37.37212585736218,
+            "average_loss": -12.073374261007855,
+            "payoff_ratio": 3.0954168279251575,
+            "expectancy": 7.704825786340158,
+            "median_net": -6.974403586564614,
+            "best": 101.43521588702994,
+            "worst": -60.24874830490709
+          },
+          "1d": {
+            "n": 24,
+            "wins": 10,
+            "losses": 14,
+            "breakeven": 0,
+            "net": 105.68553791742116,
+            "winrate": 0.4166666666666667,
+            "profit_factor": 1.7231448373308778,
+            "average_win": 25.18326615109542,
+            "average_loss": -10.439080256680931,
+            "payoff_ratio": 2.412402772263229,
+            "expectancy": 4.403564079892549,
+            "median_net": -3.0914700614479815,
+            "best": 70.39249276749598,
+            "worst": -36.67151332780269
+          },
+          "2h": {
+            "n": 95,
+            "wins": 44,
+            "losses": 51,
+            "breakeven": 0,
+            "net": 469.3287433796346,
+            "winrate": 0.4631578947368421,
+            "profit_factor": 1.9485249655377752,
+            "average_win": 21.911983120818213,
+            "average_loss": -9.701931645811113,
+            "payoff_ratio": 2.258517573691512,
+            "expectancy": 4.94030256189089,
+            "median_net": -2.2323185567897355,
+            "best": 121.19528793101153,
+            "worst": -50.469237824177924
+          },
+          "4h": {
+            "n": 66,
+            "wins": 30,
+            "losses": 36,
+            "breakeven": 0,
+            "net": 79.87570575776907,
+            "winrate": 0.45454545454545453,
+            "profit_factor": 1.2131872632638623,
+            "average_win": 15.151653900573931,
+            "average_loss": -10.407608646095802,
+            "payoff_ratio": 1.4558247159166346,
+            "expectancy": 1.2102379660268041,
+            "median_net": -0.9406810277169447,
+            "best": 118.8666822263311,
+            "worst": -29.961928157525644
+          }
+        },
+        "symbol": {
+          "BTCUSDT": {
+            "n": 53,
+            "wins": 25,
+            "losses": 28,
+            "breakeven": 0,
+            "net": 215.3379753665604,
+            "winrate": 0.4716981132075472,
+            "profit_factor": 1.58316865240748,
+            "average_win": 23.38372138940161,
+            "average_loss": -13.187680691731423,
+            "payoff_ratio": 1.7731488906963777,
+            "expectancy": 4.062980667293592,
+            "median_net": -3.1942344208919224,
+            "best": 118.8666822263311,
+            "worst": -60.24874830490709
+          },
+          "DOGEUSDT": {
+            "n": 65,
+            "wins": 29,
+            "losses": 36,
+            "breakeven": 0,
+            "net": 244.63145185487966,
+            "winrate": 0.4461538461538462,
+            "profit_factor": 1.7610023829463837,
+            "average_win": 19.520377937182033,
+            "average_loss": -8.929430786761092,
+            "payoff_ratio": 2.1860719236575794,
+            "expectancy": 3.7635607977673793,
+            "median_net": -2.0474692976108777,
+            "best": 88.96151801789438,
+            "worst": -29.961928157525644
+          },
+          "ETHUSDT": {
+            "n": 63,
+            "wins": 25,
+            "losses": 38,
+            "breakeven": 0,
+            "net": 145.1146881271813,
+            "winrate": 0.3968253968253968,
+            "profit_factor": 1.3745911990882913,
+            "average_win": 21.30038010968321,
+            "average_loss": -10.194600384602603,
+            "payoff_ratio": 2.089378622614203,
+            "expectancy": 2.303407748050497,
+            "median_net": -2.2323185567897355,
+            "best": 82.89288530929494,
+            "worst": -50.469237824177924
+          },
+          "SOLUSDT": {
+            "n": 49,
+            "wins": 23,
+            "losses": 26,
+            "breakeven": 0,
+            "net": 396.5230320915105,
+            "winrate": 0.46938775510204084,
+            "profit_factor": 2.5048810907069883,
+            "average_win": 28.696274070491008,
+            "average_loss": -10.13427967422241,
+            "payoff_ratio": 2.8316047112339864,
+            "expectancy": 8.092306777377766,
+            "median_net": -3.9697659074533957,
+            "best": 121.19528793101153,
+            "worst": -25.182857730607097
+          }
+        },
+        "event_id": {
+          "BREAKOUT_ACCEPTED": {
+            "n": 52,
+            "wins": 24,
+            "losses": 28,
+            "breakeven": 0,
+            "net": 256.9788067773063,
+            "winrate": 0.46153846153846156,
+            "profit_factor": 2.155080190016485,
+            "average_win": 19.97732641300944,
+            "average_loss": -7.945608111961436,
+            "payoff_ratio": 2.5142602216858996,
+            "expectancy": 4.941900130332814,
+            "median_net": -0.7811682292372021,
+            "best": 121.19528793101153,
+            "worst": -25.182857730607097
+          },
+          "LEVEL_REJECTED": {
+            "n": 178,
+            "wins": 78,
+            "losses": 100,
+            "breakeven": 0,
+            "net": 744.6283406628256,
+            "winrate": 0.43820224719101125,
+            "profit_factor": 1.6653673668363576,
+            "average_win": 23.89425599185213,
+            "average_loss": -11.191236267016405,
+            "payoff_ratio": 2.1350863677389205,
+            "expectancy": 4.183305284622616,
+            "median_net": -2.9655616134479326,
+            "best": 118.8666822263311,
+            "worst": -60.24874830490709
+          }
+        },
+        "direction": {
+          "-1": {
+            "n": 116,
+            "wins": 55,
+            "losses": 61,
+            "breakeven": 0,
+            "net": 483.65911476026446,
+            "winrate": 0.47413793103448276,
+            "profit_factor": 1.7989087223815277,
+            "average_win": 19.80106967568879,
+            "average_loss": -9.924585531190477,
+            "payoff_ratio": 1.9951533102776944,
+            "expectancy": 4.1694751272436585,
+            "median_net": -0.7341169582915583,
+            "best": 83.81085175232464,
+            "worst": -29.961928157525644
+          },
+          "1": {
+            "n": 114,
+            "wins": 47,
+            "losses": 67,
+            "breakeven": 0,
+            "net": 517.9480326798675,
+            "winrate": 0.41228070175438597,
+            "profit_factor": 1.7035416651175943,
+            "average_win": 26.684020619442748,
+            "average_loss": -10.988073678118532,
+            "payoff_ratio": 2.428453011976145,
+            "expectancy": 4.543403795437434,
+            "median_net": -3.2393490725278253,
+            "best": 121.19528793101153,
+            "worst": -60.24874830490709
+          }
+        },
+        "entry_mode": {
+          "limit": {
+            "n": 20,
+            "wins": 6,
+            "losses": 14,
+            "breakeven": 0,
+            "net": 275.75316944604884,
+            "winrate": 0.3,
+            "profit_factor": 3.2168867638847543,
+            "average_win": 66.69012413725453,
+            "average_loss": -8.884826812677023,
+            "payoff_ratio": 7.506069115731093,
+            "expectancy": 13.787658472302443,
+            "median_net": -5.801383385344417,
+            "best": 118.8666822263311,
+            "worst": -15.891645819519248
+          },
+          "market": {
+            "n": 210,
+            "wins": 96,
+            "losses": 114,
+            "breakeven": 0,
+            "net": 725.853977994083,
+            "winrate": 0.45714285714285713,
+            "profit_factor": 1.5963244980188431,
+            "average_win": 20.240281838053807,
+            "average_loss": -10.677307705781425,
+            "payoff_ratio": 1.895635341397376,
+            "expectancy": 3.4564475142575386,
+            "median_net": -2.12636999890799,
+            "best": 121.19528793101153,
+            "worst": -60.24874830490709
+          }
+        },
+        "exit_reason_code": {
+          "PROTECTIVE_STOP": {
+            "n": 196,
+            "wins": 70,
+            "losses": 126,
+            "breakeven": 0,
+            "net": 359.2547791785214,
+            "winrate": 0.35714285714285715,
+            "profit_factor": 1.2688471948369457,
+            "average_win": 24.221906800940385,
+            "average_loss": -10.605386483232584,
+            "payoff_ratio": 2.2839249507065023,
+            "expectancy": 1.8329325468291908,
+            "median_net": -4.056812750235441,
+            "best": 121.19528793101153,
+            "worst": -60.24874830490709
+          },
+          "v21": {
+            "n": 31,
+            "wins": 30,
+            "losses": 1,
+            "breakeven": 0,
+            "net": 633.9685674014964,
+            "winrate": 0.967741935483871,
+            "profit_factor": 8331.664718763275,
+            "average_win": 21.134822266652147,
+            "average_loss": -0.07610059806795488,
+            "payoff_ratio": 277.7221572921092,
+            "expectancy": 20.45059894843537,
+            "median_net": 11.402372625575845,
+            "best": 101.43521588702994,
+            "worst": -0.07610059806795488
+          },
+          "§8.5": {
+            "n": 3,
+            "wins": 2,
+            "losses": 1,
+            "breakeven": 0,
+            "net": 8.383800860114064,
+            "winrate": 0.6666666666666666,
+            "profit_factor": 2.5981758360990477,
+            "average_win": 6.81482860565062,
+            "average_loss": -5.245856351187175,
+            "payoff_ratio": 1.2990879180495238,
+            "expectancy": 2.7946002867046884,
+            "median_net": 0.24645932486917568,
+            "best": 13.383197886432065,
+            "worst": -5.245856351187175
+          }
+        }
+      },
+      "fees": 197.4565664106115,
+      "funding": 11.915872144089137,
+      "slippage_embedded": 64.3492645251807,
+      "holding_hours_mean": 64.86086956521739,
+      "holding_hours_median": 22.5,
+      "capacity_skips": 19,
+      "counters": {
+        "go_events": 0,
+        "open_intents": 291,
+        "opens_filled": 213,
+        "min_size_skips": 0,
+        "liquidations": 0,
+        "limits_armed": 80,
+        "limit_fills_entry": 21,
+        "limit_expired": 45,
+        "limit_min_size_skips": 0,
+        "reduce_limits_armed": 0,
+        "reduce_limit_fills": 0,
+        "reduce_timeout_taker": 0,
+        "resting_canceled": 0,
+        "e1_priority_cancels": 2,
+        "portfolio_cap_skips": 19,
+        "protective_stop_fills": 196,
+        "mic_go_events": 0,
+        "watch_entries_armed": 80,
+        "watch_canceled_played_out": 10,
+        "virtual_entry_triggers": 2,
+        "virtual_entry_fills": 2,
+        "level_rejected_signals": 703,
+        "breakout_accepted_signals": 226,
+        "dup": 336,
+        "f1_reject_level_rejected_market": 79,
+        "restraint_departure_reset_reject": 44,
+        "accept_watch_armed": 46,
+        "deadzone_watch_armed": 37,
+        "restraint_coarse_echo_reject": 19,
+        "restraint_struct_impulse_reject": 449,
+        "e1_cancel_orders": 2,
+        "campaigns": {
+          "BTCUSDT@12h": {
+            "level_rejected_signals": 20,
+            "breakout_accepted_signals": 11,
+            "dup": 29,
+            "f1_reject_level_rejected_market": 6,
+            "restraint_departure_reset_reject": 2,
+            "accept_watch_armed": 1,
+            "deadzone_watch_armed": 3,
+            "restraint_coarse_echo_reject": 1
+          },
+          "BTCUSDT@1d": {
+            "deadzone_watch_armed": 2,
+            "level_rejected_signals": 14,
+            "dup": 18,
+            "f1_reject_level_rejected_market": 6,
+            "breakout_accepted_signals": 4,
+            "restraint_departure_reset_reject": 2
+          },
+          "BTCUSDT@2h": {
+            "restraint_struct_impulse_reject": 51,
+            "level_rejected_signals": 70,
+            "breakout_accepted_signals": 21,
+            "dup": 15,
+            "restraint_departure_reset_reject": 5,
+            "accept_watch_armed": 4,
+            "deadzone_watch_armed": 1,
+            "f1_reject_level_rejected_market": 2
+          },
+          "BTCUSDT@4h": {
+            "level_rejected_signals": 47,
+            "restraint_struct_impulse_reject": 39,
+            "breakout_accepted_signals": 21,
+            "f1_reject_level_rejected_market": 10,
+            "dup": 18,
+            "restraint_coarse_echo_reject": 2,
+            "restraint_departure_reset_reject": 1,
+            "accept_watch_armed": 3,
+            "deadzone_watch_armed": 1,
+            "e1_cancel_orders": 1
+          },
+          "DOGEUSDT@12h": {
+            "f1_reject_level_rejected_market": 6,
+            "level_rejected_signals": 21,
+            "dup": 29,
+            "restraint_coarse_echo_reject": 3,
+            "breakout_accepted_signals": 6,
+            "accept_watch_armed": 1,
+            "restraint_departure_reset_reject": 1,
+            "deadzone_watch_armed": 1
+          },
+          "DOGEUSDT@1d": {
+            "level_rejected_signals": 7,
+            "dup": 18,
+            "breakout_accepted_signals": 4,
+            "restraint_departure_reset_reject": 1,
+            "f1_reject_level_rejected_market": 2
+          },
+          "DOGEUSDT@2h": {
+            "breakout_accepted_signals": 22,
+            "accept_watch_armed": 4,
+            "restraint_struct_impulse_reject": 56,
+            "level_rejected_signals": 71,
+            "restraint_departure_reset_reject": 3,
+            "dup": 10,
+            "f1_reject_level_rejected_market": 3,
+            "deadzone_watch_armed": 2
+          },
+          "DOGEUSDT@4h": {
+            "restraint_struct_impulse_reject": 66,
+            "level_rejected_signals": 79,
+            "breakout_accepted_signals": 23,
+            "accept_watch_armed": 5,
+            "dup": 32,
+            "deadzone_watch_armed": 3,
+            "f1_reject_level_rejected_market": 6,
+            "restraint_coarse_echo_reject": 2
+          },
+          "ETHUSDT@12h": {
+            "deadzone_watch_armed": 4,
+            "level_rejected_signals": 29,
+            "restraint_departure_reset_reject": 4,
+            "breakout_accepted_signals": 6,
+            "accept_watch_armed": 3,
+            "dup": 33,
+            "f1_reject_level_rejected_market": 9,
+            "restraint_coarse_echo_reject": 1
+          },
+          "ETHUSDT@1d": {
+            "breakout_accepted_signals": 7,
+            "dup": 32,
+            "f1_reject_level_rejected_market": 7,
+            "level_rejected_signals": 14,
+            "deadzone_watch_armed": 3,
+            "restraint_departure_reset_reject": 2,
+            "accept_watch_armed": 1
+          },
+          "ETHUSDT@2h": {
+            "breakout_accepted_signals": 15,
+            "accept_watch_armed": 5,
+            "restraint_struct_impulse_reject": 68,
+            "level_rejected_signals": 90,
+            "deadzone_watch_armed": 4,
+            "dup": 23,
+            "f1_reject_level_rejected_market": 2,
+            "restraint_departure_reset_reject": 5
+          },
+          "ETHUSDT@4h": {
+            "f1_reject_level_rejected_market": 5,
+            "level_rejected_signals": 75,
+            "dup": 28,
+            "restraint_departure_reset_reject": 6,
+            "breakout_accepted_signals": 28,
+            "restraint_struct_impulse_reject": 55,
+            "restraint_coarse_echo_reject": 7,
+            "deadzone_watch_armed": 2,
+            "accept_watch_armed": 5
+          },
+          "SOLUSDT@12h": {
+            "level_rejected_signals": 22,
+            "breakout_accepted_signals": 8,
+            "accept_watch_armed": 3,
+            "dup": 15,
+            "f1_reject_level_rejected_market": 7,
+            "deadzone_watch_armed": 2,
+            "restraint_departure_reset_reject": 4,
+            "restraint_coarse_echo_reject": 2
+          },
+          "SOLUSDT@1d": {
+            "breakout_accepted_signals": 3,
+            "accept_watch_armed": 2,
+            "level_rejected_signals": 7,
+            "dup": 3,
+            "restraint_departure_reset_reject": 2,
+            "f1_reject_level_rejected_market": 2,
+            "deadzone_watch_armed": 1
+          },
+          "SOLUSDT@2h": {
+            "restraint_struct_impulse_reject": 64,
+            "level_rejected_signals": 79,
+            "breakout_accepted_signals": 24,
+            "dup": 18,
+            "restraint_departure_reset_reject": 2,
+            "deadzone_watch_armed": 7,
+            "accept_watch_armed": 5,
+            "f1_reject_level_rejected_market": 1
+          },
+          "SOLUSDT@4h": {
+            "breakout_accepted_signals": 23,
+            "restraint_struct_impulse_reject": 50,
+            "level_rejected_signals": 58,
+            "f1_reject_level_rejected_market": 5,
+            "dup": 15,
+            "accept_watch_armed": 4,
+            "restraint_coarse_echo_reject": 1,
+            "restraint_departure_reset_reject": 4,
+            "e1_cancel_orders": 1,
+            "deadzone_watch_armed": 1
+          }
+        }
+      },
+      "monthly_full_execution_window": [
+        {
+          "month": "2024-10",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2024-11",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2024-12",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-01",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-02",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-03",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-04",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-05",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-06",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-07",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-08",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-09",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-10",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-11",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2025-12",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-01",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-02",
+          "equity_end": 300.0,
+          "pnl": 0.0,
+          "return_frac": 0.0
+        },
+        {
+          "month": "2026-03",
+          "equity_end": 293.6628468896321,
+          "pnl": -6.337153110367922,
+          "return_frac": -0.02112384370122644
+        },
+        {
+          "month": "2026-04",
+          "equity_end": 241.09686321800925,
+          "pnl": -52.56598367162283,
+          "return_frac": -0.17900113762562142
+        },
+        {
+          "month": "2026-05",
+          "equity_end": 199.61391676110193,
+          "pnl": -41.482946456907314,
+          "return_frac": -0.17205925412391954
+        },
+        {
+          "month": "2026-06",
+          "equity_end": 298.90525334669655,
+          "pnl": 99.29133658559462,
+          "return_frac": 0.49741690457597976
+        },
+        {
+          "month": "2026-07",
+          "equity_end": 197.2689276685075,
+          "pnl": -101.63632567818905,
+          "return_frac": -0.34002856938851567
+        },
+        {
+          "month": "2026-08",
+          "equity_end": 651.6442237784768,
+          "pnl": 454.37529610996927,
+          "return_frac": 2.3033292748136476
+        },
+        {
+          "month": "2026-09",
+          "equity_end": 904.2267904710084,
+          "pnl": 252.5825666925316,
+          "return_frac": 0.3876080804153583
+        },
+        {
+          "month": "2026-10",
+          "equity_end": 1309.8752905567947,
+          "pnl": 405.6485000857863,
+          "return_frac": 0.4486136712168034
+        }
+      ],
+      "segment_bounds": {
+        "BTCUSDT@12h": {
+          "lo": 1027,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "BTCUSDT@1d": {
+          "lo": 514,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "BTCUSDT@2h": {
+          "lo": 6160,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792375200000
+        },
+        "BTCUSDT@4h": {
+          "lo": 3080,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@12h": {
+          "lo": 1027,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@1d": {
+          "lo": 514,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@2h": {
+          "lo": 6160,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792375200000
+        },
+        "DOGEUSDT@4h": {
+          "lo": 3080,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@12h": {
+          "lo": 1027,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@1d": {
+          "lo": 514,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@2h": {
+          "lo": 6160,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792375200000
+        },
+        "ETHUSDT@4h": {
+          "lo": 3080,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@12h": {
+          "lo": 1027,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@1d": {
+          "lo": 514,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1773360000000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@2h": {
+          "lo": 6160,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792375200000
+        },
+        "SOLUSDT@4h": {
+          "lo": 3080,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1773374400000,
+          "ts_hi": 1792368000000
+        }
+      },
+      "standard_metrics": {
+        "segment": "test",
+        "cost_multiplier": 1.0,
+        "ts_lo": 1773360000000,
+        "ts_hi": 1792375200000,
+        "span_days": 220.08333333333334,
+        "equity_start": 300.0,
+        "equity_end": 1312.421790556795,
+        "net_pnl": 999.4606788821952,
+        "return_pct": 3.331535596273984,
+        "ann_return": 10.580394663998698,
+        "max_dd_usdt": 265.04855795797107,
+        "max_dd_pct": 0.17198048908949612,
+        "peak_ts": 1791478800000,
+        "trough_ts": 1792148400000,
+        "dd_days": 7.75,
+        "n_trades": 234,
+        "n_closed": 230,
+        "n_open_end": 4,
+        "winrate": 0.4434782608695652,
+        "profit_factor": 1.746576221900196,
+        "payoff_ratio": 2.1917819255218145,
+        "expectancy_usdt": 4.271199482402544,
+        "expectancy_r": 0.30880732594105115,
+        "holding": {
+          "median_h": 22.5,
+          "p90_h": 203.0
+        },
+        "exposure_ratio": 0.9163354154836267,
+        "fees_total": 197.4565664106115,
+        "slippage_total": 64.3492645251807,
+        "funding_total": 11.915872144089137,
+        "by_direction": {
+          "-1": {
+            "n": 118,
+            "net": 482.78853865831496,
+            "expectancy": 4.091428293714533,
+            "winrate": 0.4661016949152542
+          },
+          "1": {
+            "n": 116,
+            "net": 516.6721402238804,
+            "expectancy": 4.454070174343797,
+            "winrate": 0.4051724137931034
+          }
+        },
+        "by_regime": {
+          "TRANSITION": {
+            "n": 104,
+            "net": 249.50614234273942,
+            "expectancy": 2.3990975225263407,
+            "winrate": 0.4326923076923077
+          },
+          "TREND_UP": {
+            "n": 46,
+            "net": 287.9022580214523,
+            "expectancy": 6.25874473959679,
+            "winrate": 0.5217391304347826
+          },
+          "RANGE": {
+            "n": 27,
+            "net": 90.78930681924317,
+            "expectancy": 3.362566919231228,
+            "winrate": 0.37037037037037035
+          },
+          "TREND_DOWN": {
+            "n": 57,
+            "net": 371.2629716987604,
+            "expectancy": 6.5133854683993055,
+            "winrate": 0.40350877192982454
+          }
+        },
+        "by_symbol": {
+          "BTCUSDT": {
+            "n": 55,
+            "net": 214.38615443898772,
+            "expectancy": 3.8979300807088677,
+            "winrate": 0.45454545454545453
+          },
+          "SOLUSDT": {
+            "n": 50,
+            "net": 396.21035363971055,
+            "expectancy": 7.924207072794211,
+            "winrate": 0.46
+          },
+          "ETHUSDT": {
+            "n": 64,
+            "net": 144.23271894861733,
+            "expectancy": 2.253636233572146,
+            "winrate": 0.390625
+          },
+          "DOGEUSDT": {
+            "n": 65,
+            "net": 244.63145185487969,
+            "expectancy": 3.7635607977673797,
+            "winrate": 0.4461538461538462
+          }
+        },
+        "monthly": [
+          {
+            "month": "2026-03",
+            "equity_end": 293.6628468896321,
+            "pnl": -6.337153110367922
+          },
+          {
+            "month": "2026-04",
+            "equity_end": 241.09686321800925,
+            "pnl": -52.56598367162283
+          },
+          {
+            "month": "2026-05",
+            "equity_end": 199.61391676110193,
+            "pnl": -41.482946456907314
+          },
+          {
+            "month": "2026-06",
+            "equity_end": 298.90525334669655,
+            "pnl": 99.29133658559462
+          },
+          {
+            "month": "2026-07",
+            "equity_end": 197.2689276685075,
+            "pnl": -101.63632567818905
+          },
+          {
+            "month": "2026-08",
+            "equity_end": 651.6442237784768,
+            "pnl": 454.37529610996927
+          },
+          {
+            "month": "2026-09",
+            "equity_end": 904.2267904710084,
+            "pnl": 252.5825666925316
+          },
+          {
+            "month": "2026-10",
+            "equity_end": 1312.421790556795,
+            "pnl": 408.19500008578666
+          }
+        ],
+        "counters": {
+          "go_events": 0,
+          "open_intents": 291,
+          "opens_filled": 213,
+          "min_size_skips": 0,
+          "liquidations": 0,
+          "limits_armed": 80,
+          "limit_fills_entry": 21,
+          "limit_expired": 45,
+          "limit_min_size_skips": 0,
+          "reduce_limits_armed": 0,
+          "reduce_limit_fills": 0,
+          "reduce_timeout_taker": 0,
+          "resting_canceled": 0,
+          "e1_priority_cancels": 2,
+          "portfolio_cap_skips": 19,
+          "protective_stop_fills": 196,
+          "mic_go_events": 0,
+          "watch_entries_armed": 80,
+          "watch_canceled_played_out": 10,
+          "virtual_entry_triggers": 2,
+          "virtual_entry_fills": 2,
+          "level_rejected_signals": 703,
+          "breakout_accepted_signals": 226,
+          "dup": 336,
+          "f1_reject_level_rejected_market": 79,
+          "restraint_departure_reset_reject": 44,
+          "accept_watch_armed": 46,
+          "deadzone_watch_armed": 37,
+          "restraint_coarse_echo_reject": 19,
+          "restraint_struct_impulse_reject": 449,
+          "e1_cancel_orders": 2,
+          "campaigns": {
+            "BTCUSDT@12h": {
+              "level_rejected_signals": 20,
+              "breakout_accepted_signals": 11,
+              "dup": 29,
+              "f1_reject_level_rejected_market": 6,
+              "restraint_departure_reset_reject": 2,
+              "accept_watch_armed": 1,
+              "deadzone_watch_armed": 3,
+              "restraint_coarse_echo_reject": 1
+            },
+            "BTCUSDT@1d": {
+              "deadzone_watch_armed": 2,
+              "level_rejected_signals": 14,
+              "dup": 18,
+              "f1_reject_level_rejected_market": 6,
+              "breakout_accepted_signals": 4,
+              "restraint_departure_reset_reject": 2
+            },
+            "BTCUSDT@2h": {
+              "restraint_struct_impulse_reject": 51,
+              "level_rejected_signals": 70,
+              "breakout_accepted_signals": 21,
+              "dup": 15,
+              "restraint_departure_reset_reject": 5,
+              "accept_watch_armed": 4,
+              "deadzone_watch_armed": 1,
+              "f1_reject_level_rejected_market": 2
+            },
+            "BTCUSDT@4h": {
+              "level_rejected_signals": 47,
+              "restraint_struct_impulse_reject": 39,
+              "breakout_accepted_signals": 21,
+              "f1_reject_level_rejected_market": 10,
+              "dup": 18,
+              "restraint_coarse_echo_reject": 2,
+              "restraint_departure_reset_reject": 1,
+              "accept_watch_armed": 3,
+              "deadzone_watch_armed": 1,
+              "e1_cancel_orders": 1
+            },
+            "DOGEUSDT@12h": {
+              "f1_reject_level_rejected_market": 6,
+              "level_rejected_signals": 21,
+              "dup": 29,
+              "restraint_coarse_echo_reject": 3,
+              "breakout_accepted_signals": 6,
+              "accept_watch_armed": 1,
+              "restraint_departure_reset_reject": 1,
+              "deadzone_watch_armed": 1
+            },
+            "DOGEUSDT@1d": {
+              "level_rejected_signals": 7,
+              "dup": 18,
+              "breakout_accepted_signals": 4,
+              "restraint_departure_reset_reject": 1,
+              "f1_reject_level_rejected_market": 2
+            },
+            "DOGEUSDT@2h": {
+              "breakout_accepted_signals": 22,
+              "accept_watch_armed": 4,
+              "restraint_struct_impulse_reject": 56,
+              "level_rejected_signals": 71,
+              "restraint_departure_reset_reject": 3,
+              "dup": 10,
+              "f1_reject_level_rejected_market": 3,
+              "deadzone_watch_armed": 2
+            },
+            "DOGEUSDT@4h": {
+              "restraint_struct_impulse_reject": 66,
+              "level_rejected_signals": 79,
+              "breakout_accepted_signals": 23,
+              "accept_watch_armed": 5,
+              "dup": 32,
+              "deadzone_watch_armed": 3,
+              "f1_reject_level_rejected_market": 6,
+              "restraint_coarse_echo_reject": 2
+            },
+            "ETHUSDT@12h": {
+              "deadzone_watch_armed": 4,
+              "level_rejected_signals": 29,
+              "restraint_departure_reset_reject": 4,
+              "breakout_accepted_signals": 6,
+              "accept_watch_armed": 3,
+              "dup": 33,
+              "f1_reject_level_rejected_market": 9,
+              "restraint_coarse_echo_reject": 1
+            },
+            "ETHUSDT@1d": {
+              "breakout_accepted_signals": 7,
+              "dup": 32,
+              "f1_reject_level_rejected_market": 7,
+              "level_rejected_signals": 14,
+              "deadzone_watch_armed": 3,
+              "restraint_departure_reset_reject": 2,
+              "accept_watch_armed": 1
+            },
+            "ETHUSDT@2h": {
+              "breakout_accepted_signals": 15,
+              "accept_watch_armed": 5,
+              "restraint_struct_impulse_reject": 68,
+              "level_rejected_signals": 90,
+              "deadzone_watch_armed": 4,
+              "dup": 23,
+              "f1_reject_level_rejected_market": 2,
+              "restraint_departure_reset_reject": 5
+            },
+            "ETHUSDT@4h": {
+              "f1_reject_level_rejected_market": 5,
+              "level_rejected_signals": 75,
+              "dup": 28,
+              "restraint_departure_reset_reject": 6,
+              "breakout_accepted_signals": 28,
+              "restraint_struct_impulse_reject": 55,
+              "restraint_coarse_echo_reject": 7,
+              "deadzone_watch_armed": 2,
+              "accept_watch_armed": 5
+            },
+            "SOLUSDT@12h": {
+              "level_rejected_signals": 22,
+              "breakout_accepted_signals": 8,
+              "accept_watch_armed": 3,
+              "dup": 15,
+              "f1_reject_level_rejected_market": 7,
+              "deadzone_watch_armed": 2,
+              "restraint_departure_reset_reject": 4,
+              "restraint_coarse_echo_reject": 2
+            },
+            "SOLUSDT@1d": {
+              "breakout_accepted_signals": 3,
+              "accept_watch_armed": 2,
+              "level_rejected_signals": 7,
+              "dup": 3,
+              "restraint_departure_reset_reject": 2,
+              "f1_reject_level_rejected_market": 2,
+              "deadzone_watch_armed": 1
+            },
+            "SOLUSDT@2h": {
+              "restraint_struct_impulse_reject": 64,
+              "level_rejected_signals": 79,
+              "breakout_accepted_signals": 24,
+              "dup": 18,
+              "restraint_departure_reset_reject": 2,
+              "deadzone_watch_armed": 7,
+              "accept_watch_armed": 5,
+              "f1_reject_level_rejected_market": 1
+            },
+            "SOLUSDT@4h": {
+              "breakout_accepted_signals": 23,
+              "restraint_struct_impulse_reject": 50,
+              "level_rejected_signals": 58,
+              "f1_reject_level_rejected_market": 5,
+              "dup": 15,
+              "accept_watch_armed": 4,
+              "restraint_coarse_echo_reject": 1,
+              "restraint_departure_reset_reject": 4,
+              "e1_cancel_orders": 1,
+              "deadzone_watch_armed": 1
+            }
+          }
+        }
+      }
+    },
+    "full_1.5x": {
+      "start_utc": "2024-10-15T20:00:00+00:00",
+      "end_utc": "2026-10-19T03:00:00+00:00",
+      "equity_end": 11144.104307184502,
+      "cash_end": 11102.217447142504,
+      "unrealized_end": 45.260845788025456,
+      "unsettled_funding_end": 3.3739857460269005,
+      "equity_profit": 10844.104307184502,
+      "return_frac": 36.14701435728167,
+      "multiple": 37.14701435728167,
+      "max_drawdown_frac": 0.633571907192883,
+      "max_drawdown_usdt": 3255.91087614434,
+      "min_equity": 222.986266138079,
+      "max_equity": 12471.82874855394,
+      "n_opened": 686,
+      "n_open_end": 4,
+      "closed": {
+        "n": 682,
+        "wins": 301,
+        "losses": 381,
+        "breakeven": 0,
+        "net": 10815.987983718169,
+        "winrate": 0.4413489736070381,
+        "profit_factor": 1.4503561406326133,
+        "average_win": 115.72262323508284,
+        "average_loss": -63.03548979013587,
+        "payoff_ratio": 1.8358328557509158,
+        "expectancy": 15.85921991747532,
+        "median_net": -9.645455196114877,
+        "best": 1396.1303535476525,
+        "worst": -285.64215686848854
+      },
+      "concentration": {
+        "top_10pct": {
+          "n": 69,
+          "wins": 69,
+          "losses": 0,
+          "breakeven": 0,
+          "net": 26003.398033268648,
+          "winrate": 1.0,
+          "profit_factor": null,
+          "average_win": 376.86084106186445,
+          "average_loss": null,
+          "payoff_ratio": null,
+          "expectancy": 376.86084106186445,
+          "median_net": 281.1676982079373,
+          "best": 1396.1303535476525,
+          "worst": 135.6379795090043,
+          "share_of_net": 2.4041629920829077
+        },
+        "remaining_90pct": {
+          "n": 613,
+          "wins": 232,
+          "losses": 381,
+          "breakeven": 0,
+          "net": -15187.410049550479,
+          "winrate": 0.37846655791190864,
+          "profit_factor": 0.36762657406639887,
+          "average_win": 38.05651534694521,
+          "average_loss": -63.03548979013587,
+          "payoff_ratio": 0.6037315720659395,
+          "expectancy": -24.77554657349181,
+          "median_net": -16.976566186399864,
+          "best": 134.3795451956591,
+          "worst": -285.64215686848854,
+          "share_of_net": -1.4041629920829075
+        },
+        "without_top_10_trades": {
+          "n": 672,
+          "wins": 291,
+          "losses": 381,
+          "breakeven": 0,
+          "net": 1773.3386250921485,
+          "winrate": 0.4330357142857143,
+          "profit_factor": 1.0738382790766285,
+          "average_win": 88.62494926162857,
+          "average_loss": -63.03548979013587,
+          "payoff_ratio": 1.405953210749813,
+          "expectancy": 2.638896763529983,
+          "median_net": -10.697856053193807,
+          "best": 665.3642025491588,
+          "worst": -285.64215686848854
+        }
+      },
+      "streaks": {
+        "longest_win": 7,
+        "longest_loss": 11
+      },
+      "buckets": {
+        "tf": {
+          "12h": {
+            "n": 124,
+            "wins": 51,
+            "losses": 73,
+            "breakeven": 0,
+            "net": 4311.154614558553,
+            "winrate": 0.4112903225806452,
+            "profit_factor": 1.7673634583746862,
+            "average_win": 194.69203272836418,
+            "average_loss": -76.96080896695919,
+            "payoff_ratio": 2.529755538457884,
+            "expectancy": 34.7673759238593,
+            "median_net": -18.086699046277143,
+            "best": 1188.5456554348311,
+            "worst": -285.64215686848854
+          },
+          "1d": {
+            "n": 58,
+            "wins": 21,
+            "losses": 37,
+            "breakeven": 0,
+            "net": 2467.6299682051863,
+            "winrate": 0.3620689655172414,
+            "profit_factor": 2.0185963084846423,
+            "average_win": 232.86709100288732,
+            "average_loss": -65.47510656366074,
+            "payoff_ratio": 3.5565744482824653,
+            "expectancy": 42.545344279399764,
+            "median_net": -27.50194615170405,
+            "best": 866.3823514335154,
+            "worst": -163.6524085088109
+          },
+          "2h": {
+            "n": 306,
+            "wins": 135,
+            "losses": 171,
+            "breakeven": 0,
+            "net": 3093.452807122028,
+            "winrate": 0.4411764705882353,
+            "profit_factor": 1.3206726978478405,
+            "average_win": 94.37195255048381,
+            "average_loss": -56.41380577306016,
+            "payoff_ratio": 1.6728520839405976,
+            "expectancy": 10.109322899091595,
+            "median_net": -7.482824018605733,
+            "best": 1396.1303535476525,
+            "worst": -272.8465029353149
+          },
+          "4h": {
+            "n": 194,
+            "wins": 94,
+            "losses": 100,
+            "breakeven": 0,
+            "net": 943.7505938324015,
+            "winrate": 0.4845360824742268,
+            "profit_factor": 1.1491142689134843,
+            "average_win": 77.3701427578448,
+            "average_loss": -63.290428254050106,
+            "payoff_ratio": 1.2224619882058343,
+            "expectancy": 4.864693782641244,
+            "median_net": -4.624662488175598,
+            "best": 1019.8721426218767,
+            "worst": -244.7207758525168
+          }
+        },
+        "symbol": {
+          "BTCUSDT": {
+            "n": 162,
+            "wins": 70,
+            "losses": 92,
+            "breakeven": 0,
+            "net": 1320.600805037761,
+            "winrate": 0.43209876543209874,
+            "profit_factor": 1.2166850374883067,
+            "average_win": 105.93092421866415,
+            "average_loss": -66.24525967683401,
+            "payoff_ratio": 1.5990717635560605,
+            "expectancy": 8.151856821220745,
+            "median_net": -11.621255248296272,
+            "best": 1188.5456554348311,
+            "worst": -285.64215686848854
+          },
+          "DOGEUSDT": {
+            "n": 167,
+            "wins": 74,
+            "losses": 93,
+            "breakeven": 0,
+            "net": 2530.343389387732,
+            "winrate": 0.4431137724550898,
+            "profit_factor": 1.4614957483588984,
+            "average_win": 108.28731735498519,
+            "average_loss": -58.95610854710938,
+            "payoff_ratio": 1.8367446567213181,
+            "expectancy": 15.15175682268103,
+            "median_net": -9.204360469364431,
+            "best": 565.9898015818221,
+            "worst": -222.9629231089468
+          },
+          "ETHUSDT": {
+            "n": 183,
+            "wins": 75,
+            "losses": 108,
+            "breakeven": 0,
+            "net": 2292.1789036567216,
+            "winrate": 0.4098360655737705,
+            "profit_factor": 1.3343607005435267,
+            "average_win": 121.96782068716084,
+            "average_loss": -63.475996739632784,
+            "payoff_ratio": 1.9214794087826785,
+            "expectancy": 12.525567779544927,
+            "median_net": -12.531629895952106,
+            "best": 764.4818464482895,
+            "worst": -272.8465029353149
+          },
+          "SOLUSDT": {
+            "n": 170,
+            "wins": 82,
+            "losses": 88,
+            "breakeven": 0,
+            "net": 4672.864885635954,
+            "winrate": 0.4823529411764706,
+            "profit_factor": 1.8368862605692309,
+            "average_win": 125.07923003228632,
+            "average_loss": -63.45036337513095,
+            "payoff_ratio": 1.9712925723181989,
+            "expectancy": 27.487440503740906,
+            "median_net": -4.971489300463068,
+            "best": 1396.1303535476525,
+            "worst": -266.71811419961006
+          }
+        },
+        "event_id": {
+          "BREAKOUT_ACCEPTED": {
+            "n": 181,
+            "wins": 81,
+            "losses": 100,
+            "breakeven": 0,
+            "net": 3497.930413568753,
+            "winrate": 0.44751381215469616,
+            "profit_factor": 1.6614196344766066,
+            "average_win": 108.4746861650984,
+            "average_loss": -52.88519165804218,
+            "payoff_ratio": 2.0511353512056867,
+            "expectancy": 19.325582395407476,
+            "median_net": -6.582187866750404,
+            "best": 1396.1303535476525,
+            "worst": -285.64215686848854
+          },
+          "LEVEL_REJECTED": {
+            "n": 501,
+            "wins": 220,
+            "losses": 281,
+            "breakeven": 0,
+            "net": 7318.057570149415,
+            "winrate": 0.43912175648702595,
+            "profit_factor": 1.3907548384799107,
+            "average_win": 118.3911818835771,
+            "average_loss": -66.64769553109448,
+            "payoff_ratio": 1.7763732255129765,
+            "expectancy": 14.606901337623585,
+            "median_net": -11.421168482980939,
+            "best": 1188.5456554348311,
+            "worst": -272.8465029353149
+          }
+        },
+        "direction": {
+          "-1": {
+            "n": 352,
+            "wins": 153,
+            "losses": 199,
+            "breakeven": 0,
+            "net": 5769.371622657857,
+            "winrate": 0.4346590909090909,
+            "profit_factor": 1.4890245472920116,
+            "average_win": 114.81755141496201,
+            "average_loss": -59.28499368759462,
+            "payoff_ratio": 1.9367051301379758,
+            "expectancy": 16.39026029164164,
+            "median_net": -9.33408146966157,
+            "best": 1072.1289324678241,
+            "worst": -266.71811419961006
+          },
+          "1": {
+            "n": 330,
+            "wins": 148,
+            "losses": 182,
+            "breakeven": 0,
+            "net": 5046.616361060312,
+            "winrate": 0.4484848484848485,
+            "profit_factor": 1.4130203548757068,
+            "average_win": 116.65827180588343,
+            "average_loss": -67.1363069572002,
+            "payoff_ratio": 1.7376331391039095,
+            "expectancy": 15.292776851697914,
+            "median_net": -10.201998295937633,
+            "best": 1396.1303535476525,
+            "worst": -285.64215686848854
+          }
+        },
+        "entry_mode": {
+          "limit": {
+            "n": 49,
+            "wins": 15,
+            "losses": 34,
+            "breakeven": 0,
+            "net": 2175.487725013882,
+            "winrate": 0.30612244897959184,
+            "profit_factor": 1.8697341843533917,
+            "average_win": 311.7875047553533,
+            "average_loss": -73.56837783283584,
+            "payoff_ratio": 4.23806415120102,
+            "expectancy": 44.39770867375269,
+            "median_net": -34.5557285134022,
+            "best": 1019.8721426218767,
+            "worst": -180.67877858945667
+          },
+          "market": {
+            "n": 633,
+            "wins": 286,
+            "losses": 347,
+            "breakeven": 0,
+            "net": 8640.500258704287,
+            "winrate": 0.4518167456556082,
+            "profit_factor": 1.4015998716438505,
+            "average_win": 105.4395000784253,
+            "average_loss": -62.003448886816564,
+            "payoff_ratio": 1.7005425016098465,
+            "expectancy": 13.650079397637104,
+            "median_net": -7.803629933940067,
+            "best": 1396.1303535476525,
+            "worst": -285.64215686848854
+          }
+        },
+        "exit_reason_code": {
+          "PROTECTIVE_STOP": {
+            "n": 604,
+            "wins": 231,
+            "losses": 373,
+            "breakeven": 0,
+            "net": 1639.912524427478,
+            "winrate": 0.3824503311258278,
+            "profit_factor": 1.0688606369084326,
+            "average_win": 110.19420374346409,
+            "average_loss": -63.8470470249671,
+            "payoff_ratio": 1.7259091669560402,
+            "expectancy": 2.715086960972646,
+            "median_net": -16.449783401681792,
+            "best": 1396.1303535476525,
+            "worst": -285.64215686848854
+          },
+          "v21": {
+            "n": 65,
+            "wins": 64,
+            "losses": 1,
+            "breakeven": 0,
+            "net": 8778.759511761853,
+            "winrate": 0.9846153846153847,
+            "profit_factor": 28347.695014417342,
+            "average_win": 137.17295631695856,
+            "average_loss": -0.30969252349513443,
+            "payoff_ratio": 442.932734600271,
+            "expectancy": 135.05783864249005,
+            "median_net": 51.297935971939964,
+            "best": 1188.5456554348311,
+            "worst": -0.30969252349513443
+          },
+          "§8.5": {
+            "n": 13,
+            "wins": 6,
+            "losses": 7,
+            "breakeven": 0,
+            "net": 397.3159475288372,
+            "winrate": 0.46153846153846156,
+            "profit_factor": 2.9741095128453,
+            "average_win": 99.76322078906362,
+            "average_loss": -28.751911029363498,
+            "payoff_ratio": 3.4697944316528497,
+            "expectancy": 30.56276519452594,
+            "median_net": -1.5244604057985764,
+            "best": 155.09131862950517,
+            "worst": -68.43989062260026
+          }
+        }
+      },
+      "fees": 3968.0691801682665,
+      "funding": 305.89819362238524,
+      "slippage_embedded": 1293.5478560649522,
+      "holding_hours_mean": 59.00146627565982,
+      "holding_hours_median": 22.5,
+      "capacity_skips": 50,
+      "counters": {
+        "go_events": 0,
+        "open_intents": 890,
+        "opens_filled": 636,
+        "min_size_skips": 0,
+        "liquidations": 0,
+        "limits_armed": 264,
+        "limit_fills_entry": 50,
+        "limit_expired": 154,
+        "limit_min_size_skips": 0,
+        "reduce_limits_armed": 0,
+        "reduce_limit_fills": 0,
+        "reduce_timeout_taker": 0,
+        "resting_canceled": 0,
+        "e1_priority_cancels": 6,
+        "portfolio_cap_skips": 50,
+        "protective_stop_fills": 604,
+        "mic_go_events": 0,
+        "watch_entries_armed": 264,
+        "watch_canceled_played_out": 43,
+        "virtual_entry_triggers": 11,
+        "virtual_entry_fills": 11,
+        "f1_reject_level_rejected_market": 209,
+        "level_rejected_signals": 1972,
+        "dup": 908,
+        "breakout_accepted_signals": 759,
+        "restraint_departure_reset_reject": 124,
+        "deadzone_watch_armed": 103,
+        "restraint_coarse_echo_reject": 45,
+        "accept_watch_armed": 178,
+        "restraint_struct_impulse_reject": 1325,
+        "e1_cancel_orders": 6,
+        "campaigns": {
+          "BTCUSDT@12h": {
+            "f1_reject_level_rejected_market": 13,
+            "level_rejected_signals": 75,
+            "dup": 58,
+            "breakout_accepted_signals": 28,
+            "restraint_departure_reset_reject": 16,
+            "deadzone_watch_armed": 11,
+            "restraint_coarse_echo_reject": 10,
+            "accept_watch_armed": 4
+          },
+          "BTCUSDT@1d": {
+            "f1_reject_level_rejected_market": 13,
+            "level_rejected_signals": 39,
+            "restraint_departure_reset_reject": 8,
+            "restraint_coarse_echo_reject": 3,
+            "dup": 37,
+            "breakout_accepted_signals": 16,
+            "accept_watch_armed": 4,
+            "deadzone_watch_armed": 3
+          },
+          "BTCUSDT@2h": {
+            "f1_reject_level_rejected_market": 9,
+            "level_rejected_signals": 208,
+            "restraint_struct_impulse_reject": 170,
+            "breakout_accepted_signals": 75,
+            "deadzone_watch_armed": 8,
+            "accept_watch_armed": 17,
+            "dup": 42,
+            "restraint_departure_reset_reject": 13
+          },
+          "BTCUSDT@4h": {
+            "restraint_struct_impulse_reject": 112,
+            "level_rejected_signals": 122,
+            "dup": 66,
+            "breakout_accepted_signals": 74,
+            "accept_watch_armed": 11,
+            "f1_reject_level_rejected_market": 14,
+            "e1_cancel_orders": 3,
+            "deadzone_watch_armed": 4,
+            "restraint_departure_reset_reject": 2,
+            "restraint_coarse_echo_reject": 4
+          },
+          "DOGEUSDT@12h": {
+            "level_rejected_signals": 57,
+            "dup": 64,
+            "restraint_departure_reset_reject": 11,
+            "f1_reject_level_rejected_market": 15,
+            "restraint_coarse_echo_reject": 5,
+            "deadzone_watch_armed": 4,
+            "breakout_accepted_signals": 25,
+            "accept_watch_armed": 7
+          },
+          "DOGEUSDT@1d": {
+            "breakout_accepted_signals": 12,
+            "f1_reject_level_rejected_market": 5,
+            "level_rejected_signals": 16,
+            "dup": 27,
+            "restraint_departure_reset_reject": 4,
+            "deadzone_watch_armed": 2,
+            "accept_watch_armed": 1,
+            "restraint_coarse_echo_reject": 1
+          },
+          "DOGEUSDT@2h": {
+            "restraint_struct_impulse_reject": 176,
+            "level_rejected_signals": 230,
+            "breakout_accepted_signals": 67,
+            "restraint_departure_reset_reject": 13,
+            "f1_reject_level_rejected_market": 7,
+            "dup": 35,
+            "accept_watch_armed": 15,
+            "deadzone_watch_armed": 8
+          },
+          "DOGEUSDT@4h": {
+            "restraint_struct_impulse_reject": 189,
+            "level_rejected_signals": 226,
+            "dup": 71,
+            "f1_reject_level_rejected_market": 22,
+            "deadzone_watch_armed": 8,
+            "breakout_accepted_signals": 72,
+            "accept_watch_armed": 16,
+            "restraint_coarse_echo_reject": 8,
+            "restraint_departure_reset_reject": 3,
+            "e1_cancel_orders": 2
+          },
+          "ETHUSDT@12h": {
+            "level_rejected_signals": 47,
+            "f1_reject_level_rejected_market": 13,
+            "dup": 93,
+            "breakout_accepted_signals": 19,
+            "restraint_coarse_echo_reject": 2,
+            "accept_watch_armed": 7,
+            "deadzone_watch_armed": 4,
+            "restraint_departure_reset_reject": 3
+          },
+          "ETHUSDT@1d": {
+            "f1_reject_level_rejected_market": 19,
+            "level_rejected_signals": 40,
+            "dup": 56,
+            "restraint_departure_reset_reject": 6,
+            "deadzone_watch_armed": 6,
+            "restraint_coarse_echo_reject": 1,
+            "breakout_accepted_signals": 9,
+            "accept_watch_armed": 1
+          },
+          "ETHUSDT@2h": {
+            "restraint_struct_impulse_reject": 199,
+            "level_rejected_signals": 268,
+            "f1_reject_level_rejected_market": 17,
+            "restraint_departure_reset_reject": 10,
+            "breakout_accepted_signals": 78,
+            "dup": 68,
+            "deadzone_watch_armed": 12,
+            "accept_watch_armed": 33
+          },
+          "ETHUSDT@4h": {
+            "breakout_accepted_signals": 88,
+            "restraint_struct_impulse_reject": 159,
+            "level_rejected_signals": 201,
+            "dup": 73,
+            "accept_watch_armed": 20,
+            "f1_reject_level_rejected_market": 26,
+            "restraint_coarse_echo_reject": 8,
+            "restraint_departure_reset_reject": 10,
+            "deadzone_watch_armed": 4
+          },
+          "SOLUSDT@12h": {
+            "deadzone_watch_armed": 5,
+            "level_rejected_signals": 43,
+            "dup": 67,
+            "breakout_accepted_signals": 25,
+            "f1_reject_level_rejected_market": 7,
+            "restraint_coarse_echo_reject": 1,
+            "accept_watch_armed": 8,
+            "restraint_departure_reset_reject": 11
+          },
+          "SOLUSDT@1d": {
+            "breakout_accepted_signals": 7,
+            "dup": 36,
+            "level_rejected_signals": 15,
+            "deadzone_watch_armed": 2,
+            "f1_reject_level_rejected_market": 3,
+            "accept_watch_armed": 2,
+            "restraint_departure_reset_reject": 2
+          },
+          "SOLUSDT@2h": {
+            "restraint_struct_impulse_reject": 183,
+            "level_rejected_signals": 225,
+            "breakout_accepted_signals": 91,
+            "accept_watch_armed": 21,
+            "deadzone_watch_armed": 16,
+            "dup": 61,
+            "f1_reject_level_rejected_market": 9,
+            "restraint_departure_reset_reject": 5
+          },
+          "SOLUSDT@4h": {
+            "f1_reject_level_rejected_market": 17,
+            "level_rejected_signals": 160,
+            "restraint_struct_impulse_reject": 137,
+            "deadzone_watch_armed": 6,
+            "breakout_accepted_signals": 73,
+            "accept_watch_armed": 11,
+            "dup": 54,
+            "restraint_departure_reset_reject": 7,
+            "restraint_coarse_echo_reject": 2,
+            "e1_cancel_orders": 1
+          }
+        }
+      },
+      "monthly_full_execution_window": [
+        {
+          "month": "2024-10",
+          "equity_end": 261.95582234911046,
+          "pnl": -38.04417765088954,
+          "return_frac": -0.1268139255029651
+        },
+        {
+          "month": "2024-11",
+          "equity_end": 271.65319128085923,
+          "pnl": 9.69736893174877,
+          "return_frac": 0.037019100567365903
+        },
+        {
+          "month": "2024-12",
+          "equity_end": 243.15999121375384,
+          "pnl": -28.49320006710539,
+          "return_frac": -0.10488814776207278
+        },
+        {
+          "month": "2025-01",
+          "equity_end": 764.748641059188,
+          "pnl": 521.5886498454341,
+          "return_frac": 2.145043052690864
+        },
+        {
+          "month": "2025-02",
+          "equity_end": 946.9867231379112,
+          "pnl": 182.2380820787232,
+          "return_frac": 0.23829801361440905
+        },
+        {
+          "month": "2025-03",
+          "equity_end": 737.9385414065772,
+          "pnl": -209.048181731334,
+          "return_frac": -0.22075091088778653
+        },
+        {
+          "month": "2025-04",
+          "equity_end": 887.2814307850465,
+          "pnl": 149.3428893784693,
+          "return_frac": 0.20237849224382343
+        },
+        {
+          "month": "2025-05",
+          "equity_end": 918.6003636895722,
+          "pnl": 31.318932904525695,
+          "return_frac": 0.035297631414212605
+        },
+        {
+          "month": "2025-06",
+          "equity_end": 1415.9630568262025,
+          "pnl": 497.36269313663036,
+          "return_frac": 0.5414353322689376
+        },
+        {
+          "month": "2025-07",
+          "equity_end": 1401.4086024400003,
+          "pnl": -14.554454386202224,
+          "return_frac": -0.01027883765472326
+        },
+        {
+          "month": "2025-08",
+          "equity_end": 1220.7296298398867,
+          "pnl": -180.67897260011364,
+          "return_frac": -0.12892669010703406
+        },
+        {
+          "month": "2025-09",
+          "equity_end": 1655.3234159328256,
+          "pnl": 434.5937860929389,
+          "return_frac": 0.35601149957336675
+        },
+        {
+          "month": "2025-10",
+          "equity_end": 1516.670913970817,
+          "pnl": -138.6525019620085,
+          "return_frac": -0.08376157832810793
+        },
+        {
+          "month": "2025-11",
+          "equity_end": 2000.1704351950746,
+          "pnl": 483.4995212242575,
+          "return_frac": 0.3187900003689006
+        },
+        {
+          "month": "2025-12",
+          "equity_end": 1449.4975479215527,
+          "pnl": -550.6728872735218,
+          "return_frac": -0.2753129821258533
+        },
+        {
+          "month": "2026-01",
+          "equity_end": 4053.0133095437823,
+          "pnl": 2603.5157616222295,
+          "return_frac": 1.7961505111584586
+        },
+        {
+          "month": "2026-02",
+          "equity_end": 4466.143592554621,
+          "pnl": 413.13028301083887,
+          "return_frac": 0.10193163739137634
+        },
+        {
+          "month": "2026-03",
+          "equity_end": 3528.8837704289067,
+          "pnl": -937.2598221257144,
+          "return_frac": -0.2098588642980922
+        },
+        {
+          "month": "2026-04",
+          "equity_end": 2885.1288869197574,
+          "pnl": -643.7548835091493,
+          "return_frac": -0.18242450740476113
+        },
+        {
+          "month": "2026-05",
+          "equity_end": 2284.7260073197012,
+          "pnl": -600.4028796000562,
+          "return_frac": -0.20810261972076494
+        },
+        {
+          "month": "2026-06",
+          "equity_end": 3564.5070097129437,
+          "pnl": 1279.7810023932425,
+          "return_frac": 0.5601463800443196
+        },
+        {
+          "month": "2026-07",
+          "equity_end": 2436.3638375367636,
+          "pnl": -1128.14317217618,
+          "return_frac": -0.3164934643422209
+        },
+        {
+          "month": "2026-08",
+          "equity_end": 7395.94664872476,
+          "pnl": 4959.582811187996,
+          "return_frac": 2.03564949322277
+        },
+        {
+          "month": "2026-09",
+          "equity_end": 8441.308415603618,
+          "pnl": 1045.3617668788584,
+          "return_frac": 0.1413425240241699
+        },
+        {
+          "month": "2026-10",
+          "equity_end": 11144.104307184502,
+          "pnl": 2702.795891580883,
+          "return_frac": 0.3201868429051602
+        }
+      ],
+      "segment_bounds": {
+        "BTCUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "BTCUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "BTCUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "BTCUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "DOGEUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "DOGEUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "ETHUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "ETHUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@12h": {
+          "lo": 0,
+          "hi": 1468,
+          "n": 1468,
+          "ts_lo": 1728993600000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@1d": {
+          "lo": 0,
+          "hi": 735,
+          "n": 735,
+          "ts_lo": 1728950400000,
+          "ts_hi": 1792368000000
+        },
+        "SOLUSDT@2h": {
+          "lo": 0,
+          "hi": 8800,
+          "n": 8800,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792375200000
+        },
+        "SOLUSDT@4h": {
+          "lo": 0,
+          "hi": 4400,
+          "n": 4400,
+          "ts_lo": 1729022400000,
+          "ts_hi": 1792368000000
+        }
+      },
+      "standard_metrics": {
+        "segment": "full",
+        "cost_multiplier": 1.5,
+        "ts_lo": 1728950400000,
+        "ts_hi": 1792375200000,
+        "span_days": 734.0833333333334,
+        "equity_start": 300.0,
+        "equity_end": 11154.957507184503,
+        "net_pnl": 10802.217447142504,
+        "return_pct": 36.007391490475015,
+        "ann_return": 5.04422482365248,
+        "max_dd_usdt": 3255.91087614434,
+        "max_dd_pct": 0.633571907192883,
+        "peak_ts": 1771138800000,
+        "trough_ts": 1786914000000,
+        "dd_days": 182.58333333333334,
+        "n_trades": 686,
+        "n_closed": 682,
+        "n_open_end": 4,
+        "winrate": 0.4413489736070381,
+        "profit_factor": 1.4503561406326133,
+        "payoff_ratio": 1.8358328557509158,
+        "expectancy_usdt": 15.746672663473039,
+        "expectancy_r": 0.2284876640146168,
+        "holding": {
+          "median_h": 22.5,
+          "p90_h": 143.0
+        },
+        "exposure_ratio": 0.8493664412750724,
+        "fees_total": 3968.0691801682665,
+        "slippage_total": 1293.5478560649522,
+        "funding_total": 305.89819362238524,
+        "by_direction": {
+          "-1": {
+            "n": 354,
+            "net": 5763.756397048061,
+            "expectancy": 16.281797731774184,
+            "winrate": 0.4322033898305085
+          },
+          "1": {
+            "n": 332,
+            "net": 5038.46105009444,
+            "expectancy": 15.176087500284458,
+            "winrate": 0.4457831325301205
+          }
+        },
+        "by_regime": {
+          "TRANSITION": {
+            "n": 321,
+            "net": 3892.7014518918863,
+            "expectancy": 12.126795800286251,
+            "winrate": 0.4236760124610592
+          },
+          "RANGE": {
+            "n": 76,
+            "net": 1123.8644990159992,
+            "expectancy": 14.787690776526304,
+            "winrate": 0.4473684210526316
+          },
+          "TREND_DOWN": {
+            "n": 151,
+            "net": 2716.6492720888014,
+            "expectancy": 17.99105478204504,
+            "winrate": 0.4370860927152318
+          },
+          "TREND_UP": {
+            "n": 138,
+            "net": 3069.002224145818,
+            "expectancy": 22.239146551781293,
+            "winrate": 0.47101449275362317
+          }
+        },
+        "by_symbol": {
+          "ETHUSDT": {
+            "n": 184,
+            "net": 2286.561210484211,
+            "expectancy": 12.42696310045767,
+            "winrate": 0.4076086956521739
+          },
+          "DOGEUSDT": {
+            "n": 167,
+            "net": 2530.3433893877323,
+            "expectancy": 15.151756822681032,
+            "winrate": 0.4431137724550898
+          },
+          "BTCUSDT": {
+            "n": 164,
+            "net": 1314.4739153461035,
+            "expectancy": 8.015084849671362,
+            "winrate": 0.4268292682926829
+          },
+          "SOLUSDT": {
+            "n": 171,
+            "net": 4670.838931924458,
+            "expectancy": 27.31484755511379,
+            "winrate": 0.47953216374269003
+          }
+        },
+        "monthly": [
+          {
+            "month": "2024-10",
+            "equity_end": 261.95582234911046,
+            "pnl": -38.04417765088954
+          },
+          {
+            "month": "2024-11",
+            "equity_end": 271.65319128085923,
+            "pnl": 9.69736893174877
+          },
+          {
+            "month": "2024-12",
+            "equity_end": 243.15999121375384,
+            "pnl": -28.49320006710539
+          },
+          {
+            "month": "2025-01",
+            "equity_end": 764.748641059188,
+            "pnl": 521.5886498454341
+          },
+          {
+            "month": "2025-02",
+            "equity_end": 946.9867231379112,
+            "pnl": 182.2380820787232
+          },
+          {
+            "month": "2025-03",
+            "equity_end": 737.9385414065772,
+            "pnl": -209.048181731334
+          },
+          {
+            "month": "2025-04",
+            "equity_end": 887.2814307850465,
+            "pnl": 149.3428893784693
+          },
+          {
+            "month": "2025-05",
+            "equity_end": 918.6003636895722,
+            "pnl": 31.318932904525695
+          },
+          {
+            "month": "2025-06",
+            "equity_end": 1415.9630568262025,
+            "pnl": 497.36269313663036
+          },
+          {
+            "month": "2025-07",
+            "equity_end": 1401.4086024400003,
+            "pnl": -14.554454386202224
+          },
+          {
+            "month": "2025-08",
+            "equity_end": 1220.7296298398867,
+            "pnl": -180.67897260011364
+          },
+          {
+            "month": "2025-09",
+            "equity_end": 1655.3234159328256,
+            "pnl": 434.5937860929389
+          },
+          {
+            "month": "2025-10",
+            "equity_end": 1516.670913970817,
+            "pnl": -138.6525019620085
+          },
+          {
+            "month": "2025-11",
+            "equity_end": 2000.1704351950746,
+            "pnl": 483.4995212242575
+          },
+          {
+            "month": "2025-12",
+            "equity_end": 1449.4975479215527,
+            "pnl": -550.6728872735218
+          },
+          {
+            "month": "2026-01",
+            "equity_end": 4053.0133095437823,
+            "pnl": 2603.5157616222295
+          },
+          {
+            "month": "2026-02",
+            "equity_end": 4466.143592554621,
+            "pnl": 413.13028301083887
+          },
+          {
+            "month": "2026-03",
+            "equity_end": 3528.8837704289067,
+            "pnl": -937.2598221257144
+          },
+          {
+            "month": "2026-04",
+            "equity_end": 2885.1288869197574,
+            "pnl": -643.7548835091493
+          },
+          {
+            "month": "2026-05",
+            "equity_end": 2284.7260073197012,
+            "pnl": -600.4028796000562
+          },
+          {
+            "month": "2026-06",
+            "equity_end": 3564.5070097129437,
+            "pnl": 1279.7810023932425
+          },
+          {
+            "month": "2026-07",
+            "equity_end": 2436.3638375367636,
+            "pnl": -1128.14317217618
+          },
+          {
+            "month": "2026-08",
+            "equity_end": 7395.94664872476,
+            "pnl": 4959.582811187996
+          },
+          {
+            "month": "2026-09",
+            "equity_end": 8441.308415603618,
+            "pnl": 1045.3617668788584
+          },
+          {
+            "month": "2026-10",
+            "equity_end": 11154.957507184503,
+            "pnl": 2713.6490915808845
+          }
+        ],
+        "counters": {
+          "go_events": 0,
+          "open_intents": 890,
+          "opens_filled": 636,
+          "min_size_skips": 0,
+          "liquidations": 0,
+          "limits_armed": 264,
+          "limit_fills_entry": 50,
+          "limit_expired": 154,
+          "limit_min_size_skips": 0,
+          "reduce_limits_armed": 0,
+          "reduce_limit_fills": 0,
+          "reduce_timeout_taker": 0,
+          "resting_canceled": 0,
+          "e1_priority_cancels": 6,
+          "portfolio_cap_skips": 50,
+          "protective_stop_fills": 604,
+          "mic_go_events": 0,
+          "watch_entries_armed": 264,
+          "watch_canceled_played_out": 43,
+          "virtual_entry_triggers": 11,
+          "virtual_entry_fills": 11,
+          "f1_reject_level_rejected_market": 209,
+          "level_rejected_signals": 1972,
+          "dup": 908,
+          "breakout_accepted_signals": 759,
+          "restraint_departure_reset_reject": 124,
+          "deadzone_watch_armed": 103,
+          "restraint_coarse_echo_reject": 45,
+          "accept_watch_armed": 178,
+          "restraint_struct_impulse_reject": 1325,
+          "e1_cancel_orders": 6,
+          "campaigns": {
+            "BTCUSDT@12h": {
+              "f1_reject_level_rejected_market": 13,
+              "level_rejected_signals": 75,
+              "dup": 58,
+              "breakout_accepted_signals": 28,
+              "restraint_departure_reset_reject": 16,
+              "deadzone_watch_armed": 11,
+              "restraint_coarse_echo_reject": 10,
+              "accept_watch_armed": 4
+            },
+            "BTCUSDT@1d": {
+              "f1_reject_level_rejected_market": 13,
+              "level_rejected_signals": 39,
+              "restraint_departure_reset_reject": 8,
+              "restraint_coarse_echo_reject": 3,
+              "dup": 37,
+              "breakout_accepted_signals": 16,
+              "accept_watch_armed": 4,
+              "deadzone_watch_armed": 3
+            },
+            "BTCUSDT@2h": {
+              "f1_reject_level_rejected_market": 9,
+              "level_rejected_signals": 208,
+              "restraint_struct_impulse_reject": 170,
+              "breakout_accepted_signals": 75,
+              "deadzone_watch_armed": 8,
+              "accept_watch_armed": 17,
+              "dup": 42,
+              "restraint_departure_reset_reject": 13
+            },
+            "BTCUSDT@4h": {
+              "restraint_struct_impulse_reject": 112,
+              "level_rejected_signals": 122,
+              "dup": 66,
+              "breakout_accepted_signals": 74,
+              "accept_watch_armed": 11,
+              "f1_reject_level_rejected_market": 14,
+              "e1_cancel_orders": 3,
+              "deadzone_watch_armed": 4,
+              "restraint_departure_reset_reject": 2,
+              "restraint_coarse_echo_reject": 4
+            },
+            "DOGEUSDT@12h": {
+              "level_rejected_signals": 57,
+              "dup": 64,
+              "restraint_departure_reset_reject": 11,
+              "f1_reject_level_rejected_market": 15,
+              "restraint_coarse_echo_reject": 5,
+              "deadzone_watch_armed": 4,
+              "breakout_accepted_signals": 25,
+              "accept_watch_armed": 7
+            },
+            "DOGEUSDT@1d": {
+              "breakout_accepted_signals": 12,
+              "f1_reject_level_rejected_market": 5,
+              "level_rejected_signals": 16,
+              "dup": 27,
+              "restraint_departure_reset_reject": 4,
+              "deadzone_watch_armed": 2,
+              "accept_watch_armed": 1,
+              "restraint_coarse_echo_reject": 1
+            },
+            "DOGEUSDT@2h": {
+              "restraint_struct_impulse_reject": 176,
+              "level_rejected_signals": 230,
+              "breakout_accepted_signals": 67,
+              "restraint_departure_reset_reject": 13,
+              "f1_reject_level_rejected_market": 7,
+              "dup": 35,
+              "accept_watch_armed": 15,
+              "deadzone_watch_armed": 8
+            },
+            "DOGEUSDT@4h": {
+              "restraint_struct_impulse_reject": 189,
+              "level_rejected_signals": 226,
+              "dup": 71,
+              "f1_reject_level_rejected_market": 22,
+              "deadzone_watch_armed": 8,
+              "breakout_accepted_signals": 72,
+              "accept_watch_armed": 16,
+              "restraint_coarse_echo_reject": 8,
+              "restraint_departure_reset_reject": 3,
+              "e1_cancel_orders": 2
+            },
+            "ETHUSDT@12h": {
+              "level_rejected_signals": 47,
+              "f1_reject_level_rejected_market": 13,
+              "dup": 93,
+              "breakout_accepted_signals": 19,
+              "restraint_coarse_echo_reject": 2,
+              "accept_watch_armed": 7,
+              "deadzone_watch_armed": 4,
+              "restraint_departure_reset_reject": 3
+            },
+            "ETHUSDT@1d": {
+              "f1_reject_level_rejected_market": 19,
+              "level_rejected_signals": 40,
+              "dup": 56,
+              "restraint_departure_reset_reject": 6,
+              "deadzone_watch_armed": 6,
+              "restraint_coarse_echo_reject": 1,
+              "breakout_accepted_signals": 9,
+              "accept_watch_armed": 1
+            },
+            "ETHUSDT@2h": {
+              "restraint_struct_impulse_reject": 199,
+              "level_rejected_signals": 268,
+              "f1_reject_level_rejected_market": 17,
+              "restraint_departure_reset_reject": 10,
+              "breakout_accepted_signals": 78,
+              "dup": 68,
+              "deadzone_watch_armed": 12,
+              "accept_watch_armed": 33
+            },
+            "ETHUSDT@4h": {
+              "breakout_accepted_signals": 88,
+              "restraint_struct_impulse_reject": 159,
+              "level_rejected_signals": 201,
+              "dup": 73,
+              "accept_watch_armed": 20,
+              "f1_reject_level_rejected_market": 26,
+              "restraint_coarse_echo_reject": 8,
+              "restraint_departure_reset_reject": 10,
+              "deadzone_watch_armed": 4
+            },
+            "SOLUSDT@12h": {
+              "deadzone_watch_armed": 5,
+              "level_rejected_signals": 43,
+              "dup": 67,
+              "breakout_accepted_signals": 25,
+              "f1_reject_level_rejected_market": 7,
+              "restraint_coarse_echo_reject": 1,
+              "accept_watch_armed": 8,
+              "restraint_departure_reset_reject": 11
+            },
+            "SOLUSDT@1d": {
+              "breakout_accepted_signals": 7,
+              "dup": 36,
+              "level_rejected_signals": 15,
+              "deadzone_watch_armed": 2,
+              "f1_reject_level_rejected_market": 3,
+              "accept_watch_armed": 2,
+              "restraint_departure_reset_reject": 2
+            },
+            "SOLUSDT@2h": {
+              "restraint_struct_impulse_reject": 183,
+              "level_rejected_signals": 225,
+              "breakout_accepted_signals": 91,
+              "accept_watch_armed": 21,
+              "deadzone_watch_armed": 16,
+              "dup": 61,
+              "f1_reject_level_rejected_market": 9,
+              "restraint_departure_reset_reject": 5
+            },
+            "SOLUSDT@4h": {
+              "f1_reject_level_rejected_market": 17,
+              "level_rejected_signals": 160,
+              "restraint_struct_impulse_reject": 137,
+              "deadzone_watch_armed": 6,
+              "breakout_accepted_signals": 73,
+              "accept_watch_armed": 11,
+              "dup": 54,
+              "restraint_departure_reset_reject": 7,
+              "restraint_coarse_echo_reject": 2,
+              "e1_cancel_orders": 1
+            }
+          }
+        }
+      }
+    }
+  },
+  "hashes": {
+    "config\\strategy.json": "3649e393b1742e3d1d9fdbf00933051062fce731f707c2df300de5b9255f82e5",
+    "config\\live.json": "0b4faafad6254f2ab67351467ea718a581f71c6c6995bfefce0ed21bbafddfdb",
+    "data\\manifest.json": "9741906066c113bc460613f1365866de294e7774db6cc7e94531961a9f39421d",
+    "data\\contracts.json": "eec9df63fe47b6d57db4b25ee9370efedf4a81884e85039eef71c38f4b89c623"
+  },
+  "limitations": [
+    "Production canonical campaigns, not a tick-by-tick execution of live_runner.",
+    "Fixed four-symbol universe; no historical dynamic universe, outages or API failures.",
+    "Live daily-loss/order-rate circuit breakers are not simulated by run_campaigns.",
+    "Slippage is embedded in fill prices; do not deduct slippage_cost twice.",
+    "Tail removal is attribution of original trades, not a counterfactual recompounding replay.",
+    "dev/test are independent 300-USDT starts, not additive portions of full compounded PnL."
+  ]
+}

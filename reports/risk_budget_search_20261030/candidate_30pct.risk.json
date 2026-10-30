@@ -1,0 +1,11 @@
+{
+  "risk_frac": 0.015,
+  "dynamic_risk_tiers": [],
+  "portfolio_cap_frac": 0.06,
+  "tf_cap_by_tf": {
+    "2h": 0.045,
+    "4h": 0.045,
+    "12h": 0.045,
+    "1d": 0.045
+  }
+}

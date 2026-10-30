@@ -1,0 +1,120 @@
+{
+  "version": "live-v21-2026-10-21",
+  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=3000U:4%, <=10000U:3%, <=100000U:2%, >100000U:1%, 配置上界10亿U) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利(峰值锚定回吐预算,frac 见 strategy.json 的 arm_config.reject_opp_lock_frac) + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
+  "meta": {
+    "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Dual-Bot Telegram K-Line Charts",
+    "strategy_config": "config/strategy.json",
+    "cognition_frame": "支持 v21 多周期并发(2h/4h 同周期触发, 12h->2h 降档触发, 1d->4h 降档触发)及 12h->2h 单帧兼容模式",
+    "execution_approximation": [
+      "市价决策:canonical 于次一执行细 bar 开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
+      "限价单:GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
+      "持仓管理意图(破位/防线收紧/对侧突破锁利):canonical 以认知 bar 收盘裁决;实盘同步更新交易所计划止损单或立即市价执行",
+      "Telegram 双通道通知:信号 Bot 只发信号广播(公开可订阅,不含账户数据),运营 Bot 发开仓/减仓/防线推进/平仓/日结/告警(未单独配置时回退到信号 Bot 并如实告警),均附带高清黑白 K 线结构图(箱体/事件区间/±R 标尺/pivot)",
+      "信号广播与容量闸门解耦:检测到事件即推送结构事实,并用 exec_status 说明本系统是否真的开仓(容量满/熔断只影响执行,不影响通知)"
+    ]
+  },
+  "credentials_source": "config/secrets.env",
+  "account": {
+    "position_mode": "hedge_mode",
+    "note": "账户持仓模式(Bitget posMode)。hedge_mode:下单须带 tradeSide,side 表持仓方向(开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close),杠杆逐侧设置;one_way_mode:省略 tradeSide,side 表买卖方向。启动时与交易所实测值比对,不一致即 fail-closed 拒绝启动。"
+  },
+  "risk": {
+    "risk_frac": 0.04,
+    "dynamic_risk_tiers": [
+      [3000.0, 0.04],
+      [10000.0, 0.03],
+      [100000.0, 0.02],
+      [1000000000.0, 0.01]
+    ],
+    "leverage_cap": 20,
+    "portfolio_cap_frac": 0.5,
+    "tf_cap_by_tf": {
+      "2h": 0.12,
+      "4h": 0.12,
+      "12h": 0.12,
+      "1d": 0.12
+    },
+    "max_daily_loss_frac": 0.1,
+    "edge_size_by_event_direction": {},
+    "edge_size_note": "**2026-10-30 根治移除 0.35 掩蔽权重:** 此前 ACCEPT|LONG 净亏(-15.37U)的根因是 structure.py 一刀切丢弃了 FLIPPED_BOX_EDGE,导致「跌破平衡箱挖坑后重新向上突破进入平衡箱」的真多头突破被全部拦掉,只剩下箱顶追涨。补齐 box_reentry_enabled(突破进入平衡箱)后,ACCEPT|LONG 在 1.0 原生权重下直接由 -15.37U 翻正至 +81.01U(全策略 dev +249.02 / test +145.17 / full +520.70 / 去Top10 +148.40 / 1.5x +258.98 五项全优),故彻底清空 0.35 权重补丁。",
+    "orders_per_hour": 30,
+    "taker_fee": 0.0006,
+    "maker_fee": 0.0002,
+    "slippage_per_side": 0.0002
+  },
+  "loop": {
+    "poll_seconds": 15,
+    "reconcile_seconds": 120,
+    "universe_refresh_seconds": 7200,
+    "api_error_max": 5,
+    "max_consecutive_errors": 20,
+    "state_path": "runtime/live/state.json",
+    "heartbeat_path": "runtime/live/heartbeat.json",
+    "state_bar_tail": 24,
+    "campaigns_write_seconds": 60,
+    "journal_dir": "logs",
+    "journal_prefix": "live_",
+    "gap_recovery": {
+      "enabled": true,
+      "min_gap_seconds": 180,
+      "stop_policy": "market",
+      "reduce_policy": "market",
+      "stop_check_seconds": 120,
+      "note": "掉线补做:重启后把缺口内已收盘的 bar 逐根补放进 canonical 持仓管理(移动防线/对侧锁利/TP1),但绝不补开新仓。缺口内曾触及固定止损而交易所仍有仓 → stop_policy=market 立即市价离场(否则 rearm 只重挂止损并告警);TP1 该减未减 → reduce_policy=market 市价减仓(接受回撤换确定性,limit 会挂一张可能永不成交的单)。stop_check_seconds:核对保护止损计划单是否仍在交易所的周期,本地有记录而交易所没有 = 保护失效,价格已越过防线则市价离场,否则重挂。"
+    }
+  },
+  "heartbeat": {
+    "enabled": true,
+    "write_seconds": 15,
+    "stall_seconds": 180,
+    "self_fence_seconds": 900,
+    "protect_on_stall": true,
+    "note": "进程内心跳线程(与主循环解耦)。write_seconds=落盘间隔;stall_seconds=主循环多久无进展判卡死(告警+只保护不主出补挂止损);self_fence_seconds=卡死多久且仍有持仓则自我熔断退出(退出码3),由看护拉起并补做缺口;0=关闭自我熔断。"
+  },
+  "supervisor": {
+    "poll_seconds": 30,
+    "ok_seconds": 120,
+    "stale_seconds": 300,
+    "recover_max_seconds": 2700,
+    "max_restarts_per_hour": 6,
+    "startup_grace_seconds": 180,
+    "gc_hours": 24,
+    "log_max_mb": 32,
+    "runner_argv": ["scripts/live_runner.py", "--mode", "live"],
+    "note": "跨平台看护(scripts/live_supervisor.py):只读 runtime/live/heartbeat.json 判定缺失/正常/迟到/补做中/卡死→终止+拉起。ok_seconds=正常阈值;stale_seconds=迟到上限(超过即卡死);recover_max_seconds=掉线补做允许的最长静默;max_restarts_per_hour=重启预算(超出只告警,交人工);gc_hours=顺带执行存储治理的间隔(0=不执行)。"
+  },
+  "universe": {
+    "enabled": true,
+    "min_usdt_volume_24h": 3000000.0,
+    "product_type": "USDT-FUTURES"
+  },
+  "cognition": {
+    "tf_list": ["2h", "4h", "12h", "1d"],
+    "trigger_tf_by_htf": {
+      "2h": null,
+      "4h": 7200,
+      "12h": 7200,
+      "1d": 14400
+    },
+    "main_tf_label": "12h",
+    "obs_tf_seconds": 43200,
+    "trigger_tf_seconds": 7200,
+    "granularity": "2H",
+    "warmup_cog_bars": 160,
+    "min_warmup_cog_bars": 60,
+    "warmup_trigger_bars": 1800
+  },
+  "paper": {
+    "equity0": 104.0
+  },
+  "adopt_external_positions": {
+    "enabled": true,
+    "note": "接管交易所既有仓位(含非本系统所开),按与其他仓位完全相同的结构语义挂保护与出场。扩展层:只改执行/对账面(scripts/live_runner.py + market_operator/adopt.py),不动策略链路(events/routing/position/structure/trigger/campaign)。失效价 = 最近支撑/阻力外沿 ∓ k_bm·ATR;无结构或距离 < k_is·ATR 时退回 turtle_stop_atr·ATR;目标 = 对侧内沿。接管不计入 fills、不伪装成开仓成交,只发告警并在 journal 落 origin=adopted。置 enabled=false 即回到旧行为(仅告警、绝不动作)。"
+  },
+  "symbols_core": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "DOGEUSDT"
+  ]
+}

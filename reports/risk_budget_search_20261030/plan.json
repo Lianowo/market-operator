@@ -1,0 +1,404 @@
+{
+  "equity0": 300,
+  "budgets": [
+    0.15,
+    0.2,
+    0.3
+  ],
+  "candidates": [
+    {
+      "id": "r0.005_p0.06_s2",
+      "risk_frac": 0.005,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.01,
+        "4h": 0.01,
+        "12h": 0.01,
+        "1d": 0.01
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.005_p0.06_s3",
+      "risk_frac": 0.005,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.015,
+        "4h": 0.015,
+        "12h": 0.015,
+        "1d": 0.015
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.005_p0.09_s2",
+      "risk_frac": 0.005,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.01,
+        "4h": 0.01,
+        "12h": 0.01,
+        "1d": 0.01
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.005_p0.09_s3",
+      "risk_frac": 0.005,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.015,
+        "4h": 0.015,
+        "12h": 0.015,
+        "1d": 0.015
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.005_p0.12_s2",
+      "risk_frac": 0.005,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.01,
+        "4h": 0.01,
+        "12h": 0.01,
+        "1d": 0.01
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.005_p0.12_s3",
+      "risk_frac": 0.005,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.015,
+        "4h": 0.015,
+        "12h": 0.015,
+        "1d": 0.015
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.0075_p0.06_s2",
+      "risk_frac": 0.0075,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.015,
+        "4h": 0.015,
+        "12h": 0.015,
+        "1d": 0.015
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.0075_p0.06_s3",
+      "risk_frac": 0.0075,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.0225,
+        "4h": 0.0225,
+        "12h": 0.0225,
+        "1d": 0.0225
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.0075_p0.09_s2",
+      "risk_frac": 0.0075,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.015,
+        "4h": 0.015,
+        "12h": 0.015,
+        "1d": 0.015
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.0075_p0.09_s3",
+      "risk_frac": 0.0075,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.0225,
+        "4h": 0.0225,
+        "12h": 0.0225,
+        "1d": 0.0225
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.0075_p0.12_s2",
+      "risk_frac": 0.0075,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.015,
+        "4h": 0.015,
+        "12h": 0.015,
+        "1d": 0.015
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.0075_p0.12_s3",
+      "risk_frac": 0.0075,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.0225,
+        "4h": 0.0225,
+        "12h": 0.0225,
+        "1d": 0.0225
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.01_p0.06_s2",
+      "risk_frac": 0.01,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.02,
+        "4h": 0.02,
+        "12h": 0.02,
+        "1d": 0.02
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.01_p0.06_s3",
+      "risk_frac": 0.01,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.03,
+        "4h": 0.03,
+        "12h": 0.03,
+        "1d": 0.03
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.01_p0.09_s2",
+      "risk_frac": 0.01,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.02,
+        "4h": 0.02,
+        "12h": 0.02,
+        "1d": 0.02
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.01_p0.09_s3",
+      "risk_frac": 0.01,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.03,
+        "4h": 0.03,
+        "12h": 0.03,
+        "1d": 0.03
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.01_p0.12_s2",
+      "risk_frac": 0.01,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.02,
+        "4h": 0.02,
+        "12h": 0.02,
+        "1d": 0.02
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.01_p0.12_s3",
+      "risk_frac": 0.01,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.03,
+        "4h": 0.03,
+        "12h": 0.03,
+        "1d": 0.03
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.015_p0.06_s2",
+      "risk_frac": 0.015,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.03,
+        "4h": 0.03,
+        "12h": 0.03,
+        "1d": 0.03
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.015_p0.06_s3",
+      "risk_frac": 0.015,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.045,
+        "4h": 0.045,
+        "12h": 0.045,
+        "1d": 0.045
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.015_p0.09_s2",
+      "risk_frac": 0.015,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.03,
+        "4h": 0.03,
+        "12h": 0.03,
+        "1d": 0.03
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.015_p0.09_s3",
+      "risk_frac": 0.015,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.045,
+        "4h": 0.045,
+        "12h": 0.045,
+        "1d": 0.045
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.015_p0.12_s2",
+      "risk_frac": 0.015,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.03,
+        "4h": 0.03,
+        "12h": 0.03,
+        "1d": 0.03
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.015_p0.12_s3",
+      "risk_frac": 0.015,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.045,
+        "4h": 0.045,
+        "12h": 0.045,
+        "1d": 0.045
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.02_p0.06_s2",
+      "risk_frac": 0.02,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.04,
+        "4h": 0.04,
+        "12h": 0.04,
+        "1d": 0.04
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.02_p0.06_s3",
+      "risk_frac": 0.02,
+      "portfolio_cap_frac": 0.06,
+      "tf_cap_by_tf": {
+        "2h": 0.06,
+        "4h": 0.06,
+        "12h": 0.06,
+        "1d": 0.06
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.02_p0.09_s2",
+      "risk_frac": 0.02,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.04,
+        "4h": 0.04,
+        "12h": 0.04,
+        "1d": 0.04
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.02_p0.09_s3",
+      "risk_frac": 0.02,
+      "portfolio_cap_frac": 0.09,
+      "tf_cap_by_tf": {
+        "2h": 0.06,
+        "4h": 0.06,
+        "12h": 0.06,
+        "1d": 0.06
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.02_p0.12_s2",
+      "risk_frac": 0.02,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.04,
+        "4h": 0.04,
+        "12h": 0.04,
+        "1d": 0.04
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "r0.02_p0.12_s3",
+      "risk_frac": 0.02,
+      "portfolio_cap_frac": 0.12,
+      "tf_cap_by_tf": {
+        "2h": 0.06,
+        "4h": 0.06,
+        "12h": 0.06,
+        "1d": 0.06
+      },
+      "dynamic_risk_tiers": null
+    },
+    {
+      "id": "old_dynamic",
+      "risk_frac": 0.04,
+      "portfolio_cap_frac": 0.5,
+      "tf_cap_by_tf": {
+        "2h": 0.12,
+        "4h": 0.12,
+        "12h": 0.12,
+        "1d": 0.12
+      },
+      "dynamic_risk_tiers": [
+        [
+          250,
+          0.04
+        ],
+        [
+          600,
+          0.03
+        ],
+        [
+          1500,
+          0.02
+        ],
+        [
+          1000000000.0,
+          0.01
+        ]
+      ]
+    }
+  ],
+  "selection": "Top 3 dev terminal equities within each budget, frozen before validation.",
+  "validation": "dev/test/full and full@1.5x all profitable with drawdown <= budget.",
+  "ranking": "Highest full equity among passing top-3; if none pass, dev-ranked backups until first passing. Not global optimum.",
+  "limitations": "Reused historical test; not virgin OOS. No live daily breaker, dynamic universe or API failures.",
+  "strategy_sha256": "3649e393b1742e3d1d9fdbf00933051062fce731f707c2df300de5b9255f82e5"
+}

@@ -75,7 +75,7 @@ from market_operator import adopt as adopt_mod                   # noqa: E402
 from market_operator.secrets_loader import SecretsError, load_secrets  # noqa: E402
 from market_operator.routing import RouterParams, MarketRouter      # noqa: E402
 from market_operator.structure import Params                    # noqa: E402
-from market_operator.tg import TelegramNotifier                 # noqa: E402
+from market_operator.tg import NotificationGuard, TelegramNotifier  # noqa: E402
 from market_operator.trigger import (                           # noqa: E402
     MicTracker, resolve_trigger_tf)
 
@@ -598,7 +598,8 @@ class LiveRunner:
                  universe_enabled: bool = True) -> None:
         if mode not in ("live", "paper"):
             raise RuntimeError("MODE 必须显式为 live 或 paper(fail-closed)")
-        self.mode, self.cfg, self.client, self.tg = mode, cfg, client, tg
+        self.mode, self.cfg, self.client = mode, cfg, client
+        self.tg = NotificationGuard(tg)
         self.risk = cfg["risk"]
         self.loop_cfg = cfg["loop"]
         self.cog_cfg = cfg["cognition"]
@@ -2262,10 +2263,10 @@ class LiveRunner:
         if block is not None:
             return self._BLOCK_STATUS.get(block, f"仅参考 · {block}")
         if watch_entry:
-            act = "进入价格关注(回踩内沿监控)"
+            return "计划进入系统价格关注（尚未下单；触发后再检查并提交市价单）"
         else:
-            act = "挂限价单" if kind == "limit" else "同向开仓(市价)"
-        return f"本系统已{act}"
+            act = "提交限价单" if kind == "limit" else "提交市价开仓单"
+        return f"本系统计划{act}（非成交确认，成交以运营通知及交易所回执为准）"
 
     def _note_block(self, sym: str, cs: CampaignState, hyp, block: str, *,
                     qty: float, ref: float) -> None:
@@ -2296,14 +2297,20 @@ class LiveRunner:
         if fn is None:
             return
         try:
-            fn(size_note=size_note, exec_status=exec_status, **payload)
+            # Keep the existing signal-specific error counter as well as the
+            # general guard used for fills/alerts elsewhere in the runner.
+            target = self.tg._notifier if isinstance(self.tg, NotificationGuard) else self.tg
+            target.send_signal(size_note=size_note, exec_status=exec_status, **payload)
         except Exception as e:                      # noqa: BLE001 通知不反噬
             self.counters["signal_notice_errors"] = \
                 self.counters.get("signal_notice_errors", 0) + 1
-            self._journal("signal_notice_error", {
-                "symbol": payload.get("symbol"),
-                "event": payload.get("event_id"),
-                "why": f"{type(e).__name__}: {str(e)[:120]}"})
+            try:
+                self._journal("signal_notice_error", {
+                    "symbol": payload.get("symbol"),
+                    "event": payload.get("event_id"),
+                    "why": f"{type(e).__name__}: {str(e)[:120]}"})
+            except Exception:
+                pass
 
     # 闸门 → 对外口径:信号频道只看到确定性文案,不含账户数字。
     # 空串表示按周期名动态拼装(见 _signal_status_text)。
@@ -2417,12 +2424,22 @@ class LiveRunner:
                 block = "DUPLICATE"
         is_watch = bool(d.meta.get("watch_entry"))
         wait_h = int(d.meta.get("max_wait_hours") or N_FILL_H) if is_watch else N_FILL_H
+        watch_details = None
+        if is_watch:
+            try:
+                prog = d.meta.get("prog_price")
+                if (prog is None and d.meta.get("max_prog_frac") is not None
+                        and hyp.target_1 is not None and d.meta.get("confirm_close") is not None):
+                    close = float(d.meta["confirm_close"])
+                    prog = close + hyp.direction * float(d.meta["max_prog_frac"]) * abs(float(hyp.target_1) - close)
+                watch_details = {"watch_price": entry_ref, "near_price": d.meta.get("near_price"),
+                                 "prog_price": prog, "max_wait_hours": wait_h}
+            except Exception:
+                watch_details = {"watch_price": entry_ref, "max_wait_hours": wait_h}
         # ---- 信号广播(公开频道):先发事实,再记账 ----
         self._notify_signal(
             (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
-            size_note=f"风险档 {eff_rf:.2%} ×{size_mult:g}"
-                      f"{'' if edge_mult >= 1.0 else f'(edge×{edge_mult:g})'}"
-                      f"{' · 降档触发' if mic else ''}",
+            size_note="降档触发" if mic else "本周期触发",
             exec_status=self._signal_status_text(block, tf_label=cs.tf_label,
                                                 kind=d.kind, watch_entry=is_watch),
             symbol=sym, tf_label=cs.tf_label, event_id=hyp.event_id,
@@ -2432,7 +2449,7 @@ class LiveRunner:
             zone_lo=zone_lo, zone_hi=zone_hi,
             zone_touches=d.meta.get("zone_touches"),
             pivots=chart_pivots, atr=getattr(view, "atr", None),
-            decision_ts=t)
+            decision_ts=t, watch_details=watch_details)
         if block is not None:
             self._note_block(sym, cs, hyp, block, qty=qty, ref=entry_ref)
             return
@@ -2502,6 +2519,9 @@ class LiveRunner:
             "limit_price", "ref_px", "invalid", "tf_label", "event_id",
             "route", "decision_ts", "mic", "size_mult", "edge_mult",
             "watch_entry", "watch_price", "near_price")})
+        if is_watch and intent["status"] == "armed":
+            self._notify_watch(intent, f"关注已建立({self.mode}，尚未下单)",
+                               f"关注价 {entry_ref:.8g}；等待 {wait_h} 小时；非交易所挂单")
 
     def _live_entry_filled(self, it: dict, *, side_fallback_price: float,
                            now_ms: int) -> None:
@@ -2527,6 +2547,13 @@ class LiveRunner:
                 "ref_px": price, "direction": int(it["direction"]),
                 "submitted_ms": int(now_ms),
                 "deadline_ms": int(now_ms) + 180_000}
+
+    def _notify_watch(self, it: dict, status: str, reason: str) -> None:
+        """Best-effort presentation only; never mutate intent/trading state."""
+        try:
+            self.tg.send_watch(str(it["symbol"]), str(it.get("tf_label") or "HTF"), status, reason)
+        except Exception:
+            pass
 
     def _poll_watch_entries(self, now_ms: int) -> None:
         """实盘 15s 轮询监控死区系统价格关注(WatchEntry:F1钳制内沿+差25%企稳补票+走完65%作废)。"""
@@ -2555,6 +2582,7 @@ class LiveRunner:
             if sym in self.positions:
                 it["status"] = "canceled"
                 self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": "POSITION_ALREADY_OPEN"})
+                self._notify_watch(it, "关注作废", "该品种已有持仓")
                 continue
             last_p, bid_p, ask_p = px_by_sym.get(sym, (0.0, 0.0, 0.0))
             if last_p <= 0.0:
@@ -2565,6 +2593,7 @@ class LiveRunner:
                 self.counters["watch_canceled_invalid"] = self.counters.get("watch_canceled_invalid", 0) + 1
                 self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": "ZONE_BROKEN",
                                                "price": last_p, "invalid": inv})
+                self._notify_watch(it, "关注作废", "价格已越过失效位")
                 continue
             watch_px = float(it.get("watch_price") or it.get("limit_price") or it["ref_px"])
             touched_watch = (last_p <= watch_px) if d > 0 else (last_p >= watch_px)
@@ -2583,6 +2612,7 @@ class LiveRunner:
                     self._journal("watch_cancel", {"oid": oid, "symbol": sym,
                                                    "why": "MOVE_ALREADY_PLAYED_OUT",
                                                    "price": last_p, "prog_px": prog_f})
+                    self._notify_watch(it, "关注作废", "未触发前行情已走完")
                     continue
             trigger_why = "WATCH_INNER_EDGE_HIT" if touched_watch else None
             if trigger_why is None and it.get("near_price") is not None:
@@ -2613,6 +2643,7 @@ class LiveRunner:
         d, inv = int(it["direction"]), float(it["invalid"])
         if d * (exec_px - inv) <= 0.0:
             it["status"] = "canceled"
+            self._notify_watch(it, "关注作废", "执行参考价已越过失效位")
             return
         spec = self._spec(sym)
         risk_cap = float(it.get("risk_usdt_cap") or 0.0)
@@ -2633,6 +2664,7 @@ class LiveRunner:
             self.counters["watch_triggered"] = self.counters.get("watch_triggered", 0) + 1
             self._journal("watch_trigger", {"oid": oid, "symbol": sym, "why": trigger_why,
                                             "exec_px": exec_px, "qty": qty})
+            self._notify_watch(it, "市价委托已提交（非成交确认）", trigger_why)
             self._live_entry_filled(it, side_fallback_price=exec_px, now_ms=now_ms)
         except BitgetError as e:
             it["status"] = "error"
@@ -2687,9 +2719,14 @@ class LiveRunner:
                 f", 目标 {it.get('target_1')}；此后由 §8 统一管理")
         else:
             self.tg.send_fill(
-                sym, f"开仓({self.mode})", it["qty"], price,
-                note=f"{it['event_id']} {it['route']}",
+                sym, (f"开仓暂记({self.mode},待成交回执)"
+                      if self.mode == "live" and it.get("fill_price_source") != "fills"
+                      else f"开仓({self.mode})"), it["qty"], price,
+                note=f"{it['event_id']} {it['route']}"
+                     + (f" · 系统Watch触发 {it.get('watch_trigger') or '价格条件满足'}" if it.get("watch_entry") else "")
+                     + (" · 参考价暂记，成交均价待回执校正" if self.mode == "live" and it.get("fill_price_source") != "fills" else ""),
                 tf_label=tf_lbl, direction=it["direction"],
+                price_label=("参考价(待成交回执)" if self.mode == "live" and it.get("fill_price_source") != "fills" else "成交价格"),
                 stop_price=float(it["invalid"]), target_price=it.get("target_1"),
                 box_lo=it.get("box_lo"), box_hi=it.get("box_hi"),
                 bars=chart_bars)
@@ -2863,7 +2900,7 @@ class LiveRunner:
             qty, float(ref_price), pnl=pnl,
             note=str(it["route"])[:60] if note is None else str(note)[:160],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
-            direction=-pos["direction"],
+            direction=pos["direction"],
             entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),
@@ -3172,6 +3209,8 @@ class LiveRunner:
                 it["status"] = "canceled"
                 self._journal("cancel", {"oid": oid, "symbol": sym,
                                          "reason": str(reason)[:80]})
+                if it.get("watch_entry"):
+                    self._notify_watch(it, "关注到期" if reason == "N_fill_expiry" else "关注作废", str(reason))
 
     def _expiry_sweep(self, now_ms: int) -> None:
         """到期处置:entry 撤单作废(canonical limit_expired);reduce/exit
@@ -3665,6 +3704,8 @@ class LiveRunner:
                     it["status"] = "expired"
                     self.counters["expired_intents"] += 1
                     self._journal("expired", {"oid": oid, "symbol": sym})
+                    if it.get("watch_entry"):
+                        self._notify_watch(it, "关注到期(paper)", "等待期限已过，未开仓")
                     continue
                 fill = float(o)                  # TIMEOUT_TO_TAKER
                 self.counters["expired_intents"] += 1
@@ -3694,6 +3735,7 @@ class LiveRunner:
                                 self._journal("watch_cancel", {"oid": oid, "symbol": sym,
                                                                "why": "MOVE_ALREADY_PLAYED_OUT",
                                                                "prog_px": prog_f})
+                                self._notify_watch(it, "关注作废(paper)", "未触发前行情已走完")
                                 continue
                     # role=entry:direction=开仓方向;role=reduce:direction=平仓
                     # 单方向。两种角色同判:买单等低穿、卖单等高穿(严格,maker)
@@ -3747,7 +3789,7 @@ class LiveRunner:
             sym, f"平仓(paper,{it['role']})", qty, price,
             pnl=gross - fee, note=str(it["route"])[:60],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
-            direction=-pos["direction"],
+            direction=pos["direction"],
             entry_price=float(pos["entry"]),      # 图 ENTRY 用真实建仓均价
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),

@@ -1847,6 +1847,91 @@ def test_notifier_routes_by_kind_only():
     assert n.ops_channel_separate is True
 
 
+def test_watch_signal_is_not_exchange_limit_order(tmp_path):
+    tg = _SignalTG()
+    r = _runner(tmp_path, _FakeClient(), tg, mode="paper")
+    r.equity = 104.0
+    decision = _decision(kind="limit")
+    decision.limit_price = 100.0
+    decision.meta.update(watch_entry=True, near_price=101.0,
+                         confirm_close=102.0, max_prog_frac=.65,
+                         max_wait_hours=4)
+    r._submit_open(_campaign(), decision, NOW, mic=False)
+    signal = tg.signals[0]
+    assert "尚未下单" in signal["exec_status"]
+    assert "风险档" not in signal["size_note"]
+    assert signal["watch_details"]["prog_price"] == pytest.approx(107.2)
+    assert signal["watch_details"]["max_wait_hours"] == 4
+    assert next(iter(r.open_intents.values()))["watch_entry"] is True
+    assert r.positions == {}
+
+
+def test_notification_failure_cannot_abort_paper_close(tmp_path):
+    class Boom(_FakeTG):
+        def send_fill(self, *args, **kwargs):
+            raise RuntimeError("template failed")
+
+    snapshots = []
+    for i, tg in enumerate((_FakeTG(), Boom())):
+        r = _runner(tmp_path / str(i), _FakeClient(), tg, mode="paper")
+        r.equity = 104.0
+        r.positions["BTCUSDT"] = _pos()
+        intent = {"oid": "close", "role": "exit", "qty": 1.0,
+                  "route": "test", "status": "armed"}
+        r._paper_close_fill("BTCUSDT", intent, 110.0, NOW)
+        snapshots.append((r.equity, r.positions, dict(r.counters), intent))
+    assert snapshots[0] == snapshots[1]
+
+
+def test_watch_notice_failure_cannot_prevent_expiry(tmp_path):
+    class Boom(_FakeTG):
+        def send_watch(self, *args, **kwargs):
+            raise RuntimeError("watch template failed")
+
+    r = _runner(tmp_path, _FakeClient(), Boom(), mode="paper")
+    r.open_intents["w"] = {"oid": "w", "symbol": "BTCUSDT", "role": "entry",
+                           "status": "armed", "watch_entry": True, "expiry_ts": NOW - 1}
+    r._expiry_sweep(NOW)
+    assert r.open_intents["w"]["status"] == "expired"
+    assert r.counters["expired_intents"] == 1
+    assert r.tg.errors == 1
+
+
+def test_live_order_and_bookkeeping_identical_with_broken_notifier(tmp_path):
+    class Boom(_FakeTG):
+        def send_signal(self, *args, **kwargs):
+            raise RuntimeError("signal failed")
+        def send_fill(self, *args, **kwargs):
+            raise RuntimeError("fill failed")
+        def send_alert(self, *args, **kwargs):
+            raise RuntimeError("alert failed")
+
+    snapshots = []
+    for i, tg in enumerate((_SignalTG(), Boom())):
+        client = _FakeClient()
+        r = _runner(tmp_path / str(i), client, tg, mode="live")
+        r.equity = 104.0
+        r._submit_open(_campaign(), _decision(), NOW, mic=False)
+        counters = {k: v for k, v in r.counters.items() if k != "signal_notice_errors"}
+        snapshots.append((client.market_orders, r.positions, r.open_intents,
+                          r._entry_settle, counters))
+    assert snapshots[0] == snapshots[1]
+    assert len(snapshots[0][0]) == 1
+
+
+def test_live_watch_arming_never_places_exchange_order(tmp_path):
+    tg, client = _SignalTG(), _FakeClient()
+    r = _runner(tmp_path, client, tg, mode="live")
+    r.equity = 104.0
+    decision = _decision(kind="limit")
+    decision.limit_price = 100.0
+    decision.meta.update(watch_entry=True, max_wait_hours=8)
+    r._submit_open(_campaign(), decision, NOW, mic=False)
+    assert len(r.open_intents) == 1
+    assert client.market_orders == [] and r.positions == {}
+    assert r.counters["watch_armed"] == 1
+
+
 def test_notifier_reports_fallback_instead_of_pretending_split():
     """secrets_loader 会把运营键回退填成同值:此时必须如实报"未分开"。"""
     from market_operator.tg import TelegramNotifier

@@ -228,7 +228,7 @@ def test_dual_bot_telegram_and_bw_kline_chart():
     assert "SIG_TOK/sendPhoto" in calls[0][0]
     assert calls[0][1]["chat_id"] == "SIG_CHAT"
     assert "photo" in calls[0][2]
-    assert "REJECT (刺穿拒绝)" in calls[0][1]["caption"]
+    assert "REJECT (边界拒绝)" in calls[0][1]["caption"]
     assert "REJECT 市价" in calls[0][1]["caption"]
     # 每行一条关键信息 + Emoji 行首
     cap_lines = [ln for ln in calls[0][1]["caption"].splitlines() if not ln.startswith("【")]
@@ -285,10 +285,12 @@ def test_live_runner_v21_multi_tf_campaigns(tmp_path):
     assert ("BTCUSDT", "2h") in runner.extra_campaigns
     assert ("BTCUSDT", "4h") in runner.extra_campaigns
     assert ("BTCUSDT", "1d") in runner.extra_campaigns
-    assert runner.current_risk_frac(104.0) == 0.04
-    assert runner.current_risk_frac(300.0) == 0.03
-    assert runner.current_risk_frac(800.0) == 0.02
-    assert runner.current_risk_frac(2000.0) == 0.01
+    assert runner.current_risk_frac(104.0) == 0.05
+    assert runner.current_risk_frac(300.0) == 0.05
+    assert runner.current_risk_frac(1000.01) == 0.04
+    assert runner.current_risk_frac(5000.01) == 0.03
+    assert runner.current_risk_frac(10000.01) == 0.02
+    assert runner.current_risk_frac(100000.01) == 0.01
 
 
 def test_live_runner_v21_adaptive_warmup_for_new_listings(tmp_path):

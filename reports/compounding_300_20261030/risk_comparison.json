@@ -1,0 +1,288 @@
+{
+  "standard_0.75pct": {
+    "risk_frac": 0.0075,
+    "portfolio_cap": 0.12,
+    "tf_cap": {
+      "2h": 0.0225,
+      "4h": 0.0225,
+      "12h": 0.0225,
+      "1d": 0.0225
+    },
+    "tiers": null,
+    "equity_end": 981.890531573409,
+    "max_drawdown": 0.1649940804535195,
+    "dd_peak_ts": 1780718400000,
+    "dd_trough_ts": 1786914000000,
+    "closed": {
+      "n": 669,
+      "wins": 305,
+      "losses": 364,
+      "breakeven": 0,
+      "net": 680.7830252680768,
+      "winrate": 0.45590433482810166,
+      "profit_factor": 1.660406013136023,
+      "average_win": 5.611928868157892,
+      "average_loss": -2.8320199986815395,
+      "payoff_ratio": 1.9815993074803682,
+      "expectancy": 1.0176128927773944,
+      "median_net": -0.8512436486430343,
+      "best": 72.7171727586069,
+      "worst": -7.718824608403682
+    },
+    "concentration": {
+      "top_10pct": {
+        "n": 67,
+        "wins": 67,
+        "losses": 0,
+        "breakeven": 0,
+        "net": 1149.4979251564453,
+        "winrate": 1.0,
+        "profit_factor": null,
+        "average_win": 17.156685450096198,
+        "average_loss": null,
+        "payoff_ratio": null,
+        "expectancy": 17.156685450096198,
+        "median_net": 11.861309865928147,
+        "best": 72.7171727586069,
+        "worst": 6.850709130357567,
+        "share_of_net": 1.6884938115250439
+      },
+      "remaining_90pct": {
+        "n": 602,
+        "wins": 238,
+        "losses": 364,
+        "breakeven": 0,
+        "net": -468.71489988836845,
+        "winrate": 0.3953488372093023,
+        "profit_factor": 0.5453145468619214,
+        "average_win": 2.36193436820047,
+        "average_loss": -2.8320199986815395,
+        "payoff_ratio": 0.8340104834358796,
+        "expectancy": -0.7785961792165589,
+        "median_net": -1.3245272421503915,
+        "best": 6.6924575348881605,
+        "worst": -7.718824608403682,
+        "share_of_net": -0.6884938115250439
+      },
+      "without_top_10_trades": {
+        "n": 659,
+        "wins": 295,
+        "losses": 364,
+        "breakeven": 0,
+        "net": 251.47316623841738,
+        "winrate": 0.44764795144157815,
+        "profit_factor": 1.2439461399038398,
+        "average_win": 4.346876087316941,
+        "average_loss": -2.8320199986815395,
+        "payoff_ratio": 1.5349030336440597,
+        "expectancy": 0.38159812782764396,
+        "median_net": -0.9262004793214892,
+        "best": 28.19166567889985,
+        "worst": -7.718824608403682
+      }
+    },
+    "cap_skips": 60
+  },
+  "old_dynamic_tiers": {
+    "risk_frac": 0.04,
+    "portfolio_cap": 0.5,
+    "tf_cap": {
+      "2h": 0.12,
+      "4h": 0.12,
+      "12h": 0.12,
+      "1d": 0.12
+    },
+    "tiers": [
+      [
+        250,
+        0.04
+      ],
+      [
+        600,
+        0.03
+      ],
+      [
+        1500,
+        0.02
+      ],
+      [
+        1000000000.0,
+        0.01
+      ]
+    ],
+    "equity_end": 3783.970758685487,
+    "max_drawdown": 0.2315057977430235,
+    "dd_peak_ts": 1780718400000,
+    "dd_trough_ts": 1786914000000,
+    "closed": {
+      "n": 706,
+      "wins": 321,
+      "losses": 385,
+      "breakeven": 0,
+      "net": 3478.040908970368,
+      "winrate": 0.4546742209631728,
+      "profit_factor": 1.5902264173852254,
+      "average_win": 29.192411586048816,
+      "average_loss": -15.305774571821564,
+      "payoff_ratio": 1.907280905586641,
+      "expectancy": 4.926403553782391,
+      "median_net": -4.261778389275445,
+      "best": 315.10774862062993,
+      "worst": -42.17412381343495
+    },
+    "concentration": {
+      "top_10pct": {
+        "n": 71,
+        "wins": 71,
+        "losses": 0,
+        "breakeven": 0,
+        "net": 6220.435039851687,
+        "winrate": 1.0,
+        "profit_factor": null,
+        "average_win": 87.61176112467166,
+        "average_loss": null,
+        "payoff_ratio": null,
+        "expectancy": 87.61176112467166,
+        "median_net": 63.49161572891964,
+        "best": 315.10774862062993,
+        "worst": 35.96622293437722,
+        "share_of_net": 1.7884881755727169
+      },
+      "remaining_90pct": {
+        "n": 635,
+        "wins": 250,
+        "losses": 385,
+        "breakeven": 0,
+        "net": -2742.3941308813196,
+        "winrate": 0.3937007874015748,
+        "profit_factor": 0.5346134489811027,
+        "average_win": 12.60131631707993,
+        "average_loss": -15.305774571821564,
+        "payoff_ratio": 0.823304711430898,
+        "expectancy": -4.318730914773731,
+        "median_net": -6.870591145796209,
+        "best": 35.55526752995885,
+        "worst": -42.17412381343495,
+        "share_of_net": -0.788488175572717
+      },
+      "without_top_10_trades": {
+        "n": 696,
+        "wins": 311,
+        "losses": 385,
+        "breakeven": 0,
+        "net": 1481.042306523928,
+        "winrate": 0.4468390804597701,
+        "profit_factor": 1.2513341037251775,
+        "average_win": 23.709856966801382,
+        "average_loss": -15.305774571821564,
+        "payoff_ratio": 1.549079195929882,
+        "expectancy": 2.1279343484539193,
+        "median_net": -4.601522113021007,
+        "best": 140.13337710263696,
+        "worst": -42.17412381343495
+      }
+    },
+    "cap_skips": 2
+  },
+  "new_dynamic_tiers": {
+    "risk_frac": 0.04,
+    "portfolio_cap": 0.5,
+    "tf_cap": {
+      "2h": 0.12,
+      "4h": 0.12,
+      "12h": 0.12,
+      "1d": 0.12
+    },
+    "tiers": [
+      [
+        3000.0,
+        0.04
+      ],
+      [
+        10000.0,
+        0.03
+      ],
+      [
+        100000.0,
+        0.02
+      ],
+      [
+        1000000000.0,
+        0.01
+      ]
+    ],
+    "equity_end": 15239.791938939416,
+    "max_drawdown": 0.5871578065236492,
+    "dd_peak_ts": 1771138800000,
+    "dd_trough_ts": 1786914000000,
+    "closed": {
+      "n": 688,
+      "wins": 306,
+      "losses": 382,
+      "breakeven": 0,
+      "net": 14891.787002335068,
+      "winrate": 0.44476744186046513,
+      "profit_factor": 1.4496245540926502,
+      "average_win": 156.90287659419403,
+      "average_loss": -86.70286187300604,
+      "payoff_ratio": 1.8096620250437658,
+      "expectancy": 21.64503924758004,
+      "median_net": -10.958888171963068,
+      "best": 2000.5302194478968,
+      "worst": -343.54082196716405
+    },
+    "concentration": {
+      "top_10pct": {
+        "n": 69,
+        "wins": 69,
+        "losses": 0,
+        "breakeven": 0,
+        "net": 35564.62918960984,
+        "winrate": 1.0,
+        "profit_factor": null,
+        "average_win": 515.4294085450701,
+        "average_loss": null,
+        "payoff_ratio": null,
+        "expectancy": 515.4294085450701,
+        "median_net": 351.2265643633168,
+        "best": 2000.5302194478968,
+        "worst": 183.23732289113286,
+        "share_of_net": 2.3882042621233586
+      },
+      "remaining_90pct": {
+        "n": 619,
+        "wins": 237,
+        "losses": 382,
+        "breakeven": 0,
+        "net": -20672.84218727477,
+        "winrate": 0.38287560581583197,
+        "profit_factor": 0.37582927765326846,
+        "average_win": 52.52173438064783,
+        "average_loss": -86.70286187300604,
+        "payoff_ratio": 0.6057670213651838,
+        "expectancy": -33.39716023792371,
+        "median_net": -23.10345218317701,
+        "best": 182.58482504849383,
+        "worst": -343.54082196716405,
+        "share_of_net": -1.3882042621233583
+      },
+      "without_top_10_trades": {
+        "n": 678,
+        "wins": 296,
+        "losses": 382,
+        "breakeven": 0,
+        "net": 1700.2285643137345,
+        "winrate": 0.4365781710914454,
+        "profit_factor": 1.0513346390171496,
+        "average_win": 117.63757364797988,
+        "average_loss": -86.70286187300604,
+        "payoff_ratio": 1.3567899733261861,
+        "expectancy": 2.5077117467754197,
+        "median_net": -11.401017141050168,
+        "best": 937.7819271587867,
+        "worst": -343.54082196716405
+      }
+    },
+    "cap_skips": 38
+  }
+}

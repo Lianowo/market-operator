@@ -40,7 +40,8 @@ TIMEOUT_S = 15
 MAX_LEN = 4000
 MAX_CAPTION_LEN = 1024
 
-_KIND_TAG = {"signal": "信号", "fill": "成交", "daily": "日结", "alert": "告警"}
+_KIND_TAG = {"signal": "信号", "fill": "成交", "daily": "日结", "alert": "告警",
+             "watch": "关注状态"}
 
 CHANNEL_SIGNAL = "signal"      # 公开广播:只发信号
 CHANNEL_OPS = "ops"            # 私有运营:成交/日结/告警
@@ -52,13 +53,14 @@ _KIND_CHANNEL = {
     "fill": CHANNEL_OPS,
     "daily": CHANNEL_OPS,
     "alert": CHANNEL_OPS,
+    "watch": CHANNEL_OPS,
 }
 
 _EVENT_DISPLAY = {
     "BREAKOUT_ACCEPTED": "ACCEPT (突破接受)",
     "ACCEPT": "ACCEPT (突破接受)",
-    "LEVEL_REJECTED": "REJECT (刺穿拒绝)",
-    "REJECT": "REJECT (刺穿拒绝)",
+    "LEVEL_REJECTED": "REJECT (边界拒绝)",
+    "REJECT": "REJECT (边界拒绝)",
 }
 
 _ROUTE_DISPLAY = {
@@ -66,6 +68,10 @@ _ROUTE_DISPLAY = {
     "level_rejected_market": "REJECT 市价",
     "accept_market": "ACCEPT 市价",
     "reject_market": "REJECT 市价",
+    "breakout_accepted_limit": "ACCEPT 限价意图",
+    "level_rejected_limit": "REJECT 限价意图",
+    "e1_market": "ACCEPT 市价",
+    "e3_market": "REJECT 市价",
 }
 
 
@@ -474,6 +480,31 @@ def render_bw_kline_png(
 
 
 
+class NotificationGuard:
+    """Runner boundary: notifier method failures cannot abort bookkeeping.
+
+    Does not create threads or change synchronous/async transport policy. The live
+    entrypoint continues to provide an async TelegramNotifier.
+    """
+
+    def __init__(self, notifier) -> None:
+        self._notifier = notifier
+        self.errors = 0
+
+    def __getattr__(self, name):
+        value = getattr(self._notifier, name)
+        if not name.startswith("send") or not callable(value):
+            return value
+
+        def guarded(*args, **kwargs):
+            try:
+                return value(*args, **kwargs)
+            except Exception:
+                self.errors += 1
+                return False
+        return guarded
+
+
 class TelegramNotifier:
     """双通道发信器(公开信号 Bot + 私有运营 Bot) + 黑白 K 线图同条消息发送。
 
@@ -645,6 +676,12 @@ class TelegramNotifier:
                 self._record_miss("render", e)
                 png = None
         if png:
+            if len(body) > MAX_CAPTION_LEN:
+                # Preserve watch conditions/status instead of silently chopping
+                # them off a photo caption. Both sends run on the same worker.
+                text_ok = self._post_text_sync(token, chat_id, kind, body)
+                photo_ok = self._post_photo_sync(token, chat_id, kind, "K线结构图（详见配套文字）", png)
+                return text_ok and photo_ok
             return self._post_photo_sync(token, chat_id, kind, body, png)
         return self._post_text_sync(token, chat_id, kind, body)
 
@@ -691,7 +728,8 @@ class TelegramNotifier:
                     pivots: Optional[Sequence[tuple]] = None,
                     atr: Optional[float] = None,
                     exec_status: str = "",
-                    decision_ts: Optional[int] = None) -> bool:
+                    decision_ts: Optional[int] = None,
+                    watch_details: Optional[dict] = None) -> bool:
         """信号广播(公开通道):结构事实 + 系统如何处置,一条消息读完。
 
         纪律:这里**只写结构与决策**,不写账户权益/持仓数量/下单成败 —— 该频道
@@ -702,7 +740,7 @@ class TelegramNotifier:
         dir_emoji = "🟢" if long_side else "🔴"
         d_int = 1 if long_side else -1
         ev_disp = format_event_display(event_id)
-        rt_disp = format_route_display(route)
+        rt_disp = "系统价格关注 Watch（非交易所限价挂单）" if watch_details else format_route_display(route)
         lines = [
             f"📡 信号触发: {symbol}",
             f"⏱️ 交易周期: {tf_label or 'HTF'}",
@@ -739,6 +777,15 @@ class TelegramNotifier:
                 lines.append(f"📐 仓位参数: {clean_note}")
         if exec_status:
             lines.append(f"🤖 系统执行: {exec_status}")
+        if watch_details:
+            for key, label in (("watch_price", "关注触发价"),
+                               ("near_price", "近价区（触及后需企稳确认）"),
+                               ("prog_price", "行情走完作废价")):
+                value = watch_details.get(key)
+                if value is not None:
+                    lines.append(f"👁️ {label}: {float(value):.8g}")
+            lines.append(f"⌛ 关注期限: {watch_details['max_wait_hours']} 小时（自决策时刻起）")
+            lines.append("ℹ️ Watch规则（仅在系统实际建立关注后适用）：失效位被破、行情走完或到期会作废。关注不等于成交，触发后仍需执行检查。")
         if decision_ts:
             try:
                 stamp = datetime.fromtimestamp(
@@ -804,17 +851,19 @@ class TelegramNotifier:
         `price_label` 供非成交类事件改写金额行文案(如"参考价")。
         """
         lines = [
-            f"⚡ 交易执行: {symbol}",
+            f"⚡ {'持仓更新' if price_label.startswith('参考价') else '交易执行'}: {symbol}",
             f"🏷️ 动作类型: {fill_kind}",
         ]
         if tf_label:
             lines.append(f"⏱️ 所属周期: {tf_label}")
         lines.extend([
-            f"📦 成交数量: {qty:.8g}",
+            f"📦 {'持仓数量' if price_label.startswith('参考价') else '成交数量'}: {qty:.8g}",
             f"💵 {price_label}: {price:.8g}",
         ])
         if entry_price is not None:
             lines.append(f"🎯 建仓均价: {entry_price:.8g}")
+        if direction in (-1, 1):
+            lines.append(f"🧭 持仓方向: {'多' if direction > 0 else '空'}")
         if stop_price is not None:
             lines.append(f"🛡️ 当前止损: {stop_price:.8g}")
         if target_price is not None:
@@ -827,7 +876,7 @@ class TelegramNotifier:
                 lines.append(f"📍 入场箱内: {pos_txt}")
         if pnl is not None:
             pnl_emoji = "💰" if pnl >= 0 else "💸"
-            lines.append(f"{pnl_emoji} 实现盈亏: {pnl:+.2f} USDT")
+            lines.append(f"{pnl_emoji} 本次平仓估算盈亏: {pnl:+.2f} USDT（按当前记账口径，非整笔净收益）")
         if note:
             clean_note = (str(note)
                           .replace("BREAKOUT_ACCEPTED e1_market", "ACCEPT (突破接受) | 市价")
@@ -846,7 +895,19 @@ class TelegramNotifier:
                 target_price=target_price, direction=direction,
                 zone_lo=zone_lo, zone_hi=zone_hi, pivots=pivots, atr=atr,
                 max_bars=60)
-        return self.send("fill", "\n".join(lines), png_factory=png_factory)
+        body = "\n".join(lines)
+        if price_label.startswith("参考价"):
+            body = "【持仓更新】\n" + body
+        return self.send("fill", body, png_factory=png_factory)
+
+    def send_watch(self, symbol: str, tf_label: str, status: str, reason: str) -> bool:
+        reason = {"WATCH_INNER_EDGE_HIT": "价格命中关注内沿",
+                  "WATCH_NEAR_BOUNCE": "近价区触及后企稳确认",
+                  "N_fill_expiry": "等待期限已过",
+                  "position_exit": "持仓离场，关联关注作废"}.get(reason, reason)
+        return self.send("watch", f"👁️ 价格关注更新: {symbol}\n"
+                         f"⏱️ 所属周期: {tf_label}\n状态: {status}\n原因: {reason}\n"
+                         "关注触发不等于成交，成交以运营通道开仓通知为准。")
 
     def send_daily(self, date: str, equity: float, day_pnl: float,
                    n_signals: int, n_fills: int, n_positions: int,
