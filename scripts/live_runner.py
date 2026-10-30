@@ -2453,6 +2453,8 @@ class LiveRunner:
                   "watch_price": float(entry_ref) if is_watch else None,
                   "near_price": (float(d.meta["near_price"])
                                  if d.meta.get("near_price") is not None else None),
+                  "prog_price": (float(d.meta["prog_price"])
+                                 if d.meta.get("prog_price") is not None else None),
                   "confirm_close": (float(d.meta["confirm_close"])
                                     if d.meta.get("confirm_close") is not None else None),
                   "max_prog_frac": (float(d.meta["max_prog_frac"])
@@ -2568,19 +2570,22 @@ class LiveRunner:
                 continue
             watch_px = float(it.get("watch_price") or it.get("limit_price") or it["ref_px"])
             touched_watch = (last_p <= watch_px) if d > 0 else (last_p >= watch_px)
+            prog_px = it.get("prog_price")
             max_prog, c0, tgt = it.get("max_prog_frac"), it.get("confirm_close"), it.get("target_1")
-            if not touched_watch and max_prog is not None and tgt is not None and c0 is not None:
+            if prog_px is None and max_prog is not None and tgt is not None and c0 is not None:
                 span_rem = abs(float(tgt) - float(c0))
                 if span_rem > 0.0:
                     prog_px = float(c0) + d * float(max_prog) * span_rem
-                    if (last_p >= prog_px) if d > 0 else (last_p <= prog_px):
-                        it["status"] = "canceled"
-                        self.counters["watch_canceled_played_out"] = \
-                            self.counters.get("watch_canceled_played_out", 0) + 1
-                        self._journal("watch_cancel", {"oid": oid, "symbol": sym,
-                                                       "why": "MOVE_ALREADY_PLAYED_OUT",
-                                                       "price": last_p, "prog_px": prog_px})
-                        continue
+            if not touched_watch and prog_px is not None:
+                prog_f = float(prog_px)
+                if (last_p >= prog_f) if d > 0 else (last_p <= prog_f):
+                    it["status"] = "canceled"
+                    self.counters["watch_canceled_played_out"] = \
+                        self.counters.get("watch_canceled_played_out", 0) + 1
+                    self._journal("watch_cancel", {"oid": oid, "symbol": sym,
+                                                   "why": "MOVE_ALREADY_PLAYED_OUT",
+                                                   "price": last_p, "prog_px": prog_f})
+                    continue
             trigger_why = "WATCH_INNER_EDGE_HIT" if touched_watch else None
             if trigger_why is None and it.get("near_price") is not None:
                 near_f = float(it["near_price"])
@@ -3672,23 +3677,26 @@ class LiveRunner:
                     lp = float(it["limit_price"])
                     d = int(it["direction"])
                     if it["role"] == "entry" and it.get("watch_entry"):
+                        prog_px = it.get("prog_price")
                         max_prog = it.get("max_prog_frac")
                         c0 = it.get("confirm_close")
                         tgt = it.get("target_1")
-                        if max_prog is not None and tgt is not None and c0 is not None:
+                        if prog_px is None and max_prog is not None and tgt is not None and c0 is not None:
                             span_rem = abs(float(tgt) - float(c0))
                             if span_rem > 0.0:
                                 prog_px = float(c0) + d * float(max_prog) * span_rem
-                                already_ran = (h >= prog_px) if d > 0 else (low <= prog_px)
-                                touched_watch = (low <= lp) if d > 0 else (h >= lp)
-                                if already_ran and not touched_watch:
-                                    it["status"] = "canceled"
-                                    self.counters["watch_canceled_played_out"] = \
-                                        self.counters.get("watch_canceled_played_out", 0) + 1
-                                    self._journal("watch_cancel", {"oid": oid, "symbol": sym,
-                                                                   "why": "MOVE_ALREADY_PLAYED_OUT",
-                                                                   "prog_px": prog_px})
-                                    continue
+                        if prog_px is not None:
+                            prog_f = float(prog_px)
+                            already_ran = (h >= prog_f) if d > 0 else (low <= prog_f)
+                            touched_watch = (low <= lp) if d > 0 else (h >= lp)
+                            if already_ran and not touched_watch:
+                                it["status"] = "canceled"
+                                self.counters["watch_canceled_played_out"] = \
+                                    self.counters.get("watch_canceled_played_out", 0) + 1
+                                self._journal("watch_cancel", {"oid": oid, "symbol": sym,
+                                                               "why": "MOVE_ALREADY_PLAYED_OUT",
+                                                               "prog_px": prog_f})
+                                continue
                     # role=entry:direction=开仓方向;role=reduce:direction=平仓
                     # 单方向。两种角色同判:买单等低穿、卖单等高穿(严格,maker)
                     if d > 0 and low < lp:

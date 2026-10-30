@@ -424,12 +424,15 @@ class MicTracker:
                     not_counter = (ctx.regime is not Regime.TREND_DOWN) if direction > 0 else (ctx.regime is not Regime.TREND_UP)
                     close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
                     progressing = (c >= start_c and c > o and close_pos >= 0.50) if direction > 0 else (c <= start_c and c < o and close_pos >= 0.50)
-                    not_climax = ext_dist <= 1.50 * ctx.atr
+                    max_ext = float(getattr(p, "accept_max_ext_atr", 1.50) or 1.50)
+                    not_climax = ext_dist <= max_ext * ctx.atr
                     if not_counter and progressing and not_climax:
+                        sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * ctx.atr else "A1_TIGHT"
                         events.append(self._mk(BREAKOUT_ACCEPTED, direction, ts, a, {
                             "zone": cd.zone.clone(), "ref": ref,
                             "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                            "started": cd.started, "sub_kind": "A1_REAL"}))
+                            "started": cd.started, "sub_kind": sub_kind,
+                            "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0}))
                 else:
                     events.append(self._mk(BREAKOUT_ACCEPTED, direction, ts, a, {
                         "zone": cd.zone.clone(), "ref": ref,

@@ -176,6 +176,20 @@ class RouterParams:
     deadzone_watch_near_frac: float = 0.75
     deadzone_watch_max_prog_frac: float = 0.65
     deadzone_watch_wait_hours: int = 4
+    # ── 突破过伸系统价格关注 (Breakout WatchEntry: 2026-10-30) ───────────
+    # 当 ACCEPT(BREAKOUT_ACCEPTED)确认时距被破箱沿外缘 ext_dist > accept_watch_ext_atr·ATR
+    # (看见突破的时间晚了)时,不在半山腰市价追单、也不在交易所挂死板限价单,转入系统价格关注态:
+    # ① 关注目标价 watch_px = 被破箱沿外缘 ref(上破盯 zone.hi,下破盯 zone.lo);
+    # ② 近沿补票带 near_px = close − accept_watch_near_frac·(close − watch_px);
+    # ③ 无 target_1 时的走完作废:未回踩先从确认收盘继续顺向推进 ≥ accept_watch_max_run_atr·ATR
+    #    即判 MOVE_ALREADY_PLAYED_OUT 作废;
+    # ④ 短回踩时间窗:超过 accept_watch_wait_hours 小时未回踩即过期作废。
+    accept_watch_enabled: bool = False
+    accept_watch_ext_atr: float = 0.80
+    accept_watch_near_frac: float = 0.75
+    accept_watch_max_run_atr: float = 1.50
+    accept_watch_wait_hours: int = 4
+    accept_watch_keep_confirm_stop: bool = False
 
 
 
@@ -343,6 +357,7 @@ class MarketRouter:
 
         # v22 轨道 C: A2 过伸突破转翻转边界前缘 Limit 挂单(当显式传入 A2_OVEREXTENDED 且开启回抽限价时)
         if (cid == BREAKOUT_ACCEPTED
+                and not p.accept_watch_enabled
                 and p.allow_pullback_limit
                 and ev.attrs.get("sub_kind") == "A2_OVEREXTENDED"
                 and (p.accept_use_struct_stop or p.min_box_rr > 0.0)
@@ -373,6 +388,65 @@ class MarketRouter:
         hyp = self._gates(symbol, ev, view, close, atr, route)
         if hyp is None:
             return None
+
+        # 突破过伸系统价格关注 (Breakout WatchEntry: 看见突破偏晚 -> 盯回踩箱沿 + 近沿补票 + ATR走完作废 + 短窗)
+        if (cid == BREAKOUT_ACCEPTED
+                and p.accept_watch_enabled
+                and zone is not None and atr > 0.0):
+            direction = int(ev.direction)
+            edge_px = float(ev.attrs.get("ref")
+                            if ev.attrs.get("ref") is not None
+                            else (zone.hi if direction > 0 else zone.lo))
+            close_px = float(close)
+            ext_dist = direction * (close_px - edge_px)
+            if ext_dist > float(p.accept_watch_ext_atr) * float(atr) + 1e-9:
+                min_dist = float(p.k_is) * float(atr)
+                ev_inv = ev.attrs.get("invalid")
+                if p.accept_use_struct_stop and ev_inv is not None:
+                    inv_px = float(ev_inv)
+                elif p.accept_watch_keep_confirm_stop:
+                    inv_px = float(hyp.invalid)
+                else:
+                    inv_px = edge_px - direction * float(p.turtle_stop_atr) * float(atr)
+                f1_floor_px = inv_px + direction * min_dist
+                watch_px = (max(edge_px, f1_floor_px) if direction > 0
+                            else min(edge_px, f1_floor_px))
+                dist_w = direction * (watch_px - inv_px)
+                if direction * (close_px - watch_px) > 1e-9 and dist_w >= min_dist - 1e-9:
+                    near_frac = float(p.accept_watch_near_frac or 0.0)
+                    near_px = (close_px - near_frac * (close_px - watch_px)
+                               if near_frac > 0.0 else None)
+                    max_run = float(p.accept_watch_max_run_atr or 0.0)
+                    prog_px = (close_px + direction * max_run * float(atr)
+                               if max_run > 0.0 else None)
+                    hyp_w = Hypothesis(
+                        event_id=ev.id, direction=direction, ts=ev.ts,
+                        known_index=ev.known_index, entry=float(watch_px),
+                        invalid=inv_px, target_1=None,
+                        r_mult=None, regime=view.regime,
+                    )
+                    reason = (f"{ev.id}|{side} {ROUTE_BREAKOUT_ACCEPTED_LIMIT} "
+                              f"WATCH_ENTRY 突破过伸({ext_dist / float(atr):.2f}ATR>{p.accept_watch_ext_atr:.2g}ATR)"
+                              f"系统价格关注 confirm_close={close_px:.8g} "
+                              f"watch_px={watch_px:.8g} near_px={near_px} "
+                              f"prog_px={prog_px} invalid={inv_px:.8g}")
+                    self._bump("accept_watch_armed")
+                    return RouteDecision(
+                        kind="limit", route=ROUTE_BREAKOUT_ACCEPTED_LIMIT,
+                        intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
+                                           reason=reason, ref_price=float(watch_px), ts=ev.ts),
+                        hyp=hyp_w, limit_price=float(watch_px),
+                        meta={
+                            "watch_entry": True,
+                            "watch_price": float(watch_px),
+                            "near_price": float(near_px) if near_px is not None else None,
+                            "prog_price": float(prog_px) if prog_px is not None else None,
+                            "confirm_close": close_px,
+                            "max_prog_frac": None,
+                            "max_wait_hours": int(p.accept_watch_wait_hours),
+                            **_event_provenance(ev),
+                        },
+                    )
 
         # v22 轨道 B:当配置了 min_box_rr > 0 且允许回抽挂单时,确认 K 线过长自动转为 50%/内沿 RestingLimitOrder
         if (cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED)

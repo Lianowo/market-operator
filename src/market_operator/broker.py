@@ -442,20 +442,26 @@ class Broker:
                 if max_wait_h is not None and (od.wait_bars + 1) > int(max_wait_h):
                     rows.append(self._timeout(od, int(ts)))
                     continue
+                prog_px = od.meta.get("prog_price")
                 max_prog = od.meta.get("max_prog_frac")
                 c0 = od.meta.get("confirm_close")
-                if max_prog is not None and od.target_1 is not None and c0 is not None:
+                if prog_px is None and max_prog is not None and od.target_1 is not None and c0 is not None:
                     span_rem = abs(float(od.target_1) - float(c0))
                     if span_rem > 0.0:
                         prog_px = float(c0) + od.direction * float(max_prog) * span_rem
-                        already_ran = (h >= prog_px) if od.direction > 0 else (l <= prog_px)
-                        touched_watch = (l <= od.limit_price) if od.direction > 0 else (h >= od.limit_price)
-                        if already_ran and not touched_watch:
-                            rows.append(self._admin_row(
-                                od, int(ts), kind="CANCEL",
-                                reason_code="MOVE_ALREADY_PLAYED_OUT",
-                                detail=f"reached {prog_px:.8g} ({float(max_prog):.0%} to target) before pullback"))
-                            continue
+                if prog_px is not None:
+                    prog_f = float(prog_px)
+                    already_ran = (h >= prog_f) if od.direction > 0 else (l <= prog_f)
+                    touched_watch = (l <= od.limit_price) if od.direction > 0 else (h >= od.limit_price)
+                    if already_ran and not touched_watch:
+                        detail = (f"reached {prog_f:.8g} ({float(max_prog):.0%} to target) before pullback"
+                                  if max_prog is not None and od.target_1 is not None
+                                  else f"reached {prog_f:.8g} before pullback")
+                        rows.append(self._admin_row(
+                            od, int(ts), kind="CANCEL",
+                            reason_code="MOVE_ALREADY_PLAYED_OUT",
+                            detail=detail))
+                        continue
                 near_px = od.meta.get("near_price")
                 if near_px is not None:
                     exact_cross = (h > od.limit_price) if od.direction < 0 else (l < od.limit_price)

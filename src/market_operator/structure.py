@@ -89,6 +89,10 @@ class Params:
     # 才成立 —— 支撑拒绝=夺回试探后的局部**高**点;阻力拒绝=跌破试探后的局部**低**点。
     # 这是"试探失败、原方向重新取得主动权"的最小可观测结构事实。
     struct_confirm_reject: bool = False
+    # 突破接受(ACCEPT)第 N_a 根确认收盘距箱沿的最大允许透支上限(ATR 倍数,默认 1.50)。
+    # 当开启突破系统价格关注(accept_watch_enabled)时,可适度放宽该上限(如 2.2~2.5),
+    # 把"看见突破晚了(>1.5 ATR)"的候选接回系统 Watch 等回踩箱沿,而非一刀切永久丢弃。
+    accept_max_ext_atr: float = 1.50
 
 
     @classmethod

@@ -22,6 +22,7 @@
   "e5_edge_atr": 0.75,
   "use_balance_detector": true,
   "balance_quality_min": 0.35,
+  "accept_max_ext_atr": 99.0,
   "risk_frac": 0.0075,
   "leverage_cap": 20.0,
   "taker_fee": 0.0006,
@@ -63,7 +64,12 @@
     "deadzone_watch_r_hi": 1.5,
     "deadzone_watch_near_frac": 0.75,
     "deadzone_watch_max_prog_frac": 0.65,
-    "deadzone_watch_wait_hours": 4
+    "deadzone_watch_wait_hours": 4,
+    "accept_watch_enabled": true,
+    "accept_watch_ext_atr": 1.5,
+    "accept_watch_near_frac": 0.75,
+    "accept_watch_max_run_atr": 1.5,
+    "accept_watch_wait_hours": 8
   },
 
   "router_params_by_tf": {

@@ -13,10 +13,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import live_runner as lr
 from market_operator.broker import Broker, ContractSpec, RestingLimitOrder
-from market_operator.events import LEVEL_REJECTED, MarketEvent
+from market_operator.events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent
 from market_operator.hypothesis import StructureView
 from market_operator.replay import MS_1H
 from market_operator.routing import (
+    ROUTE_BREAKOUT_ACCEPTED,
+    ROUTE_BREAKOUT_ACCEPTED_LIMIT,
     ROUTE_LEVEL_REJECTED,
     ROUTE_LEVEL_REJECTED_LIMIT,
     WHITELIST_BALANCE,
@@ -244,3 +246,99 @@ def test_live_runner_15s_watch_polling_bounce_and_played_out(tmp_path):
     client.ticker_px = 99.9
     runner._poll_watch_entries(t_now + 60_000)
     assert len(client.market_orders) == 1
+
+
+def test_router_accept_watch_long_short_and_tight_market():
+    """突破过伸系统价格关注:紧致突破仍市价;上破/下破过伸均转 WatchEntry 且预算 prog_price(无 target_1)。"""
+    z_res = Zone(
+        lo=104.0, hi=105.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+        touches=3, origin_known=1, last_change_known=5,
+        box_opposite=99.0, box_quality=0.6, box_width_atr=3.0, box_rotations=3,
+    )
+    z_sup = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=3, origin_known=1, last_change_known=5,
+        box_opposite=105.0, box_quality=0.6, box_width_atr=3.0, box_rotations=3,
+    )
+    view = StructureView(regime=Regime.RANGE, zones=(z_res, z_sup), atr=2.0)
+    r = MarketRouter(RouterParams(
+        whitelist=WHITELIST_BALANCE,
+        accept_watch_enabled=True,
+        accept_watch_ext_atr=0.80,
+        accept_watch_near_frac=0.75,
+        accept_watch_max_run_atr=1.50,
+        accept_watch_wait_hours=4,
+    ))
+
+    # 1) 紧致上破 (close=106.2, ext=0.6 ATR <= 0.8 ATR) ⇒ 直接市价
+    ev_tight = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=T0, known_index=10,
+        attrs={"zone": z_res, "ref": 105.0, "invalid": 103.8, "sub_kind": "A1_TIGHT"},
+    )
+    d_tight = r.on_bar("BTCUSDT", (T0, 105.0, 106.4, 104.8, 106.2, 10.0),
+                       10, view, 2.0, [ev_tight], position_open=False, entry_resting=False)
+    assert len(d_tight) == 1 and d_tight[0].kind == "market" and d_tight[0].route == ROUTE_BREAKOUT_ACCEPTED
+
+    # 2) 过伸上破 (close=107.0, ext=1.0 ATR > 0.8 ATR) ⇒ WatchEntry 盯 105.0
+    ev_up = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=T0 + MS_1H, known_index=11,
+        attrs={"zone": z_res, "ref": 105.0, "invalid": 103.8, "sub_kind": "A2_OVEREXTENDED"},
+    )
+    d_up = r.on_bar("BTCUSDT", (T0 + MS_1H, 105.5, 107.2, 105.4, 107.0, 10.0),
+                    11, view, 2.0, [ev_up], position_open=False, entry_resting=False)
+    assert len(d_up) == 1
+    up = d_up[0]
+    assert up.kind == "limit" and up.route == ROUTE_BREAKOUT_ACCEPTED_LIMIT
+    assert up.meta["watch_entry"] is True
+    assert up.limit_price == pytest.approx(105.0)
+    assert up.meta["near_price"] == pytest.approx(105.5)
+    assert up.meta["prog_price"] == pytest.approx(110.0)  # 107.0 + 1.5 * 2.0
+    assert up.hyp.target_1 is None
+
+    # 3) 过伸下破下沿做空 (close=97.0, ref=99.0, ext=1.0 ATR > 0.8 ATR) ⇒ WatchEntry 盯 99.0
+    ev_dn = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=-1, ts=T0 + 2 * MS_1H, known_index=12,
+        attrs={"zone": z_sup, "ref": 99.0, "invalid": 100.2, "sub_kind": "A2_OVEREXTENDED"},
+    )
+    d_dn = r.on_bar("BTCUSDT", (T0 + 2 * MS_1H, 98.5, 98.6, 96.8, 97.0, 10.0),
+                    12, view, 2.0, [ev_dn], position_open=False, entry_resting=False)
+    assert len(d_dn) == 1
+    dn = d_dn[0]
+    assert dn.kind == "limit" and dn.route == ROUTE_BREAKOUT_ACCEPTED_LIMIT
+    assert dn.meta["watch_entry"] is True
+    assert dn.limit_price == pytest.approx(99.0)
+    assert dn.meta["near_price"] == pytest.approx(98.5)
+    assert dn.meta["prog_price"] == pytest.approx(94.0)   # 97.0 - 1.5 * 2.0
+    assert dn.hyp.target_1 is None
+
+
+def test_broker_accept_watch_without_target1_prog_price_and_short_bounce():
+    """无 target_1 的突破 WatchEntry(空头跌破下沿):回抽近沿掉头补票 vs 直接下杀越过 prog_price 作废。"""
+    def _arm_short(b: Broker):
+        b.submit_limit(RestingLimitOrder(
+            direction=-1, limit_price=99.0, armed_at_ts=T0,
+            expiry_ts=T0 + 4 * MS_1H, fill_after_ts=T0,
+            symbol="BTCUSDT@2h", role="entry", invalid=103.0, target_1=None,
+            event_id=BREAKOUT_ACCEPTED, reason="WATCH_ENTRY_SHORT",
+            meta={
+                "direction": -1, "watch_entry": True, "watch_price": 99.0,
+                "near_price": 98.5, "prog_price": 94.0, "confirm_close": 97.0,
+                "max_prog_frac": None, "max_wait_hours": 4,
+            },
+        ))
+
+    # 空头回抽至 98.7 (>=98.5, <99.0) 且阴线收在 98.2 (<=98.5) ⇒ 触发补票做空
+    b1 = _broker()
+    _arm_short(b1)
+    rows_trig = b1.on_15m_bar("BTCUSDT@2h", T0 + MS_1H, 98.6, 98.8, 98.0, 98.2)
+    assert len(rows_trig) == 1 and rows_trig[0]["kind"] == "TRIGGER"
+    rows_open = b1.on_bar_open("BTCUSDT@2h", T0 + 2 * MS_1H, 98.2)
+    assert len(rows_open) == 1 and rows_open[0]["kind"] == "OPEN"
+
+    # 空头未回抽先下杀至 93.8 (<= prog_price 94.0) ⇒ 判 MOVE_ALREADY_PLAYED_OUT 作废
+    b2 = _broker()
+    _arm_short(b2)
+    rows_cancel = b2.on_15m_bar("BTCUSDT@2h", T0 + MS_1H, 97.0, 97.2, 93.8, 94.2)
+    assert len(rows_cancel) == 1
+    assert rows_cancel[0]["kind"] == "CANCEL" and rows_cancel[0]["reason_code"] == "MOVE_ALREADY_PLAYED_OUT"
+

@@ -433,15 +433,17 @@ class EventDetector:
                     start_c = getattr(cd, "_start_close", c)
                     close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
                     progressing = (c >= start_c and c > o and close_pos >= 0.50) if direction > 0 else (c <= start_c and c < o and close_pos >= 0.50)
-                    # ③ 未极端透支高潮 (距离突破口 <= 1.5 * ATR)
-                    not_climax = ext_dist <= 1.50 * atr
+                    # ③ 未极端透支高潮 (距离突破口 <= accept_max_ext_atr * ATR)
+                    max_ext = float(getattr(p, "accept_max_ext_atr", 1.50) or 1.50)
+                    not_climax = ext_dist <= max_ext * atr
                     if not_counter and progressing and not_climax:
                         sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
                         events.append(MarketEvent(
                             id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
                             attrs={"zone": cd.zone.clone(), "ref": ref,
                                    "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                                   "started": cd.started, "sub_kind": sub_kind},
+                                   "started": cd.started, "sub_kind": sub_kind,
+                                   "ext_atr": (ext_dist / atr) if atr > 0.0 else 0.0},
                         ))
                 else:
                     events.append(MarketEvent(
