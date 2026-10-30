@@ -263,6 +263,15 @@ def exit_label(*, executor: str, pnl: Optional[float],
 
 
 _NO_POS_MARKS = ("43023", "仓位不足", "position is empty", "no position")
+# 43023 有**两种**含义,处置完全不同:
+#   ① 交易所已无该仓位(本地残影)          ⇒ 丢弃本地止损记录,等 reconcile 收尾
+#   ② 仓位小于交易所 TPSL 的最小名义(蚂蚁仓) ⇒ 仓位是真的,只是挂不上交易所单
+# 旧实现把两种都当 ①:直接 `stops.pop()`,于是小仓位**既没有交易所保护单、
+# 也不在本地监控里**,等于裸奔(2026-10-29 实盘 ADVANTESTUSDT 名义 ~18.5U 即此)。
+# 现在一律先切"本地止损"模式:要么交易所触发、要么本地裁决,绝不允许两者都没有。
+_STOP_TOO_SMALL_MARKS = ("43023", "仓位不足", "position is not enough",
+                         "insufficient position")
+
 
 
 def _mark_from_reject(msg: str) -> Optional[float]:
@@ -302,6 +311,17 @@ def _stop_reject_no_position(msg: str) -> bool:
     """
     s = str(msg)
     return any(k in s for k in _NO_POS_MARKS)
+
+
+def _stop_requires_local(msg: str) -> bool:
+    """是不是「仓位太小/挂不上交易所 TPSL」——此时必须退化为**本地止损监控**。
+
+    与 `_stop_reject_no_position` 的区别只有一个,但很关键:这里**不丢仓位**。
+    仓位是真金白银,交易所不让我们挂保护单,不代表风险不存在。
+    """
+    s = str(msg)
+    return any(k in s for k in _STOP_TOO_SMALL_MARKS)
+
 
 
 def _utc_day_gap(prev: Optional[str], cur: str) -> Optional[int]:
@@ -2827,6 +2847,30 @@ class LiveRunner:
             spec = self._spec(sym)
             stop_qty = floor_step(float(pos["qty"]), spec.size_step,
                                   spec.size_place)
+            # 本地止损模式:交易所拒绝为小仓位挂 TPSL(43023)时退化为本地裁决。
+            # 语义:保护只能缺席「交易所单」,不能缺席「风险」。每轮用标记价与本
+            # 地防线比较,越过即市价离场(与 stop_missing_breached 同一条纪律)。
+            if cur is not None and cur.get("mode") == "local":
+                mark = float(pos.get("mark") or 0.0)
+                breached = mark > 0.0 and (
+                    (int(pos["direction"]) > 0 and mark <= want)
+                    or (int(pos["direction"]) < 0 and mark >= want))
+                if breached:
+                    self.stops.pop(sym, None)
+                    self._cancel_entry(sym, "local_stop")
+                    self._arm_close_intent(
+                        sym, pos, stop_qty, "market", None,
+                        f"LOCAL_STOP|{want:.8g}", int(now_ms),
+                        role="exit", force=True)
+                    self.counters["stop_local_triggered"] = \
+                        self.counters.get("stop_local_triggered", 0) + 1
+                    self._journal("stop_local_triggered",
+                                  {"symbol": sym, "trigger": want,
+                                   "mark": mark})
+                    self.tg.send_alert(
+                        f"{sym} 本地止损触发(该仓位无法挂交易所 TPSL):"
+                        f"现价 {mark:.8g} 越过防线 {want:.8g} → 市价离场")
+                continue
             missing = bool(cur and cur.get("order_id") and live_ids is not None
                            and str(cur["order_id"]) not in live_ids)
             if missing:
@@ -2892,6 +2936,23 @@ class LiveRunner:
                 self._journal("stop_error", {"symbol": sym, "trigger": want,
                                              "qty": stop_qty,
                                              "why": why[:160]})
+                if _stop_requires_local(why):
+                    # 仓位太小/交易所不支持 TPSL:切成**本地止损监控**,绝不再
+                    # 丢记录(见 `_STOP_TOO_SMALL_MARKS` 注释)。错误只记一次,
+                    # 之后本模式不再尝试下交易所单 ⇒ 不刷 API 错误计数。
+                    self.stops[sym] = {"trigger": want, "qty": stop_qty,
+                                       "order_id": "", "mode": "local"}
+                    if not cur or cur.get("mode") != "local":
+                        self.counters["stop_local_mode"] = \
+                            self.counters.get("stop_local_mode", 0) + 1
+                        self._journal("stop_local_mode",
+                                      {"symbol": sym, "trigger": want,
+                                       "qty": stop_qty, "why": why[:160]})
+                        self.tg.send_alert(
+                            f"{sym} 该仓位无法挂交易所保护单(仓位过小,"
+                            f"43023)⇒ 已切成**本地止损**监控:防线 "
+                            f"{want:.8g},越过即市价离场")
+                    continue
                 if _stop_reject_no_position(why):
                     # 交易所已无该仓位(43023):本地是残影,不是"价格穿越"。
                     # 丢本地止损记录即可,仓位是否真的消失由 `reconcile` 判定;
