@@ -148,6 +148,9 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
         breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
         time_stop=False,
         reject_opp_lock_frac=float(arm_cfg["reject_opp_lock_frac"]),
+        giveback_atr_k=(None if arm_cfg.get("giveback_atr_k") is None
+                        else float(arm_cfg["giveback_atr_k"])),
+
         # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
         # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。
         # v21.7 起回放与实盘共用 position.opp_lock_step,不再有"实盘专用"

@@ -226,7 +226,9 @@ class LockDecision:
 def opp_lock_step(*, direction: int, entry: float, target: float, frac: float,
                   peak: float, high: float, low: float, close: float,
                   ref_px: Optional[float] = None,
-                  armed: bool = False) -> LockDecision:
+                  armed: bool = False,
+                  budget_override: Optional[float] = None) -> LockDecision:
+
     """锁利唯一裁决入口(position.py / live_runner.py 共用)。
 
     纯函数:只读价格事实,不碰仓位状态。调用契约 ——
@@ -245,7 +247,10 @@ def opp_lock_step(*, direction: int, entry: float, target: float, frac: float,
     entry, target = float(entry), float(target)
     if float(frac) == 0.0:
         return LockDecision("off", armed=bool(armed), reason="lock_disabled")
-    budget = opp_lock_budget(entry, target, frac)
+    # ATR 单位预算(2026-10-30):调用方已把"预算"算成价格单位并封顶 span,
+    # 这里只做参数域校验;span 比例口径仍由 `opp_lock_budget` 提供。
+    budget = (float(budget_override) if budget_override is not None
+              else opp_lock_budget(entry, target, frac))
     if budget is None or d * (target - entry) <= 0.0:
         # 目标在建仓价反侧(箱体外缘被成交价穿过):行程无从定义 ⇒ 不锁利、
         # 不减仓,保持结构防线。这是**参数域**判断,不是"闸门拒单"。
@@ -304,6 +309,8 @@ class Position:
     s2_banked: bool = False        # v20 S2:缘前 25% 段已落袋
     armed: bool = False            # v21.7:对侧锁利已 arming(价格事实;一经 True 不回落)
     lock_off_logged: bool = False  # 锁利参数域不成立(目标在 entry 反侧)只记一次
+    giveback_unit: Optional[float] = None  # ATR 预算单位(建仓后首根冻结)
+
 
     @property
     def mfe_r(self) -> float:
@@ -340,7 +347,9 @@ class PositionManager:
                  harvest_fade_2leg: bool = False,
                  s2_level: float = S2_LEVEL,
                  s2_bank_frac: float = S2_BANK_FRAC,
-                 reject_opp_lock_frac: float = 0.0) -> None:
+                 reject_opp_lock_frac: float = 0.0,
+                 giveback_atr_k: Optional[float] = None) -> None:
+
         self.p = params or Params()
         self.allow_add = allow_add
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
@@ -368,6 +377,10 @@ class PositionManager:
         self.s2_level = float(s2_level)
         self.s2_bank_frac = float(s2_bank_frac)
         self.reject_opp_lock_frac = float(reject_opp_lock_frac)
+        # ATR 单位回吐预算(None ⇒ span 比例口径,逐位旧行为)
+        self.giveback_atr_k = (None if giveback_atr_k is None
+                               else float(giveback_atr_k))
+
         # 符号是 arming 口径(不是"两把尺子"):<0 收盘突破(acceptance),
         # >0 盘中触及(touch);|frac| 决定回吐预算 (1−|frac|)·|target−entry|。
         # 旧 `opp_lock_max_giveback_r`(以 R 为单位的第二把尺子)已删除:
@@ -555,10 +568,21 @@ class PositionManager:
                     else:
                         intents.append(self._reduce(pos, ts, c, extreme))
             else:
+                # ATR 单位回吐预算(可选):建仓后首根冻结单位,封顶为 span
+                # (不允许回吐超过整段计划行程 ⇒ 否则等于"不锁利")。
+                budget_override = None
+                if self.giveback_atr_k is not None and atr > 0.0:
+                    if pos.giveback_unit is None:
+                        pos.giveback_unit = float(atr)
+                    span_px = abs(float(pos.target_1) - float(pos.entry))
+                    budget_override = min(float(self.giveback_atr_k)
+                                          * float(pos.giveback_unit), span_px)
                 ld = opp_lock_step(
                     direction=pos.direction, entry=pos.entry,
                     target=pos.target_1, frac=frac_cfg, peak=pos._best,
-                    high=h, low=low, close=c, ref_px=c, armed=pos.armed)
+                    high=h, low=low, close=c, ref_px=c, armed=pos.armed,
+                    budget_override=budget_override)
+
                 if ld.action == "off":
                     # 参数域不成立(目标落在 entry 反侧/行程退化):不锁利、
                     # 不减仓,保持结构防线。只记一次,避免逐 bar 刷台账。

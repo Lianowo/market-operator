@@ -156,6 +156,14 @@ class ArmConfig:
     # pivot」,本开关把它们喂给同一根 bar 的价格型裁决;不加时间计数、不消费事件。
     # 与 exit_exec 正交:pivot_exec 只补 pivot,是否也提前 §8.2 仍由 exit_exec 决定。
     pivot_exec: bool = False
+    # ── 回吐预算单位(2026-10-30)───────────────────────────────────────────
+    # `None` ⇒ 沿用 span 比例口径:budget = (1−|frac|)·|target−entry|。
+    # 数值 ⇒ 改用**ATR 单位**:budget = giveback_atr_k × ATR(建仓后首根冻结),
+    # 并封顶为 span(不允许回吐超过整段计划行程)。
+    # 动机:span 在 0.95R~6R 之间变化,同一个 75% 在不同目标距离下行为完全不同;
+    # `1.0–1.5R` 区间被实测为死区(均净 +0.019R),正是这种尺度不一致的机械后果。
+    giveback_atr_k: Optional[float] = None
+
 
 
 def require_exec_pivots(pivot_exec: bool, frames) -> None:
@@ -475,7 +483,10 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 harvest_fade_2leg=(arm.harvest_fade_2leg if arm is not None
                                    else False),
                 reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
-                                      else 0.0)),
+                                      else 0.0),
+                giveback_atr_k=(arm.giveback_atr_k if arm is not None
+                                else None)),
+
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
 

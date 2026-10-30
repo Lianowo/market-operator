@@ -28,7 +28,7 @@
   "maker_fee": 0.0002,
   "slippage_per_side": 0.0002,
   "funding_per_8h_per_side": 0.0001,
-  "funding_source": "const",
+  "funding_source": "history",
   "slippage_by_symbol": {},
   "dev_frac": 0.7,
   "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT"],
