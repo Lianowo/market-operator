@@ -719,7 +719,8 @@ class ZoneBook:
             z.last_change_known = index
             self.flips.append(ZoneFlip(index=index, from_role=z.role,
                                        zone=flipped.clone()))
-            self._insert_merged(flipped, index, atr_val)
+            if not self.p.use_balance_detector:
+                self._insert_merged(flipped, index, atr_val)
             return
         # 回踩后反向重新 acceptance 穿回(§4.2)→ DEAD(不生成新区)
         if (c < z.lo - bm) if up else (c > z.hi + bm):

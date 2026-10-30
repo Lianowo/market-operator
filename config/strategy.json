@@ -75,32 +75,24 @@
 
   "router_params_by_tf": {
     "2h": {
-      "min_box_rotations": 3,
-      "min_box_quality": 0.50,
       "min_bar_impulse_atr": 1.2,
       "zone_cooldown_bars": 4,
       "reject_use_struct_stop": true,
       "reject_target_mode": "opposite"
     },
     "4h": {
-      "min_box_rotations": 3,
-      "min_box_quality": 0.45,
       "min_bar_impulse_atr": 1.2,
       "zone_cooldown_bars": 3,
       "reject_use_struct_stop": true,
       "reject_target_mode": "opposite"
     },
     "12h": {
-      "min_box_rotations": 1,
-      "min_box_quality": 0.35,
       "min_bar_impulse_atr": 0.0,
       "zone_cooldown_bars": 0,
       "reject_use_struct_stop": true,
       "reject_target_mode": "opposite"
     },
     "1d": {
-      "min_box_rotations": 2,
-      "min_box_quality": 0.40,
       "min_bar_impulse_atr": 0.0,
       "zone_cooldown_bars": 2,
       "reject_use_struct_stop": true,

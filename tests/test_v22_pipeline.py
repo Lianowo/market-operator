@@ -275,3 +275,28 @@ def test_step3_1_directional_cap_frac_blocks_same_direction_overload_only():
     assert short_exp + 40.0 <= broker.risk_budget.directional_cap_frac * 1000.0
 
 
+
+def test_balance_detector_retest_does_not_inject_zombie_legacy_zone():
+    """use_balance_detector=True 时,_retest 仅记录 flips 事实,严禁向 zones 注入或合并 box_rotations=0 的旧版僵尸区。"""
+    p = Params(use_balance_detector=True, balance_quality_min=0.35, k_bm=0.1, k_rj=0.3)
+    ms = MarketStructure(p)
+    for b in _make_box_bars(cycles=4):
+        ms.update(b)
+    rz = [z for z in ms.zones if z.role is ZoneRole.RESISTANCE and z.state is ZoneState.ACTIVE][0]
+    atr = ms.atr()
+    t0 = _make_box_bars(cycles=4)[-1][0]
+    step = 3_600_000
+
+    # 第 1 根收盘突破阻力外沿 -> BROKEN
+    c1 = rz.hi + 0.5 * atr
+    ms.update((t0 + step, rz.lo, c1 + 0.2 * atr, rz.lo, c1, 120.0))
+    # 第 2 根回踩带内并向上抽离 >= k_rj*atr 触发 _retest FLIPPED
+    l2 = rz.hi - 0.05 * atr
+    c2 = l2 + 0.5 * atr
+    ms.update((t0 + 2 * step, c1, c2 + 0.1 * atr, l2, c2, 120.0))
+
+    for z in ms.zones:
+        assert z.box_rotations > 0, "真平衡箱视图中严禁混入 box_rotations=0 的旧版 _retest 僵尸区"
+        assert z.box_quality > 0.0, "真平衡箱视图中严禁混入 box_quality=0.0 的旧版 _retest 僵尸区"
+
+
