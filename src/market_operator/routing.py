@@ -190,6 +190,14 @@ class RouterParams:
     accept_watch_max_run_atr: float = 1.50
     accept_watch_wait_hours: int = 4
     accept_watch_keep_confirm_stop: bool = False
+    # 突破接受(ACCEPT)箱体等距量度目标倍数(None ⇒ 无 target_1,沿用纯 trail;
+    # 数值 > 0 ⇒ target_1 = ref + direction * accept_target_box_mult * |ref - box_opposite|,
+    # 使突破单达到 1x/1.5x 箱体量度目标后同样可激活 opp_lock_step 峰值回吐锁利)。
+    accept_target_box_mult: Optional[float] = None
+    # 80% 法则重返平衡箱(FLIPPED_BOX_EDGE 上的 BREAKOUT_ACCEPTED):
+    # 开启后以重返箱体的对侧边界 box_opposite 作为 target_1 锁利锚点,并用结构止损(可选)。
+    reentry_use_box_target: bool = False
+    reentry_use_struct_stop: bool = False
 
 
 
@@ -419,11 +427,14 @@ class MarketRouter:
                     max_run = float(p.accept_watch_max_run_atr or 0.0)
                     prog_px = (close_px + direction * max_run * float(atr)
                                if max_run > 0.0 else None)
+                    target_w = hyp.target_1
+                    r_w = (direction * (float(target_w) - watch_px) / dist_w
+                           if target_w is not None and dist_w > 0.0 else None)
                     hyp_w = Hypothesis(
                         event_id=ev.id, direction=direction, ts=ev.ts,
                         known_index=ev.known_index, entry=float(watch_px),
-                        invalid=inv_px, target_1=None,
-                        r_mult=None, regime=view.regime,
+                        invalid=inv_px, target_1=target_w,
+                        r_mult=r_w, regime=view.regime,
                     )
                     reason = (f"{ev.id}|{side} {ROUTE_BREAKOUT_ACCEPTED_LIMIT} "
                               f"WATCH_ENTRY 突破过伸({ext_dist / float(atr):.2f}ATR>{p.accept_watch_ext_atr:.2g}ATR)"
@@ -614,7 +625,11 @@ class MarketRouter:
         ev_inv = ev.attrs.get("invalid")
         if cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED) and p.reject_use_struct_stop and ev_inv is not None:
             invalid = float(ev_inv)
-        elif cid == BREAKOUT_ACCEPTED and p.accept_use_struct_stop and ev_inv is not None:
+        elif cid == BREAKOUT_ACCEPTED and ev_inv is not None and (
+            p.accept_use_struct_stop
+            or (p.reentry_use_struct_stop
+                and getattr(ev.attrs.get("zone"), "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE")
+        ):
             invalid = float(ev_inv)
         # F1(全入口,闸):天然距离不足即笔不存在。
         # A3:优先用**钱的占比**(往返成本/风险)表达同一件事;`k_is` 仅作旧口径回退。
@@ -750,6 +765,29 @@ class MarketRouter:
                         target_1 = float(close) + ev.direction * float(cap_r) * dist
                         r_mult = float(cap_r)
                         self._bump("target_r_clamped")
+        elif (cid == BREAKOUT_ACCEPTED
+              and p.reentry_use_box_target
+              and zone is not None
+              and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE"):
+            opp = getattr(zone, "box_opposite", None)
+            if opp is not None and ev.direction * (float(opp) - close) > 0.0:
+                target_1 = float(opp)
+                r_mult = ev.direction * (target_1 - close) / dist if dist > 0 else None
+        elif (cid == BREAKOUT_ACCEPTED
+              and p.accept_target_box_mult is not None
+              and float(p.accept_target_box_mult) > 0.0
+              and zone is not None):
+            opp = getattr(zone, "box_opposite", None)
+            if opp is not None:
+                ref_edge = float(ev.attrs.get("ref")
+                                 if ev.attrs.get("ref") is not None
+                                 else (zone.hi if ev.direction > 0 else zone.lo))
+                box_span = abs(ref_edge - float(opp))
+                if box_span > 0.0:
+                    cand_t = ref_edge + ev.direction * float(p.accept_target_box_mult) * box_span
+                    if ev.direction * (cand_t - close) > 0.0:
+                        target_1 = cand_t
+                        r_mult = ev.direction * (cand_t - close) / dist if dist > 0 else None
 
         hyp = Hypothesis(event_id=ev.id, direction=ev.direction, ts=ev.ts,
                          known_index=ev.known_index, entry=float(close),

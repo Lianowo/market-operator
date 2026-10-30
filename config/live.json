@@ -35,10 +35,8 @@
       "1d": 0.12
     },
     "max_daily_loss_frac": 0.1,
-    "edge_size_by_event_direction": {
-      "BREAKOUT_ACCEPTED|1": 0.35
-    },
-    "edge_size_note": "**2026-10-29 复核:保留 0.35。** 曾按「语义修好后 ACCEPT|LONG 已转正」置空,但同口径全量回放把它证伪:ACCEPT|LONG N=20 / WR=30.0% / 净 −13.31U(仍是净亏),0.35 权重下 ≈ −4.66U ⇒ 该权重在**减亏**,不是陈旧补丁。真正的方向性修复应落到「为什么 ACCEPT|LONG 仍然亏」,而不是用权重掩盖;在修好之前保留 0.35 是数据支持的现状。机制本身是风险约束(只缩不放,下限 10%),不是信号。",
+    "edge_size_by_event_direction": {},
+    "edge_size_note": "**2026-10-30 根治移除 0.35 掩蔽权重:** 此前 ACCEPT|LONG 净亏(-15.37U)的根因是 structure.py 一刀切丢弃了 FLIPPED_BOX_EDGE,导致「跌破平衡箱挖坑后重新向上突破进入平衡箱」的真多头突破被全部拦掉,只剩下箱顶追涨。补齐 box_reentry_enabled(突破进入平衡箱)后,ACCEPT|LONG 在 1.0 原生权重下直接由 -15.37U 翻正至 +81.01U(全策略 dev +249.02 / test +145.17 / full +520.70 / 去Top10 +148.40 / 1.5x +258.98 五项全优),故彻底清空 0.35 权重补丁。",
     "orders_per_hour": 30,
     "taker_fee": 0.0006,
     "maker_fee": 0.0002,

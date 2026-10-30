@@ -310,6 +310,7 @@ class Position:
     armed: bool = False            # v21.7:对侧锁利已 arming(价格事实;一经 True 不回落)
     lock_off_logged: bool = False  # 锁利参数域不成立(目标在 entry 反侧)只记一次
     giveback_unit: Optional[float] = None  # ATR 预算单位(建仓后首根冻结)
+    reenter_invalid_px: Optional[float] = None  # ACCEPT 重返箱内证伪锚点(被破箱沿内侧或箱中轴)
 
 
     @property
@@ -348,10 +349,12 @@ class PositionManager:
                  s2_level: float = S2_LEVEL,
                  s2_bank_frac: float = S2_BANK_FRAC,
                  reject_opp_lock_frac: float = 0.0,
-                 giveback_atr_k: Optional[float] = None) -> None:
+                 giveback_atr_k: Optional[float] = None,
+                 accept_reenter_box_exit: bool = False) -> None:
 
         self.p = params or Params()
         self.allow_add = allow_add
+        self.accept_reenter_box_exit = bool(accept_reenter_box_exit)
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
         self.time_stop = time_stop                      # v6 臂 B:False=关 §8.6
         # v16 收割婚配开关(全 None ⇒ 逐位 canonical 旧行为,回归钉死)
@@ -401,7 +404,7 @@ class PositionManager:
 
     def open(self, symbol: str, direction: int, entry: float, invalid: float,
              target_1: Optional[float], event_id: str, ts: object,
-             index: int) -> Position:
+             index: int, *, reenter_invalid_px: Optional[float] = None) -> Position:
         risk = direction * (entry - invalid)
         if risk <= 0.0:
             raise ValueError(f"invalid not protective: entry={entry} "
@@ -409,7 +412,9 @@ class PositionManager:
         pos = Position(symbol=symbol, direction=direction, entry=float(entry),
                        invalid=float(invalid), target_1=target_1,
                        event_id=event_id, opened_ts=ts, opened_index=index,
-                       initial_risk=float(risk))
+                       initial_risk=float(risk),
+                       reenter_invalid_px=(float(reenter_invalid_px)
+                                           if reenter_invalid_px is not None else None))
         # v16:fade 家族持仓进入收割模式(达对面结构缘全平;trail 禁用)
         if self.harvest_family is not None and str(event_id) in self.harvest_family:
             pos.harvest = True
@@ -503,6 +508,18 @@ class PositionManager:
                     tag = "trail_armed" if pos.trail_armed else "trail_pending"
                 reason = f"v16|{tag}|" + reason
             return [self._exit(pos, ts, c, reason)]
+
+        # 1.5 ACCEPT 重返箱内接受证伪退出:突破单在认知 bar 收盘重新跌穿被破箱沿内侧
+        #     ⇒ "箱外接受"前提已证伪,不再死扛 2·ATR 初始止损
+        if (self.accept_reenter_box_exit
+                and not price_only
+                and pos.event_id == "BREAKOUT_ACCEPTED"
+                and pos.reenter_invalid_px is not None):
+            re_px = float(pos.reenter_invalid_px)
+            if (c > re_px) if pos.direction < 0 else (c < re_px):
+                reason = (f"§8.1b|accept_reentered_box close={c:.8g} "
+                          f"reenter_px={re_px:.8g} exit all")
+                return [self._exit(pos, ts, c, reason)]
 
         # 2. §8.5 反向 STRUCTURE_BROKEN(CHoCH 出场)
         #    price_only(执行细 bar 价格型推进)不消费事件:事件只能在其决策

@@ -342,3 +342,40 @@ def test_broker_accept_watch_without_target1_prog_price_and_short_bounce():
     assert len(rows_cancel) == 1
     assert rows_cancel[0]["kind"] == "CANCEL" and rows_cancel[0]["reason_code"] == "MOVE_ALREADY_PLAYED_OUT"
 
+
+def test_box_reentry_allows_flipped_edge_accept_and_blocks_flipped_reject():
+    """突破进入平衡箱(box_reentry_enabled):FLIPPED_BOX_EDGE 允许触发 BREAKOUT_ACCEPTED 重返箱内,但不发迁移期 LEVEL_REJECTED;且 live.json 已移除 0.35 权重补丁。"""
+    from market_operator.events import EventDetector
+    from market_operator.structure import Params
+
+    p = Params(use_balance_detector=True, box_reentry_enabled=True, n_a=2, n_f=3, k_bm=0.1, k_rj=0.3)
+    det = EventDetector(p)
+    # 推进若干基础 bar 使 ATR 就绪
+    for k in range(15):
+        det.update((T0 + k * MS_1H, 100.0, 101.0, 99.0, 100.0, 10.0))
+
+    # 手工植入一条来自 BROKEN_DOWN 下沿翻转成的 RESISTANCE (FLIPPED_BOX_EDGE): [99.0, 100.0], 对侧上沿 106.0
+    det.structure._bal_det = None
+    z_flip = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+        touches=3, origin_known=5, last_change_known=14,
+        box_opposite=106.0, box_quality=0.6, box_width_atr=3.5, box_rotations=3,
+        source_kind="FLIPPED_BOX_EDGE",
+    )
+    det.structure._zones.zones = [z_flip]
+
+    # 1) 在箱外下方触碰翻转沿 [99.0, 100.0] 并回落 ⇒ 因 source_kind == FLIPPED_BOX_EDGE, 不得发射迁移期 LEVEL_REJECTED
+    evs_touch = det.update((T0 + 15 * MS_1H, 98.0, 99.8, 97.5, 98.2, 10.0))
+    assert not any(e.id == LEVEL_REJECTED for e in evs_touch)
+
+    # 2) 从下方连续 n_a=2 根强阳突破翻转沿重返箱内 ⇒ 正常发射 BREAKOUT_ACCEPTED (突破进入平衡箱做多)!
+    det.update((T0 + 16 * MS_1H, 98.5, 100.6, 98.4, 100.4, 10.0))
+    evs_reenter = det.update((T0 + 17 * MS_1H, 100.3, 101.2, 100.2, 101.0, 10.0))
+    acc = [e for e in evs_reenter if e.id == BREAKOUT_ACCEPTED]
+    assert len(acc) == 1 and acc[0].direction == 1
+
+    # 3) 校验生产 live.json 已彻底清空 0.35 方向掩蔽权重
+    live_cfg = json.loads((ROOT / "config" / "live.json").read_text("utf-8"))
+    assert live_cfg["risk"]["edge_size_by_event_direction"] == {}
+
+

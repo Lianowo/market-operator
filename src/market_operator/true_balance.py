@@ -52,6 +52,7 @@ class TrueBalanceParams:
     poc_zone_hi: float = 0.75            # 价值中枢 POC 相对箱体高度上界
     quality_min: float = 0.35            # 综合真实度最低门槛
     keep_flipped_bars: int = 96          # 破位后翻转边缘作为 S/R Flip 保留的最大 bar 数
+    reentry_enabled: bool = False        # 80% 法则:允许迁移期价格重返近期已破箱体并携带对侧目标
 
 
 @dataclass(frozen=True)
@@ -537,14 +538,16 @@ class TrueBalanceDetector:
             if hb.state == "BROKEN_UP" and c >= hb.val:
                 candidates_sup.append(BracketLevel(
                     role="SUPPORT", source_kind="FLIPPED_BOX_EDGE",
-                    inner=hb.hi_ext, outer=hb.vah, opposite=None, poc=hb.poc,
+                    inner=hb.hi_ext, outer=hb.vah,
+                    opposite=(hb.val if self.p.reentry_enabled else None), poc=hb.poc,
                     quality=hb.quality, rotations=hb.rotations, width_atr=hb.width_atr,
                     origin_index=hb.broken_index or hb.end_index, box_id=hb.box_id,
                 ))
             elif hb.state == "BROKEN_DOWN" and c <= hb.vah:
                 candidates_res.append(BracketLevel(
                     role="RESISTANCE", source_kind="FLIPPED_BOX_EDGE",
-                    inner=hb.lo_ext, outer=hb.val, opposite=None, poc=hb.poc,
+                    inner=hb.lo_ext, outer=hb.val,
+                    opposite=(hb.vah if self.p.reentry_enabled else None), poc=hb.poc,
                     quality=hb.quality, rotations=hb.rotations, width_atr=hb.width_atr,
                     origin_index=hb.broken_index or hb.end_index, box_id=hb.box_id,
                 ))

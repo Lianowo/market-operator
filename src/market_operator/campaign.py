@@ -163,6 +163,7 @@ class ArmConfig:
     # 动机:span 在 0.95R~6R 之间变化,同一个 75% 在不同目标距离下行为完全不同;
     # `1.0–1.5R` 区间被实测为死区(均净 +0.019R),正是这种尺度不一致的机械后果。
     giveback_atr_k: Optional[float] = None
+    accept_reenter_box_exit: bool = False
 
 
 
@@ -485,7 +486,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
                                       else 0.0),
                 giveback_atr_k=(arm.giveback_atr_k if arm is not None
-                                else None)),
+                                else None),
+                accept_reenter_box_exit=(arm.accept_reenter_box_exit if arm is not None
+                                         else False)),
 
             lo=lo, hi=hi)
     go_set = base_rp.whitelist
@@ -652,10 +655,13 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
         k = row["kind"]
         if k == "OPEN":
             m = row["meta"]
-            st.pos_mgr.open(sym, int(m["direction"]), row["price"],
+            d_open = int(m["direction"])
+            re_px = (m.get("zone_lo") if d_open > 0 else m.get("zone_hi"))
+            st.pos_mgr.open(sym, d_open, row["price"],
                             float(m["invalid"]), m.get("target_1"),
                             str(m.get("event_id")), ts,
-                            _cog_index_of(f, ts))
+                            _cog_index_of(f, ts),
+                            reenter_invalid_px=re_px)
             counters["opens_filled"] += 1
             if m.get("entry_mode") == "stop_entry":        # v14 C3 触发成交
                 _lc(counters, "stop_entry_fills")
@@ -700,10 +706,13 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
             else:
                 counters["limit_fills_entry"] += 1
                 m = row["meta"]
-                st.pos_mgr.open(sym, int(m["direction"]), row["price"],
+                d_open = int(m["direction"])
+                re_px = (m.get("zone_lo") if d_open > 0 else m.get("zone_hi"))
+                st.pos_mgr.open(sym, d_open, row["price"],
                                 float(m["invalid"]), m.get("target_1"),
                                 str(m.get("event_id")), ts,
-                                _cog_index_of(f, ts))
+                                _cog_index_of(f, ts),
+                                reenter_invalid_px=re_px)
                 if m.get("order_type") == "ladder_entry":   # v14 C4 首份
                     _lc(counters, "ladder_fills")
                 elif m.get("order_type") == "maker_entry":  # v14 C2 真挂单

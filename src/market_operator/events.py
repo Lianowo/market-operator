@@ -407,6 +407,11 @@ class EventDetector:
                 cd_new = _AcceptCandidate(
                     zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=t)
                 cd_new._start_close = c
+                rng0 = max(h - l, 1e-12)
+                res0 = z.role is res_role
+                cd_new._start_strong = ((c > o and (c - l) / rng0 >= 0.50) if res0
+                                        else (c < o and (h - c) / rng0 >= 0.50))
+                cd_new._inner_held = True
                 self._candidates.append(cd_new)
 
         events: list[MarketEvent] = []
@@ -420,6 +425,8 @@ class EventDetector:
             if t > cd.started:
                 if not hold:
                     continue                  # 候选作废,回到 episode 检测
+                if (l < cd.lo) if cd.role is res_role else (h > cd.hi):
+                    cd._inner_held = False
                 cd.count += 1
             if cd.count >= n_a:
                 direction = +1 if cd.role is res_role else -1
@@ -433,6 +440,10 @@ class EventDetector:
                     start_c = getattr(cd, "_start_close", c)
                     close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
                     progressing = (c >= start_c and c > o and close_pos >= 0.50) if direction > 0 else (c <= start_c and c < o and close_pos >= 0.50)
+                    if getattr(p, "accept_strict_progression", False):
+                        progressing = bool(progressing
+                                           and getattr(cd, "_start_strong", True)
+                                           and getattr(cd, "_inner_held", True))
                     # ③ 未极端透支高潮 (距离突破口 <= accept_max_ext_atr * ATR)
                     max_ext = float(getattr(p, "accept_max_ext_atr", 1.50) or 1.50)
                     not_climax = ext_dist <= max_ext * atr
@@ -462,6 +473,8 @@ class EventDetector:
         survivors: list[_Episode] = []
         for ep in self._episodes:
             z = ep.zone
+            if getattr(z, "source_kind", "BOX_EDGE") != "BOX_EDGE":
+                continue
             res = z.role is res_role
             fired: Optional[MarketEvent] = None
             edge = z.hi if res else z.lo

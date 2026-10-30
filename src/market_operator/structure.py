@@ -93,6 +93,13 @@ class Params:
     # 当开启突破系统价格关注(accept_watch_enabled)时,可适度放宽该上限(如 2.2~2.5),
     # 把"看见突破晚了(>1.5 ATR)"的候选接回系统 Watch 等回踩箱沿,而非一刀切永久丢弃。
     accept_max_ext_atr: float = 1.50
+    # 降档触发层(trigger.py)同步 R3_TRAP(1~2 根假突破未超 1.25·ATR 逃逸后反向吞没重返箱内)
+    mic_r3_trap: bool = False
+    # 80% 法则:允许价格从箱外重新突破进入近期已破平衡箱(恢复箱体并桥接翻转边界)
+    box_reentry_enabled: bool = False
+    box_reentry_max_bars: int = 96
+    # ACCEPT 破位过程完整性:首根破位 bar 须顺向强收盘,且确认期间影线不跌穿被破箱沿内侧
+    accept_strict_progression: bool = False
 
 
     @classmethod
@@ -124,7 +131,7 @@ class Params:
             wanted["e4_depth_atr"] = tuple(wanted["e4_depth_atr"])
         for k in ("atr_n", "n_a", "n_f", "n_time", "range_max_pivots",
                   "box_min_rotations", "box_keep_broken_bars",
-                  "box_keep_active_bars"):
+                  "box_keep_active_bars", "box_reentry_max_bars"):
             if k in wanted:
                 wanted[k] = int(wanted[k])
         return cls(**wanted)
@@ -182,6 +189,7 @@ class Zone:
     box_quality: float = 0.0                 # v21.5:平衡箱质量分
     box_width_atr: float = 0.0               # v21.5:平衡箱宽度(ATR 倍数)
     box_rotations: int = 0                   # v21.5:平衡箱来回旋转次数
+    source_kind: str = "BOX_EDGE"            # "BOX_EDGE" | "FLIPPED_BOX_EDGE"
 
     def clone(self) -> "Zone":
         return Zone(
@@ -194,6 +202,7 @@ class Zone:
             box_quality=self.box_quality,
             box_width_atr=self.box_width_atr,
             box_rotations=self.box_rotations,
+            source_kind=self.source_kind,
         )
 
 
@@ -350,7 +359,9 @@ class ZoneBook:
         if params.use_balance_detector:
             from .true_balance import TrueBalanceDetector, TrueBalanceParams
             self._bal_det = TrueBalanceDetector(
-                TrueBalanceParams(quality_min=params.balance_quality_min))
+                TrueBalanceParams(quality_min=params.balance_quality_min,
+                                  keep_flipped_bars=params.box_reentry_max_bars,
+                                  reentry_enabled=params.box_reentry_enabled))
 
 
     # -- §4.1 生成与合并 ----------------------------------------------------
@@ -505,7 +516,8 @@ class ZoneBook:
             ):
                 if lvl is None or int(lvl.rotations) < self.p.box_min_rotations:
                     continue
-                if getattr(lvl, "source_kind", "BOX_EDGE") != "BOX_EDGE":
+                sk = getattr(lvl, "source_kind", "BOX_EDGE")
+                if sk != "BOX_EDGE" and not (self.p.box_reentry_enabled and sk == "FLIPPED_BOX_EDGE"):
                     continue
 
                 zlo = float(min(lvl.outer, lvl.inner))
@@ -536,6 +548,7 @@ class ZoneBook:
                         matched.state = ZoneState.ACTIVE
                         matched._retest_extreme = None
                     matched.last_change_known = index
+                    matched.source_kind = sk
                     if opp is not None:
                         matched.box_opposite = opp
                     matched.box_quality = max(matched.box_quality, qual)
@@ -553,6 +566,7 @@ class ZoneBook:
                         box_quality=qual,
                         box_width_atr=w_atr,
                         box_rotations=rot,
+                        source_kind=sk,
                     )
                     self.zones.append(nz)
                     alive_ids.add(id(nz))

@@ -23,6 +23,7 @@
   "use_balance_detector": true,
   "balance_quality_min": 0.35,
   "accept_max_ext_atr": 99.0,
+  "box_reentry_enabled": true,
   "risk_frac": 0.0075,
   "leverage_cap": 20.0,
   "taker_fee": 0.0006,

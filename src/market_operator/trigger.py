@@ -134,6 +134,7 @@ class _MicEpisode:
     ex: float                       # episode 极值(§8.4 次序启发式,trigger 级推进)
     ex_index: int                   # ex 建立 trigger bar(窗口判据)
     puncture_index: Optional[int] = None  # 刺穿 trigger bar(窗口判据)
+    outside_closes: int = 0         # R3_TRAP:episode 期间收盘越过外沿的 trigger 根数
     reclaim: Optional[float] = None  # 结构确认:试探极值之后形成的反向局部极值
 
 
@@ -284,6 +285,13 @@ class MicTracker:
                 if z.state is ZoneState.ACTIVE \
                         and (id(ep.zone), ep.opened) in cog_eps:
                     kept.append(ep)
+                elif (self.p.use_balance_detector and getattr(self.p, "mic_r3_trap", False)
+                      and z.state in (ZoneState.BROKEN, ZoneState.RETESTED)
+                      and ep.outside_closes <= 2):
+                    res0 = z.role is ZoneRole.RESISTANCE
+                    esc0 = (ep.ex - z.hi) if res0 else (z.lo - ep.ex)
+                    if esc0 <= 1.25 * ctx.atr:
+                        kept.append(ep)
                 continue
             rebound = False
             for z2 in ctx.zones:
@@ -396,10 +404,18 @@ class MicTracker:
             if not broke:
                 continue
             self._broken.add(id(z))
-            self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+            if p.use_balance_detector and getattr(p, "mic_r3_trap", False):
+                esc = (h - z.hi) if res else (z.lo - l)
+                if esc > 1.25 * ctx.atr:
+                    self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+            else:
+                self._episodes = [ep for ep in self._episodes if ep.zone is not z]
             self._candidates = [cd for cd in self._candidates if cd.zone is not z]
             cd_new = _MicCandidate(zone=z, lo=z.lo, hi=z.hi, role=z.role, count=1, started=a)
             cd_new._start_close = c
+            cd_new._start_strong = ((c > o and (c - l) / rng >= 0.50) if res
+                                    else (c < o and (h - c) / rng >= 0.50))
+            cd_new._inner_held = True
             self._candidates.append(cd_new)
             if not p.use_balance_detector and id(z) not in self._adopted_retests:
                 self._adopted_retests.add(id(z))
@@ -414,6 +430,8 @@ class MicTracker:
             if a > cd.started:
                 if not hold:
                     continue
+                if (l < cd.lo) if cd.role is res_role else (h > cd.hi):
+                    cd._inner_held = False
                 cd.count += 1
             if cd.count >= req_count:
                 direction = +1 if cd.role is res_role else -1
@@ -424,6 +442,10 @@ class MicTracker:
                     not_counter = (ctx.regime is not Regime.TREND_DOWN) if direction > 0 else (ctx.regime is not Regime.TREND_UP)
                     close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
                     progressing = (c >= start_c and c > o and close_pos >= 0.50) if direction > 0 else (c <= start_c and c < o and close_pos >= 0.50)
+                    if getattr(p, "accept_strict_progression", False):
+                        progressing = bool(progressing
+                                           and getattr(cd, "_start_strong", True)
+                                           and getattr(cd, "_inner_held", True))
                     max_ext = float(getattr(p, "accept_max_ext_atr", 1.50) or 1.50)
                     not_climax = ext_dist <= max_ext * ctx.atr
                     if not_counter and progressing and not_climax:
@@ -449,7 +471,10 @@ class MicTracker:
         new_e3: list[MarketEvent] = []
         for ep in self._episodes:
             z = ep.zone
-            if z.state is not ZoneState.ACTIVE:
+            if getattr(z, "source_kind", "BOX_EDGE") != "BOX_EDGE":
+                continue
+            r3_on = bool(p.use_balance_detector and getattr(p, "mic_r3_trap", False))
+            if z.state is not ZoneState.ACTIVE and not (r3_on and 1 <= ep.outside_closes <= 2):
                 continue                        # ① 已砍(防御;理论不可达)
             res = z.role is res_role
             edge = z.hi if res else z.lo
@@ -476,8 +501,22 @@ class MicTracker:
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = a
             fired: Optional[MarketEvent] = None
+            closed_outside = (c > z.hi + bm) if res else (c < z.lo - bm)
             close_pos = (h - c) / rng if res else (c - l) / rng
-            if p.struct_confirm_reject and p.use_balance_detector:
+            if (r3_on and 1 <= ep.outside_closes <= 2
+                    and ((c < z.lo and close_pos >= 0.50) if res else (c > z.hi and close_pos >= 0.50))):
+                esc_ex = (ep.ex - z.hi) if res else (z.lo - ep.ex)
+                if esc_ex <= 1.25 * ctx.atr:
+                    direction = -1 if res else +1
+                    inv_r3 = (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
+                    fired = self._mk(LEVEL_REJECTED, direction, ts, a, {
+                        "zone": z.clone(), "ref": edge, "invalid": inv_r3,
+                        "ex": ep.ex, "ex_index": ep.ex_index,
+                        "outside_closes": ep.outside_closes, "sub_kind": "R3_TRAP_MIC"})
+                    new_e3.append(fired)
+                    self._broken.discard(id(z))
+                    self._candidates = [cd for cd in self._candidates if cd.zone is not z]
+            if fired is None and p.struct_confirm_reject and p.use_balance_detector:
                 if (ep.reclaim is not None
                         and d * (ep.reclaim - ep.ex) >= rj_trig
                         and d * (c - ep.reclaim) > 0.0):
@@ -488,8 +527,9 @@ class MicTracker:
                         "ex": ep.ex, "ex_index": ep.ex_index,
                         "reclaim": ep.reclaim, "sub_kind": "S_STRUCT_MIC"})
                     new_e3.append(fired)
-            elif p.use_balance_detector:
-                if (extreme_first or ep.ex_index < a) and a - ep.ex_index <= self.n_f_mic:
+            elif fired is None and p.use_balance_detector:
+                if ((not r3_on or ep.outside_closes == 0)
+                        and (extreme_first or ep.ex_index < a) and a - ep.ex_index <= self.n_f_mic):
                     real_retreat = (ep.ex - c) if res else (c - ep.ex)
                     back_inside = (c <= z.lo) if res else (c >= z.hi)
                     against_trend = (ctx.regime is Regime.TREND_UP) if res else (ctx.regime is Regime.TREND_DOWN)
@@ -526,6 +566,10 @@ class MicTracker:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, a
+                if r3_on and closed_outside:
+                    ep.outside_closes += 1
+                    if ep.outside_closes > 2:
+                        continue
                 if not p.use_balance_detector or (a - ep.opened) <= (p.n_f + 1):
                     survivors.append(ep)
         self._episodes = survivors
