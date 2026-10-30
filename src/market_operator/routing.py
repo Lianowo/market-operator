@@ -198,6 +198,14 @@ class RouterParams:
     # 开启后以重返箱体的对侧边界 box_opposite 作为 target_1 锁利锚点,并用结构止损(可选)。
     reentry_use_box_target: bool = False
     reentry_use_struct_stop: bool = False
+    # ── 纯结构失衡确认与边界离开复位 (2026-10-30, 退役 min_bar_impulse_atr 与 zone_cooldown_bars) ──
+    # struct_impulse_confirm: 要求确认 K 线收盘位于自身有利半区,且满足「收盘击穿前 3 根极值(ChoCH)」
+    #   或「波幅超越前 4 根最大波幅且收盘吞没前 1 根实体」,以零 ATR 参数结构事实替代 1.2·ATR 振幅闸。
+    struct_impulse_confirm: bool = False
+    # zone_departure_reset: 同一箱沿发射交易假设后进入已测试锁定,直至后续 K 线在未刺穿外沿证伪位且脱离
+    #   边缘带的前提下向箱内推进离开内沿 >= k_rj(0.3)·ATR 才解锁复位(并阻断细周期触发后的大周期同窗回声),
+    #   以纯结构边界离开复位替代硬编码根数 zone_cooldown_bars。
+    zone_departure_reset: bool = False
 
 
 
@@ -238,6 +246,7 @@ class MarketRouter:
         self._notes: list[str] = []
         self.counters: dict[str, int] = {}
         self._zone_last_bar: dict[tuple, int] = {}
+        self._zone_lock: dict[tuple, tuple[int, int]] = {}
         self._cur_bar_range: float = 0.0
         self._cur_bar_index: int = 0
 
@@ -687,6 +696,21 @@ class MarketRouter:
             if (self._cur_bar_range / atr) < p.min_bar_impulse_atr:
                 self._bump("restraint_impulse_reject")
                 return None
+        if p.struct_impulse_confirm:
+            eval_bars = ev.attrs.get("eval_bars") or ()
+            if len(eval_bars) >= 5:
+                _, _bo, bh, bl, bc = eval_bars[-1]
+                b1, b2, b3, b4 = eval_bars[-2], eval_bars[-3], eval_bars[-4], eval_bars[-5]
+                d = int(ev.direction)
+                brk3 = (bc < min(b1[3], b2[3], b3[3])) if d < 0 else (bc > max(b1[2], b2[2], b3[2]))
+                out1 = ((bh - bl) > (b1[2] - b1[3])) and (
+                    (bc < min(b1[1], b1[4])) if d < 0 else (bc > max(b1[1], b1[4]))
+                )
+                mid_ok = (bc < 0.5 * (bh + bl)) if d < 0 else (bc > 0.5 * (bh + bl))
+                rmax4 = (bh - bl) > max(b1[2] - b1[3], b2[2] - b2[3], b3[2] - b3[3], b4[2] - b4[3])
+                if not ((brk3 or (rmax4 and out1)) and mid_ok):
+                    self._bump("restraint_struct_impulse_reject")
+                    return None
         if p.min_box_rr > 0.0 and zone is not None:
             opp = getattr(zone, "box_opposite", None)
             if opp is None and not p.allow_pullback_limit and cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED):
@@ -723,6 +747,39 @@ class MarketRouter:
                 self._bump("restraint_cooldown_reject")
                 return None
             self._zone_last_bar[zkey] = self._cur_bar_index
+        if p.zone_departure_reset and zone is not None:
+            zkey = (symbol, round(float(zone.lo), 6), round(float(zone.hi), 6), ev.direction)
+            cts = int(ev.attrs.get("close_ts", ev.ts))
+            step_ms = int(ev.attrs.get("reset_step_ms", 0))
+            prev_lock = self._zone_lock.get(zkey)
+            if prev_lock is not None:
+                ta, ta_step = prev_lock
+                if ta_step > 0 and step_ms > ta_step and (cts - ta) <= 3 * step_ms:
+                    self._bump("restraint_coarse_echo_reject")
+                    return None
+                rb = ev.attrs.get("reset_bars") or ()
+                mid = [b for b in rb if ta < (int(b[0]) + step_ms) < cts]
+                if not mid:
+                    self._bump("restraint_departure_reset_reject")
+                    return None
+                d = int(ev.direction)
+                inner = float(zone.hi) if d > 0 else float(zone.lo)
+                outer = float(zone.lo) if d > 0 else float(zone.hi)
+                inv = outer - d * p.k_bm * atr
+                ready = False
+                for b in mid:
+                    _, _bo, bh, bl, bc = b
+                    in_zone = (bl <= inner) if d > 0 else (bh >= inner)
+                    breached = (bl <= inv) if d > 0 else (bh >= inv)
+                    if breached or in_zone:
+                        ready = False
+                        continue
+                    if ((bc - inner) if d > 0 else (inner - bc)) >= 0.3 * atr:
+                        ready = True
+                if not ready:
+                    self._bump("restraint_departure_reset_reject")
+                    return None
+            self._zone_lock[zkey] = (cts, step_ms)
         target_1: Optional[float] = None
         r_mult: Optional[float] = None
         if cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED) and p.reject_target_mode != "none" and zone is not None:

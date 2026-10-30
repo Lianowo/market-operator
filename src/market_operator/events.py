@@ -303,6 +303,7 @@ class EventDetector:
         self._e4: list[_E4Candidate] = []
         self._prev_regime: Regime = Regime.TRANSITION
         self.consumed_episodes: int = 0
+        self._recent_bars: list[tuple[int, float, float, float, float]] = []
 
 
     # -- 主入口 ---------------------------------------------------------------
@@ -312,6 +313,11 @@ class EventDetector:
         s = self.structure
         t = s.bars_seen - 1
         atr = s.atr()
+        ts_cur, o_cur, h_cur, l_cur, c_cur, _ = s._bars[t]
+        step_ms = (int(ts_cur) - self._recent_bars[-1][0]) if self._recent_bars else 0
+        self._recent_bars.append((int(ts_cur), float(o_cur), float(h_cur), float(l_cur), float(c_cur)))
+        if len(self._recent_bars) > 96:
+            self._recent_bars = self._recent_bars[-96:]
         emitted: list[MarketEvent] = []
         if t > 0 and atr > 0.0:
             ts, o, h, l, c, _ = s._bars[t]
@@ -321,6 +327,15 @@ class EventDetector:
             emitted.extend(self._structure_break(t, ts, c, atr))
             if self.enable_e7:
                 emitted.extend(self._flip_retest(t, ts, atr))
+        if emitted:
+            eval_tail = tuple(self._recent_bars[-6:])
+            reset_tail = tuple(self._recent_bars[-96:])
+            close_ts = int(ts_cur) + int(step_ms)
+            for ev in emitted:
+                ev.attrs["eval_bars"] = eval_tail
+                ev.attrs["reset_bars"] = reset_tail
+                ev.attrs["reset_step_ms"] = int(step_ms)
+                ev.attrs["close_ts"] = close_ts
         self._prev_regime = s.regime()
         self.events.extend(emitted)
         return emitted

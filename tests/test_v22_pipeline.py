@@ -300,3 +300,90 @@ def test_balance_detector_retest_does_not_inject_zombie_legacy_zone():
         assert z.box_quality > 0.0, "真平衡箱视图中严禁混入 box_quality=0.0 的旧版 _retest 僵尸区"
 
 
+
+def test_struct_impulse_confirm_and_zone_departure_reset():
+    """验证 struct_impulse_confirm(局部 3 根破位或 5 根扩张吞没+半区收盘)与 zone_departure_reset(边界离开净空复位)语义。"""
+    wl = frozenset({(ACCEPT, 1), (ACCEPT, -1), (REJECT, 1), (REJECT, -1)})
+    rp = RouterParams(
+        whitelist=wl,
+        reject_use_struct_stop=True,
+        reject_target_mode="opposite",
+        struct_impulse_confirm=True,
+        zone_departure_reset=True,
+    )
+    router = MarketRouter(rp)
+    z = Zone(
+        lo=125.0, hi=128.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+        touches=3, origin_known=1, last_change_known=5,
+        box_opposite=105.0, box_quality=0.55, box_width_atr=4.6, box_rotations=3,
+    )
+    view = StructureView(regime=Regime.RANGE, zones=(z,), atr=2.0)
+    step = 7_200_000
+
+    # 1) 窄幅碎步 K 线(既未跌破前 3 根低点 min=124.8,波幅 2.5 也未超前 4 根最大波幅 3.0) -> struct_impulse_confirm 拦截
+    weak_eval = (
+        (1000, 124.5, 127.0, 124.0, 125.5),
+        (1000 + step, 125.5, 127.2, 124.8, 126.5),
+        (1000 + 2 * step, 126.5, 127.5, 125.2, 127.0),
+        (1000 + 3 * step, 127.0, 128.2, 126.0, 127.5),
+        (1000 + 4 * step, 127.5, 127.5, 125.0, 125.0),
+    )
+    ev_weak = MarketEvent(
+        id=LEVEL_REJECTED, direction=-1, ts=1000 + 4 * step, known_index=14,
+        attrs={"zone": z, "ref": 125.0, "invalid": 128.5, "eval_bars": weak_eval,
+               "reset_bars": weak_eval, "reset_step_ms": step, "close_ts": 1000 + 5 * step},
+    )
+    d_weak = router.on_bar(
+        "BTCUSDT", (1000 + 4 * step, 127.5, 127.5, 125.0, 125.0, 100.0),
+        14, view, 2.0, [ev_weak], position_open=False, entry_resting=False,
+    )
+    assert d_weak == []
+    assert router.counters.get("restraint_struct_impulse_reject") == 1
+
+    # 2) 真实结构击穿(收盘 123.5 < 前 3 根最低点 min(124.8,125.2,126.0)=124.8,且位于下半区) -> 放行并锁定该箱沿
+    strong_eval = weak_eval[:-1] + ((1000 + 4 * step, 127.5, 128.4, 123.0, 123.5),)
+    ev_strong = MarketEvent(
+        id=LEVEL_REJECTED, direction=-1, ts=1000 + 4 * step, known_index=14,
+        attrs={"zone": z, "ref": 125.0, "invalid": 128.5, "eval_bars": strong_eval,
+               "reset_bars": strong_eval, "reset_step_ms": step, "close_ts": 1000 + 5 * step},
+    )
+    d_ok = router.on_bar(
+        "BTCUSDT", (1000 + 4 * step, 127.5, 128.4, 123.0, 123.5, 100.0),
+        14, view, 2.0, [ev_strong], position_open=False, entry_resting=False,
+    )
+    assert len(d_ok) == 1
+
+    # 3) 价格未脱离边缘带(仍在 125.0 附近摩擦)即再次触发 -> zone_departure_reset 拦截
+    hover_bars = strong_eval + (
+        (1000 + 5 * step, 123.5, 126.2, 124.0, 125.2),
+        (1000 + 6 * step, 125.2, 128.2, 122.5, 123.0),
+    )
+    ev_hover = MarketEvent(
+        id=LEVEL_REJECTED, direction=-1, ts=1000 + 6 * step, known_index=16,
+        attrs={"zone": z, "ref": 125.0, "invalid": 128.5, "eval_bars": hover_bars[-5:],
+               "reset_bars": hover_bars, "reset_step_ms": step, "close_ts": 1000 + 7 * step},
+    )
+    d_hover = router.on_bar(
+        "BTCUSDT", (1000 + 6 * step, 125.2, 128.2, 122.5, 123.0, 100.0),
+        16, view, 2.0, [ev_hover], position_open=False, entry_resting=False,
+    )
+    assert d_hover == []
+    assert router.counters.get("restraint_departure_reset_reject") == 1
+
+    # 4) 价格先真正离开边缘带进入箱体内部净空区(high=124.0 < inner=125.0, close=121.0 <= 125.0 - 0.3*2.0),随后重返测试 -> 解锁放行!
+    departed_bars = hover_bars + (
+        (1000 + 7 * step, 123.0, 124.0, 120.5, 121.0),
+        (1000 + 8 * step, 121.0, 128.3, 120.0, 120.2),
+    )
+    ev_retest = MarketEvent(
+        id=LEVEL_REJECTED, direction=-1, ts=1000 + 8 * step, known_index=18,
+        attrs={"zone": z, "ref": 125.0, "invalid": 128.5, "eval_bars": departed_bars[-5:],
+               "reset_bars": departed_bars, "reset_step_ms": step, "close_ts": 1000 + 9 * step},
+    )
+    d_retest = router.on_bar(
+        "BTCUSDT", (1000 + 8 * step, 121.0, 128.3, 120.0, 120.2, 100.0),
+        18, view, 2.0, [ev_retest], position_open=False, entry_resting=False,
+    )
+    assert len(d_retest) == 1
+
+

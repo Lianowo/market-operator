@@ -255,6 +255,7 @@ class MicTracker:
         # STRUCTURE_BROKEN 同现象去重(ref, regime):每个认知覆盖区间至多一发(镜像认知层
         # "每个合格认知收盘一发"的频率形状;emit 后同段内重复收盘不再发)
         self._e6_fired: Optional[tuple] = None
+        self._recent_trig_bars: list[tuple[int, float, float, float, float]] = []
 
     # -- 同步:认知 bar i 收盘后调用(det 已完成 update) ------------------------
 
@@ -368,6 +369,10 @@ class MicTracker:
         ctx = self._ctx
         prev_c = getattr(self, "_prev_trig_close", None)
         self._prev_trig_close = c
+        step_ms = int(self.trigger_tf_seconds) * 1000
+        self._recent_trig_bars.append((int(ts), float(o), float(h), float(l), float(c)))
+        if len(self._recent_trig_bars) > 96:
+            self._recent_trig_bars = self._recent_trig_bars[-96:]
         if ctx is None or ctx.atr <= 0.0:
             return []
         p = self.p
@@ -658,6 +663,11 @@ class MicTracker:
         attrs = dict(attrs)
         attrs["mic"] = True                        # [发射纪律] 纯增量标注
         attrs["trigger_tf"] = self.trigger_tf_seconds
+        step_ms = int(self.trigger_tf_seconds) * 1000
+        attrs["eval_bars"] = tuple(self._recent_trig_bars[-6:])
+        attrs["reset_bars"] = tuple(self._recent_trig_bars[-96:])
+        attrs["reset_step_ms"] = step_ms
+        attrs["close_ts"] = int(ts) + step_ms
         return MarketEvent(id=eid, direction=direction, ts=ts,
                            known_index=a, attrs=attrs)
 
