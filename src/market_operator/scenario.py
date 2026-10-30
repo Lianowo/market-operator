@@ -49,10 +49,13 @@ DEFAULT_TRIGGER_SECONDS: dict[str, Optional[int]] = {
     "2h": None, "4h": 7200, "12h": 7200, "1d": 14400,
 }
 
-#: 触发粒度(秒) → 行情粒度标签。行情层只提供这四种原始/聚合粒度。
+#: 触发粒度(秒) → 行情粒度标签。行情层提供这五种原始/聚合粒度。
+#: 900(15m) 是 2026-10-30 为「观察尺度研究」新增:2h 区域若要按用户冻结表
+#: 用 15m 观察,装配层必须能取到 15m 原生帧。
 TRIGGER_GRANULARITY_BY_SECONDS: dict[int, str] = {
-    1800: "30m", 3600: "1h", 7200: "2h", 14400: "4h",
+    900: "15m", 1800: "30m", 3600: "1h", 7200: "2h", 14400: "4h",
 }
+
 
 #: 真实资金费率表目录(scripts/fetch_funding.py 落地,manifest 记 sha256)。
 FUNDING_DIR = REPO_ROOT / "data" / "raw" / "funding"
@@ -276,11 +279,14 @@ class MarketData:
 
 def _trigger_frame_for(symbol: str, seconds: int):
     """触发粒度行情:1h 及以下取原始数据,以上取聚合帧(同一物理来源)。"""
+    if seconds == 900:
+        return datafeed.load(symbol, "15m")      # 15m 是原生帧,不走 aggregate
     if seconds == 1800:
         return datafeed.load(symbol, "30m")
     if seconds == 3600:
         return datafeed.load(symbol)
     return aggregate.load_tf(symbol, TRIGGER_GRANULARITY_BY_SECONDS[seconds])
+
 
 
 def load_market_data(symbols: Sequence[str], params: Params,
