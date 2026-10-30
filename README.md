@@ -2,7 +2,7 @@
 
 模拟专业交易者决策过程的加密货币研究与实盘交易系统：因果市场认知（平衡箱体与波段结构） → 事件原语（ACCEPT / REJECT 及 E1–E10） → 可证伪交易假设 → 事件驱动持仓管理 → 全成本真实回测与 Bitget 多周期实盘引擎。研究与实盘标的：Bitget USDT 永续（核心 BTC/ETH/SOL/DOGE + 全市场 >3M USDT 活跃宇宙），多尺度（2h/4h/12h/1d 混合触发）。
 
-**当前状态:平衡箱统一架构与实盘引擎已就绪(`config/strategy.json` / `config/live.json`,全仓 471 项测试通过,`tools/replay_acceptance.py` 对冻结基线逐项 Δ=0)。** 协议出处见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
+**当前状态:平衡箱统一架构与实盘引擎已就绪(`config/strategy.json` / `config/live.json`)。** 策略等价性使用 `tools/verify_strategy_parity.py --ref <commit>` 直接对照指定提交的逐笔交易、净值与计数器;历史收益下界验收仍由 `tools/replay_acceptance.py` 提供,两者判据不同。协议出处见 `docs/v21-protocol.md` 与 `docs/acceptance.md`。
 
 
 ## 设计原则
@@ -41,12 +41,10 @@ aggregate(多 TF 聚合) ◄─────────────────�
   目标、初始防线 2.0·atr、trailing 只紧不松、关时间止损）。v6 协议的 A/B
   二臂判选已终局（臂 B 判选；记录见 `docs/v6-protocol.md` 原文与
   `reports/backtest_v6.json/.md` 冻结产物）,**臂切换与臂 A clamp2R 实现
-  已移除**,双臂实现冻结于 `research/rounds/v6/`。
-- **生产闭包**:`data`、`aggregate`、`structure`、`balance_detect`、`events`、`hypothesis`、
-  `position`、`broker`、`campaign`、`routing`、`replay`、`split`、`trigger`、`scenario`、`bitget_live`、`tg`、`secrets_loader`(另有 `harvest`/`quality`/`repairs` 由 `campaign` 传递 import —— v18 决策语境钩子仍供历史路由复用;研究方法学 `research` 已不在闭包内)。
-- **退役实验件**:`strategy_v8`、`zonebio`、`quattro`、`aggtape`、`bandside`、`balance`、`flow_features`、`flow_study`
-—— 只被各自的研究脚本与历史测试引用。`tests/test_layering.py` 把这条边界变成断言:生产闭包不得 import 退役模块,生产模块名不得含版本号,退役清单不得出现无人引用的孤儿。
-（`tape_features` 于 2026-10-24 随唯一 importer 归档到 `scripts/archive/`,已退出本清单。）
+  已移除**,历史实现通过 Git 历史追溯,不在当前源码树保留副本。
+- **认知与决策主链**:`data`、`aggregate`、`structure`、`true_balance`、`events`、`hypothesis`、`routing`、`position`、`broker`、`capacity`、`campaign`、`replay`、`split`、`trigger`、`scenario`;实盘入口另接执行、通知与运维模块。
+- **退役实现已删除**:历史实验模块、专属脚本与配置不再保留运行副本。`tests/test_layering.py` 约束生产闭包不得引用退役模块、模块名不得含版本号,并检查源码、测试和工具中的包内导入是否仍可解析。
+- **执行配置**:代码使用 `campaign.ExecutionConfig`,JSON 保持 `arm_config` 这个已发布键不变;历史 stop-entry、虚拟成交模式、分层入场和收割实验开关已删除。观察挂单仍使用原有 `virtual_limit` 账本标识与计数器,这是活跃输出契约,不是可删除的实验模式。
 
 
 
@@ -54,10 +52,10 @@ aggregate(多 TF 聚合) ◄─────────────────�
 
 详见 **`docs/v21-protocol.md`**、**`config/strategy.json`** 与 **`config/live.json`**：
 
-- **六维平衡箱识别（`balance_detect.py`）**：基于拍卖市场理论，在多尺度窗口阶梯 `(8..144)` 上以 12%/88% 稳健分位边界、方向效率、驻留率、重叠度、遍历比、上下沿轮动次数与重心稳定性识别高置信度震荡箱体（`use_balance_detector=True, balance_quality_min=0.35`），自动派生箱体上下沿支撑/阻力与对侧目标 `box_opposite`。
+- **平衡箱识别（`true_balance.py`）**：由确认波段定框,维护价值边界与外缘双层结构,经水平性与中枢校验生成现价周围的唯一活跃支撑/阻力夹板,并桥接到区域生命周期与事件链。
 - **双原语与高阶降档混合触发（M3c）**：
   - `ACCEPT`（突破接受，顺趋势迁移）与 `REJECT`（刺穿拒绝，箱内回归）；
-  - `2h` / `4h` 同周期收盘确认触发（配强克制过滤：`min_box_rotations=3`、`min_bar_impulse_atr=1.2`、同箱沿冷却）；
+  - 具体认知周期与触发周期映射以 `config/strategy.json` 的 `trigger_tf_by_htf` 为准;结构冲量确认与区域离开重置分别由 `struct_impulse_confirm`、`zone_departure_reset` 控制,不再使用旧固定冲量阈值与冷却根数；
   - `12h -> 2h`、`1d -> 4h` 降一档细周期触发，兼顾大箱体高胜率与早入场高盈亏比。
 - **分类止损与对侧突破锁利**：`REJECT` 采用箱体外缘结构止损，触及或突破对侧缘 `box_opposite` 时**不平半仓**，而是把防线交给"**回吐预算**"（v21.7：`budget = (1−|frac|)·|target−entry|`，`stop = peak ∓ budget`，`peak` 为入场以来最有利极值）—— 推进可多次棘轮、回吐超预算立刻市价离场，不再把仓位钉在一个落后于行情的绝对价位上（`reject_opp_lock_frac=-0.25` 即"锁 ¼、让 ¾"，`-0.50` 为"锁一半"；标定见 `docs/v21-protocol.md` §5.1）；剩余仓位交由 §8.3 确认 pivot 移动防线收割；`ACCEPT` 采用 2.0·ATR 初始防线与无上限移动防线。
 - **各周期独立风险容量池与阶梯动态复利**：`tf_cap_by_tf` 为 `2h`/`4h`/`12h`/`1d` 分配独立风险预算，防止短周期仓位挤占大周期高胜率机会；实盘支持 104 USDT 起步 × 20x 杠杆 × 四档净值阶梯动态风险（`<=250U:4%`, `<=600U:3%`, `<=1500U:2%`, `>1500U:1%`）与 Telegram 信号/运营双通道高清黑白 K 线结构图推送（信号广播与容量闸门解耦：公开信号频道只发市场结构与 `exec_status` 处置说明，成交/防线推进/平仓/日结/告警全部走运营通道）。

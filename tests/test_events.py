@@ -15,7 +15,6 @@ from market_operator.events import BREAKOUT_ACCEPTED, BREAKOUT_FAILED, LEVEL_REJ
 from market_operator.structure import Params, Regime, ZoneRole
 
 BASE_TS = 1_700_000_000_000
-CONFIG = "config/defaults.json"
 P2 = Params(atr_n=2)    # 编排用小窗口;规则本身不变(config 先验值均需用,见各场景)
 
 
@@ -259,7 +258,7 @@ def test_e4_control_no_recovery_within_window():
 
 
 def range_bars():
-    p = Params.from_json(CONFIG)
+    p = Params()
     bars = []
     calm(bars, 100.0, 0.05, 16)                 # ATR 自 13 起可用(0.1)
     seg(bars, 100.9, 101.7, 100.9, 100.0)       # 16-19
@@ -306,7 +305,7 @@ def test_e5_range_rotation_positive():
 
 def test_e5_control_insufficient_room():
     """窄平衡带:多处 LEVEL_REJECTED 均触发,但对侧空间恒 < k_room·atr → 全程无 RANGE_ROTATED(A8)。"""
-    p = Params.from_json(CONFIG)
+    p = Params()
     bars = []
     calm(bars, 100.0, 0.05, 16)
     for _ in range(6):

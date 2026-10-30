@@ -8,8 +8,6 @@
 5. manifest 追加往返(tmp 树:sha/行数/首末 ts/来源;重跑字节幂等);
 dev/test 时间拐点(协议 §2):12320 号 1h bar 的 ts 落在每个 TF 帧
 split_boundary 索引桶内,逐 TF 核算一致(硬编码期望索引核算);
-另锁 research._net_row 的 bar_hours funding 口径(v3 确认修复:持仓时长
-= horizon 根 × bar_hours 小时,1h 恒等;多 TF 不再把"根"误当"小时")。
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ import pytest
 
 from market_operator import aggregate as agg
 from market_operator import data as mo_data
-from market_operator.research import CostModel, split_boundary, _net_row
+from market_operator.split import split_boundary
 
 MS_H = 3_600_000
 T0 = 1_704_067_200_000                 # 2024-01-01 00:00:00 UTC(整网格)
@@ -202,27 +200,3 @@ def test_aggregate_symbol_rejects_1h(tmp_path):
     with pytest.raises(ValueError):
         agg.aggregate_symbol("TESTSYM", "1h", data_dir=tmp_path / "d",
                              manifest_path=tmp_path / "m.json")
-
-
-# ---------------------------------------------------------------------------
-# 已确认上游修复锁定:research funding 计费 bar_hours(根 × 小时/根 = 小时)
-# ---------------------------------------------------------------------------
-
-
-def test_net_row_funding_scales_with_bar_hours():
-    """v3 确认修复:_net_row 的 horizon 是根数,funding 按 horizon·bar_hours
-    小时计(§9.2/v3-protocol §2);bar_hours=1 与 v1/v2 恒等。"""
-    cost = CostModel(taker_fee=0.0006, slippage_per_side=0.0002,
-                     funding_per_8h_per_side=0.0001)
-    base = _net_row(mfe=0.0, mae=0.0, gross=0.0, hit=None,
-                    entry=100.0, atr=10.0, horizon=24, cost=cost)
-    scaled = _net_row(mfe=0.0, mae=0.0, gross=0.0, hit=None,
-                      entry=100.0, atr=10.0, horizon=24, cost=cost,
-                      bar_hours=4.0)
-    # 1x:fee+slip = 2·(0.0006+0.0002)=0.0016;24h funding=2·0.0001·3=0.0006
-    assert base["net_atr_1_0"] == pytest.approx(-(0.0016 + 0.0006) * 100 / 10)
-    assert base["net_atr_1_0"] == pytest.approx(-0.022)
-    # 96h funding=2·0.0001·12=0.0024 ⇒ frac=0.0040
-    assert scaled["net_atr_1_0"] == pytest.approx(-(0.0016 + 0.0024) * 100 / 10)
-    assert scaled["net_atr_1_0"] == pytest.approx(-0.040)
-    assert scaled["net_atr_1_0"] != base["net_atr_1_0"]

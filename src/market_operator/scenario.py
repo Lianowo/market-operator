@@ -1,12 +1,7 @@
 """场景回放门面:装配链的唯一入口,也是「同一场景同一品类」判分的唯一入口。
 
-为什么需要一个门面
-------------------
-一次回放 = 五段职责串联:配置解析 → 行情装载 → 认知缓存 → 战役帧装配 →
-撮合回放。此前这五段被三个诊断脚本各自抄了一份(`_diag_v21_backtest.load_all_data`、
-`_diag_v21_tf_sweep.Ctx`、`_diag_v21_abcd.Ctx`),任何一段的默认值改动
-(例如 `use_balance_detector` 被硬编码为 True)都只会在其中一个脚本里生效,
-"同一场景"因此无法被证明是同一场景。
+配置解析、行情装载、认知缓存、战役帧装配与撮合回放集中于此,
+避免不同入口复制装配逻辑而产生默认值漂移。
 
 本模块把这条链固化为**带类型的显式契约**:
 
@@ -32,7 +27,7 @@ from typing import Any, Mapping, Optional, Sequence
 from . import aggregate, capacity, data as datafeed
 from .replay import prepare_cognition
 from .broker import ContractSpec
-from .campaign import ArmConfig, build_campaign_frame, run_campaigns
+from .campaign import ExecutionConfig, build_campaign_frame, run_campaigns
 from .structure import Params
 from .routing import RouterParams
 from .trigger import prepare_mic_cognition
@@ -153,7 +148,7 @@ class ScenarioSettings:
     structure: Params
     router: RouterParams
     router_by_timeframe: Mapping[str, RouterParams]
-    arm: ArmConfig
+    arm: ExecutionConfig
     costs: ExecutionCosts
     trigger_seconds_by_timeframe: Mapping[str, Optional[int]]
     tf_cap_by_timeframe: Mapping[str, float]
@@ -167,24 +162,24 @@ class ScenarioSettings:
     n_fill: int
 
 
-def arm_config_from(raw: Mapping[str, Any], path: Path = PRODUCTION_CONFIG) -> ArmConfig:
-    """``arm_config`` → ``ArmConfig``,忽略仅供实盘使用的键。
+def execution_config_from(raw: Mapping[str, Any], path: Path = PRODUCTION_CONFIG) -> ExecutionConfig:
+    """``arm_config`` → ``ExecutionConfig``,忽略仅供实盘使用的键。
 
     ``config/strategy.json`` 被回放与实盘**共用**,里面可能带只被
     ``scripts/live_runner.py`` 读取的键(联调期常见)。若不认识的键直接塞进
-    ``ArmConfig(**...)``,整份生产配置会加载失败 —— 宁可显式列出未知键并忽略,
+    ``ExecutionConfig(**...)``,整份生产配置会加载失败 —— 宁可显式列出未知键并忽略,
     也不能让配置与链路互锁。未知键在此打印一次,便于发现拼写错误。
 
     注:v21.7 起锁利只有 ``reject_opp_lock_frac`` 一个参数(回放与实盘
     共用 ``position.opp_lock_step``),不再有"只给实盘看"的锁利键。
     """
-    known = {f.name for f in fields(ArmConfig)}
+    known = {f.name for f in fields(ExecutionConfig)}
     arm = dict(raw.get("arm_config", {}))
     unknown = sorted(set(arm) - known)
     if unknown:
         print(f"[config] {path.name}: arm_config 忽略回放链不用的键 {unknown}",
               flush=True)
-    return ArmConfig(**{k: v for k, v in arm.items() if k in known})
+    return ExecutionConfig(**{k: v for k, v in arm.items() if k in known})
 
 
 def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
@@ -235,7 +230,7 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
         structure=structure,
         router=router,
         router_by_timeframe=router_by_timeframe,
-        arm=arm_config_from(raw, config_path),
+        arm=execution_config_from(raw, config_path),
         costs=ExecutionCosts(
             taker_fee=float(raw["taker_fee"]),
             maker_fee=float(raw["maker_fee"]),
@@ -305,12 +300,16 @@ def load_market_data(symbols: Sequence[str], params: Params,
             seconds: _trigger_frame_for(symbol, seconds)
             for seconds in TRIGGER_GRANULARITY_BY_SECONDS
         }
+        execution = market.trigger_frame[symbol][3600]
         for tf in timeframes:
-            frame = aggregate.load_tf(symbol, tf)
+            seconds = aggregate.TF_HOURS[tf] * 3600
+            frame = market.trigger_frame[symbol].get(seconds)
+            if frame is None:
+                frame = aggregate.load_tf(symbol, tf)
             market.cognition[(symbol, tf)] = prepare_cognition(
                 frame, params, symbol, enable_e7=enable_flip_retest)
             market.cognition_frame[(symbol, tf)] = frame
-            market.execution_frame[(symbol, tf)] = datafeed.load(symbol)
+            market.execution_frame[(symbol, tf)] = execution
         if progress:
             print(f"[prep] {symbol} 认知就绪", flush=True)
     return market
@@ -403,7 +402,7 @@ class ScenarioRunner:
             tf_cap_by_timeframe: Optional[Mapping[str, float]] = None,
             capacity_mode: Optional[str] = None,
             directional_cap_frac: Optional[float] = None,
-            arm: Optional[ArmConfig] = None) -> ScenarioOutcome:
+            arm: Optional[ExecutionConfig] = None) -> ScenarioOutcome:
 
         """按场景回放。所有可替换项缺省为配置值(即"现行语义")。"""
         settings = self.settings
@@ -457,7 +456,7 @@ __all__ = [
     "COGNITION_TIMEFRAMES", "CONTRACTS_PATH", "DEFAULT_TRIGGER_SECONDS",
     "PRODUCTION_CONFIG", "REPO_ROOT", "TRIGGER_GRANULARITY_BY_SECONDS",
     "ExecutionCosts", "MarketData", "ScenarioOutcome", "ScenarioRunner",
-    "ScenarioSettings", "ScenarioSpec", "arm_config_from", "build_frames",
+    "ScenarioSettings", "ScenarioSpec", "execution_config_from", "build_frames",
     "load_contract_specs",
     "load_market_data", "load_settings",
 ]

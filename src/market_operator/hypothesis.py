@@ -2,8 +2,7 @@
 
 每个事件转化为一个可证伪结构 Hypothesis:direction 取自事件;invalid 取自
 `event.attrs["invalid"]`(events.py 已按 §7 口径写入结构失效价的建议值);
-entry = 知时(known_index)下一根 bar 开盘价——构建时刻不可知,由研究器
-(`market_operator.research`)事后代入(`with_entry`),构建时可为 None。
+entry = 知时(known_index)下一根 bar 开盘价——构建时刻不可知,由成交装配侧事后代入(`with_entry`),构建时可为 None。
 
 target_1 = 结构目标(§7:"最近的对侧区域边缘 / RANGE 对侧边缘"):
 - 一般事件:沿事件方向、状态 ∈ {ACTIVE, RETESTED, FLIPPED} 的最近对侧区域近缘。
@@ -31,7 +30,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .events import RANGE_ROTATED, MarketEvent
-from .structure import Params, Regime, Zone, ZoneRole, ZoneState
+from .structure import Params, Regime, ZoneRole, ZoneState
 
 TARGET_STATES = (ZoneState.ACTIVE, ZoneState.RETESTED, ZoneState.FLIPPED)
 

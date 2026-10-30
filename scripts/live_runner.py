@@ -117,9 +117,7 @@ def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
     base_rp = dc_replace(RouterParams(**base_kw), **rp_extra)
     rp_by_tf = {}
     for tf, tf_ov in (raw.get("router_params_by_tf") or {}).items():
-        clean_ov = {("zone_cooldown_bars" if k == "min_zone_cooldown_bars" else k): v
-                    for k, v in tf_ov.items()}
-        rp_by_tf[tf] = dc_replace(base_rp, **clean_ov)
+        rp_by_tf[tf] = dc_replace(base_rp, **tf_ov)
     return raw, params, base_rp, rp_by_tf
 
 

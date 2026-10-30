@@ -1,19 +1,20 @@
-"""真实市场平衡箱与现价近邻夹板引擎 (True Balance & Active Bracket Engine)。
+"""真实市场平衡箱与现价近邻夹板引擎。
 
-核心原则(告别固定窗口盲扫与满屏陈旧画线):
-1. 波段定框生长 (Swing-Anchored Formation & Growth):
-   - 由显著推进腿停止延伸后,多空在 [L, H] 内完成至少 3 段折返(>=2 顶 + >=2 底独立拐点)
-     锚定左起点 ``start_index``,未有效破位前随 K 线向右增量生长。
-2. 双层物理边界 (Dual-Layer Boundaries):
-   - 内沿 (VAL / VAH):拐点实体边与实体高密分位簇拟合(用于触发观察与前缘 Limit 挂单);
-   - 外沿 (lo_ext / hi_ext):边界拐点影线极值 + 异常单针截断保护(用于结构止损掩体)。
-3. 三道硬性防伪门:
-   - 水平度硬约束:每 10 根 K 线重心与边界漂移 <= max_slope_atr_per_10(剔除 45 度斜通道);
-   - 中枢居中与驻留率:箱内收盘驻留率 >= dwell_min,且成交量×实体中枢 POC 落在 [0.25, 0.75];
-   - 可交易净跨度:总跨度 >= width_min_atr * ATR。
+核心原则:
+1. 波段定框生长:
+   显著推进腿停止延伸后,多空在区间内完成至少 3 段折返(>=2 顶 + >=2 底独立拐点)
+   锚定左起点 ``start_index``,未有效破位前随 K 线向右增量生长。
+2. 双层物理边界:
+   - 内沿 (VAL / VAH):拐点实体边与实体高密分位簇拟合;
+   - 外沿 (lo_ext / hi_ext):边界拐点影线极值 + 异常单针截断保护。
+3. 硬性防伪约束:
+   - 水平度约束:每 10 根 K 线重心与边界漂移 <= max_slope_atr_per_10;
+   - 中枢居中与驻留率:箱内收盘驻留率 >= dwell_min,且 POC 落在 [poc_zone_lo, poc_zone_hi];
+   - 可交易净跨度:总跨度 ∈ [width_min_atr, width_max_atr] * ATR。
 4. 现价近邻夹板算子 (ActiveBracket):
-   - 任意时刻围绕现价最多只激活 [1 个当前支撑, 1 个当前阻力]。
+   任意时刻围绕现价最多激活 [1 个当前支撑, 1 个当前阻力]。
 """
+
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
@@ -21,38 +22,39 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 
-def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return lo if v < lo else hi if v > hi else v
+def clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return lo if value < lo else hi if value > hi else value
 
 
-def _quantile(vals: Sequence[float], q: float) -> float:
-    if not vals:
+def quantile(values: Sequence[float], q: float) -> float:
+    if not values:
         return 0.0
-    s = sorted(vals)
-    pos = _clamp(q) * (len(s) - 1)
+    ordered = sorted(values)
+    pos = clamp(q) * (len(ordered) - 1)
     lo = int(pos)
-    hi = min(lo + 1, len(s) - 1)
-    return s[lo] * (1.0 - (pos - lo)) + s[hi] * (pos - lo)
+    hi = min(lo + 1, len(ordered) - 1)
+    frac = pos - lo
+    return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
 
 
 @dataclass(frozen=True)
 class TrueBalanceParams:
-    pivot_rev_atr: float = 0.90          # 波段拐点确认回退阈值(ATR 倍数)
-    width_min_atr: float = 1.80          # 可交易箱体最小总跨度(ATR 倍数)
-    width_max_atr: float = 12.0          # 箱体最大跨度上限(ATR 倍数)
-    min_bars: int = 10                   # 箱体最短持续 K 线根数
-    min_swings: int = 4                  # 至少 4 个交替拐点(= 3 段折返:2 顶 + 2 底)
-    edge_cluster_atr: float = 0.65       # 拐点归属上下沿簇的容差(ATR 倍数)
-    wick_cap_atr: float = 0.85           # 单根极端插针超出内沿的最大外扩保护(ATR 倍数)
-    break_margin_atr: float = 0.15       # 收盘有效破位外沿的余量(ATR 倍数)
-    break_confirm_bars: int = 2          # 连续收盘在外沿外侧几根判箱体破位转迁移
-    max_slope_atr_per_10: float = 0.30   # 每 10 根 K 线最大重心/边界斜率漂移(ATR 倍数)
-    dwell_min: float = 0.68              # 收盘落在箱体内的最低驻留率
-    poc_zone_lo: float = 0.25            # 价值中枢 POC 相对箱体高度下界
-    poc_zone_hi: float = 0.75            # 价值中枢 POC 相对箱体高度上界
-    quality_min: float = 0.35            # 综合真实度最低门槛
-    keep_flipped_bars: int = 96          # 破位后翻转边缘作为 S/R Flip 保留的最大 bar 数
-    reentry_enabled: bool = False        # 80% 法则:允许迁移期价格重返近期已破箱体并携带对侧目标
+    pivot_rev_atr: float = 0.90
+    width_min_atr: float = 1.80
+    width_max_atr: float = 12.0
+    min_bars: int = 10
+    min_swings: int = 4
+    edge_cluster_atr: float = 0.65
+    wick_cap_atr: float = 0.85
+    break_margin_atr: float = 0.15
+    break_confirm_bars: int = 2
+    max_slope_atr_per_10: float = 0.30
+    dwell_min: float = 0.68
+    poc_zone_lo: float = 0.25
+    poc_zone_hi: float = 0.75
+    quality_min: float = 0.35
+    keep_flipped_bars: int = 96
+    reentry_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,8 +62,8 @@ class SwingPoint:
     index: int
     ts: int
     kind: str          # "HIGH" | "LOW"
-    price: float       # 影线极值
-    body_edge: float   # 实体极值:HIGH 取 max(o,c),LOW 取 min(o,c)
+    price: float
+    body_edge: float
     close: float
     atr: float
 
@@ -71,11 +73,11 @@ class TrueBalanceBox:
     box_id: int
     start_index: int
     end_index: int
-    val: float                 # 支撑内沿 (Value Area Low)
-    vah: float                 # 阻力内沿 (Value Area High)
-    lo_ext: float              # 支撑外沿 (极值防线)
-    hi_ext: float              # 阻力外沿 (极值防线)
-    poc: float                 # 成交量×实体价值中枢
+    val: float
+    vah: float
+    lo_ext: float
+    hi_ext: float
+    poc: float
     quality: float
     width_atr: float
     rotations: int
@@ -88,7 +90,7 @@ class TrueBalanceBox:
     broken_index: Optional[int] = None
     outside_up_streak: int = 0
     outside_dn_streak: int = 0
-    components: dict = field(default_factory=dict)
+    components: dict[str, float] = field(default_factory=dict)
 
     @property
     def lo(self) -> float:
@@ -119,9 +121,9 @@ class TrueBalanceBox:
 class BracketLevel:
     role: str                  # "SUPPORT" | "RESISTANCE"
     source_kind: str           # "BOX_EDGE" | "FLIPPED_BOX_EDGE" | "MAJOR_SWING"
-    inner: float               # 内沿(触碰观察 / Limit 挂单参考价)
-    outer: float               # 外沿(极值防线 / 结构止损掩体)
-    opposite: Optional[float]  # 均值回归对侧目标
+    inner: float
+    outer: float
+    opposite: Optional[float]
     poc: Optional[float]
     quality: float
     rotations: int
@@ -140,7 +142,7 @@ class BracketLevel:
 
 @dataclass(frozen=True)
 class ActiveBracket:
-    """围绕现价 P_t 的唯一活跃夹板:[最多 1 个当前支撑, 最多 1 个当前阻力]。"""
+    """围绕现价的唯一活跃夹板:[最多 1 个当前支撑, 最多 1 个当前阻力]。"""
 
     index: int
     close: float
@@ -151,12 +153,19 @@ class ActiveBracket:
     resistance: Optional[BracketLevel]
 
 
+
 class TrueBalanceDetector:
     """事件定框 + 双层物理边界 + 水平/中枢硬校验 + 现价夹板引擎。"""
 
     def __init__(self, params: Optional[TrueBalanceParams] = None) -> None:
         self.p = params or TrueBalanceParams()
         self.bars: list[tuple[int, float, float, float, float, float]] = []
+        self._highs: list[float] = []
+        self._lows: list[float] = []
+        self._closes: list[float] = []
+        self._body_highs: list[float] = []
+        self._body_lows: list[float] = []
+        self._vols: list[float] = []
         self.units: list[float] = []
         self.path_prefix: list[float] = [0.0]
         self.swings: list[SwingPoint] = []
@@ -181,9 +190,15 @@ class TrueBalanceDetector:
         )
         idx = len(self.bars)
         self.bars.append((ts, o, h, l, c, v))
+        self._highs.append(h)
+        self._lows.append(l)
+        self._closes.append(c)
+        self._body_highs.append(o if o >= c else c)
+        self._body_lows.append(o if o <= c else c)
+        self._vols.append(v if v >= 1.0 else 1.0)
         atr = float(unit) if unit and unit > 0.0 else max(h - l, 1e-8)
         self.units.append(atr)
-        prev_c = self.bars[-2][4] if idx > 0 else o
+        prev_c = self._closes[-2] if idx > 0 else o
         self.path_prefix.append(self.path_prefix[-1] + abs(c - prev_c))
 
         new_swing = self._update_swing(idx, ts, o, h, l, c, atr)
@@ -193,7 +208,7 @@ class TrueBalanceDetector:
             self._last_swing_bar = idx
 
         if self.active_box is not None:
-            self._advance_active_box(idx, o, h, l, c, v, atr, has_new_swing=(new_swing is not None))
+            self._advance_active_box(idx, c, atr, has_new_swing=(new_swing is not None))
 
         if (
             self.active_box is None
@@ -206,19 +221,25 @@ class TrueBalanceDetector:
 
         return self.bracket()
 
-    def _update_swing(self, idx: int, ts: int, o: float, h: float, l: float,
-                      c: float, atr: float) -> Optional[SwingPoint]:
-        body_hi = max(o, c)
-        body_lo = min(o, c)
+    def _set_swing_extreme(
+        self, price: float, body: float, close: float, idx: int, ts: int, atr: float
+    ) -> None:
+        self._sw_ext_price = price
+        self._sw_ext_body = body
+        self._sw_ext_close = close
+        self._sw_ext_idx = idx
+        self._sw_ext_ts = ts
+        self._sw_ext_atr = atr
+
+    def _update_swing(
+        self, idx: int, ts: int, o: float, h: float, l: float, c: float, atr: float
+    ) -> Optional[SwingPoint]:
+        body_hi = o if o >= c else c
+        body_lo = o if o <= c else c
         rev = self.p.pivot_rev_atr * atr
 
         if idx == 0:
-            self._sw_ext_price = c
-            self._sw_ext_body = c
-            self._sw_ext_close = c
-            self._sw_ext_idx = 0
-            self._sw_ext_ts = ts
-            self._sw_ext_atr = atr
+            self._set_swing_extreme(c, c, c, 0, ts, atr)
             return None
 
         if self._sw_dir is None:
@@ -226,24 +247,17 @@ class TrueBalanceDetector:
             dn_move = self._sw_ext_price - l
             if up_move >= rev and up_move >= dn_move:
                 self._sw_dir = 1
-                self._sw_ext_price, self._sw_ext_body = h, body_hi
-                self._sw_ext_close, self._sw_ext_idx = c, idx
-                self._sw_ext_ts, self._sw_ext_atr = ts, atr
+                self._set_swing_extreme(h, body_hi, c, idx, ts, atr)
             elif dn_move >= rev:
                 self._sw_dir = -1
-                self._sw_ext_price, self._sw_ext_body = l, body_lo
-                self._sw_ext_close, self._sw_ext_idx = c, idx
-                self._sw_ext_ts, self._sw_ext_atr = ts, atr
+                self._set_swing_extreme(l, body_lo, c, idx, ts, atr)
             return None
 
         if self._sw_dir == 1:
             if h >= self._sw_ext_price:
-                self._sw_ext_price = h
-                self._sw_ext_body = max(self._sw_ext_body, body_hi)
-                self._sw_ext_close = c
-                self._sw_ext_idx = idx
-                self._sw_ext_ts = ts
-                self._sw_ext_atr = atr
+                self._set_swing_extreme(
+                    h, max(self._sw_ext_body, body_hi), c, idx, ts, atr
+                )
                 return None
             if self._sw_ext_price - l >= rev:
                 confirmed = SwingPoint(
@@ -252,37 +266,33 @@ class TrueBalanceDetector:
                     close=self._sw_ext_close, atr=self._sw_ext_atr,
                 )
                 self._sw_dir = -1
-                self._sw_ext_price, self._sw_ext_body = l, body_lo
-                self._sw_ext_close, self._sw_ext_idx = c, idx
-                self._sw_ext_ts, self._sw_ext_atr = ts, atr
+                self._set_swing_extreme(l, body_lo, c, idx, ts, atr)
                 return confirmed
-        else:
-            if l <= self._sw_ext_price:
-                self._sw_ext_price = l
-                self._sw_ext_body = min(self._sw_ext_body, body_lo)
-                self._sw_ext_close = c
-                self._sw_ext_idx = idx
-                self._sw_ext_ts = ts
-                self._sw_ext_atr = atr
-                return None
-            if h - self._sw_ext_price >= rev:
-                confirmed = SwingPoint(
-                    index=self._sw_ext_idx, ts=self._sw_ext_ts, kind="LOW",
-                    price=self._sw_ext_price, body_edge=self._sw_ext_body,
-                    close=self._sw_ext_close, atr=self._sw_ext_atr,
-                )
-                self._sw_dir = 1
-                self._sw_ext_price, self._sw_ext_body = h, body_hi
-                self._sw_ext_close, self._sw_ext_idx = c, idx
-                self._sw_ext_ts, self._sw_ext_atr = ts, atr
-                return confirmed
+            return None
+
+        if l <= self._sw_ext_price:
+            self._set_swing_extreme(
+                l, min(self._sw_ext_body, body_lo), c, idx, ts, atr
+            )
+            return None
+        if h - self._sw_ext_price >= rev:
+            confirmed = SwingPoint(
+                index=self._sw_ext_idx, ts=self._sw_ext_ts, kind="LOW",
+                price=self._sw_ext_price, body_edge=self._sw_ext_body,
+                close=self._sw_ext_close, atr=self._sw_ext_atr,
+            )
+            self._sw_dir = 1
+            self._set_swing_extreme(h, body_hi, c, idx, ts, atr)
+            return confirmed
         return None
 
-    def _advance_active_box(self, idx: int, o: float, h: float, l: float,
-                            c: float, v: float, atr: float, *,
-                            has_new_swing: bool = False) -> None:
+
+    def _advance_active_box(
+        self, idx: int, c: float, atr: float, *, has_new_swing: bool = False
+    ) -> None:
         box = self.active_box
-        assert box is not None
+        if box is None:
+            return
         bm = self.p.break_margin_atr * atr
         runaway = 1.25 * atr
 
@@ -309,7 +319,6 @@ class TrueBalanceDetector:
             self.active_box = None
             return
 
-        # 仍在箱体有效生命期内:价格探顶/探底或单根假突破收回均维持箱体存活!
         box.end_index = idx
         if has_new_swing and idx - box.start_index + 1 <= 180:
             rebuilt = self._evaluate_span(box.start_index, idx, atr, box_id=box.box_id)
@@ -333,46 +342,52 @@ class TrueBalanceDetector:
         best: Optional[TrueBalanceBox] = None
         max_k = min(len(recent_swings), 10)
         for k in range(self.p.min_swings, max_k + 1):
-            sub = recent_swings[-k:]
-            start_idx = sub[0].index
-            if idx - start_idx + 1 < self.p.min_bars or idx - start_idx + 1 > 180:
+            start_idx = recent_swings[-k].index
+            span_len = idx - start_idx + 1
+            if span_len < self.p.min_bars or span_len > 180:
                 continue
             cand = self._evaluate_span(start_idx, idx, atr, box_id=self._next_box_id)
-            if cand is not None:
-                if best is None or cand.quality > best.quality:
-                    best = cand
+            if cand is not None and (best is None or cand.quality > best.quality):
+                best = cand
 
         if best is not None:
             self._next_box_id += 1
         return best
 
-    def _evaluate_span(self, start_idx: int, end_idx: int, atr: float,
-                       *, box_id: int) -> Optional[TrueBalanceBox]:
+
+    def _evaluate_span(
+        self, start_idx: int, end_idx: int, atr: float, *, box_id: int
+    ) -> Optional[TrueBalanceBox]:
         length = end_idx - start_idx + 1
         if length < self.p.min_bars or atr <= 0.0:
             return None
 
+        path = self.path_prefix[end_idx + 1] - self.path_prefix[start_idx]
+        disp = abs(self._closes[end_idx] - self._closes[start_idx])
+        efficiency = disp / path if path > 0.0 else 1.0
+        if efficiency > 0.48:
+            return None
+
         s_lo = bisect_left(self._swing_indices, start_idx)
         s_hi = bisect_right(self._swing_indices, end_idx)
+        if s_hi - s_lo < 4:
+            return None
         span_swings = self.swings[s_lo:s_hi]
         high_swings = [s for s in span_swings if s.kind == "HIGH"]
         low_swings = [s for s in span_swings if s.kind == "LOW"]
         if len(high_swings) < 2 or len(low_swings) < 2:
             return None
 
-        bars = self.bars[start_idx:end_idx + 1]
-        body_highs = [max(b[1], b[4]) for b in bars]
-        body_lows = [min(b[1], b[4]) for b in bars]
-        closes = [b[4] for b in bars]
-        highs = [b[2] for b in bars]
-        lows = [b[3] for b in bars]
+        end_excl = end_idx + 1
+        body_highs = self._body_highs[start_idx:end_excl]
+        body_lows = self._body_lows[start_idx:end_excl]
 
-        top_anchors = sorted([s.body_edge for s in high_swings], reverse=True)
-        bot_anchors = sorted([s.body_edge for s in low_swings])
-        vah_swing = _quantile(top_anchors[:max(2, len(top_anchors) // 2 + 1)], 0.50)
-        val_swing = _quantile(bot_anchors[:max(2, len(bot_anchors) // 2 + 1)], 0.50)
-        vah_body = _quantile(body_highs, 0.86)
-        val_body = _quantile(body_lows, 0.14)
+        top_anchors = sorted((s.body_edge for s in high_swings), reverse=True)
+        bot_anchors = sorted(s.body_edge for s in low_swings)
+        vah_swing = quantile(top_anchors[:max(2, len(top_anchors) // 2 + 1)], 0.50)
+        val_swing = quantile(bot_anchors[:max(2, len(bot_anchors) // 2 + 1)], 0.50)
+        vah_body = quantile(body_highs, 0.86)
+        val_body = quantile(body_lows, 0.14)
         vah = 0.60 * vah_swing + 0.40 * vah_body
         val = 0.60 * val_swing + 0.40 * val_body
 
@@ -381,16 +396,23 @@ class TrueBalanceDetector:
             return None
 
         cluster_tol = self.p.edge_cluster_atr * atr
-        top_cluster = [s for s in high_swings if abs(s.body_edge - vah) <= cluster_tol or abs(s.price - vah) <= cluster_tol]
-        bot_cluster = [s for s in low_swings if abs(s.body_edge - val) <= cluster_tol or abs(s.price - val) <= cluster_tol]
+        top_cluster = [
+            s for s in high_swings
+            if abs(s.body_edge - vah) <= cluster_tol or abs(s.price - vah) <= cluster_tol
+        ]
+        bot_cluster = [
+            s for s in low_swings
+            if abs(s.body_edge - val) <= cluster_tol or abs(s.price - val) <= cluster_tol
+        ]
         if len(top_cluster) < 2 or len(bot_cluster) < 2:
             return None
 
-        raw_hi_ext = max(max(s.price for s in top_cluster), _quantile(highs, 0.94))
-        raw_lo_ext = min(min(s.price for s in bot_cluster), _quantile(lows, 0.06))
+        highs = self._highs[start_idx:end_excl]
+        lows = self._lows[start_idx:end_excl]
+        raw_hi_ext = max(max(s.price for s in top_cluster), quantile(highs, 0.94))
+        raw_lo_ext = min(min(s.price for s in bot_cluster), quantile(lows, 0.06))
         hi_ext = max(vah + 0.15 * atr, min(raw_hi_ext, vah + self.p.wick_cap_atr * atr))
         lo_ext = min(val - 0.15 * atr, max(raw_lo_ext, val - self.p.wick_cap_atr * atr))
-        # 确保内沿 VAL/VAH 紧贴外沿极值防线(带宽 <= 0.50*ATR),避免在箱体半山腰过早触发
         vah = max(vah, hi_ext - 0.50 * atr)
         val = min(val, lo_ext + 0.50 * atr)
 
@@ -398,20 +420,25 @@ class TrueBalanceDetector:
         if total_width_atr < self.p.width_min_atr or total_width_atr > self.p.width_max_atr:
             return None
 
-        seq: list[str] = []
         top_zone_lo = vah - 0.35 * inner_width
         bot_zone_hi = val + 0.35 * inner_width
+        last_side = ""
+        alternations = -1
         for s in span_swings:
             if s.kind == "HIGH" and s.price >= top_zone_lo:
-                if not seq or seq[-1] != "T":
-                    seq.append("T")
+                if last_side != "T":
+                    last_side = "T"
+                    alternations += 1
             elif s.kind == "LOW" and s.price <= bot_zone_hi:
-                if not seq or seq[-1] != "B":
-                    seq.append("B")
-        alternations = max(0, len(seq) - 1)
+                if last_side != "B":
+                    last_side = "B"
+                    alternations += 1
         if alternations < 3:
             return None
         rotations = alternations
+
+        closes = self._closes[start_idx:end_excl]
+
 
 
         mid = length // 2
@@ -432,27 +459,23 @@ class TrueBalanceDetector:
             return None
 
         dwell_tol = 0.15 * atr
-        inside_count = sum(1 for c in closes if (lo_ext - dwell_tol) <= c <= (hi_ext + dwell_tol))
+        lo_bound = lo_ext - dwell_tol
+        hi_bound = hi_ext + dwell_tol
+        inside_count = sum(1 for c in closes if lo_bound <= c <= hi_bound)
         dwell = inside_count / length
         if dwell < self.p.dwell_min:
             return None
 
-        poc = self._compute_poc(bars, val, vah)
+        poc = self._compute_poc_slice(start_idx, end_excl, val, vah)
         poc_pos = (poc - val) / max(inner_width, 1e-12)
         if not (self.p.poc_zone_lo <= poc_pos <= self.p.poc_zone_hi):
             return None
 
-        path = self.path_prefix[end_idx + 1] - self.path_prefix[start_idx]
-        disp = abs(closes[-1] - closes[0])
-        efficiency = disp / path if path > 0.0 else 1.0
-        if efficiency > 0.48:
-            return None
-
-        c_horizontal = _clamp(1.0 - slope_atr_per_10 / max(self.p.max_slope_atr_per_10, 1e-6))
-        c_dwell = _clamp((dwell - 0.60) / 0.35)
-        c_poc = _clamp(1.0 - abs(poc_pos - 0.50) / 0.30)
-        c_rot = _clamp(alternations / 5.0)
-        c_eff = _clamp(1.0 - efficiency / 0.50)
+        c_horizontal = clamp(1.0 - slope_atr_per_10 / max(self.p.max_slope_atr_per_10, 1e-6))
+        c_dwell = clamp((dwell - 0.60) / 0.35)
+        c_poc = clamp(1.0 - abs(poc_pos - 0.50) / 0.30)
+        c_rot = clamp(alternations / 5.0)
+        c_eff = clamp(1.0 - efficiency / 0.50)
         quality = (
             0.25 * c_horizontal
             + 0.22 * c_dwell
@@ -480,34 +503,54 @@ class TrueBalanceDetector:
             },
         )
 
-
-    @staticmethod
-    def _compute_poc(bars: Sequence[tuple], val: float, vah: float, bins: int = 12) -> float:
+    def _compute_poc_slice(
+        self, start_idx: int, end_excl: int, val: float, vah: float, bins: int = 12
+    ) -> float:
         span = vah - val
-        if span <= 1e-12 or not bars:
+        if span <= 1e-12 or start_idx >= end_excl:
             return 0.5 * (val + vah)
         step = span / bins
+        min_body_den = step * 0.25
         weights = [0.0] * bins
-        for b in bars:
-            o, h, l, c, v = b[1], b[2], b[3], b[4], max(float(b[5]), 1.0)
-            b_lo, b_hi = min(o, c), max(o, c)
-            for i in range(bins):
+        highs = self._highs
+        lows = self._lows
+        closes = self._closes
+        body_highs = self._body_highs
+        body_lows = self._body_lows
+        vols = self._vols
+
+        for k in range(start_idx, end_excl):
+            h = highs[k]
+            l = lows[k]
+            if h < val or l > vah:
+                continue
+            c = closes[k]
+            v = vols[k]
+            b_lo = body_lows[k]
+            b_hi = body_highs[k]
+            body_den = max(b_hi - b_lo, min_body_den)
+            wick_den = max(h - l, step)
+            i_lo = max(0, int((l - val) / step) - 1)
+            i_hi = min(bins, int((h - val) / step) + 2)
+            for i in range(i_lo, i_hi):
                 bin_lo = val + i * step
                 bin_hi = bin_lo + step
                 body_ov = max(0.0, min(b_hi, bin_hi) - max(b_lo, bin_lo))
-                wick_ov = max(0.0, min(h, bin_hi) - max(l, bin_lo))
                 if body_ov > 0.0 or (b_hi == b_lo and bin_lo <= c <= bin_hi):
-                    weights[i] += v * (0.75 * (body_ov / max(b_hi - b_lo, step * 0.25)) + 0.25)
-                elif wick_ov > 0.0:
-                    weights[i] += v * 0.20 * (wick_ov / max(h - l, step))
+                    weights[i] += v * (0.75 * (body_ov / body_den) + 0.25)
+                else:
+                    wick_ov = max(0.0, min(h, bin_hi) - max(l, bin_lo))
+                    if wick_ov > 0.0:
+                        weights[i] += v * 0.20 * (wick_ov / wick_den)
         best_i = max(range(bins), key=weights.__getitem__)
         return val + (best_i + 0.5) * step
+
 
     def bracket(self) -> Optional[ActiveBracket]:
         if not self.bars:
             return None
         idx = len(self.bars) - 1
-        c = self.bars[-1][4]
+        c = self._closes[-1]
         atr = self.units[-1]
 
         if self.active_box is not None:
@@ -529,58 +572,62 @@ class TrueBalanceDetector:
                 active_box=b, support=sup, resistance=res,
             )
 
-        candidates_sup: list[BracketLevel] = []
-        candidates_res: list[BracketLevel] = []
+        sup_limit = c + 0.2 * atr
+        res_limit = c - 0.2 * atr
+        best_sup_key: Optional[tuple[int, float]] = None
+        best_sup_args: Optional[tuple] = None
+        best_res_key: Optional[tuple[int, float]] = None
+        best_res_args: Optional[tuple] = None
 
         for hb in reversed(self.history_boxes[-6:]):
             if hb.broken_index is not None and idx - hb.broken_index > self.p.keep_flipped_bars:
                 continue
-            if hb.state == "BROKEN_UP" and c >= hb.val:
-                candidates_sup.append(BracketLevel(
-                    role="SUPPORT", source_kind="FLIPPED_BOX_EDGE",
-                    inner=hb.hi_ext, outer=hb.vah,
-                    opposite=(hb.val if self.p.reentry_enabled else None), poc=hb.poc,
-                    quality=hb.quality, rotations=hb.rotations, width_atr=hb.width_atr,
-                    origin_index=hb.broken_index or hb.end_index, box_id=hb.box_id,
-                ))
-            elif hb.state == "BROKEN_DOWN" and c <= hb.vah:
-                candidates_res.append(BracketLevel(
-                    role="RESISTANCE", source_kind="FLIPPED_BOX_EDGE",
-                    inner=hb.lo_ext, outer=hb.val,
-                    opposite=(hb.vah if self.p.reentry_enabled else None), poc=hb.poc,
-                    quality=hb.quality, rotations=hb.rotations, width_atr=hb.width_atr,
-                    origin_index=hb.broken_index or hb.end_index, box_id=hb.box_id,
-                ))
+            if hb.state == "BROKEN_UP" and c >= hb.val and hb.vah <= sup_limit:
+                key = (1, hb.hi_ext)
+                if best_sup_key is None or key > best_sup_key:
+                    best_sup_key = key
+                    best_sup_args = (
+                        "SUPPORT", "FLIPPED_BOX_EDGE", hb.hi_ext, hb.vah,
+                        hb.val if self.p.reentry_enabled else None, hb.poc,
+                        hb.quality, hb.rotations, hb.width_atr,
+                        hb.broken_index or hb.end_index, hb.box_id,
+                    )
+            elif hb.state == "BROKEN_DOWN" and c <= hb.vah and hb.val >= res_limit:
+                key = (0, hb.lo_ext)
+                if best_res_key is None or key < best_res_key:
+                    best_res_key = key
+                    best_res_args = (
+                        "RESISTANCE", "FLIPPED_BOX_EDGE", hb.lo_ext, hb.val,
+                        hb.vah if self.p.reentry_enabled else None, hb.poc,
+                        hb.quality, hb.rotations, hb.width_atr,
+                        hb.broken_index or hb.end_index, hb.box_id,
+                    )
 
         half_w = 0.35 * atr
-        for sw in reversed(self.swings[-12:]):
-            if sw.kind == "LOW" and sw.price < c:
-                candidates_sup.append(BracketLevel(
-                    role="SUPPORT", source_kind="MAJOR_SWING",
-                    inner=max(sw.body_edge, sw.price + half_w), outer=sw.price,
-                    opposite=None, poc=None, quality=0.50, rotations=1,
-                    width_atr=0.0, origin_index=sw.index,
-                ))
-            elif sw.kind == "HIGH" and sw.price > c:
-                candidates_res.append(BracketLevel(
-                    role="RESISTANCE", source_kind="MAJOR_SWING",
-                    inner=min(sw.body_edge, sw.price - half_w), outer=sw.price,
-                    opposite=None, poc=None, quality=0.50, rotations=1,
-                    width_atr=0.0, origin_index=sw.index,
-                ))
+        if best_sup_key is None or best_sup_key[0] == 0 or best_res_key is None or best_res_key[0] == 1:
+            for sw in reversed(self.swings[-12:]):
+                if sw.kind == "LOW" and sw.price < c and sw.price <= sup_limit:
+                    inner = max(sw.body_edge, sw.price + half_w)
+                    key = (0, inner)
+                    if best_sup_key is None or key > best_sup_key:
+                        best_sup_key = key
+                        best_sup_args = (
+                            "SUPPORT", "MAJOR_SWING", inner, sw.price,
+                            None, None, 0.50, 1, 0.0, sw.index, None,
+                        )
+                elif sw.kind == "HIGH" and sw.price > c and sw.price >= res_limit:
+                    inner = min(sw.body_edge, sw.price - half_w)
+                    key = (1, inner)
+                    if best_res_key is None or key < best_res_key:
+                        best_res_key = key
+                        best_res_args = (
+                            "RESISTANCE", "MAJOR_SWING", inner, sw.price,
+                            None, None, 0.50, 1, 0.0, sw.index, None,
+                        )
 
-        nearest_sup = max(
-            (s for s in candidates_sup if s.outer <= c + 0.2 * atr),
-            key=lambda s: (1 if s.source_kind == "FLIPPED_BOX_EDGE" else 0, s.inner),
-            default=None,
-        )
-        nearest_res = min(
-            (r for r in candidates_res if r.outer >= c - 0.2 * atr),
-            key=lambda r: (0 if r.source_kind == "FLIPPED_BOX_EDGE" else 1, r.inner),
-            default=None,
-        )
+        nearest_sup = BracketLevel(*best_sup_args) if best_sup_args is not None else None
+        nearest_res = BracketLevel(*best_res_args) if best_res_args is not None else None
         return ActiveBracket(
             index=idx, close=c, atr=atr, mode="MIGRATION",
             active_box=None, support=nearest_sup, resistance=nearest_res,
         )
-

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from market_operator.balance_detect import BalanceBox
+from market_operator.true_balance import ActiveBracket, BracketLevel
 from market_operator.structure import (
     MarketStructure,
     Params,
@@ -29,7 +29,6 @@ from market_operator.structure import (
 from market_operator.events import EventDetector
 
 BASE_TS = 1_700_000_000_000
-CONFIG = "config/defaults.json"
 
 
 def _mk(bars, o, h, l, c):
@@ -80,7 +79,7 @@ def make_random_df(n=220, seed=42):
 
 
 def test_params_from_json_matches_frozen_priors():
-    p = Params.from_json(CONFIG)
+    p = Params()
     assert p.atr_n == 14 and p.k_rev == 1.0 and p.k_zw == 0.5
     assert p.k_bm == 0.1 and p.k_rj == 0.3 and p.k_span == 3.0
     assert p.k_room == 2.0 and p.tol_atr == 0.1
@@ -90,7 +89,7 @@ def test_params_from_json_matches_frozen_priors():
 
 
 def test_atr_warmup_zero_then_wilder_exact():
-    p = Params.from_json(CONFIG)  # atr_n = 14
+    p = Params()  # atr_n = 14
     bars = []
     calm(bars, 100.0, 0.5, 14)              # tr = 1.0 × 14
     bar(bars, 100.0, 102.0, 100.0, 101.0)   # tr = 2.0(含跳空幅度)
@@ -122,7 +121,7 @@ def test_atr_warmup_zero_then_wilder_exact():
 
 
 def test_pivot_invariants_on_random_walk():
-    p = Params.from_json(CONFIG)
+    p = Params()
     df = make_random_df()
     s = MarketStructure(p)
     feed_all(s, list(df.itertuples(index=False, name=None)))
@@ -215,7 +214,7 @@ def _snapshot(structure, events_new):
 
 def test_prefix_invariance_structure_and_events():
     """先喂 t 根得到的认知 == 喂全部后回看在 t 时刻的认知(多切点)。"""
-    p = Params.from_json(CONFIG)
+    p = Params()
     df = make_random_df()
     bars = list(df.itertuples(index=False, name=None))
     cuts = list(range(25, len(bars), 15)) + [len(bars) - 1]
@@ -250,7 +249,7 @@ def test_incremental_equals_batch_replay():
     df = make_random_df()
     structure_r, events_r = replay(df)
 
-    det = EventDetector(Params.from_json(CONFIG))
+    det = EventDetector(Params())
     events_m = []
     for i, row in enumerate(df.itertuples(index=False)):
         if i % 3 == 0:
@@ -328,7 +327,7 @@ def test_balance_box_windows_are_params_not_magic_numbers():
 
 
 class _FakeBoxDetector:
-    """只提供 ``_sync_balance_boxes`` 用到的三个面:push/bars/score。"""
+    """提供当前检测器的 push → ActiveBracket 契约。"""
 
     def __init__(self, boxes, bars):
         self._boxes = list(boxes)
@@ -336,9 +335,26 @@ class _FakeBoxDetector:
 
     def push(self, bar, unit):
         self.bars.append(bar)
-
-    def score(self):
-        return [BalanceBox(**b) for b in self._boxes]
+        support = resistance = None
+        if self._boxes:
+            box = self._boxes[0]
+            support = BracketLevel(
+                role="SUPPORT", source_kind="BOX_EDGE",
+                inner=box["lo"] + 0.5 * unit, outer=box["lo"],
+                opposite=box["hi"], poc=None, quality=box["quality"],
+                rotations=box["rotations"],
+                width_atr=(box["hi"] - box["lo"]) / unit,
+                origin_index=box["start_index"],
+            )
+            resistance = replace(
+                support, role="RESISTANCE", inner=box["hi"] - 0.5 * unit,
+                outer=box["hi"], opposite=box["lo"],
+            )
+        return ActiveBracket(
+            index=len(self.bars) - 1, close=bar[4], atr=unit,
+            mode="IN_BOX" if self._boxes else "MIGRATION",
+            active_box=None, support=support, resistance=resistance,
+        )
 
 
 def _box(lo, hi, rotations=1, start=0, end=2):

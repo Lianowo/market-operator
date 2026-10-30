@@ -1,0 +1,42 @@
+{
+  "commit": "49c066fed7bb2946d92529a6465380db41113a2d",
+  "differences": {},
+  "scenarios": {
+    "dev@1": {
+      "trade_count": 443,
+      "trades": "8b74e70462956717476574b91c10c3cfc27392feed59c009e7e4538470106f25",
+      "equity": "ddaf7498c384f6277ec81aa23ca6ae8b7453cc29db6b8f5ef10238d4a0c6d3e5",
+      "counters": "a8d638b01e3416cc268eaa72932c68f7b4640cbda9c5f2dc18ae456c3f041459"
+    },
+    "dev@1.5": {
+      "trade_count": 442,
+      "trades": "30cb9800414049d1444202560df4aec0fc0c20f4159ae9599bd9804e7433e0d2",
+      "equity": "f78116ec386db4c50222893a8c09c9343c5666cd8d67fae7d4ade2d1a5b2d756",
+      "counters": "2aa13edc640dfd82d3005b5e3d7c64af1f80c112967d4162023c7e3d6992d8c6"
+    },
+    "test@1": {
+      "trade_count": 230,
+      "trades": "9a2ea1a03e0a816c8a12d6336d7206a954de6537b3cc2306edc2c38aaed9bb1f",
+      "equity": "3e684a807ec943db468cd5d442d122e7125ca2afcd8087b90352e5cb732b2f4e",
+      "counters": "03228ead9cbe0b8474d2f4838482e68ef0acfb2d521ca0fea58ec9ea686b61d3"
+    },
+    "test@1.5": {
+      "trade_count": 227,
+      "trades": "48a8e096c5b393f2799037eb3729a5551f56dd3cdf8b9b1cc124514e30076ff5",
+      "equity": "f7fb503ba90ac3c06e986a476fdf6666f3e64ed2a471567701a1f7d0da59e7b6",
+      "counters": "4b8c869df745842976419894d062fbeb00d75d6206a9ff70b73c4d7fcd519489"
+    },
+    "full@1": {
+      "trade_count": 673,
+      "trades": "b3342afe95b70a1a5ca83d72978864316ff953ae060f82b2915cf8e3f0c59236",
+      "equity": "90d2ce71f7bd8332f449c68754f96a469e4fcbc5634aedf5d5797d46b15cfc42",
+      "counters": "ae7e13415f0ff68b351074aa398e0c98905e667267fd3fa04d1388a7dd9c0180"
+    },
+    "full@1.5": {
+      "trade_count": 669,
+      "trades": "6394aa19848392ab8196fc7ae9824ec5a8b2cdb05c03fc9783f837f8d243547a",
+      "equity": "b4309ba794f2d62dc969dfe2fcdd7d275d5985873b1d562463b295473df3366e",
+      "counters": "6098884ab70af1f9f07f0f9cd57ff080c55ebb073a2d9b1c85b5e8b2b88dc20d"
+    }
+  }
+}

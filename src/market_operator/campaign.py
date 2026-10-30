@@ -3,7 +3,7 @@
 规范地位:多尺度战役引擎是规范语义链的执行/风险层(唯一,不重命名)。
 语义合并后 A/B 臂切换移除,持仓侧接线固化为原臂 B(turtle)口径:
 PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
-见 routing docstring。A/B 判定历史与双臂归档见 research/rounds/v6/。
+见 routing docstring。历史实现由 Git 提交追溯。
 
 基础设施(非策略变更):每 (symbol, TF ∈ {1h,2h,4h,12h,1d}) 为一个独立
 战役 —— 自有 EventDetector 认知缓存(SymbolCognition,TF 帧)、策略状态
@@ -51,6 +51,7 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -66,79 +67,18 @@ from .replay import (
     assert_aligned,
     assert_fill_after_decision,
     annotate_excursions,
-    reconstruct_trades_v5,
+    reconstruct_trades,
 )
 from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, floor_step
 from .position import PositionManager
-from .repairs import prior_moves_delta, range_quantile
 from .split import split_boundary
 from .routing import RouterParams, MarketRouter
 from .structure import Params
 
-# v14 施工包(docs/v14-protocol.md;None ⇒ canonical 逐位):续涨/fade 家族表
-# 与协议原文一致(BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED 续涨;LEVEL_REJECTED/BREAKOUT_FAILED/EDGE_RECLAIMED fade;TREND_RESUMED/RANGE_ROTATED 不在两族,按 fill_model
-# 兜底),不写死阈值 —— 阈值全在 config/v14.json。
-STOP_FAMILY = ("BREAKOUT_ACCEPTED", "STRUCTURE_BROKEN", "FLIP_RETESTED")
-FADE_FAMILY = ("BREAKOUT_FAILED", "LEVEL_REJECTED", "EDGE_RECLAIMED")
-
-
 @dataclass(frozen=True)
-class ArmConfig:
-    """v14 arm 接线(docs/v14-protocol.md §判定;None ⇒ canonical 逐位)。
+class ExecutionConfig:
+    """Current position-management and execution settings."""
 
-    fill_model ∈ {"canonical","exchange_maker","virtual_limit"}(C2);stop_entry
-    开 C3(续涨家族预埋 stop,超时 stop_wait_tf×TF 作废);ladder_fade 开 C4
-    (fade 家族限价拆 ladder_slices 份于 zone 前缘/中/内缘,各 1/slices 风险
-    份额,maker 成交,未成交过期/作废);k_bm 为破位参考余量(= Params.k_bm
-    冻结先验,config/v14.json 同值照抄,非新先验)。全部默认关(canonical)。
-
-    v15 加性扩展(docs/v15-protocol.md;c2_family=None ⇒ 逐位 v14 行为):
-    c2_family 非 None 时 C2 maker 双模式只接管该家族事件(v15 合成件 =
-    fade 家族 BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED),其余事件(TREND_RESUMED/RANGE_ROTATED 与未匹配 C3 的续涨族)不走 C2,
-    落回 canonical 提交路径;阈值协议写死,阈值来源 config/v15.json。
-
-    v16 加性扩展(docs/v16-protocol.md,收割婚配;全 None ⇒ 逐位旧行为):
-    harvest_family 非 None 时持仓侧 PositionManager 进入收割婚配 —— 家族
-    (fade BREAKOUT_FAILED/LEVEL_REJECTED/EDGE_RECLAIMED)持仓达对面结构缘全部落袋、禁用 trail;time_cap_bars
-    (= k_cap_hours,48×TF 小时认知 bar 根数)非 None 开时间帽:到期且
-    MFE < cap_mfe_min(恰界 inclusive 持有)⇒ 出;新开关注入见
-    run_campaigns 的 PositionManager 接线,阈值来源 config/v16.json。
-
-    v18 加性扩展(docs/v18-protocol.md §R4;False ⇒ 逐位 v16 收割行为):
-    harvest_ladder3=True 时收割模式持仓改三段收割(缘前 25%/50% 各落袋
-    1/6 仓,到缘收净;无 trail 无保本;阈值协议写死,config/v18.json 同名
-    照抄)。注:R4 三段收割(持仓侧兑现拆段)与 v14 C4 ladder_fade(入场
-    限价拆层,沿用 v14 ladder 语义未动)是不同语义词,勿混。
-
-    v19 加性扩展(docs/v19-protocol.md §3;False ⇒ 逐位旧行为):early_exit
-    =True 时持仓侧启用夭折处置(半窗 MFE<0.3R / 连续≥3 根收盘全逆出仓,
-    阈值协议写死 config/v19.json,数源 position.EARLY_HALF_MFE_R /
-    EARLY_CONSEC_N;半窗基数 = time_cap_bars)。
-
-    v20 加性扩展(v20 收尾 S1/S2;全 False ⇒ 逐位旧行为):trail_arm_gate
-    =True 时持仓侧 S1 结构脉冲激活 trail(cont 家族 BREAKOUT_ACCEPTED/STRUCTURE_BROKEN/FLIP_RETESTED + TREND_RESUMED,trail
-    扶手只在 MFE≥1R 或新确认顺向 pivot 之后上线,Threshold 数源
-    position.S1_TRAIL_ARM_MFE_R / S1_FAMILY);harvest_fade_2leg=True 时持
-    仓侧 S2 fade 双格收割(缘前 25% 落袋 40% 仓、缘收剩 60%,数源
-    position.S2_LEVEL / S2_BANK_FRAC;与 harvest_ladder3 互斥,R4 死亡名
-    单不接线)。决策侧 S3/S4 不在本结构(在 lifecycle.V20Params,经
-    router_factory/router_params 注入)。
-    """
-
-    fill_model: str = "canonical"
-    stop_entry: bool = False
-    stop_wait_tf: int = 12
-    ladder_fade: bool = False
-    ladder_slices: int = 3
-    k_bm: float = 0.1
-    c2_family: Optional[tuple] = None
-    harvest_family: Optional[tuple] = None
-    time_cap_bars: Optional[int] = None
-    cap_mfe_min: float = 0.5
-    harvest_ladder3: bool = False
-    early_exit: bool = False
-    trail_arm_gate: bool = False
-    harvest_fade_2leg: bool = False
     breakeven_on_reduce: bool = True
     reject_opp_lock_frac: float = 0.0
     # v21.7 锁利口径已收敛为单一参数 `reject_opp_lock_frac`(符号=arming 口径,
@@ -170,20 +110,19 @@ class ArmConfig:
 def require_exec_pivots(pivot_exec: bool, frames) -> None:
     """`pivot_exec` 的装配前置条件:帧上必须真有细周期 pivot 流。
 
-    `CampaignFrame.exec_pivots` 目前只有 `scripts/_diag_v21_scale.py` 会装配;
+    `CampaignFrame.exec_pivots` 由显式提供细周期 pivot 的调用方装配;
     `scenario.build_frames`(验收/生产同源链)不装配。若开关打开而帧上没有数据,
     回放逐位等于关闭 —— 这种"静默无效"最容易被读成"该机制没有价值",因此在这里
     直接报错,把"没接上"和"没用"区分开。
     """
     if pivot_exec and not any(getattr(f, "exec_pivots", None) for f in frames):
         raise ValueError(
-            "pivot_exec=True 但场景帧没有 exec_pivots:该字段只由 "
-            "scripts/_diag_v21_scale.py 装配。请改用 exit_exec,或先补齐细周期 "
+            "pivot_exec=True 但场景帧没有 exec_pivots。请改用 exit_exec,或先补齐细周期 "
             "pivot 装配,否则该开关会静默无效。")
 
 
-def _lc(counters: dict, key: str, n: int = 1) -> None:
-    """v14 惰性计数(仅 arm 路径使用;arm0 计数表与 canonical 逐键一致)。"""
+def _increment_counter(counters: dict, key: str, n: int = 1) -> None:
+    """Accumulate optional diagnostic counters without prepopulating keys."""
     counters[key] = counters.get(key, 0) + n
 
 
@@ -200,9 +139,9 @@ def _count_go(counters: dict, events, go_set: frozenset,
       拒绝/闸门挡下的都不改变这个计数(拒绝原因另有 counters)。
     """
     n = sum(1 for e in events if (e.id, e.direction) in go_set)
-    _lc(counters, "go_events", n)
+    _increment_counter(counters, "go_events", n)
     if mic:
-        _lc(counters, "mic_go_events", n)
+        _increment_counter(counters, "mic_go_events", n)
     return n
 
 
@@ -324,25 +263,6 @@ def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
-# 组合容量:口径唯一,全部委托给 capacity 模块(决策门与成交裁剪同一公式)
-# ---------------------------------------------------------------------------
-
-
-def _outstanding_worst_case(broker: Broker,
-                            tf_filter: Optional[str] = None) -> float:
-    """准入时刻已占用的最坏情景(货币单位)。
-
-    实现只有一处(capacity 模块);本函数是它的**接缝**:冻结诊断脚本
-    ``scripts/_diag_v21_abcd.py`` 在此 monkeypatch 以复现历史数字,因此名字与
-    签名(``(broker, tf_filter)``)必须保留。
-    """
-    symbol = f"@{tf_filter}" if tf_filter else None
-    return broker.capacity_usage(broker.equity_mtm(), symbol,
-                                 moment=capacity.DECISION)[1]
-
-
-
-# ---------------------------------------------------------------------------
 # 引擎:全部战役合并执行细帧时间轴
 # ---------------------------------------------------------------------------
 
@@ -369,8 +289,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   router_params: Optional[RouterParams] = None,
                   router_factory: Optional[type] = None,
                   enable_mic: bool = False,
-                  arm: Optional[ArmConfig] = None,
-                  mic_families: Optional[tuple] = None,
+                  arm: Optional[ExecutionConfig] = None,
                   router_params_by_tf: Optional[dict] = None,
                   tf_cap_by_tf: Optional[dict] = None,
                   dynamic_risk_tiers: Optional[list] = None,
@@ -382,63 +301,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                   directional_cap_frac: Optional[float] = None,
                   ) -> BacktestResult:
 
-    """全部 (symbol, TF) 战役合并回放(turtle 唯一语义);主循环与缝见模块
-    docstring。A/B 臂切换已随语义合并移除(臂 B 固化,见 routing docstring)。
-
-    v8 接插缝(非策略变更):`router_factory` = 可调用 (router_params) → 路由
-    实例,默认 None ⇒ MarketRouter(行为逐位不变);v8 轮传入 V8Router
-    (docs/v8-protocol.md,strategy_v8.py),执行/持仓/容量/账目层不变。
-
-    v10 接插缝(docs/v10-protocol.md §A;enable_mic=False ⇒ 逐位旧行为):
-    enable_mic=True 要求全部战役挂载 MicCognition;trigger 帧时间轴并入主
-    循环 —— mic 事件知时 = trigger bar 收盘、mic 市价 = 次一 trigger bar
-    开盘、mic 挂单自次一 trigger bar 可成交;认知收盘决策(bar 事件)、§8
-    收割、mark/费用/组合容量口径与粒度不变(纯增量:非 mic 订单的撮合时序
-    逐位照旧)。
-
-    v14 施工钩(docs/v14-protocol.md;arm=None ⇒ 逐位旧行为,arm0 与
-    canonical 产物数值一致由对照测试钉死):arm 非 None 时,_submit_decisions
-    对过闸决策按 _arm_route 分流(C3 stop/C4 分层/C2 maker 双模式);质量层
-    (C1 五问/C5 配注)在路由侧(quality.V14Router,经 router_factory 注入)。
-
-    v16 施工钩(docs/v16-protocol.md;arm=None ⇒ 逐位旧行为):arm.harvest_
-    family/time_cap_bars 非 None 时持仓侧 PositionManager 进入收割婚配
-    (fade 对面结构缘收割全平+禁 trail,时间帽 MFE 恰界 inclusive);三闸/
-    定档/fade 前缘改单/结构锚重建在路由侧(harvest.V16Router,经
-    router_factory/router_params 注入);提交差分(fade maker / 续涨
-    stop-entry)沿用 ArmConfig 的 C2/C3 通道。
-
-    v17 加性钩(docs/v17-directive.md;mic_families=None ⇒ 逐位旧行为):
-    mic_families 非 None 时 trigger 帧 mic 事件流按事件族过滤后才入路由
-    (arm-C = 仅续涨族触发,fade 归 bar;被过滤事件的频次如实记
-    mic_family_filtered,仅该路径新增计数键);arm 非 None 时 mic 决策
-    与认知收盘决策过同一 _arm_route 分流(C2 maker / C3 stop-entry,
-    阈值=frozen 语境 ATR;arm=None 时与 v13 行为逐位一致:mic 决策走
-    canonical 提交)。
-
-    v18 加性钩(docs/v18-protocol.md;全默认 ⇒ 逐位旧行为):路由实现
-    set_ctx18 时(repairs.V18Router),每次决策前注入 causal 决策语境
-    (rngq/pmd,窗口取路由冻结口径;bar 路径取认知帧,mic 路径 rngq 取
-    trigger 帧、pmd 取最近已收认知三根);arm.harvest_ladder3=True 时
-    持仓侧三段收割,其 REDUCE 段落市量价提交(不转 _arm_reduce_limit
-    的 target_1 maker),段落/缘收计数 v18_r4_partial_banked /
-    v18_r4_edge_collect(仅该路径新增计数键)。
-
-    v19 加性钩(docs/v19-protocol.md;全默认 ⇒ 逐位旧行为):注入语境增
-    "mic" 标志(tiered.V19Router 的"不 mic-only 处"判定;V18Router 只读
-    rngq/pmd 不受影响);arm.early_exit=True 时持仓侧启用夭折处置(半窗
-    MFE<0.3R / 连续≥3 逆根,position.py,计数 position 持仓侧 intent
-    reason 桶标签 early_half_mfe/early_consec 路径)。v19 默认执行
-    (fill_model="canonical" + stop_entry=False 的 arm)不退 _arm_route:
-    决策全落 canonical 主路(market 提交),与 arm=None 数值逐位一致。
-
-    v20 加性钩(v20 收尾;全默认 ⇒ 逐位旧行为):arm.trail_arm_gate /
-    arm.harvest_fade_2leg 接通持仓侧 S1 扶手闸 / S2 双格收割(position.py);
-    S2 段/缘收计数 v20_s2_partial_banked / v20_s2_edge_collect(仅该路径
-    新增计数键);决策侧 S3(TRANSITION fade 事件层抑制)与 S4(LEVEL_REJECTED 前缘限
-    价改单,落 canonical 限价主路 = FLIP_RETESTED G3 同一通道)在 lifecycle.V20Router,
-    经 router_factory/router_params 注入,引擎零新增缝。
-    """
+    """Replay campaigns in timestamp/key order through the production chain."""
     if segment not in ("full", "dev", "test"):
         raise ValueError(f"unknown segment {segment}")
     if not (0.0 < portfolio_cap_frac <= 1.0):
@@ -467,22 +330,6 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 breakeven_on_reduce=(arm.breakeven_on_reduce if arm is not None
                                      else True),
                 time_stop=False,             # §8.6 关闭(原臂 B 接线)
-                # v16 收割婚配接线(arm=None ⇒ 全 None,逐位 canonical)
-                harvest_family=(arm.harvest_family if arm is not None
-                                else None),
-                time_cap_bars=(arm.time_cap_bars if arm is not None
-                               else None),
-                cap_mfe_min=(arm.cap_mfe_min if arm is not None else 0.5),
-                # v18 R4 三段收割接线(arm=None ⇒ False,逐位 v16 收割)
-                harvest_ladder3=(arm.harvest_ladder3 if arm is not None
-                                 else False),
-                # v19 夭折处置接线(arm=None ⇒ False,逐位旧行为)
-                early_exit=(arm.early_exit if arm is not None else False),
-                # v20 S1 扶手闸 / S2 双格收割接线(arm=None ⇒ False,逐位旧行为)
-                trail_arm_gate=(arm.trail_arm_gate if arm is not None
-                                else False),
-                harvest_fade_2leg=(arm.harvest_fade_2leg if arm is not None
-                                   else False),
                 reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
                                       else 0.0),
                 giveback_atr_k=(arm.giveback_atr_k if arm is not None
@@ -543,7 +390,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     exit_exec_trail = bool(arm.exit_exec_trail) if arm is not None else True
     pivot_exec = bool(arm.pivot_exec) if arm is not None else False
     # v21.7:`pivot_exec` 只在帧携带 `exec_pivots` 时才有意义 —— 该字段目前只有
-    # `scripts/_diag_v21_scale.py` 装配,`scenario.build_frames` 不装配。缺数据时
+    # 显式调用方装配,`scenario.build_frames` 不装配。缺数据时
     # 静默放行会产出"开关无效"的读数,而它极易被误读成"该机制无效"(v21.6 的
     # pivot_exec 结论就来自手工装配的脚本,不是这条生产链)。宁可直接报错。
     require_exec_pivots(pivot_exec, (st.frame for st in states.values()))
@@ -576,7 +423,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 #     每根已收盘执行细 bar 推进一次**价格型**出场(§8.2 目标/
                 #     锁利、§8.3 移动防线、§8.1 兜底),让 2h/4h/1d 仓位不必
                 #     等到认知收盘才收网。只碰持仓管理 —— 路由/准入/开仓、
-                #     事件消费与时间类计数(bars_held/§8.6/v19 半窗)全部不动,
+                #     事件消费与时间类计数(bars_held/§8.6)全部不动,
                 #     ATR 沿用最近一次认知 bar 的冻结值。
                 if exit_exec or pivot_exec:
                     pm_pos = st.pos_mgr.positions.get(sym)
@@ -587,7 +434,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                         # 逐根喂入才能提前推进§8.3(空列表 ⇒ 与旧路径等价)
                         pv = f.exec_pivots.get(ts, ()) if pivot_exec else ()
                         if exit_exec or pv:
-                            _lc(counters, "exit_exec_ticks" if exit_exec
+                            _increment_counter(counters, "exit_exec_ticks" if exit_exec
                                 else "pivot_exec_ticks")
                             m2 = st.pos_mgr.on_bar(sym, q, st.last_atr,
                                                    new_pivots=pv,
@@ -598,13 +445,12 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
                 for i in f.close_edge.get(ts, ()):
                     _cognition_step(st, broker, i, counters, cap_skips,
-                                    seg_bounds[key], go_set, n_fill, arm=arm)
+                                    seg_bounds[key], go_set, n_fill)
             if enable_mic:
                 a = mic_index[key].get(ts)
                 if a is not None:
                     _mic_trigger_step(st, broker, a, ts, counters, cap_skips,
-                                      seg_bounds[key], go_set, n_fill,
-                                      arm=arm, mic_families=mic_families)
+                                      seg_bounds[key], go_set, n_fill)
         if ts in exec_set:
             equity_rows.append((ts, broker.equity_mtm(), broker.cash,
                                 broker.unrealized(), broker.funding_accrued(),
@@ -663,10 +509,8 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                             _cog_index_of(f, ts),
                             reenter_invalid_px=re_px)
             counters["opens_filled"] += 1
-            if m.get("entry_mode") == "stop_entry":        # v14 C3 触发成交
-                _lc(counters, "stop_entry_fills")
-            elif m.get("entry_mode") == "virtual_limit":   # v14 C2 虚拟成交
-                _lc(counters, "virtual_entry_fills")
+            if m.get("entry_mode") == "virtual_limit":
+                _increment_counter(counters, "virtual_entry_fills")
         elif k == "REDUCE":
             # TIMEOUT_TO_TAKER 市价转换(非 deferred 语义:pos_mgr 已在决策时
             # 按 §8.2 立即记账,此处仅同步 broker 侧 stop)
@@ -681,10 +525,6 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                 detail="position closed by EXIT/LIQUIDATION; resting "
                        "limit canceled")
             counters["resting_canceled"] += len(rows_cancel)
-            for rc in rows_cancel:                    # v14:未成交份作废归因
-                ot = rc["meta"].get("order_type")
-                if ot is not None:
-                    _lc(counters, f"{ot}_canceled")
         elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
             counters["min_size_skips"] += 1
 
@@ -699,10 +539,6 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
         if k == "LIMIT_FILL":
             if row["meta"].get("role") == "reduce":
                 counters["reduce_limit_fills"] += 1
-            elif row["meta"].get("ladder_add"):
-                # v14 C4 分层合并份:持仓已开张,只入账与计数(不重复 open)
-                _lc(counters, "ladder_fills")
-                _lc(counters, "ladder_add_fills")
             else:
                 counters["limit_fills_entry"] += 1
                 m = row["meta"]
@@ -713,28 +549,15 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                                 str(m.get("event_id")), ts,
                                 _cog_index_of(f, ts),
                                 reenter_invalid_px=re_px)
-                if m.get("order_type") == "ladder_entry":   # v14 C4 首份
-                    _lc(counters, "ladder_fills")
-                elif m.get("order_type") == "maker_entry":  # v14 C2 真挂单
-                    _lc(counters, "maker_entry_fills")
         elif k == "EXPIRED":
             counters["limit_expired"] += 1
-            ot = row["meta"].get("order_type")             # v14:漏单/作废归因
-            if ot is not None:
-                _lc(counters, f"{ot}_expired")
-        elif k == "TRIGGER":                               # v14:价达/穿过触发
-            if row["reason_code"] == "STOP_TRIGGER":
-                _lc(counters, "stop_entry_triggers")
-            elif row["reason_code"] == "VIRTUAL_TRIGGER":
-                _lc(counters, "virtual_entry_triggers")
+        elif k == "TRIGGER" and row["reason_code"] == "VIRTUAL_TRIGGER":
+            _increment_counter(counters, "virtual_entry_triggers")
         elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
             counters["reduce_timeout_taker"] += 1
         elif k == "CANCEL":
             if row.get("reason_code") == "MOVE_ALREADY_PLAYED_OUT":
-                _lc(counters, "watch_canceled_played_out")
-            ot = row["meta"].get("order_type")             # v14:E1撤单/平仓撤销
-            if ot is not None:
-                _lc(counters, f"{ot}_canceled")
+                _increment_counter(counters, "watch_canceled_played_out")
         elif k == "SKIP" and row["reason_code"] == "MIN_SIZE":
             counters["min_size_skips"] += 1
             counters["limit_min_size_skips"] += 1
@@ -742,18 +565,12 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
                       counters: dict, cap_skips: list, bounds: dict,
-                      go_set: frozenset, n_fill: int,
-                      arm: Optional[ArmConfig] = None,
-                      mic_families: Optional[tuple] = None) -> None:
+                      go_set: frozenset, n_fill: int) -> None:
     """v10 §A trigger bar 收盘推进:①' mic 市价撮合 → ②' mic 挂单 → mic 路由。
 
     §8 收割/mark/费用计提不在此处(canonical 粒度不变);决策只在已收盘
     trigger bar 上做出,成交严格在后(broker 行内断言)。
 
-    v17 加性(docs/v17-directive.md):mic_families 非 None ⇒ mic 事件流先
-    按事件族过滤再入路由(arm-C 仅续涨族,fade 归 bar);arm 非 None ⇒
-    mic 决策过同一 _arm_route(C2 maker / C3 stop-entry,阈值 mic 冻结
-    语境 ATR)。两参默认 None ⇒ 与 v13 行为逐位一致(canonical 提交)。
     """
     f = st.frame
     key, sym = f.key, f.symbol
@@ -775,17 +592,7 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     new_events = mic.events_by.get(a)
     if not new_events:
         return
-    if mic_families is not None:                     # v17 家族过滤(arm-C)
-        kept = [e for e in new_events if e.id in mic_families]
-        n_sup = len(new_events) - len(kept)
-        if n_sup:
-            _lc(counters, "mic_family_filtered", n_sup)
-        new_events = kept
-        if not new_events:
-            return
     _count_go(counters, new_events, go_set, mic=True)
-    _inject_ctx18(st, cog_bars=f.cog.bars, i=i,
-                  rngq_bars=mic.bars, rngq_i=a)
     decisions = st.router.on_bar(
         sym, mic.bars[a], a, mic.views.get(a), mic.atrs[a], new_events,
         position_open=broker.position_of(key) is not None,
@@ -797,17 +604,17 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     _submit_decisions(st, broker, decisions, ts, fill_after, ts,
                       {"mic": True, "cog_index": i}, counters, cap_skips,
                       n_fill,
-                      cancel_moment=ts + mic.trigger_tf_seconds * 1000,
-                      arm=arm, atr=mic.atrs[a])
+                      cancel_moment=ts + mic.trigger_tf_seconds * 1000)
 
 
 def _cog_index_of(frame: CampaignFrame, exec_ts: int) -> int:
     """执行细 bar 落回认知 bar 索引(成交 bar ∈ 认知区间断言)。"""
     ms_tf = frame.tf_hours * MS_1H
     bucket = exec_ts - (exec_ts % ms_tf)
-    for i, bar in enumerate(frame.cog.bars):
-        if int(bar[0]) == bucket:
-            return i
+    bars = frame.cog.bars
+    index = bisect_left(bars, bucket, key=lambda bar: int(bar[0]))
+    if index < len(bars) and int(bars[index][0]) == bucket:
+        return index
     raise AssertionError(f"{frame.key} exec ts {exec_ts} outside cognition")
 
 
@@ -818,57 +625,13 @@ def _rekey(intent: OrderIntent, key: str) -> OrderIntent:
                        ref_price=intent.ref_price, ts=intent.ts)
 
 
-def _inject_ctx18(st: _CampaignState, *, cog_bars, i: int,
-                  rngq_bars=None, rngq_i: Optional[int] = None) -> None:
-    """v18 决策语境注入(docs/v18-protocol.md;路由无 set_ctx18 ⇒ no-op,
-    canonical/v16/v17 逐位不变)。
-
-    rngq = 事件 bar 波幅在前 rngq_window 根波幅中的分位;bar 路径取认知
-    帧自身,mic 路径取 trigger 帧(事件 bar = 发射 trigger bar;pmd 恒取
-    最近已收三根认知 bar,窗口冻结口径)。读后即清的责任在路由侧。
-
-    v19 加性(docs/v19-protocol.md §2):ctx 增 "mic" 标志(trigger 收盘决
-    策 ⇒ True = "mic-only 处",bar 认知收盘 ⇒ False),供 v19 大蛋糕条款
-    "不 mic-only 处"判定;V18Router 只读 rngq/pmd,旧路由语义零改动。
-    """
-    setter = getattr(st.router, "set_ctx18", None)
-    if setter is None:
-        return
-    wq, wp = st.router.ctx18_windows()
-    rb_ = cog_bars if rngq_bars is None else rngq_bars
-    ri = i if rngq_i is None else rngq_i
-    setter({"rngq": range_quantile(rb_, ri, wq),
-            "pmd": prior_moves_delta(cog_bars, i, wp),
-            "mic": rngq_bars is not None})
-
-
 def _apply_mgmt(st: _CampaignState, broker: Broker, mgmt: list, t: int,
                 counters: dict, n_fill: int) -> None:
-    """§8 出场意图落地(认知收盘与执行细 bar 两条路径共用)。
-
-    循环体逐字搬自 `_cognition_step` 原实现:v18 R4 / v20 S2 的段落桶计数、
-    REDUCE 的 maker 尝试、其余一律 `broker.submit`。抽出来只是为了让
-    v21.6 的「执行细 bar 出场推进」与认知收盘走**同一落地口径** —— 粒度
-    开关不得改变下单语义,否则 A/B 读数会把两种差异混在一起。
-    """
+    """Submit management intents identically for both execution granularities."""
     key = st.frame.key
     for intent in mgmt:
         intent = _rekey(intent, key)
-        # v18 R4 / v20 S2:分层收割段落 = REDUCE 市价(次一执行细 bar 开盘,
-        # 不转 maker 限价;机器可读桶标签前缀只在对应开关开启时出现)
-        r4p = intent.kind is OrderKind.REDUCE and \
-            intent.reason.startswith("v16|target_partial|")
-        if r4p:
-            _lc(counters, "v20_s2_partial_banked"
-                if intent.reason.startswith("v16|target_partial|S2|")
-                else "v18_r4_partial_banked")
-        if intent.kind is OrderKind.EXIT and \
-                intent.reason.startswith("v16|target|R4|"):
-            _lc(counters, "v18_r4_edge_collect")
-        if intent.kind is OrderKind.EXIT and \
-                intent.reason.startswith("v16|target|S2|"):
-            _lc(counters, "v20_s2_edge_collect")
-        armed_r = (intent.kind is OrderKind.REDUCE and not r4p
+        armed_r = (intent.kind is OrderKind.REDUCE
                    and _arm_reduce_limit(broker, st, intent, t, n_fill))
         if armed_r:
             counters["reduce_limits_armed"] += 1
@@ -925,7 +688,7 @@ def _cancel_structurally_dead_entries(st: "_CampaignState", broker: Broker, key:
         if why is not None:
             reasons.append(why)
     # 槽位纪律是"每战役同时一仓一挂单";只有**全部**挂单都失效才整批撤,
-    # 避免把仍在观察的同族挂单误杀(如 v14 分层,生产 arm=None 时不会出现)。
+    # 避免把仍在观察的同族挂单误杀(当前观察挂单仍沿用整组撤单口径)。
     if not reasons or len(reasons) != len(orders):
         return
     cancel_ts = int(ts) + int(st.frame.tf_hours * MS_1H)
@@ -936,8 +699,7 @@ def _cancel_structurally_dead_entries(st: "_CampaignState", broker: Broker, key:
 
 def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                     counters: dict, cap_skips: list, bounds: dict,
-                    go_set: frozenset, n_fill: int,
-                    arm: Optional[ArmConfig] = None) -> None:
+                    go_set: frozenset, n_fill: int) -> None:
     """认知 bar i 收盘:§8 持仓管理 → v6 路由(段内才启用 OPEN)。"""
     f = st.frame
     key, sym = f.key, f.symbol
@@ -969,7 +731,6 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     if not (lo <= i < hi):
         return
     _count_go(counters, new_events, go_set)
-    _inject_ctx18(st, cog_bars=cog.bars, i=i)
     decisions = st.router.on_bar(
         sym, bar, i, cog.views.get(i), atr, new_events,
         position_open=broker.position_of(key) is not None,
@@ -977,15 +738,13 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar
     _submit_decisions(st, broker, decisions, t, fill_after, fill_after, {},
                       counters, cap_skips, n_fill,
-                      cancel_moment=t + f.tf_hours * MS_1H, arm=arm, atr=atr)
+                      cancel_moment=t + f.tf_hours * MS_1H)
 
 
 def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       t: int, fill_after: int, expiry_base: int,
                       extra_meta: dict, counters: dict, cap_skips: list,
-                      n_fill: int, cancel_moment: int,
-                      arm: Optional[ArmConfig] = None,
-                      atr: float = 0.0) -> None:
+                      n_fill: int, cancel_moment: int) -> None:
     """路由决策 → 组合容量闸 → broker 提交(canonical 认知收盘与 v10 mic 触发
     共用;t = 决策时刻标签(账本 decision_ts 口径,canonical 不变);
     fill_after/expiry_base:挂单窗口锚点;extra_meta:溯源附加 —— mic 路径
@@ -998,9 +757,6 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
     仍严格早于决策收盘时刻)⇒ 护栏/时标统一为收盘时刻,canonical 行为与
     既有断言(fill>decision、撤单晚于武装)不变。
 
-    v14 施工钩子(arm=None ⇒ canonical 逐位;仅 arm 非 None 时生效,全部经由
-    _arm_route 分流:C3 stop-entry 预埋 / C4 分层 / C2 maker 双模式,组合容量
-    闸与槽位纪律在其前、保持不变)。
     """
     key = st.frame.key
     for d in decisions:
@@ -1014,10 +770,6 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                 key, cancel_moment, reason_code="E1_PRIORITY",
                 detail=str(d.meta.get("reason")))
             counters["e1_priority_cancels"] += len(rows_cancel)
-            for rc in rows_cancel:                    # v14:未成交份作废归因
-                ot = rc["meta"].get("order_type")
-                if ot is not None:
-                    _lc(counters, f"{ot}_canceled")
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
@@ -1026,10 +778,8 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
         risk_per_unit = abs(d.intent.ref_price - d.hyp.invalid)
         qty_full = broker.qty_for_entry(equity, d.intent.ref_price,
                                         d.hyp.invalid, key, use_budget=False)
-        cap_frac, _used, _headroom, pool = broker.capacity_usage(
+        cap_frac, used, _headroom, pool = broker.capacity_usage(
             equity, key, moment=capacity.DECISION)
-        used = _outstanding_worst_case(
-            broker, st.frame.tf_label if pool == "tf" else None)
         delta = capacity.delta_exposure(
             qty_full, d.intent.ref_price, risk_per_unit,
             taker_fee=broker.taker_fee, slippage=broker.slippage,
@@ -1067,9 +817,6 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
 
 
         counters["open_intents"] += 1
-        if arm is not None and _arm_route(st, broker, d, arm, t, fill_after,
-                                          n_fill, atr, extra_meta, counters):
-            continue                                 # v14 路径已接管提交
         if d.kind == "market":
             broker.submit(
                 _rekey(d.intent, key), decision_ts=t,
@@ -1100,86 +847,7 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       **d.meta, **extra_meta}))
             counters["limits_armed"] += 1
             if d.meta.get("watch_entry"):
-                _lc(counters, "watch_entries_armed")
-
-
-# ---------------------------------------------------------------------------
-# v14 施工包提交分流(docs/v14-protocol.md C2/C3/C4;主路与容量闸不变)
-# ---------------------------------------------------------------------------
-
-
-def _arm_route(st: _CampaignState, broker: Broker, d, arm: ArmConfig,
-               t: int, fill_after: int, n_fill: int, atr: float,
-               extra_meta: dict, counters: dict) -> bool:
-    """v14 arm 语义提交分流;返回 True = 已由 arm 路径接管(主路 continue)。
-
-    分流序 = 家族特异性优先:C3(stop,续涨家族)> C4(分层,fade 家族)>
-    C2(maker/virtual 双模式,剩余全部入口 —— TREND_RESUMED/RANGE_ROTATED/未配 C3 时的续涨族与
-    未配 C4 时的 fade 族)。组合容量闸在主路已先执行,此处只换新成交语义;
-    窗口/武装/撤单因果护栏与现有限价框架同一套(同一 RestingLimitOrder,
-    BREAKOUT_ACCEPTED 优先级撤单/平仓撤销/超时路径自然覆盖新单种)。
-    """
-    key = st.frame.key
-    f = st.frame
-    ev = d.hyp.event_id
-    dire = int(d.hyp.direction)
-    base_meta = {"direction": dire, "regime": d.hyp.regime.value,
-                 "r_mult": d.hyp.r_mult, "route": d.route}
-    # C3 续涨 stop-entry 预埋(破位参考价 ± k_bm·ATR;超时 stop_wait_tf×TF 作废)
-    if arm.stop_entry and ev in STOP_FAMILY and d.meta.get("ev_ref") is not None:
-        ref = float(d.meta["ev_ref"])
-        stop_px = ref + dire * arm.k_bm * float(atr)
-        broker.submit_limit(RestingLimitOrder(
-            direction=dire, limit_price=stop_px, armed_at_ts=t,
-            expiry_ts=fill_after + int(arm.stop_wait_tf) * (f.tf_hours * MS_1H),
-            fill_after_ts=fill_after, symbol=key, role="entry",
-            invalid=float(d.hyp.invalid), target_1=d.hyp.target_1,
-            event_id=ev, reason=d.intent.reason, is_stop=True,
-            meta={**base_meta, **d.meta, "order_type": "stop_entry",
-                  "stop_ref": ref, **extra_meta}))
-        _lc(counters, "stop_entry_armed")
-        return True
-    # C4 fade 家族分层(zone 前缘/中/内缘 三份,各 1/slices 风险份额,maker)
-    if arm.ladder_fade and ev in FADE_FAMILY \
-            and "zone_lo" in d.meta and "zone_hi" in d.meta:
-        zlo, zhi = float(d.meta["zone_lo"]), float(d.meta["zone_hi"])
-        mid = (zlo + zhi) / 2.0
-        prices = [zlo, mid, zhi] if dire < 0 else [zhi, mid, zlo]
-        group = f"{key}#{t}#{ev}"
-        slice_mult = float(d.meta.get("size_mult", 1.0) or 1.0) \
-            / max(1, int(arm.ladder_slices))
-        for j, px in enumerate(prices):
-            broker.submit_limit(RestingLimitOrder(
-                direction=dire, limit_price=px, armed_at_ts=t,
-                expiry_ts=fill_after + int(n_fill) * MS_1H,
-                fill_after_ts=fill_after, symbol=key, role="entry",
-                invalid=float(d.hyp.invalid), target_1=d.hyp.target_1,
-                event_id=ev, reason=d.intent.reason, ladder_group=group,
-                meta={**base_meta, **d.meta, "order_type": "ladder_entry",
-                      "ladder_slice": j, "size_mult": slice_mult,
-                      **extra_meta}))
-            _lc(counters, "ladder_armed")
-        _lc(counters, "ladder_signals")
-        return True
-    # C2 maker 双模式(市价决策 → 决策收盘参考价挂单;弱 FLIP_RETESTED 前缘限价 → 同模式)
-    # v15:c2_family 非 None 时仅接管该家族事件,其余落回 canonical 主路。
-    if arm.fill_model in ("exchange_maker", "virtual_limit") \
-            and (arm.c2_family is None or ev in arm.c2_family):
-        fm = "virtual" if arm.fill_model == "virtual_limit" else "exchange"
-        ot = "virtual_entry" if fm == "virtual" else "maker_entry"
-        px = float(d.limit_price) if d.kind == "limit" \
-            else float(d.intent.ref_price)
-        broker.submit_limit(RestingLimitOrder(
-            direction=dire, limit_price=px, armed_at_ts=t,
-            expiry_ts=fill_after + int(n_fill) * MS_1H,
-            fill_after_ts=fill_after, symbol=key, role="entry",
-            invalid=float(d.hyp.invalid), target_1=d.hyp.target_1,
-            event_id=ev, reason=d.intent.reason, fill_model=fm,
-            meta={**base_meta, **d.meta, "order_type": ot, **extra_meta}))
-        counters["limits_armed"] += 1
-        _lc(counters, f"{ot}_armed")
-        return True
-    return False
+                _increment_counter(counters, "watch_entries_armed")
 
 
 def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
@@ -1216,7 +884,7 @@ def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
 
 
 def _reconstruct_trades(ledger: list, seg_bounds: dict) -> list:
-    trades = reconstruct_trades_v5(ledger, seg_bounds)
+    trades = reconstruct_trades(ledger, seg_bounds)
     for t in trades:
         key = t["symbol"]                    # reconstruct 以复合键为 symbol
         sym, tf = parse_key(key)
@@ -1228,6 +896,6 @@ def _reconstruct_trades(ledger: list, seg_bounds: dict) -> list:
 
 
 __all__ = [
-    "ArmConfig", "CampaignFrame", "build_campaign_frame", "run_campaigns",
-    "campaign_key", "parse_key", "STOP_FAMILY", "FADE_FAMILY",
+    "ExecutionConfig", "CampaignFrame", "build_campaign_frame", "run_campaigns",
+    "campaign_key", "parse_key",
 ]

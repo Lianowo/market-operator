@@ -1,24 +1,7 @@
 """规范回放核心:语义链的唯一回放基础设施。
 
-规范地位:本模块是唯一规范回放核心(canonical replay core)。语义合并
-(refactor/semantics-unify)后,规范链的认知缓存、回放结果、成交-决策
-因果断言、逐笔重构与段×成本指标统一由本模块提供;战役引擎(campaign)
-与规范回放入口(scripts/run_backtest_v6.py)只从这里取。
-
-内容来源(原样提升,语义零改动;历史轮次原文件冻结于 research/rounds/):
-- research/rounds/v1/backtest.py:MS_PER_HOUR/MS_PER_DAY、SymbolCognition、
-  prepare_cognition、BacktestResult、assert_fill_after_decision、
-  compute_metrics(及其 _max_drawdown/_holding_stats/_breakdown);
-- research/rounds/v4/backtest_v4.py:MS_15M/MS_1H/N_FINE_PER_COARSE/
-  BOUNDARY_1H_INDEX_FROZEN、assert_aligned(1h⟷15m 完整覆盖契约)、
-  alignment_issues_ci(dev/test 拐点 12320 落桶核查)、reconstruct_trades_v4
-  (LIMIT_FILL 时代的账本重构:entry_mode/fill_wait/maker-taker 费用拆分);
-- research/rounds/v5/backtest_v5.py:reconstruct_trades_v5(补 route/l_star/
-  weak_bars/e6 质量量追溯字段)。
-
-时间约定与因果纪律与归档轮次完全一致:决策 = 认知 bar 收盘(ledger
-decision_ts = bar 标签),任何成交严格晚于决策(assert_fill_after_decision);
-15m⟷1h 帧契约(assert_aligned:每根 1h 恰 4 根 900_000ms 子 bar,完整覆盖)。
+时间约定与因果纪律:决策 = 认知 bar 收盘(ledger decision_ts = bar 标签),
+任何成交严格晚于决策(assert_fill_after_decision)。
 """
 
 from __future__ import annotations
@@ -40,47 +23,40 @@ MS_PER_HOUR = 3_600_000
 MS_PER_DAY = 86_400_000
 MS_15M = 900_000
 MS_1H = 3_600_000
-N_FINE_PER_COARSE = 4                      # 1h = 4 × 15m(exec_tf = 900s)
-BOUNDARY_1H_INDEX_FROZEN = 12320           # dev/test 拐点(v3/v4 协议 §2)
-
-
-# ---------------------------------------------------------------------------
-# 认知预计算(bar 流的纯函数,成本无关,9 次回放共用)
-# ---------------------------------------------------------------------------
+N_FINE_PER_COARSE = 4
+BOUNDARY_1H_INDEX_FROZEN = 12320
 
 
 @dataclass
 class SymbolCognition:
-    """单品种逐 bar 认知缓存(EventDetector 同源回放)。"""
+    """单品种逐 bar 认知缓存。"""
+
     symbol: str
-    bars: list                       # (ts, o, h, l, c, v) 严格按时间升序
-    atrs: list                       # 每 bar atr(t)
-    events_by: dict                  # bar index → [MarketEvent](known_index=该 bar)
-    pivots_by: dict                  # bar index → [Pivot](known_index=该 bar)
-    views: dict                      # bar index → StructureView(仅事件 bar)
+    bars: list
+    atrs: list
+    events_by: dict
+    pivots_by: dict
+    views: dict
 
 
-def prepare_cognition(df: pd.DataFrame, params: Params, symbol: str,
-                      enable_e7: bool = False, enable_e8: bool = False,
-                      e8_pos_edge: float = 0.20) -> SymbolCognition:
-    """严格时间序回放 EventDetector,缓存逐 bar 认知产物。
-
-    与 research.collect_events 同一检测路径;本缓存额外保留逐 bar atr 与
-    每 bar 新确认 pivot(§8.3 移动防线输入)。`enable_e7` 打开 v2 FLIP_RETESTED 发射
-    (docs/v2-protocol.md;v1 默认关,行为不变)。v8 增量:`enable_e8` 打开
-    EDGE_RECLAIMED 发射(docs/v8-protocol.md §1,伴随 BREAKOUT_FAILED;默认关,BREAKOUT_ACCEPTED-FLIP_RETESTED 输出不变),
-    `e8_pos_edge` 为 EDGE_RECLAIMED 位置门(冻结先验 0.20)。
-    """
-    detector = EventDetector(params, enable_e7=enable_e7, enable_e8=enable_e8,
-                             e8_pos_edge=e8_pos_edge)
+def prepare_cognition(
+    df: pd.DataFrame,
+    params: Params,
+    symbol: str,
+    enable_e7: bool = False,
+) -> SymbolCognition:
+    """严格时间序回放 EventDetector,缓存逐 bar 认知产物。"""
+    detector = EventDetector(params, enable_e7=enable_e7)
     bars: list = []
     atrs: list = []
     events_by: dict = {}
     pivots_by: dict = {}
     views: dict = {}
     for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
-        bar = (int(row.ts), float(row.open), float(row.high), float(row.low),
-               float(row.close), float(row.volume))
+        bar = (
+            int(row.ts), float(row.open), float(row.high),
+            float(row.low), float(row.close), float(row.volume),
+        )
         n_pivots_before = len(detector.structure.pivots)
         emitted = detector.update(bar)
         s = detector.structure
@@ -93,10 +69,20 @@ def prepare_cognition(df: pd.DataFrame, params: Params, symbol: str,
         if emitted:
             events_by[t] = list(emitted)
             views[t] = StructureView(
-                regime=s.regime(), zones=s.zones, atr=s.atr(),
-                pivots=s.pivots[-params.range_max_pivots:])
-    return SymbolCognition(symbol=symbol, bars=bars, atrs=atrs,
-                           events_by=events_by, pivots_by=pivots_by, views=views)
+                regime=s.regime(),
+                zones=s.zones,
+                atr=s.atr(),
+                pivots=s.pivots[-params.range_max_pivots:],
+            )
+    return SymbolCognition(
+        symbol=symbol,
+        bars=bars,
+        atrs=atrs,
+        events_by=events_by,
+        pivots_by=pivots_by,
+        views=views,
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +167,8 @@ def assert_fill_after_decision(ledger: list) -> None:
 # ---------------------------------------------------------------------------
 
 
-def reconstruct_trades_v4(ledger: list, seg_bounds: dict) -> list:
+def reconstruct_trades(ledger: list, seg_bounds: dict) -> list:
+    """将共享账本按交易分组并重构为逐笔记录(含路由追溯字段)。"""
     by_tid: dict = {}
     for row in ledger:
         if row["kind"] == "SKIP" or row["trade_id"] is None:
@@ -196,81 +183,80 @@ def reconstruct_trades_v4(ledger: list, seg_bounds: dict) -> list:
         m = open_row["meta"]
         sym = open_row["symbol"]
         direction = -1 if open_row["side"] == "sell" else +1
-        closes = [r for r in rows
-                  if r["kind"] in ("REDUCE", "EXIT", "LIQUIDATION")
-                  or (r["kind"] == "LIMIT_FILL"
-                      and r["meta"].get("role") == "reduce")]
+        closes = [
+            r for r in rows
+            if r["kind"] in ("REDUCE", "EXIT", "LIQUIDATION")
+            or (r["kind"] == "LIMIT_FILL" and r["meta"].get("role") == "reduce")
+        ]
         closed = bool(closes) and closes[-1]["kind"] in ("EXIT", "LIQUIDATION")
         final = closes[-1] if closes else None
         qty_closed = sum(r["qty"] for r in closes)
-        exit_px = (sum(r["qty"] * r["price"] for r in closes) / qty_closed
-                   if qty_closed > 0 else None)
+        exit_px = (
+            sum(r["qty"] * r["price"] for r in closes) / qty_closed
+            if qty_closed > 0
+            else None
+        )
         gross = sum(r["realized_pnl"] for r in rows)
         fees = sum(r["fee"] for r in rows)
         fees_maker = sum(r["fee"] for r in rows if r["kind"] == "LIMIT_FILL")
-        funding = -sum(r["funding_delta"] for r in rows)   # funding_delta ≤ 0
+        funding = -sum(r["funding_delta"] for r in rows)
         slip = sum(r["slippage_cost"] for r in rows)
         net = gross - fees - funding
         risk = float(m.get("risk_usdt") or 0.0)
         b = seg_bounds[sym]
         trades.append({
-            "trade_id": tid, "symbol": sym, "direction": direction,
-            "event_id": m.get("event_id"), "regime": m.get("regime"),
+            "trade_id": tid,
+            "symbol": sym,
+            "direction": direction,
+            "event_id": m.get("event_id"),
+            "regime": m.get("regime"),
             "r_mult_planned": m.get("r_mult"),
-            "invalid": m.get("invalid"), "target_1": m.get("target_1"),
+            "invalid": m.get("invalid"),
+            "target_1": m.get("target_1"),
             "risk_usdt": risk,
             "open_decision_ts": open_row["decision_ts"],
-            "open_ts": open_row["ts"], "entry": open_row["price"],
-            "entry_mode": ("limit" if open_row["kind"] == "LIMIT_FILL"
-                           else "market"),
-            "fill_wait_bars": open_row["meta"].get("fill_wait_bars"),
-            "limit_price": open_row["meta"].get("limit_price"),
+            "open_ts": open_row["ts"],
+            "entry": open_row["price"],
+            "entry_mode": "limit" if open_row["kind"] == "LIMIT_FILL" else "market",
+            "fill_wait_bars": m.get("fill_wait_bars"),
+            "limit_price": m.get("limit_price"),
             "qty": open_row["qty"],
             "notional": open_row["qty"] * open_row["price"],
             "used_leverage": open_row["used_leverage"],
             "closed": closed,
             "close_decision_ts": final["decision_ts"] if final else None,
             "exit_ts": final["ts"] if final else None,
-            "exit_price": exit_px, "exit_kind": final["kind"] if final else None,
-            "n_reduce_limit": sum(1 for r in closes
-                                  if r["kind"] == "LIMIT_FILL"),
-            "gross_pnl": gross, "fees": fees,
-            "fees_maker": fees_maker, "fees_taker": fees - fees_maker,
+            "exit_price": exit_px,
+            "exit_kind": final["kind"] if final else None,
+            "n_reduce_limit": sum(1 for r in closes if r["kind"] == "LIMIT_FILL"),
+            "gross_pnl": gross,
+            "fees": fees,
+            "fees_maker": fees_maker,
+            "fees_taker": fees - fees_maker,
             "funding": funding,
-            "slippage_cost": slip, "net_pnl": net,
+            "slippage_cost": slip,
+            "net_pnl": net,
             "r_multiple": (net / risk) if risk > 0 else None,
-            "hold_hours": ((final["ts"] - open_row["ts"]) / MS_PER_HOUR
-                           if final else None),
+            "hold_hours": (
+                ((final["ts"] - open_row["ts"]) / MS_PER_HOUR) if final else None
+            ),
             "reason_open": open_row["reason"],
             "reason_exit": final["reason"] if final else None,
-            "reasons_reduce": [r["reason"] for r in closes
-                               if r["kind"] in ("REDUCE", "LIMIT_FILL")],
+            "reasons_reduce": [
+                r["reason"] for r in closes if r["kind"] in ("REDUCE", "LIMIT_FILL")
+            ],
             "in_segment_open": bool(
                 b["ts_lo"] is not None
-                and b["ts_lo"] <= open_row["decision_ts"] <= b["ts_hi"]),
+                and b["ts_lo"] <= open_row["decision_ts"] <= b["ts_hi"]
+            ),
+            "route": m.get("route"),
+            "l_star": m.get("l_star"),
+            "weak_bars": m.get("weak_bars"),
+            "e6_margin": m.get("e6_margin"),
+            "e6_impulse": m.get("e6_impulse"),
         })
     return trades
 
-
-def reconstruct_trades_v5(ledger: list, seg_bounds: dict) -> list:
-    """reconstruct_trades_v4 输出 + route / l_star / weak_bars(open 行 meta)。"""
-    trades = reconstruct_trades_v4(ledger, seg_bounds)
-    route_of: dict = {}
-    for row in ledger:
-        if row["trade_id"] is None or row["trade_id"] in route_of:
-            continue
-        if row["kind"] in ("OPEN", "LIMIT_FILL"):
-            m = row["meta"]
-            route_of[row["trade_id"]] = {
-                "route": m.get("route"),
-                "l_star": m.get("l_star"),
-                "weak_bars": m.get("weak_bars"),
-                "e6_margin": m.get("e6_margin"),
-                "e6_impulse": m.get("e6_impulse"),
-            }
-    for t in trades:
-        t.update(route_of.get(t["trade_id"], {"route": None}))
-    return trades
 
 
 # ---------------------------------------------------------------------------
@@ -484,10 +470,20 @@ def counterfactual_summary(trades: list, *,
 
 
 __all__ = [
-    "MS_PER_HOUR", "MS_PER_DAY", "MS_15M", "MS_1H", "N_FINE_PER_COARSE",
+    "MS_PER_HOUR",
+    "MS_PER_DAY",
+    "MS_15M",
+    "MS_1H",
+    "N_FINE_PER_COARSE",
     "BOUNDARY_1H_INDEX_FROZEN",
-    "SymbolCognition", "prepare_cognition", "BacktestResult",
-    "assert_fill_after_decision", "assert_aligned", "alignment_issues_ci",
-    "annotate_excursions", "counterfactual_summary",
-    "reconstruct_trades_v4", "reconstruct_trades_v5", "compute_metrics",
+    "SymbolCognition",
+    "prepare_cognition",
+    "BacktestResult",
+    "assert_fill_after_decision",
+    "assert_aligned",
+    "alignment_issues_ci",
+    "annotate_excursions",
+    "counterfactual_summary",
+    "reconstruct_trades",
+    "compute_metrics",
 ]

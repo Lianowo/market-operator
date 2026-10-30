@@ -1017,7 +1017,7 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
 def test_pivot_exec_without_fine_pivots_fails_fast():
     """`pivot_exec=True` 必须配到细周期 pivot 流,否则开关静默无效。
 
-    `CampaignFrame.exec_pivots` 目前只有 `scripts/_diag_v21_scale.py` 装配,
+    `CampaignFrame.exec_pivots` 必须由调用方显式装配,
     `scenario.build_frames`(验收与生产同源链)不装配 ⇒ 在生产链上打开此开关,
     回放结果与关闭**逐位相同**(2026-10-24 实测 6 段 net 完全一致)。这种"开关
     没接上"极易被读成"机制没价值",所以在装配期直接报错。

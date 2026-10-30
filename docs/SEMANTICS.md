@@ -5,8 +5,8 @@
 > 只在文末表中列入,不在规范链内使用。
 > 规范链:`data → structure → events(E1-E7) → hypothesis → routing
 > (turtle 唯一语义) → position(§8) → broker → campaign`,回放核心
-> `replay`,入口 `scripts/run_backtest_v6.py`,配置 `config/canonical.json`。
-> 生产实盘链路 = **同一套引擎**,只是配置换成 `config/strategy.json`(平衡箱
+> `replay`,回放门面 `market_operator.scenario`,配置 `config/strategy.json`。
+> 生产实盘链路共享相同认知、路由与持仓规则,同样使用 `config/strategy.json`(平衡箱
 > 双原语 ACCEPT/REJECT、按周期参数、趋势损益),不存在第二套路由/持仓实现;
 > 旧 v20 链(`lifecycle`/`tiered`/`repairs`)已退役,启动即校验而非回退。
 

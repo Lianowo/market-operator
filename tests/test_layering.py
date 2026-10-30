@@ -2,11 +2,8 @@
 
 为什么需要这个测试
 ------------------
-仓库里同时住着两类代码:在跑的策略,和为了某一轮 A/B 而写、跑完就该冻结的
-实验件。它们混在同一个包里,靠人记;于是"这个模块还活着吗"要靠翻 import
-才发现——v14-v20 的臂现在只由研究脚本与历史测试引用(`lifecycle`/`tiered`),
-另有一些从未进过生产(`strategy_v8`/`zonebio`/`aggtape`…)。靠记忆区分必然出错,
-所以把它变成断言:
+历史实验实现与其专属调用方已经删除。边界仍由断言保护,不能通过悬空引用
+或重新引入退役实现恢复第二条策略链路:
 
 1. 生产闭包(回放入口 ``scenario`` + 实盘入口 ``scripts/live_runner.py`` 的传递
    依赖)**不得** import 退役模块。谁要把退役臂重新接进生产,必须先改这份清单
@@ -28,28 +25,11 @@ PRODUCTION_ENTRY_POINTS = (
     REPO_ROOT / "scripts" / "live_runner.py",  # 实盘唯一入口
 )
 
-# 已退役:只被研究脚本与各自的历史测试引用,不参与任何生产路径。
-# 判定依据是 import 反向依赖(见提交说明),不是"看起来像旧版本"。
-#
-# 两条边界值得说清楚:
-# - `lifecycle`/`tiered` 原先由 scripts/live_runner.py(实盘入口)直接 import;
-#   v21 单链化之后实盘只剩 MarketRouter + 对侧锁利 PositionManager,它们退回
-#   scripts/run_v19.py / run_v20.py 与历史测试。
-# - `harvest`/`quality`/`repairs` 仍由 campaign 传递 import(v18 决策语境钩子供
-#   历史路由复用),属于当前代码的组成部分,所以**不在此清单**。
+# 已删除实现的负面依赖约束,不是要求文件继续存在的模块注册表。
 RETIRED = frozenset({
-    "lifecycle",     # scripts/run_v20.py + tests/test_v20_lifecycle.py
-    "tiered",        # scripts/run_v19.py / run_v20.py + tests/test_v19_tiered.py
-    "strategy_v8",   # scripts/run_backtest_v8.py + tests/test_v8.py
-    "zonebio",       # scripts/run_zonebio.py + tests/test_zonebio.py
-    "quattro",       # tests/test_quattro.py(v7 逐字复刻对照,只留历史断言)
-    "aggtape",       # v19-orderflow 研究件
-    "bandside",      # scripts/run_v15.py + tests/test_v15.py
-    "balance",       # scripts/_diag_balance.py(被 balance_detect 取代)
-    "flow_features",  # v12 订单流研究件
-    "flow_study",
-    # tape_features:2026-10-24 随唯一 importer(scripts/diagnose_current_btc.py)
-    # 一起归档到 scripts/archive/ ⇒ 已从本清单移除(零引用不留在退役名单里)。
+    "lifecycle", "tiered", "strategy_v8", "zonebio", "quattro", "aggtape",
+    "bandside", "balance", "balance_detect", "flow_features", "flow_study",
+    "harvest", "quality", "repairs", "research",
 })
 
 _VERSION_IN_NAME = re.compile(r"(^|_)v\d+(_|$)")
@@ -126,20 +106,18 @@ def test_research_methodology_is_not_in_production_closure():
     assert "split" in closure, "生产闭包必须直接依赖 split.py(判分契约)"
 
 
-def test_retired_list_has_no_orphans():
-    """退役 ≠ 无主:清单里每一项都必须还有引用方(研究脚本或历史测试)。
-
-    完全没有引用的模块不是"退役",是垃圾——下一步应当删除,而不是留在清单里
-    自我安慰。这条断言就是那个提醒。
-    """
-    referenced: set[str] = set()
+def test_internal_imports_resolve_in_all_active_python_files():
+    """删除模块时必须同时收束引用方,不能让闭包遍历静默跳过悬空依赖。"""
+    modules = {path.stem for path in SRC.glob("*.py")}
+    paths = list(SRC.glob("*.py"))
     for folder in ("tests", "scripts", "tools"):
-        for path in (REPO_ROOT / folder).glob("*.py"):
-            referenced |= _internal_imports(path)
-    missing = sorted(m for m in RETIRED if not (SRC / f"{m}.py").exists())
-    assert not missing, f"清单里的模块已不存在: {missing}"
-    orphans = sorted(m for m in RETIRED if m not in referenced)
-    assert not orphans, f"无人引用的退役模块(可直接删除): {orphans}"
+        paths.extend((REPO_ROOT / folder).rglob("*.py"))
+    dangling = sorted(
+        f"{path.relative_to(REPO_ROOT)} -> {dependency}"
+        for path in paths
+        for dependency in _internal_imports(path) - modules
+    )
+    assert not dangling, f"包内模块引用已失效: {dangling}"
 
 
 def test_live_path_is_reachable_from_the_live_entry_point():
