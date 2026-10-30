@@ -1602,6 +1602,8 @@ class LiveRunner:
 
         self._expiry_sweep(now_ms)
         if self.mode == "live":
+            if not self.api_halted:
+                self._poll_watch_entries(now_ms)
             self._manage_stops(now_ms)
             if now_ms / 1000 - self._reconcile_at >= \
                     self.loop_cfg["reconcile_seconds"]:
@@ -2255,13 +2257,16 @@ class LiveRunner:
         return out
 
     def _signal_status_text(self, block: Optional[str], *, tf_label: str,
-                            kind: str) -> str:
+                            kind: str, watch_entry: bool = False) -> str:
         """把闸门结果翻成一句对外口径(公开频道不得出现账户数字)。"""
         if block == "TF_CAP":
             return f"仅参考 · {tf_label} 周期容量已满,本系统本拍未开仓"
         if block is not None:
             return self._BLOCK_STATUS.get(block, f"仅参考 · {block}")
-        act = "挂限价单" if kind == "limit" else "同向开仓(市价)"
+        if watch_entry:
+            act = "进入价格关注(回踩内沿监控)"
+        else:
+            act = "挂限价单" if kind == "limit" else "同向开仓(市价)"
         return f"本系统已{act}"
 
     def _note_block(self, sym: str, cs: CampaignState, hyp, block: str, *,
@@ -2412,6 +2417,8 @@ class LiveRunner:
             if self.open_intents.get(oid, {}).get("status") in (
                     "armed", "filled", "error"):
                 block = "DUPLICATE"
+        is_watch = bool(d.meta.get("watch_entry"))
+        wait_h = int(d.meta.get("max_wait_hours") or N_FILL_H) if is_watch else N_FILL_H
         # ---- 信号广播(公开频道):先发事实,再记账 ----
         self._notify_signal(
             (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
@@ -2419,7 +2426,7 @@ class LiveRunner:
                       f"{'' if edge_mult >= 1.0 else f'(edge×{edge_mult:g})'}"
                       f"{' · 降档触发' if mic else ''}",
             exec_status=self._signal_status_text(block, tf_label=cs.tf_label,
-                                                kind=d.kind),
+                                                kind=d.kind, watch_entry=is_watch),
             symbol=sym, tf_label=cs.tf_label, event_id=hyp.event_id,
             side=side, route=d.route,
             ref_price=entry_ref, invalid=invalid, target_1=hyp.target_1,
@@ -2442,13 +2449,28 @@ class LiveRunner:
                   "route": d.route, "size_mult": size_mult,
                   "edge_mult": edge_mult,
                   "box_lo": box_lo, "box_hi": box_hi,
+                  "watch_entry": is_watch,
+                  "watch_price": float(entry_ref) if is_watch else None,
+                  "near_price": (float(d.meta["near_price"])
+                                 if d.meta.get("near_price") is not None else None),
+                  "confirm_close": (float(d.meta["confirm_close"])
+                                    if d.meta.get("confirm_close") is not None else None),
+                  "max_prog_frac": (float(d.meta["max_prog_frac"])
+                                    if d.meta.get("max_prog_frac") is not None else None),
+                  "max_wait_hours": wait_h,
+                  "near_touched": False,
+                  "near_extreme": None,
+                  "risk_usdt_cap": float(qty * risk_per_unit),
                   "decision_ts": t, "mic": mic,
-                  "expiry_ts": t + N_FILL_H * MS_1H, "status": "armed",
+                  "expiry_ts": t + wait_h * MS_1H, "status": "armed",
                   "exchange_order_id": None}
         self.open_intents[oid] = intent
         if self.mode == "live":
             try:
-                if d.kind == "limit":
+                if is_watch:
+                    # 系统价格关注态:不在交易所挂死板限价单,由 15s 主循环监控回踩触发/走完作废
+                    self.counters["watch_armed"] = self.counters.get("watch_armed", 0) + 1
+                elif d.kind == "limit":
                     resp = self.client.place_limit_order(
                         sym, side=side, size=qty,
                         price=self.fit_price(sym, entry_ref, hyp.direction),
@@ -2478,14 +2500,15 @@ class LiveRunner:
         self._journal("intent", {k: intent[k] for k in (
             "oid", "symbol", "role", "kind", "direction", "qty",
             "limit_price", "ref_px", "invalid", "tf_label", "event_id",
-            "route", "decision_ts", "mic", "size_mult", "edge_mult")})
+            "route", "decision_ts", "mic", "size_mult", "edge_mult",
+            "watch_entry", "watch_price", "near_price")})
 
     def _live_entry_filled(self, it: dict, *, side_fallback_price: float,
                            now_ms: int) -> None:
         """live 市价开仓:先按参考价记账建仓,再由 `_settle_entries` 用成交回执
         校正 `entry`(参考价与成交价的差不再系统性污染 R);限价单留 armed 待
         `_sync_live_fills` 确认(那条路径拿到的就是成交价)。"""
-        if it["kind"] == "limit":
+        if it["kind"] == "limit" and not it.get("watch_entry"):
             return
         price = float(side_fallback_price)
         risk = it["direction"] * (price - it["invalid"])
@@ -2504,6 +2527,116 @@ class LiveRunner:
                 "ref_px": price, "direction": int(it["direction"]),
                 "submitted_ms": int(now_ms),
                 "deadline_ms": int(now_ms) + 180_000}
+
+    def _poll_watch_entries(self, now_ms: int) -> None:
+        """实盘 15s 轮询监控死区系统价格关注(WatchEntry:F1钳制内沿+差25%企稳补票+走完65%作废)。"""
+        watched = [
+            (oid, it) for oid, it in list(self.open_intents.items())
+            if it.get("status") == "armed" and it.get("role") == "entry" and it.get("watch_entry")
+        ]
+        if not watched:
+            return
+        tickers_fn = getattr(self.client, "tickers", None)
+        if not callable(tickers_fn):
+            return
+        try:
+            raw_tickers = tickers_fn() or []
+        except BitgetError as e:
+            self._api_note(e)
+            return
+        px_by_sym: dict[str, tuple[float, float, float]] = {}
+        for row in raw_tickers:
+            s_name = str(row.get("symbol") or "")
+            lp = float(row.get("lastPr") or row.get("markPrice") or 0.0) if s_name else 0.0
+            if lp > 0.0:
+                px_by_sym[s_name] = (lp, float(row.get("bidPr") or lp), float(row.get("askPr") or lp))
+        for oid, it in watched:
+            sym = str(it["symbol"])
+            if sym in self.positions:
+                it["status"] = "canceled"
+                self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": "POSITION_ALREADY_OPEN"})
+                continue
+            last_p, bid_p, ask_p = px_by_sym.get(sym, (0.0, 0.0, 0.0))
+            if last_p <= 0.0:
+                continue
+            d, inv = int(it["direction"]), float(it["invalid"])
+            if (d > 0 and last_p <= inv) or (d < 0 and last_p >= inv):
+                it["status"] = "canceled"
+                self.counters["watch_canceled_invalid"] = self.counters.get("watch_canceled_invalid", 0) + 1
+                self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": "ZONE_BROKEN",
+                                               "price": last_p, "invalid": inv})
+                continue
+            watch_px = float(it.get("watch_price") or it.get("limit_price") or it["ref_px"])
+            touched_watch = (last_p <= watch_px) if d > 0 else (last_p >= watch_px)
+            max_prog, c0, tgt = it.get("max_prog_frac"), it.get("confirm_close"), it.get("target_1")
+            if not touched_watch and max_prog is not None and tgt is not None and c0 is not None:
+                span_rem = abs(float(tgt) - float(c0))
+                if span_rem > 0.0:
+                    prog_px = float(c0) + d * float(max_prog) * span_rem
+                    if (last_p >= prog_px) if d > 0 else (last_p <= prog_px):
+                        it["status"] = "canceled"
+                        self.counters["watch_canceled_played_out"] = \
+                            self.counters.get("watch_canceled_played_out", 0) + 1
+                        self._journal("watch_cancel", {"oid": oid, "symbol": sym,
+                                                       "why": "MOVE_ALREADY_PLAYED_OUT",
+                                                       "price": last_p, "prog_px": prog_px})
+                        continue
+            trigger_why = "WATCH_INNER_EDGE_HIT" if touched_watch else None
+            if trigger_why is None and it.get("near_price") is not None:
+                near_f = float(it["near_price"])
+                if (last_p <= near_f) if d > 0 else (last_p >= near_f):
+                    it["near_touched"] = True
+                    prev_ext = it.get("near_extreme")
+                    it["near_extreme"] = (
+                        last_p if prev_ext is None
+                        else (min(float(prev_ext), last_p) if d > 0 else max(float(prev_ext), last_p))
+                    )
+                elif it.get("near_touched"):
+                    ext_f = float(it.get("near_extreme") if it.get("near_extreme") is not None else near_f)
+                    band_span = max(abs(near_f - watch_px), 1e-12)
+                    bounced = (
+                        (last_p > near_f and (last_p - ext_f) >= 0.10 * band_span) if d > 0
+                        else (last_p < near_f and (ext_f - last_p) >= 0.10 * band_span)
+                    )
+                    if bounced:
+                        trigger_why = "WATCH_NEAR_BOUNCE"
+            if trigger_why is None:
+                continue
+            self._trigger_watch_entry_live(oid, it, ask_p if d > 0 else bid_p, now_ms, trigger_why)
+
+    def _trigger_watch_entry_live(self, oid: str, it: dict, exec_px: float,
+                                  now_ms: int, trigger_why: str) -> None:
+        sym = str(it["symbol"])
+        d, inv = int(it["direction"]), float(it["invalid"])
+        if d * (exec_px - inv) <= 0.0:
+            it["status"] = "canceled"
+            return
+        spec = self._spec(sym)
+        risk_cap = float(it.get("risk_usdt_cap") or 0.0)
+        qty = float(it["qty"])
+        if risk_cap > 0.0 and abs(exec_px - inv) > 0.0:
+            qty = min(qty, floor_step(risk_cap / abs(exec_px - inv), spec.size_step, spec.size_place))
+        if qty <= 0.0 or qty * exec_px < max(spec.min_trade_usdt, spec.size_min * exec_px):
+            return
+        if self.breaker.should_stop(self.equity) or not self.rate.allow():
+            return
+        try:
+            it["qty"], it["kind"], it["watch_trigger"] = qty, "market", trigger_why
+            resp = self.client.place_market_order(
+                sym, side="buy" if d > 0 else "sell", size=qty, client_oid=oid,
+                trade_side=self.open_trade_side())
+            it["exchange_order_id"] = str(resp.get("orderId") or "")
+            self.counters["orders_placed"] += 1
+            self.counters["watch_triggered"] = self.counters.get("watch_triggered", 0) + 1
+            self._journal("watch_trigger", {"oid": oid, "symbol": sym, "why": trigger_why,
+                                            "exec_px": exec_px, "qty": qty})
+            self._live_entry_filled(it, side_fallback_price=exec_px, now_ms=now_ms)
+        except BitgetError as e:
+            it["status"] = "error"
+            self.counters["order_errors"] = self.counters.get("order_errors", 0) + 1
+            self._journal("order_error", {"oid": oid, "symbol": sym,
+                                          "event": it.get("event_id"), "why": str(e)[:160]})
+            self._api_note(e)
 
     def _register_position(self, sym: str, it: dict, price: float,
                            ts: int, *, origin: str = "strategy") -> None:
@@ -3537,12 +3670,39 @@ class LiveRunner:
                     fill = float(o)
                 else:
                     lp = float(it["limit_price"])
+                    d = int(it["direction"])
+                    if it["role"] == "entry" and it.get("watch_entry"):
+                        max_prog = it.get("max_prog_frac")
+                        c0 = it.get("confirm_close")
+                        tgt = it.get("target_1")
+                        if max_prog is not None and tgt is not None and c0 is not None:
+                            span_rem = abs(float(tgt) - float(c0))
+                            if span_rem > 0.0:
+                                prog_px = float(c0) + d * float(max_prog) * span_rem
+                                already_ran = (h >= prog_px) if d > 0 else (low <= prog_px)
+                                touched_watch = (low <= lp) if d > 0 else (h >= lp)
+                                if already_ran and not touched_watch:
+                                    it["status"] = "canceled"
+                                    self.counters["watch_canceled_played_out"] = \
+                                        self.counters.get("watch_canceled_played_out", 0) + 1
+                                    self._journal("watch_cancel", {"oid": oid, "symbol": sym,
+                                                                   "why": "MOVE_ALREADY_PLAYED_OUT",
+                                                                   "prog_px": prog_px})
+                                    continue
                     # role=entry:direction=开仓方向;role=reduce:direction=平仓
                     # 单方向。两种角色同判:买单等低穿、卖单等高穿(严格,maker)
-                    if it["direction"] > 0 and low < lp:
+                    if d > 0 and low < lp:
                         fill = lp
-                    elif it["direction"] < 0 and h > lp:
+                    elif d < 0 and h > lp:
                         fill = lp
+                    elif it["role"] == "entry" and it.get("watch_entry") and it.get("near_price") is not None:
+                        near_f = float(it["near_price"])
+                        near_hit = (low <= near_f) if d > 0 else (h >= near_f)
+                        bounce_ok = (c > o and c >= near_f) if d > 0 else (c < o and c <= near_f)
+                        if near_hit and bounce_ok:
+                            fill = float(c)
+                        else:
+                            continue
                     else:
                         continue
             if it["role"] == "entry":

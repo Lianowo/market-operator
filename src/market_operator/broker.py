@@ -437,6 +437,39 @@ class Broker:
             if hour_label <= barred:
                 kept.append(od)                       # 决策 bar 覆盖区间,不可成交
                 continue
+            if od.role == "entry" and od.meta.get("watch_entry"):
+                max_wait_h = od.meta.get("max_wait_hours")
+                if max_wait_h is not None and (od.wait_bars + 1) > int(max_wait_h):
+                    rows.append(self._timeout(od, int(ts)))
+                    continue
+                max_prog = od.meta.get("max_prog_frac")
+                c0 = od.meta.get("confirm_close")
+                if max_prog is not None and od.target_1 is not None and c0 is not None:
+                    span_rem = abs(float(od.target_1) - float(c0))
+                    if span_rem > 0.0:
+                        prog_px = float(c0) + od.direction * float(max_prog) * span_rem
+                        already_ran = (h >= prog_px) if od.direction > 0 else (l <= prog_px)
+                        touched_watch = (l <= od.limit_price) if od.direction > 0 else (h >= od.limit_price)
+                        if already_ran and not touched_watch:
+                            rows.append(self._admin_row(
+                                od, int(ts), kind="CANCEL",
+                                reason_code="MOVE_ALREADY_PLAYED_OUT",
+                                detail=f"reached {prog_px:.8g} ({float(max_prog):.0%} to target) before pullback"))
+                            continue
+                near_px = od.meta.get("near_price")
+                if near_px is not None:
+                    exact_cross = (h > od.limit_price) if od.direction < 0 else (l < od.limit_price)
+                    near_f = float(near_px)
+                    near_hit = (l <= near_f) if od.direction > 0 else (h >= near_f)
+                    bounce_ok = (c > o and c >= near_f) if od.direction > 0 else (c < o and c <= near_f)
+                    if (not exact_cross) and near_hit and bounce_ok:
+                        od.wait_bars += 1
+                        if int(ts) <= od.armed_at_ts:
+                            raise AssertionError(
+                                f"trigger ts {ts} <= armed_at_ts {od.armed_at_ts}")
+                        od.limit_price = float(c)
+                        rows.append(self._trigger_to_pending(od, int(ts)))
+                        continue
             od.wait_bars += 1
             if od.is_stop:
                 # v14 C3 stop-entry:严格穿过触发(穿过即;持平不触发,同既有

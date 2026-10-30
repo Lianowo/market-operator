@@ -721,6 +721,8 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
         elif k == "CANCEL" and row["reason_code"] == "TIMEOUT_TO_TAKER":
             counters["reduce_timeout_taker"] += 1
         elif k == "CANCEL":
+            if row.get("reason_code") == "MOVE_ALREADY_PLAYED_OUT":
+                _lc(counters, "watch_canceled_played_out")
             ot = row["meta"].get("order_type")             # v14:E1撤单/平仓撤销
             if ot is not None:
                 _lc(counters, f"{ot}_canceled")
@@ -917,7 +919,8 @@ def _cancel_structurally_dead_entries(st: "_CampaignState", broker: Broker, key:
     # 避免把仍在观察的同族挂单误杀(如 v14 分层,生产 arm=None 时不会出现)。
     if not reasons or len(reasons) != len(orders):
         return
-    rows = broker.cancel_resting(key, int(ts), reason_code="STRUCTURE_INVALID",
+    cancel_ts = int(ts) + int(st.frame.tf_hours * MS_1H)
+    rows = broker.cancel_resting(key, cancel_ts, reason_code="STRUCTURE_INVALID",
                                  detail=" | ".join(reasons)[:200])
     counters["struct_canceled"] = counters.get("struct_canceled", 0) + len(rows)
 
@@ -1069,11 +1072,13 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       "route": d.route,
                       **d.meta, **extra_meta})
         else:
+            wait_h = (int(d.meta.get("max_wait_hours") or n_fill)
+                      if d.meta.get("watch_entry") else int(n_fill))
             broker.submit_limit(RestingLimitOrder(
                 direction=int(d.hyp.direction),
                 limit_price=float(d.limit_price),
                 armed_at_ts=t,
-                expiry_ts=expiry_base + int(n_fill) * MS_1H,
+                expiry_ts=expiry_base + wait_h * MS_1H,
                 fill_after_ts=fill_after,
                 symbol=key, role="entry",
                 invalid=float(d.hyp.invalid),
@@ -1085,6 +1090,8 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       "route": d.route,
                       **d.meta, **extra_meta}))
             counters["limits_armed"] += 1
+            if d.meta.get("watch_entry"):
+                _lc(counters, "watch_entries_armed")
 
 
 # ---------------------------------------------------------------------------

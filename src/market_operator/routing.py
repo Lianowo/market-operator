@@ -162,6 +162,20 @@ class RouterParams:
     # 超过 max_confirm_stop_atr·ATR ⇒ 丢弃该笔(等下一次 A2 触碰),而不是转挂
     # 50% 回抽限价(回抽只在反向失败时成交 = adverse selection)。
     far_confirm_skip: bool = False
+    # ── 死区系统价格关注 (WatchEntry: 2026-10-30) ────────────────────────
+    # 当 REJECT 确认时剩余空间 r_mult 落在死区 [deadzone_watch_r_lo, deadzone_watch_r_hi)
+    # 时,拒绝在半山腰市价追单,转入系统价格关注态:
+    # ① 关注目标价 watch_px = clamp_f1(inner_edge, invalid ± k_is·ATR);
+    # ② 近沿差一点没挂上补票带 near_px = close − deadzone_watch_near_frac·(close − watch_px)
+    #    (进入近沿缓冲带且顺向企稳掉头即补票入场);
+    # ③ 防走完反向接盘:未回踩先向 target_1 推进 ≥ deadzone_watch_max_prog_frac 剩余行程即作废;
+    # ④ 短回踩时间窗:超过 deadzone_watch_wait_hours 小时未回踩即过期作废。
+    deadzone_watch_enabled: bool = False
+    deadzone_watch_r_lo: float = 1.0
+    deadzone_watch_r_hi: float = 1.5
+    deadzone_watch_near_frac: float = 0.75
+    deadzone_watch_max_prog_frac: float = 0.65
+    deadzone_watch_wait_hours: int = 4
 
 
 
@@ -408,6 +422,55 @@ class MarketRouter:
                         hyp=hyp_lim, limit_price=float(limit_px),
                         meta={"pullback_limit": True, **_event_provenance(ev)},
                     )
+
+        # 死区系统价格关注 (WatchEntry: F1 钳制内沿 + 差 25% 企稳补票 + 走完 65% 作废 + 4h 短窗)
+        if (cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED)
+                and p.deadzone_watch_enabled
+                and zone is not None and atr > 0.0
+                and hyp.r_mult is not None
+                and float(p.deadzone_watch_r_lo) <= float(hyp.r_mult) < float(p.deadzone_watch_r_hi)):
+            direction = int(ev.direction)
+            inner_edge = float(zone.hi if direction > 0 else zone.lo)
+            close_px = float(close)
+            inv_px = float(hyp.invalid)
+            min_dist = float(p.k_is) * float(atr)
+            f1_floor_px = inv_px + direction * min_dist
+            watch_px = max(inner_edge, f1_floor_px) if direction > 0 else min(inner_edge, f1_floor_px)
+            dist_w = direction * (watch_px - inv_px)
+            if direction * (close_px - watch_px) > 1e-9 and dist_w >= min_dist - 1e-9:
+                target_1 = hyp.target_1
+                new_r = (direction * (float(target_1) - watch_px) / dist_w
+                         if target_1 is not None and dist_w > 0.0 else hyp.r_mult)
+                near_frac = float(p.deadzone_watch_near_frac or 0.0)
+                near_px = (close_px - near_frac * (close_px - watch_px)
+                           if near_frac > 0.0 else None)
+                hyp_w = Hypothesis(
+                    event_id=ev.id, direction=direction, ts=ev.ts,
+                    known_index=ev.known_index, entry=float(watch_px),
+                    invalid=inv_px, target_1=target_1,
+                    r_mult=new_r, regime=view.regime,
+                )
+                reason = (f"{ev.id}|{side} {ROUTE_LEVEL_REJECTED_LIMIT} "
+                          f"WATCH_ENTRY 死区[{p.deadzone_watch_r_lo:.2g},{p.deadzone_watch_r_hi:.2g}R)"
+                          f"系统价格关注 confirm_close={close_px:.8g} "
+                          f"watch_px={watch_px:.8g} near_px={near_px} "
+                          f"invalid={inv_px:.8g} target_1={target_1} r_mult={new_r}")
+                self._bump("deadzone_watch_armed")
+                return RouteDecision(
+                    kind="limit", route=ROUTE_LEVEL_REJECTED_LIMIT,
+                    intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
+                                       reason=reason, ref_price=float(watch_px), ts=ev.ts),
+                    hyp=hyp_w, limit_price=float(watch_px),
+                    meta={
+                        "watch_entry": True,
+                        "watch_price": float(watch_px),
+                        "near_price": float(near_px) if near_px is not None else None,
+                        "confirm_close": close_px,
+                        "max_prog_frac": float(p.deadzone_watch_max_prog_frac),
+                        "max_wait_hours": int(p.deadzone_watch_wait_hours),
+                        **_event_provenance(ev),
+                    },
+                )
 
         reason = (f"{ev.id}|{side} {route} {tag} entry_ref={close:.8g} "
                   f"invalid={hyp.invalid:.8g} target_1={hyp.target_1} "

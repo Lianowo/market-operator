@@ -274,3 +274,44 @@ def test_target_within_cap_is_left_alone():
     hyp, router = _hyp_from(10.0)
     assert hyp.target_1 == pytest.approx(115.0)
     assert router.counters.get("target_r_clamped", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# A11 结构性撤单:认知收盘时标必须为 ts + tf_hours * MS_1H (> 同区间 mic armed_at_ts)
+# ---------------------------------------------------------------------------
+
+def test_cancel_structurally_dead_entries_uses_cognition_close_timestamp():
+    from types import SimpleNamespace
+    from market_operator.broker import RestingLimitOrder
+    from market_operator.campaign import _cancel_structurally_dead_entries
+    from market_operator.replay import MS_1H
+
+    b = _broker()
+    key = "BTCUSDT@12h"
+    cog_open_ts = T0
+    # 模拟 12h 认知区间 [T0, T0+12h) 内首根或中间 2h mic bar (如 T0 或 T0+8h) 武装的入场挂单
+    for armed_ts in (cog_open_ts, cog_open_ts + 8 * H):
+        b.submit_limit(RestingLimitOrder(
+            direction=1, limit_price=99.5, armed_at_ts=armed_ts,
+            expiry_ts=armed_ts + 12 * H, fill_after_ts=armed_ts,
+            symbol=key, role="entry", invalid=97.0, target_1=110.0,
+            event_id=LEVEL_REJECTED, reason="test_limit",
+            meta={"direction": 1, "zone_lo": 99.0, "zone_hi": 100.0},
+        ))
+        st = SimpleNamespace(
+            frame=SimpleNamespace(tf_hours=12),
+            pos_mgr=SimpleNamespace(p=SimpleNamespace(k_bm=0.1)),
+        )
+        counters: dict = {}
+        # 12h 认知 bar 收盘价 98.0 < zone_lo(99.0) - 0.1*ATR(1.0) = 98.9 ⇒ 触发结构性撤单
+        bar = (cog_open_ts, 100.0, 101.0, 97.5, 98.0, 10.0)
+        _cancel_structurally_dead_entries(st, b, key, bar, atr=1.0, counters=counters)
+
+        assert counters.get("struct_canceled") == 1
+        assert not b.resting.get(key)
+        last_row = b.ledger[-1]
+        assert last_row["kind"] == "CANCEL"
+        assert last_row["reason_code"] == "STRUCTURE_INVALID"
+        assert last_row["ts"] == cog_open_ts + 12 * MS_1H
+        assert last_row["ts"] > armed_ts
+
