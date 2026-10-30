@@ -1577,25 +1577,34 @@ class _NoPosStopClient(_FakeClient):
         raise BitgetError("bitget 400 code=43023: 仓位不足,不能设置止盈或者止损")
 
 
-def test_manage_stops_place_reject_no_position_only_drops_local_stop(tmp_path):
-    """43023「仓位不足」= 交易所已无仓 ⇒ 只丢本地止损,不发市价单、不告警。
+def test_manage_stops_place_reject_no_position_switches_to_local_stop(tmp_path):
+    """43023「仓位不足」**不再**丢保护:切成本地止损监控(2026-10-29 语义修复)。
 
-    实测 10-24 1000BONKUSDT 连续 4 次重试全为此因;若按"已越线"处理,会在
-    仓位并不存在时反复发平仓单并被拒,还误报"仓位仍在,人工核查"。
+    旧语义:43023 一律当"交易所已无该仓位" ⇒ `stops.pop()`。
+    实盘反例:ADVANTESTUSDT 名义 ~18.5U 被交易所拒绝挂 TPSL(同一个 43023),
+    于是它既没有交易所保护、也没有本地监控 —— 裸奔。
+    新语义:先切 `mode="local"`(错误只记一次、不再重试交易所单);
+    之后每轮用标记价与本地防线比较,越过即市价离场。
     """
     client, tg = _NoPosStopClient(), _FakeTG()
     r = _runner(tmp_path, client, tg)
-    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=94.0)
+    r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=99.0)
 
     r._manage_stops(NOW)
 
     assert client.market_orders == []
     assert "BTCUSDT" in r.positions          # 仓位是否存在由 reconcile 判定
-    assert "BTCUSDT" not in r.stops
-    assert r.counters["stop_place_no_pos"] == 1
-    assert r.counters.get("stop_place_breached", 0) == 0
-    assert _row(tmp_path, kind="stop_place_no_pos")["trigger"] == pytest.approx(95.0)
-    assert tg.alerts == []
+    assert r.stops["BTCUSDT"]["mode"] == "local"
+    assert r.stops["BTCUSDT"]["order_id"] == ""
+    assert r.counters["stop_local_mode"] == 1
+    assert r.counters.get("stop_place_no_pos", 0) == 0
+    assert any("本地止损" in a for a in tg.alerts)
+
+    # 下一轮:标记价跌破本地防线 ⇒ 市价离场(与 stop_missing_breached 同一纪律)
+    r.positions["BTCUSDT"]["mark"] = 94.0
+    r._manage_stops(NOW + 60_000)
+    assert [o["symbol"] for o in client.market_orders] == ["BTCUSDT"]
+    assert r.counters.get("stop_local_triggered", 0) == 1
 
 
 class _StaleMarkStopClient(_FakeClient):
