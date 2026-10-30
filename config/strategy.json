@@ -55,8 +55,11 @@
   "router_params": {
     "reject_use_struct_stop": true,
     "reject_target_mode": "opposite",
-    "accept_use_struct_stop": false
+    "accept_use_struct_stop": false,
+    "max_cost_frac": null,
+    "cost_per_side": 0.0008
   },
+
   "router_params_by_tf": {
     "2h": {
       "min_box_rotations": 3,

@@ -41,7 +41,8 @@ from .events import (
     canonical_event_id,
 )
 from .hypothesis import Hypothesis, StructureView, _structural_target
-from .structure import _bar_parts
+from .structure import _bar_parts, PivotKind
+
 
 # 同 episode 匹配容差:两侧价格同源(破位 pivot 价 / zone 前缘价,浮点原值
 # 拷贝),容差只覆盖二进制表示差;非调参先验。
@@ -144,6 +145,24 @@ class RouterParams:
     max_target_r: Optional[float] = None  # C1:目标 R 上限(None = 不截断,现行行为)
     max_confirm_stop_atr: float = 1.2     # v22:紧凑市价确认的最大止损宽度(ATR 倍数;超出转 50%/内沿回抽 Limit)
     allow_pullback_limit: bool = True     # True 时过伸确认转回抽 Limit;False 时严格要求当根入场满足 min_box_rr 且具备对侧目标
+    # A3:成本闸的语义单位。`k_is` 用「ATR 倍数」表达"止损太近⇒成本占比过高",
+    # 但真正要约束的是**钱的比例**:往返成本 / 风险距离。费率或波动结构一变,
+    # 0.8·ATR 的含义就漂了。设了 `max_cost_frac` 就用它取代 `k_is`(None=沿用旧口径)。
+    max_cost_frac: Optional[float] = None
+    cost_per_side: float = 0.0008         # 单边成本比例(taker+滑点),仅用于 max_cost_frac
+    # A5:目标锚点。盲锚"对侧内沿"在宽箱里不可达(实测 2h 常见 6–12R),于是又要
+    # 额外一个 `max_target_r` 去截断 —— 两个旋钮互相打架。语义上目标应是
+    # **方向上最近的结构障碍**:成品离场点 = min(对侧内沿, 最近逆向 pivot)。
+    # A5:目标锚点实验项。**实测否决**:改成"最近结构障碍"后
+    # full +248.45 → +5.76、去Top10 +0.23 → −111.01(目标变近 ⇒ 对侧锁利提前
+    # arming、回吐预算按更小 span 计算 ⇒ 被噪声扫)。默认 False = 保留
+    # "对侧内沿"这一结构目标。
+    target_from_pivot: bool = False
+    # A4:确认位置闸(独立开关)。拒绝证据必须发生在带缘附近;收盘已深入箱体
+    # 超过 max_confirm_stop_atr·ATR ⇒ 丢弃该笔(等下一次 A2 触碰),而不是转挂
+    # 50% 回抽限价(回抽只在反向失败时成交 = adverse selection)。
+    far_confirm_skip: bool = False
+
 
 
 
@@ -460,15 +479,42 @@ class MarketRouter:
             invalid = float(ev_inv)
         elif cid == BREAKOUT_ACCEPTED and p.accept_use_struct_stop and ev_inv is not None:
             invalid = float(ev_inv)
-        # F1(全入口,闸):天然距离不足即笔不存在
+        # F1(全入口,闸):天然距离不足即笔不存在。
+        # A3:优先用**钱的占比**(往返成本/风险)表达同一件事;`k_is` 仅作旧口径回退。
         dist = ev.direction * (close - invalid)
-        if dist < p.k_is * atr:
+        if p.max_cost_frac is not None and p.max_cost_frac > 0.0:
+            cost_r = ((2.0 * float(p.cost_per_side) * float(close)) / dist
+                      if dist > 0.0 else float("inf"))
+            if cost_r > float(p.max_cost_frac):
+                self._bump(f"f1_cost_reject_{route}")
+                self._notes.append(
+                    f"f1_cost|{symbol} {ev.id}|{side} cost/risk={cost_r:.4f} > "
+                    f"max_cost_frac={float(p.max_cost_frac):.4f} ⇒ 无交易(成本地板)")
+                return None
+        elif dist < p.k_is * atr:
             self._bump(f"f1_reject_{route}")
             self._notes.append(
                 f"f1|{symbol} {ev.id}|{side} dist={dist:.4g} < k_is·atr="
                 f"{p.k_is * atr:.4g} ⇒ 无交易(F1 全入口下限)")
             return None
+
         zone = ev.attrs.get("zone")
+        # A4:确认位置的语义。拒绝的证据必须发生在**带缘附近**:收盘已深入箱体
+        # (离内沿 > max_confirm_stop_atr·ATR)意味着那条"拒绝"已被行情走完,
+        # 此刻再进等于追高/追低。旧实现把这件事转成"挂 50% 回抽限价",而回抽
+        # 只在反向失败时才成交(adverse selection,实测更差)。正确定义是**丢弃
+        # 这一笔**,等同一箱沿的下一次 A2 触碰。
+        if (p.far_confirm_skip and p.max_confirm_stop_atr > 0.0
+                and zone is not None
+                and cid in (BREAKOUT_FAILED, LEVEL_REJECTED, EDGE_RECLAIMED)):
+            inner_edge = float(zone.hi if ev.direction > 0 else zone.lo)
+            if ev.direction * (close - inner_edge) > p.max_confirm_stop_atr * atr:
+                self._bump("restraint_far_confirm")
+                self._notes.append(
+                    f"far_confirm|{symbol} {ev.id}|{side} close 距内沿 "
+                    f"{ev.direction * (close - inner_edge):.4g} > "
+                    f"{p.max_confirm_stop_atr:.2f}·ATR ⇒ 拒绝证据已过期,不入场")
+                return None
         if p.min_box_touches > 0 and zone is not None:
             if int(zone.touches) < p.min_box_touches:
                 self._bump("restraint_touches_reject")
@@ -541,6 +587,22 @@ class MarketRouter:
                 if ev.direction * (cand_t - close) > 0.0:
                     target_1 = cand_t
                     r_mult = ev.direction * (cand_t - close) / dist if dist > 0 else None
+                    # A5:目标 = 方向上**最近的结构障碍**。对侧内沿只是一个候选;
+                    # 若其间已有确认 pivot(前高/前低),它才是第一个会挡住的价位。
+                    if p.target_from_pivot and view.pivots:
+                        want = (PivotKind.HIGH if ev.direction > 0 else PivotKind.LOW)
+                        obstacles = [
+                            float(pv.price) for pv in view.pivots
+                            if pv.kind is want
+                            and ev.direction * (float(pv.price) - close) > 0.0]
+                        if obstacles:
+                            near = (min(obstacles) if ev.direction > 0
+                                    else max(obstacles))
+                            if ev.direction * (near - close) < ev.direction * (target_1 - close):
+                                target_1 = near
+                                r_mult = (ev.direction * (target_1 - close) / dist
+                                          if dist > 0 else None)
+                                self._bump("target_from_pivot")
                     # C1:目标 R 上限。截断只改目标锚点(部分减仓/对面收割),不改
                     # 止损与入场,故风险分母恒定,左右尾可比。缺口来源:2h 的
                     # 箱体对面目标常在 6–12R,回放里从未触及 ⇒ 该目标对盈亏无贡献,
@@ -551,6 +613,7 @@ class MarketRouter:
                         target_1 = float(close) + ev.direction * float(cap_r) * dist
                         r_mult = float(cap_r)
                         self._bump("target_r_clamped")
+
         hyp = Hypothesis(event_id=ev.id, direction=ev.direction, ts=ev.ts,
                          known_index=ev.known_index, entry=float(close),
                          invalid=float(invalid), target_1=target_1,

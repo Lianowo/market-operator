@@ -854,6 +854,63 @@ def _apply_mgmt(st: _CampaignState, broker: Broker, mgmt: list, t: int,
             broker.submit(intent, decision_ts=t)
 
 
+def _cancel_structurally_dead_entries(st: "_CampaignState", broker: Broker, key: str,
+                                      bar, atr: float, counters: dict) -> None:
+    """A11:挂单的**结构性**失效 —— 结构前提没了就撤,而不是等 `n_fill` 墙钟小时。
+
+    旧实现的过期条件是"决策后 12 小时"(`expiry_ts = fill_after + n_fill×1h`):
+    箱沿早已被破、目标早已被行情走完,那张限价单还挂在那里等成交 —— 一旦成交,
+    接的是行情末端。语义上挂单只应在**它的结构前提仍成立**时存在:
+
+    1. 带被破:`level_rejected_limit`(拒绝后回抽买箱沿)与
+       `breakout_accepted_limit`(A2 过伸突破回抽翻转边)都是"在
+       `[zone_lo, zone_hi]` 这条带上接货"。收盘越过该带**远端外侧**
+       (多头跌破 `zone_lo − k_bm·ATR` / 空头升破 `zone_hi + k_bm·ATR`)
+       ⇒ 那条带已不在拍卖中,撤。
+    2. 目标已过:收盘越过该单自己的 `target_1` ⇒ 它要等的回抽机会已被走完,
+       再成交就是末端接货,撤。
+    3. `n_fill` 墙钟过期保留为最后兜底(不删除)。
+
+    只用因果可得事实:本根认知 bar 的收盘 + 挂单自身 meta(`zone_lo/zone_hi/
+    direction/target_1`)。不查未来、不改策略判定。
+    """
+    orders = [o for o in broker.resting.get(key, ()) if o.role == "entry"]
+    if not orders:
+        return
+    params = getattr(st.pos_mgr, "p", None)
+    k_bm = float(getattr(params, "k_bm", 0.1) or 0.1)
+    bm = k_bm * float(atr)
+    ts, _o, _h, _l, c, _v = bar
+    reasons: list[str] = []
+    for o in orders:
+        meta = getattr(o, "meta", None) or {}
+        d = int(meta.get("direction") or 0)
+        if d not in (1, -1):
+            continue
+        lo, hi = meta.get("zone_lo"), meta.get("zone_hi")
+        why = None
+        if lo is not None and hi is not None:
+            if d > 0 and c < float(lo) - bm:
+                why = f"zone_broken(close={c:.8g} < {float(lo) - bm:.8g})"
+            elif d < 0 and c > float(hi) + bm:
+                why = f"zone_broken(close={c:.8g} > {float(hi) + bm:.8g})"
+        if why is None and getattr(o, "target_1", None) is not None:
+            t = float(o.target_1)
+            if d > 0 and c > t:
+                why = f"target_passed(close={c:.8g} > {t:.8g})"
+            elif d < 0 and c < t:
+                why = f"target_passed(close={c:.8g} < {t:.8g})"
+        if why is not None:
+            reasons.append(why)
+    # 槽位纪律是"每战役同时一仓一挂单";只有**全部**挂单都失效才整批撤,
+    # 避免把仍在观察的同族挂单误杀(如 v14 分层,生产 arm=None 时不会出现)。
+    if not reasons or len(reasons) != len(orders):
+        return
+    rows = broker.cancel_resting(key, int(ts), reason_code="STRUCTURE_INVALID",
+                                 detail=" | ".join(reasons)[:200])
+    counters["struct_canceled"] = counters.get("struct_canceled", 0) + len(rows)
+
+
 def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                     counters: dict, cap_skips: list, bounds: dict,
                     go_set: frozenset, n_fill: int,
@@ -868,6 +925,11 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     new_pivots = cog.pivots_by.get(i, [])
     atr = cog.atrs[i]
     st.last_atr = atr
+
+    # A11:挂单只在其结构前提仍成立时存在(带被破 / 目标已过即撤;
+    # `n_fill` 墙钟过期只作最后兜底)。放在 §8 之前:本 bar 的收盘已经是
+    # "结构前提是否还成立"的最新事实。
+    _cancel_structurally_dead_entries(st, broker, key, bar, atr, counters)
 
     # §8 六条(入场成交的认知 bar 不做裁决,同 v4/v5 声明)
     pos_pm = st.pos_mgr.positions.get(sym)
