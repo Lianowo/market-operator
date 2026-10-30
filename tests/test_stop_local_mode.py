@@ -146,3 +146,37 @@ def test_local_mode_does_not_retry_exchange_orders(tmp_path):
         r._manage_stops(1_700_000_000_000 + k * 60_000)
     assert r.counters.get("stop_errors", 0) == errs_after_first
     assert r.counters.get("stop_local_mode", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# 残影:交易所明确「无仓可平」⇒ 以交易所为真相立即收尾
+# ---------------------------------------------------------------------------
+
+class _NoPosToCloseClient(_Client):
+    def place_market_order(self, symbol, **kw):
+        raise BitgetError("bitget 400 code=22002: 暂无仓位可平")
+
+    def recent_fills(self, symbol, limit=20):
+        return []
+
+
+def test_close_rejected_no_position_clears_local_record(tmp_path):
+    """`22002 暂无仓位可平` = 本地残影;旧实现每轮重试并报"仓位仍在"。
+
+    实例:RKLBUSDT 防线被跌破后平仓被拒,日志反复 `order_error 22002`,
+    本地持仓长期残留,既刷 API 错误又拖延真仓位的处置。
+    """
+    client, tg = _NoPosToCloseClient(), _TG()
+    r = _runner(tmp_path, client, tg)
+    r.positions[SYM] = _pos(mark=56.0, invalid=56.53)
+    pos = dict(r.positions[SYM])
+
+    r._arm_close_intent(SYM, pos, 0.3, "market", None,
+                        "STOP_PLACE_BREACHED|56.53", 1_700_000_000_000,
+                        role="exit", force=True)
+
+    assert SYM not in r.positions
+    assert r.counters["close_no_pos"] == 1
+    assert any("已按交易所为准" in a for a in tg.alerts)
+    assert not any("仓位仍在" in a for a in tg.alerts)
+

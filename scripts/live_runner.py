@@ -2671,6 +2671,22 @@ class LiveRunner:
                 self._journal("order_error", {"oid": oid, "symbol": sym,
                                               "role": role,
                                               "why": str(e)[:160]})
+                why = str(e)
+                if role == "exit" and ("22002" in why or "暂无仓位可平" in why
+                                       or "43023" in why):
+                    # 交易所明确说"没有仓位可平" ⇒ 本地这条是残影(持仓早已不在)。
+                    # 旧实现只发"仓位仍在,人工核查"并**每轮重试**,既刷 API 错误
+                    # 也把真仓位(如果有)的处置延后。以交易所为真相立即收尾。
+                    self.counters["close_no_pos"] = \
+                        self.counters.get("close_no_pos", 0) + 1
+                    self._journal("close_no_pos", {"symbol": sym, "role": role,
+                                                   "why": why[:160]})
+                    self.stops.pop(sym, None)
+                    self._reconcile_closed(sym, dict(pos))
+                    self.tg.send_alert(
+                        f"{sym} 交易所已无仓位可平(22002/43023)⇒ 已按交易所为准"
+                        f"清理本地记录(不再重试)")
+                    return
                 self.tg.send_alert(f"{sym} 平仓({role})下单失败:{str(e)[:120]}"
                                    f"(仓位仍在,人工核查)")
                 self._api_note(e)
