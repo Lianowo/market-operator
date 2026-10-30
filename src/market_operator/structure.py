@@ -84,6 +84,12 @@ class Params:
     box_min_rotations: int = 1           # 箱沿采纳下限(顶底来回次数;1=至少一次反转)
     box_keep_broken_bars: int = 12       # 非 ACTIVE 边缘保留根数(破位后供回踩确认)
     box_keep_active_bars: int = 24       # ACTIVE 边缘保留根数(未破位但久未变化)
+    # 结构确认(替代"振幅/连续根数"这套代理指标):
+    # REJECT 只有在「试探极值之外先形成一个反向局部极值,且收盘重新夺回该极值」时
+    # 才成立 —— 支撑拒绝=夺回试探后的局部**高**点;阻力拒绝=跌破试探后的局部**低**点。
+    # 这是"试探失败、原方向重新取得主动权"的最小可观测结构事实。
+    struct_confirm_reject: bool = False
+
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "Params":

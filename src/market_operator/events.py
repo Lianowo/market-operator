@@ -214,6 +214,8 @@ class _Episode:
     ex_index: int
     puncture_index: Optional[int] = None  # A5 刺穿 bar
     outside_closes: int = 0   # v22 R3:episode 期间收盘越过外沿(hi+bm / lo-bm)的根数
+    reclaim: Optional[float] = None  # 结构确认:试探极值之后形成的反向局部极值
+
 
     # --- v9 过程量(docs/v9-protocol.md §1,默认关;非 v9 字段以上不读) ---
     occ_count: int = 0        # episode 内收盘越出远缘的根数(occ 的分子)
@@ -462,8 +464,35 @@ class EventDetector:
             fired: Optional[MarketEvent] = None
             edge = z.hi if res else z.lo
             extreme_first = (c < o) if res else (c >= o)
+            d = -1 if res else 1
 
-            if extreme_first:
+            if p.struct_confirm_reject:
+                # ── 结构确认(取代"振幅/连续根数"这类代理指标) ──────────────
+                # ① 试探极值 ep.ex 每被刷新,就把"局部反向极值"清零(旧反弹作废);
+                # ② 否则累计反向局部极值 reclaim(阻力=反弹低点,支撑=反弹高点);
+                # ③ 当 reclaim 与试探极值相差 ≥ rj,且**收盘重新夺回** reclaim
+                #    (阻力: 收在 reclaim 下方 / 支撑: 收在 reclaim 上方)
+                #    ⇒ "试探失败、原方向重新取得主动权",这才是拒绝成立。
+                new_ex = max(ep.ex, h) if res else min(ep.ex, l)
+                if new_ex != ep.ex:
+                    ep.ex, ep.ex_index = new_ex, t
+                    ep.reclaim = None
+                else:
+                    cand = l if res else h
+                    ep.reclaim = (cand if ep.reclaim is None else
+                                  (min(ep.reclaim, cand) if res
+                                   else max(ep.reclaim, cand)))
+                if (ep.reclaim is not None
+                        and d * (ep.reclaim - ep.ex) >= rj
+                        and d * (c - ep.reclaim) > 0.0):
+                    inv_s = ((max(z.hi, ep.ex) + bm) if res
+                             else (min(z.lo, ep.ex) - bm))
+                    fired = _reject(
+                        LEVEL_REJECTED, d, z, t, ts, bm,
+                        {"ex": ep.ex, "ex_index": ep.ex_index,
+                         "reclaim": ep.reclaim, "sub_kind": "S_STRUCT",
+                         "invalid": inv_s}, edge)
+            elif extreme_first:
                 new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                 if new_ex != ep.ex:
                     ep.ex, ep.ex_index = new_ex, t
@@ -501,7 +530,8 @@ class EventDetector:
                                     {"puncture_index": ep.puncture_index}, edge)
 
             # LEVEL_REJECTED(R1 真实收盘抽离拒绝 vs 历史单带回退)
-            if fired is None and ep.outside_closes == 0 and z.state is ZoneState.ACTIVE \
+            if fired is None and not p.struct_confirm_reject \
+                    and ep.outside_closes == 0 and z.state is ZoneState.ACTIVE \
                     and (extreme_first or ep.ex_index < t) and t - ep.ex_index <= n_f:
                 if p.use_balance_detector:
                     real_retreat = (ep.ex - c) if res else (c - ep.ex)

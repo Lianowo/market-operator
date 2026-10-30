@@ -134,6 +134,8 @@ class _MicEpisode:
     ex: float                       # episode 极值(§8.4 次序启发式,trigger 级推进)
     ex_index: int                   # ex 建立 trigger bar(窗口判据)
     puncture_index: Optional[int] = None  # 刺穿 trigger bar(窗口判据)
+    reclaim: Optional[float] = None  # 结构确认:试探极值之后形成的反向局部极值
+
 
 
 @dataclass
@@ -449,16 +451,41 @@ class MicTracker:
             res = z.role is res_role
             edge = z.hi if res else z.lo
             extreme_first = (c < o) if res else (c >= o)
-            if extreme_first:
+            d = -1 if res else 1
+            if p.struct_confirm_reject and p.use_balance_detector:
+                # 结构确认(与 events.py 同一语义):试探极值刷新 ⇒ 局部反向极值清零;
+                # 否则累计反向极值;收盘重新夺回它 ⇒ 拒绝成立。不依赖振幅/根数。
                 new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                 if new_ex != ep.ex:
                     ep.ex, ep.ex_index = new_ex, a
+                    ep.reclaim = None
+                else:
+                    cand = l if res else h
+                    ep.reclaim = (cand if ep.reclaim is None else
+                                  (min(ep.reclaim, cand) if res
+                                   else max(ep.reclaim, cand)))
+            elif extreme_first:
+                new_ex = max(ep.ex, h) if res else min(ep.ex, l)
+                if new_ex != ep.ex:
+                    ep.ex, ep.ex_index = new_ex, a
+
             if ep.puncture_index is None:
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = a
             fired: Optional[MarketEvent] = None
             close_pos = (h - c) / rng if res else (c - l) / rng
-            if p.use_balance_detector:
+            if p.struct_confirm_reject and p.use_balance_detector:
+                if (ep.reclaim is not None
+                        and d * (ep.reclaim - ep.ex) >= rj_trig
+                        and d * (c - ep.reclaim) > 0.0):
+                    inv_s = ((max(z.hi, ep.ex) + bm) if res
+                             else (min(z.lo, ep.ex) - bm))
+                    fired = self._mk(LEVEL_REJECTED, d, ts, a, {
+                        "zone": z.clone(), "ref": edge, "invalid": inv_s,
+                        "ex": ep.ex, "ex_index": ep.ex_index,
+                        "reclaim": ep.reclaim, "sub_kind": "S_STRUCT_MIC"})
+                    new_e3.append(fired)
+            elif p.use_balance_detector:
                 if (extreme_first or ep.ex_index < a) and a - ep.ex_index <= self.n_f_mic:
                     real_retreat = (ep.ex - c) if res else (c - ep.ex)
                     back_inside = (c <= z.lo) if res else (c >= z.hi)
