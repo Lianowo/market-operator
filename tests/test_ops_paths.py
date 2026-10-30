@@ -355,6 +355,66 @@ def test_status_snapshot_reports_tg_bot_pid(home):
     assert ops.status_snapshot({})["tg_bot"] == {"pid": None, "alive": False}
 
 
+@pytest.mark.parametrize("content", [None, "", "not-a-pid", "999999"])
+def test_tg_refresh_repairs_missing_or_invalid_pid(home, content):
+    pid_path = ops.live_paths({})["tg_pid"]
+    if content is not None:
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(content, encoding="utf-8")
+    tg_commands._refresh_pid_file(pid_path)
+    assert pid_path.read_text(encoding="utf-8") == str(os.getpid())
+    assert ops.status_snapshot({})["tg_bot"] == {
+        "pid": os.getpid(), "alive": True}
+
+
+def test_tg_refresh_preserves_correct_pid(home, monkeypatch):
+    pid_path = ops.live_paths({})["tg_pid"]
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("Correct PID must not be rewritten every loop")
+
+    monkeypatch.setattr(tg_commands.hb, "write_atomic", unexpected_write)
+    tg_commands._refresh_pid_file(pid_path)
+
+
+def test_tg_run_loop_repairs_deleted_pid(home, monkeypatch):
+    """Simulate external PID deletion without Telegram requests or real threads."""
+    import threading
+
+    pid_path = ops.live_paths({})["tg_pid"]
+    stop = threading.Event()
+    seen = []
+
+    class PollThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            assert pid_path.exists()
+            pid_path.unlink()
+
+        def is_alive(self):
+            return not stop.is_set()
+
+        def join(self, timeout=None):
+            if not stop.is_set():
+                seen.append(pid_path.read_text(encoding="utf-8"))
+                stop.set()
+
+    monkeypatch.setattr(threading, "Thread", PollThread)
+    monkeypatch.setattr(tg_commands, "resolve_bots", lambda secrets: (
+        [tg_commands.BotIdentity("ops", "offline-token", "offline-chat")], set()))
+    report = tg_commands.run_bots({}, secrets={}, sync=False, stop_event=stop)
+    assert report["ok"] is True
+    assert seen == [str(os.getpid())]
+    assert not pid_path.exists()  # Normal exit still cleans up registration.
+    lock = tg_commands.hb.SingletonLock(ops.live_paths({})["tg_lock"])
+    assert lock.acquire()
+    lock.release()
+
+
 def test_status_text_prints_tg_bot_line(home, capsys):
     lp = ops.live_paths({})
     lp["tg_pid"].parent.mkdir(parents=True, exist_ok=True)

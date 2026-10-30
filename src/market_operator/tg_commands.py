@@ -1030,6 +1030,17 @@ def _poll_loop(bot: BotIdentity, roles: set[str], cfg: dict, secrets: dict,
     return stats
 
 
+def _refresh_pid_file(pid_path: Path) -> None:
+    """单实例锁持有者修复丢失/损坏的登记,避免状态页误报或重复拉起。"""
+    pid = str(os.getpid())
+    try:
+        if pid_path.read_text(encoding="utf-8").strip() == pid:
+            return
+    except (OSError, UnicodeError):
+        pass
+    hb.write_atomic(pid_path, pid)
+
+
 def run_bots(cfg: dict, secrets: Optional[dict] = None, *, once: bool = False,
              sync: bool = True, purge: bool = True,
              stop_event=None) -> dict:
@@ -1058,8 +1069,8 @@ def run_bots(cfg: dict, secrets: Optional[dict] = None, *, once: bool = False,
     stop_event = stop_event or threading.Event()
     state_lock = threading.Lock()
     threads = []
-    hb.write_atomic(pid_path, str(os.getpid()))
     try:
+        _refresh_pid_file(pid_path)
         for token, row in buckets.items():
             bot = BotIdentity("public" if "public" in row["roles"] else "ops",
                               token, row["chat"])
@@ -1076,6 +1087,7 @@ def run_bots(cfg: dict, secrets: Optional[dict] = None, *, once: bool = False,
                 t.join(timeout=60)
         else:
             while any(t.is_alive() for t in threads):
+                _refresh_pid_file(pid_path)
                 for t in threads:
                     t.join(timeout=1.0)
                 if stop_event.is_set():
