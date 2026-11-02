@@ -3810,6 +3810,12 @@ class LiveRunner:
 
     def _paper_entry_fill(self, sym: str, oid: str, it: dict, price: float,
                           ts: int) -> None:
+        error = entry_contract_error(int(it["direction"]), price, float(it["invalid"]),
+                                     it.get("target_1"), it)
+        if error:
+            it["status"] = "void"
+            self._journal("paper_entry_void", {"oid": oid, "symbol": sym, "why": error, "price": price})
+            return
         risk = it["direction"] * (price - it["invalid"])
         if risk <= 0.0:
             it["status"] = "void"

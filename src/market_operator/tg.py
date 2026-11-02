@@ -763,7 +763,8 @@ class TelegramNotifier:
                          f"{float(box_hi):.8g}]{span_txt}")
             pos_txt = box_position_text(ref_price, box_lo, box_hi)
             if pos_txt:
-                lines.append(f"📍 箱内位置: {pos_txt}")
+                label = "关注价位置" if watch_details else "箱内位置"
+                lines.append(f"📍 {label}: {pos_txt}（下沿=0%，上沿=100%；不是方向行程）")
         if zone_lo is not None and zone_hi is not None:
             touch_txt = f" · 触边 {int(zone_touches)} 次" if zone_touches else ""
             lines.append(f"🧱 事件区间: [{float(zone_lo):.8g}, "
@@ -806,6 +807,8 @@ class TelegramNotifier:
         if exec_status:
             lines.append(f"🤖 系统执行: {exec_status}")
         if watch_details:
+            if not price_context or price_context.get("confirm_close") is None:
+                lines.append("⚠️ 原始确认价未提供；关注价不是确认价，不能用关注价判断信号是否过晚")
             for key, label in (("watch_price", "关注触发价"),
                                ("near_price", "近价区（触及后需企稳确认）"),
                                ("prog_price", "行情走完作废价")):

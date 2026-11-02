@@ -151,9 +151,21 @@ class EventDetector:
         self._prev_regime: Regime = Regime.TRANSITION
         self.consumed_episodes: int = 0
         self._recent_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
+        self._accept_refresh_only: set[int] = set()
 
     def update(self, bar) -> list[MarketEvent]:
+        # last_change_known also tracks property refreshes. Compare the prior
+        # lifecycle/geometry instead of treating every refreshed stamp as a break.
+        previous_edges = {id(z): (z.lo, z.hi, z.role, z.source_kind, z.state)
+                          for z in self.structure._zones.zones}
         self.structure.update(bar)
+        self._accept_refresh_only = {
+            id(z) for z in self.structure._zones.zones
+            if id(z) in previous_edges
+            and previous_edges[id(z)][:4] == (z.lo, z.hi, z.role, z.source_kind)
+            and previous_edges[id(z)][4] in (ZoneState.BROKEN, ZoneState.RETESTED)
+            and z.state is ZoneState.BROKEN
+        }
         s = self.structure
         t = s.bars_seen - 1
         atr = s.atr()
@@ -231,6 +243,7 @@ class EventDetector:
                 p.use_balance_detector
                 and z.state is ZoneState.BROKEN
                 and z.last_change_known == t
+                and id(z) not in self._accept_refresh_only
             )
             if z.state is not ZoneState.ACTIVE and not just_broken:
                 continue
@@ -247,6 +260,10 @@ class EventDetector:
 
         for z in s._zones.zones:
             if z.state is ZoneState.BROKEN and z.last_change_known == t:
+                # Refreshing an already-broken edge is not a new break.
+                # Keep the original acceptance count/start and consumed state.
+                if id(z) in self._accept_refresh_only:
+                    continue
                 if p.use_balance_detector:
                     res = z.role is res_role
                     escape = (h - z.hi) if res else (z.lo - l)
