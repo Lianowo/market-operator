@@ -112,11 +112,14 @@ def opp_lock_peak_px(direction: int, peak: float, budget: float) -> float:
 
 def opp_lock_arm_hit(direction: int, target: float, frac: float,
                      high: float, low: float, close: float) -> bool:
-    """arming 判据(价格事实,与调用频率无关):
+    """Arming on the caller's observation bar (close sampling is significant).
 
     - `frac < 0` ⇒ **收盘**突破对侧缘(acceptance,协议默认);
     - `frac > 0` ⇒ **盘中**触及对侧缘(touch);
     - `frac == 0` ⇒ 未启用锁利。
+
+    A 15m close beyond target can arm even when the enclosing 2h close does
+    not. The formula is shared; changing bar cadence changes activation facts.
     """
     tgt, f = float(target), float(frac)
     if f < 0.0:
@@ -136,6 +139,30 @@ class LockDecision:
     budget: Optional[float] = None
     drawdown: Optional[float] = None   # 自峰值的逆向回吐(保护侧方向为正)
     reason: str = ""
+
+
+def opp_lock_protection_step(*, direction: int, peak: float, budget: float,
+                             ref_px: float, armed: bool) -> LockDecision:
+    """Execute an existing lock entitlement, never infer a new one.
+
+    Caller supplies a valid price-unit budget and a causally observed peak.
+    No target, candle close or activation policy is consumed here. A newer
+    reference price alone must not invent a newer peak or activate a lock.
+    This is a decision, not exchange acknowledgement or a guaranteed fill.
+    """
+    budget = float(budget)
+    if not armed:
+        return LockDecision("hold", armed=False, budget=budget,
+                            reason="not_armed")
+    d = 1 if direction > 0 else -1
+    peak_px, ref = float(peak), float(ref_px)
+    stop_px = opp_lock_peak_px(d, peak_px, budget)
+    drawdown = d * (peak_px - ref)
+    if stop_protect_dist(d, stop_px, ref) > OPP_LOCK_EPS:
+        return LockDecision("tighten", armed=True, stop_px=stop_px,
+                            budget=budget, drawdown=drawdown, reason="ratchet")
+    return LockDecision("exit", armed=True, stop_px=stop_px, budget=budget,
+                        drawdown=drawdown, reason="giveback_exhausted")
 
 
 def opp_lock_step(*, direction: int, entry: float, target: float, frac: float,
@@ -171,20 +198,12 @@ def opp_lock_step(*, direction: int, entry: float, target: float, frac: float,
         # 不减仓,保持结构防线。这是**参数域**判断,不是"闸门拒单"。
         return LockDecision("off", armed=bool(armed), reason="degenerate_span")
 
-    ref = float(close) if ref_px is None else float(ref_px)
+    # Compatibility adapter: activation consumes the original observation bar;
+    # protection consumes only the resulting entitlement and price facts.
     armed_now = bool(armed) or opp_lock_arm_hit(d, target, frac, high, low, close)
-    if not armed_now:
-        return LockDecision("hold", armed=False, budget=budget,
-                            reason="not_armed")
-
-    peak_px = float(peak)
-    stop_px = opp_lock_peak_px(d, peak_px, budget)
-    drawdown = d * (peak_px - ref)          # 保护侧方向为正
-    if stop_protect_dist(d, stop_px, ref) > OPP_LOCK_EPS:
-        return LockDecision("tighten", armed=True, stop_px=stop_px,
-                            budget=budget, drawdown=drawdown, reason="ratchet")
-    return LockDecision("exit", armed=True, stop_px=stop_px, budget=budget,
-                        drawdown=drawdown, reason="giveback_exhausted")
+    return opp_lock_protection_step(
+        direction=d, peak=peak, budget=budget,
+        ref_px=float(close) if ref_px is None else float(ref_px), armed=armed_now)
 
 
 def fmt_px(px: Optional[float]) -> str:

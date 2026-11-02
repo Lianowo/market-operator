@@ -28,6 +28,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import math
+
+
+def execution_target(meta: dict, structural_target: Optional[float]) -> Optional[float]:
+    """Explicit None disables target-driven management; absent key is legacy."""
+    return meta.get("execution_target", structural_target)
+
+
+def entry_contract_error(direction: int, entry: float, invalid: float,
+                         target: Optional[float], meta: dict) -> Optional[str]:
+    """Shared route/fill guard; only bounded structure trades require a target."""
+    if not meta.get("bounded_entry"):
+        return None
+    if target is None or not all(math.isfinite(float(x)) for x in (entry, invalid, target)):
+        return "MISSING_STRUCTURE_TARGET"
+    risk = direction * (entry - invalid)
+    room = direction * (target - entry)
+    if risk <= 0.0:
+        return "BAD_INVALID"
+    if room <= 0.0:
+        return "TARGET_ALREADY_PASSED"
+    if room / risk < float(meta.get("entry_min_rr", 0.0)):
+        return "INSUFFICIENT_REMAINING_RR"
+    return None
 
 from .events import RANGE_ROTATED, MarketEvent
 from .structure import Params, Regime, ZoneRole, ZoneState

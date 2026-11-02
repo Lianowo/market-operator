@@ -729,7 +729,8 @@ class TelegramNotifier:
                     atr: Optional[float] = None,
                     exec_status: str = "",
                     decision_ts: Optional[int] = None,
-                    watch_details: Optional[dict] = None) -> bool:
+                    watch_details: Optional[dict] = None,
+                    price_context: Optional[dict] = None) -> bool:
         """信号广播(公开通道):结构事实 + 系统如何处置,一条消息读完。
 
         纪律:这里**只写结构与决策**,不写账户权益/持仓数量/下单成败 —— 该频道
@@ -767,6 +768,33 @@ class TelegramNotifier:
             touch_txt = f" · 触边 {int(zone_touches)} 次" if zone_touches else ""
             lines.append(f"🧱 事件区间: [{float(zone_lo):.8g}, "
                          f"{float(zone_hi):.8g}]{touch_txt}")
+        if price_context is not None:
+            ctx = price_context
+            lines.append(f"🧩 交易场景: {ctx.get('trade_context', '未标注')}")
+            if "execution_target" in ctx:
+                managed = ctx["execution_target"]
+                lines.append("⚙️ 目标管理: 结构目标仅观察/评估，不触发锁利或减仓"
+                             if managed is None else f"⚙️ 目标管理: 执行锚点 {float(managed):.8g}（按持仓规则锁利/减仓）")
+            for key, label in (("ev_ref", "事件边界（非首次触边价）"),
+                               ("event_extreme", "事件过程极值"),
+                               ("confirm_close", "收盘确认价")):
+                if ctx.get(key) is not None:
+                    lines.append(f"🔎 {label}: {float(ctx[key]):.8g}")
+            lines = [line.replace("🎯 参考价格:", "🎯 关注参考价:" if watch_details else "🎯 决策参考价:")
+                     .replace("📍 箱内位置:", "📍 关注价位置:" if watch_details else "📍 决策参考价位置:") for line in lines]
+            for key, label in (("confirm_close", "确认价位置"), ("snapshot_price", "行情快照位置")):
+                txt = box_position_text(ctx.get(key), box_lo, box_hi)
+                if txt:
+                    lines.append(f"📍 {label}: {txt}")
+            px, stamp = ctx.get("snapshot_price"), ctx.get("snapshot_ts")
+            if px is not None and stamp is not None:
+                sampled = datetime.fromtimestamp(int(stamp) / 1000, tz=timezone.utc).strftime("%m-%d %H:%M:%S UTC")
+                lines.append(f"💹 行情快照价: {float(px):.8g} ({ctx.get('snapshot_source', 'unknown')} · {sampled}，非成交价)")
+            else:
+                lines.append("💹 行情快照价: 未获取（参考价不是实时价）")
+            for key, label in (("confirm_distance_atr", "确认距事件侧内沿"), ("remaining_room_atr", "确认时剩余空间")):
+                if ctx.get(key) is not None:
+                    lines.append(f"📏 {label}: {float(ctx[key]):.2f} ATR")
         if atr:
             atr_txt = (f"{float(atr) / float(ref_price):.2%}" if ref_price
                        else f"{float(atr):.8g}")
@@ -790,7 +818,7 @@ class TelegramNotifier:
             try:
                 stamp = datetime.fromtimestamp(
                     int(decision_ts) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
-                lines.append(f"🕒 决策时刻: {stamp}")
+                lines.append(f"🕒 确认收盘时刻: {stamp}")
             except (TypeError, ValueError, OSError, OverflowError):
                 pass
         return self.send("signal", "\n".join(lines),

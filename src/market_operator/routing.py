@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional, Sequence
 
 from .broker import OrderIntent, OrderKind
@@ -24,7 +24,7 @@ from .events import (
     MarketEvent,
     canonical_event_id,
 )
-from .hypothesis import Hypothesis, StructureView
+from .hypothesis import Hypothesis, StructureView, entry_contract_error
 from .structure import PivotKind, _bar_parts
 
 _REF_REL_TOL = 1e-9
@@ -33,6 +33,8 @@ _REF_REL_TOL = 1e-9
 def _event_provenance(ev: MarketEvent) -> dict:
     """提取事件结构溯源元数据(ref / invalid / zone 边界与对侧锚点)。"""
     prov: dict = {
+        "event_extreme": ev.attrs.get("ex"),
+        "event_sub_kind": ev.attrs.get("sub_kind"),
         "ev_ref": (
             float(ev.attrs["ref"]) if ev.attrs.get("ref") is not None else None
         ),
@@ -45,6 +47,7 @@ def _event_provenance(ev: MarketEvent) -> dict:
     zone = ev.attrs.get("zone")
     if zone is not None:
         prov.update({
+            "source_kind": getattr(zone, "source_kind", "BOX_EDGE"),
             "zone_lo": float(zone.lo),
             "zone_hi": float(zone.hi),
             "zone_touches": int(zone.touches),
@@ -138,6 +141,8 @@ class RouterParams:
     accept_target_box_mult: Optional[float] = None
     reentry_use_box_target: bool = False
     reentry_use_struct_stop: bool = False
+    reentry_target_management: bool = False  # Opt in to lock/reduce on reentry target.
+    bounded_min_rr: float = 0.0     # Explicit candidate threshold; not a full-box-span proxy.
     _normalized_whitelist: frozenset = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -313,6 +318,44 @@ class MarketRouter:
             "STRONG 破位,市价次开盘")
 
     def _route_market(
+        self, symbol: str, ev: MarketEvent, view: StructureView,
+        close: float, atr: float, route: str, tag: str,
+    ) -> Optional[RouteDecision]:
+        zone = ev.attrs.get("zone")
+        cid = canonical_event_id(ev.id)
+        reentry = (cid == BREAKOUT_ACCEPTED and zone is not None
+                   and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE")
+        bounded = ((cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+                    and self.params.reject_target_mode != "none")
+                   or (reentry and self.params.reentry_use_box_target))
+        opp = getattr(zone, "box_opposite", None)
+        if bounded and (opp is None or ev.direction * (float(opp) - close) <= 0.0):
+            self._bump("structure_target_unavailable")
+            return None
+        prior_locks = dict(self._zone_lock)
+        dec = self._route_market_impl(symbol, ev, view, close, atr, route, tag)
+        if dec is None:
+            self._zone_lock = prior_locks
+            return None
+        floor = max(self.params.min_box_rr, self.params.bounded_min_rr) if bounded else 0.0
+        meta = {**dec.meta, "bounded_entry": bounded, "entry_min_rr": floor,
+                "structural_target": dec.hyp.target_1,
+                "execution_target": (None if reentry and not self.params.reentry_target_management
+                                     else dec.hyp.target_1),
+                "confirm_close": float(close), "confirm_ts": ev.attrs.get("close_ts"),
+                "trade_context": "重新入箱" if reentry else ("箱沿拒绝" if cid in (BREAKOUT_FAILED, LEVEL_REJECTED) else "箱外突破")}
+        if zone is not None and atr > 0.0:
+            inner = float(zone.hi if ev.direction > 0 else zone.lo)
+            meta["confirm_distance_atr"] = ev.direction * (close - inner) / atr
+            meta["remaining_room_atr"] = ev.direction * (float(opp) - close) / atr if opp is not None and bounded else None
+        error = entry_contract_error(ev.direction, dec.hyp.entry, dec.hyp.invalid, dec.hyp.target_1, meta)
+        if error:
+            self._zone_lock = prior_locks
+            self._bump(error.lower())
+            return None
+        return replace(dec, meta=meta)
+
+    def _route_market_impl(
         self,
         symbol: str,
         ev: MarketEvent,
@@ -329,6 +372,7 @@ class MarketRouter:
 
         # v22 轨道 C: A2 过伸突破转翻转边界前缘 Limit 挂单(当显式传入 A2_OVEREXTENDED 且开启回抽限价时)
         if (cid == BREAKOUT_ACCEPTED
+                and getattr(zone, "source_kind", "BOX_EDGE") != "FLIPPED_BOX_EDGE"
                 and not p.accept_watch_enabled
                 and p.allow_pullback_limit
                 and ev.attrs.get("sub_kind") == "A2_OVEREXTENDED"
@@ -478,7 +522,8 @@ class MarketRouter:
 
         min_dist = float(p.k_is) * atr
         ev_inv = ev.attrs.get("invalid")
-        if p.accept_use_struct_stop and ev_inv is not None:
+        if (p.accept_use_struct_stop or (p.reentry_use_struct_stop
+                and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE")) and ev_inv is not None:
             inv_px = float(ev_inv)
         elif p.accept_watch_keep_confirm_stop:
             inv_px = float(hyp.invalid)
@@ -766,6 +811,9 @@ class MarketRouter:
                 return None
             if opp is not None and dist > 0.0:
                 if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                    room = ev.direction * (float(opp) - close)
+                elif (cid == BREAKOUT_ACCEPTED and p.reentry_use_box_target
+                      and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE"):
                     room = ev.direction * (float(opp) - close)
                 elif p.allow_pullback_limit:
                     box_span = abs(float(opp) - (zone.hi if ev.direction > 0 else zone.lo))

@@ -316,7 +316,8 @@ def load_market_data(symbols: Sequence[str], params: Params,
 
 
 def build_frames(market: MarketData, settings: ScenarioSettings,
-                 timeframes: Sequence[str] = COGNITION_TIMEFRAMES) -> dict:
+                  timeframes: Sequence[str] = COGNITION_TIMEFRAMES, *,
+                  execution_seconds: Optional[int] = None) -> dict:
     """把 (品种 × 认知周期) 装配成战役帧;触发帧按配置降档挂载。"""
     frames: dict = {}
     for symbol in market.symbols:
@@ -334,8 +335,9 @@ def build_frames(market: MarketData, settings: ScenarioSettings,
                 )
             frame = build_campaign_frame(
                 market.cognition[(symbol, tf)],
-                market.execution_frame[(symbol, tf)],
-                tf, mic_cog=trigger_cognition)
+                (market.execution_frame[(symbol, tf)] if execution_seconds is None
+                 else market.trigger_frame[symbol][execution_seconds]),
+                tf, mic_cog=trigger_cognition, execution_seconds=execution_seconds)
             frames[frame.key] = frame
     return frames
 

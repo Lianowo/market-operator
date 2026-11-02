@@ -1699,6 +1699,49 @@ def _campaign(symbol="BTCUSDT", tf_label="12h"):
                                  trig_bars=list(bars), cog_bars=list(bars))
 
 
+def test_bounded_market_rechecks_quote_and_preserves_close_time(tmp_path):
+    client, tg = _FakeClient(), _SignalTG()
+    client.tickers = lambda: [{"symbol": "BTCUSDT", "lastPr": "111",
+                               "askPr": "111.1", "bidPr": "110.9"}]
+    r = _runner(tmp_path, client, tg)
+    r.equity = 104.0
+    d = _decision()
+    d.meta.update(bounded_entry=True, entry_min_rr=1.0, confirm_close=100.0)
+    r._submit_open(_campaign(), d, NOW, mic=False)
+    assert client.market_orders == []
+    assert "TARGET_ALREADY_PASSED" in tg.signals[0]["exec_status"]
+    assert tg.signals[0]["decision_ts"] == NOW + 12 * 3_600_000
+    assert tg.signals[0]["price_context"]["snapshot_price"] == 111.0
+
+
+def test_watch_trigger_rejects_bad_actual_rr(tmp_path):
+    client, tg = _FakeClient(), _SignalTG()
+    r = _runner(tmp_path, client, tg)
+    it = {"symbol": "BTCUSDT", "direction": 1, "invalid": 98.0,
+          "target_1": 110.0, "bounded_entry": True, "entry_min_rr": 1.0,
+          "status": "armed"}
+    r._trigger_watch_entry_live("watch-test", it, 106.0, NOW, "WATCH_NEAR_BOUNCE")
+    assert it["status"] == "canceled"
+    assert client.market_orders == []
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_live_registration_separates_observation_target(tmp_path, managed):
+    from market_operator.position import PositionManager
+    r = _runner(tmp_path, _FakeClient(), _SignalTG(), mode="paper")
+    cs = _campaign()
+    cs.pm = PositionManager()
+    r._get_cs_for = lambda *args: cs
+    it = {"oid": "split-target", "symbol": "BTCUSDT", "tf_label": "12h",
+          "direction": 1, "qty": 1, "invalid": 95, "target_1": 110,
+          "structural_target": 110, "execution_target": 110 if managed else None,
+          "event_id": "BREAKOUT_ACCEPTED", "route": "breakout_accepted_market"}
+    r._register_position("BTCUSDT", it, 100, NOW)
+    assert r.positions["BTCUSDT"]["structural_target"] == 110
+    assert r.positions["BTCUSDT"]["target_1"] == (110 if managed else None)
+    assert cs.pm.positions["BTCUSDT"].target_1 == (110 if managed else None)
+
+
 def test_signal_broadcast_survives_portfolio_cap(tmp_path):
     """容量闸门可以挡执行,但不能挡通知:结构信号照发,执行口径如实标注。"""
     client, tg = _FakeClient(), _SignalTG()

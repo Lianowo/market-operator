@@ -67,7 +67,7 @@ from market_operator.broker import (                            # noqa: E402
 from market_operator.events import EventDetector, canonical_event_id  # noqa: E402
 from market_operator.heartbeat import (                          # noqa: E402
     SCHEMA as HB_SCHEMA, HeartbeatGuard, iso_utc)
-from market_operator.hypothesis import StructureView            # noqa: E402
+from market_operator.hypothesis import StructureView, entry_contract_error, execution_target  # noqa: E402
 from market_operator.position import (                          # noqa: E402
     Position, PositionManager, opp_lock_step)
 from market_operator import adopt as adopt_mod                   # noqa: E402
@@ -1989,7 +1989,8 @@ class LiveRunner:
              裁决函数 `position.opp_lock_step` 推演:未 arming 保持结构防线 /
              保护侧推进(可多次棘轮)/ 回吐超预算则立刻市价离场。子周期只是
              **更早看到同一事实**,不是另一套语义 —— 2h 与 12h 采样得到同一
-             防线水平(`idempotent`,不随裁决频率漂移)。
+              防线公式相同；负 frac 的收盘启用条件随采样周期变化，不能据此
+              声称 2h 与 12h 的启用时间或持仓路径等价。
         """
         sym = cs.symbol
         pos_pm = cs.pm.positions.get(sym)
@@ -2369,6 +2370,25 @@ class LiveRunner:
         box_lo, box_hi = self._box_bounds(zone_lo, zone_hi,
                                           d.meta.get("box_opposite"))
         chart_bars, on_cog = self._signal_chart_bars(cs, mic)
+        period_s = (getattr(cs, "trigger_tf_seconds", 0) if mic else
+                    getattr(cs, "obs_tf_seconds", TF_SECONDS_MAP.get(cs.tf_label, 0)))
+        confirm_ts = d.meta.get("confirm_ts") or (t + int(period_s) * 1000)
+        snapshot_px, snapshot_ts, execution_quote = None, None, None
+        if self.mode == "live":
+            try:
+                now_s = time.time()
+                cache = getattr(self, "_signal_quote_cache", None)
+                if cache is None or now_s - cache[0] >= 15.0:
+                    cache = (now_s, self.client.tickers() or [])
+                    self._signal_quote_cache = cache
+                for row in cache[1]:
+                    if row.get("symbol") == sym:
+                        snapshot_px = float(row.get("lastPr") or 0.0) or None
+                        snapshot_ts = int(cache[0] * 1000)
+                        execution_quote = float(row.get("askPr" if hyp.direction > 0 else "bidPr") or 0.0) or None
+                        break
+            except Exception:
+                pass  # Missing quote is explicit; notification must not invent one.
         chart_pivots = self._chart_pivots(getattr(view, "pivots", ())) \
             if on_cog else []
         # ---- 闸门:只产出 block 码,不决定要不要通知 ----
@@ -2378,6 +2398,12 @@ class LiveRunner:
             block = "API_HALT"
         elif risk_per_unit <= 0.0:
             block = "degenerate_risk"
+        elif self.mode == "live" and d.kind == "market" and d.meta.get("bounded_entry"):
+            block = (entry_contract_error(hyp.direction, execution_quote, invalid,
+                     hyp.target_1, d.meta) if execution_quote is not None else "EXECUTION_QUOTE_UNAVAILABLE")
+            if block is None:
+                # Size against the adverse quote as well as the decision price.
+                risk_per_unit = max(risk_per_unit, abs(execution_quote - invalid))
         if block is None:
             qty = eff_rf * size_mult * equity / risk_per_unit
             # 用该品种实际生效杠杆(而非统一上限):低上限品种按 20x 算出的数量
@@ -2449,7 +2475,16 @@ class LiveRunner:
             zone_lo=zone_lo, zone_hi=zone_hi,
             zone_touches=d.meta.get("zone_touches"),
             pivots=chart_pivots, atr=getattr(view, "atr", None),
-            decision_ts=t, watch_details=watch_details)
+            decision_ts=confirm_ts, watch_details=watch_details,
+            price_context={**d.meta, "snapshot_price": snapshot_px,
+                           "snapshot_ts": snapshot_ts, "snapshot_source": "lastPr"})
+        self._journal("signal_structure", {
+            "symbol": sym, "tf": cs.tf_label, "event": hyp.event_id,
+            "confirm_ts": confirm_ts, "entry_ref": entry_ref,
+            "invalid": invalid, "target_1": hyp.target_1,
+            "box_lo": box_lo, "box_hi": box_hi,
+            "snapshot_price": snapshot_px, "snapshot_ts": snapshot_ts,
+            "exec_block": block, **d.meta})
         if block is not None:
             self._note_block(sym, cs, hyp, block, qty=qty, ref=entry_ref)
             return
@@ -2461,9 +2496,13 @@ class LiveRunner:
                   "ref_px": float(entry_ref),
                   "invalid": float(hyp.invalid),
                   "target_1": hyp.target_1, "event_id": hyp.event_id,
+                  "structural_target": hyp.target_1,
+                  "execution_target": execution_target(d.meta, hyp.target_1),
                   "route": d.route, "size_mult": size_mult,
                   "edge_mult": edge_mult,
                   "box_lo": box_lo, "box_hi": box_hi,
+                  "bounded_entry": bool(d.meta.get("bounded_entry")),
+                  "entry_min_rr": float(d.meta.get("entry_min_rr", 0.0)),
                   "watch_entry": is_watch,
                   "watch_price": float(entry_ref) if is_watch else None,
                   "near_price": (float(d.meta["near_price"])
@@ -2479,7 +2518,7 @@ class LiveRunner:
                   "near_extreme": None,
                   "risk_usdt_cap": float(qty * risk_per_unit),
                   "decision_ts": t, "mic": mic,
-                  "expiry_ts": t + wait_h * MS_1H, "status": "armed",
+                  "expiry_ts": confirm_ts + wait_h * MS_1H, "status": "armed",
                   "exchange_order_id": None}
         self.open_intents[oid] = intent
         if self.mode == "live":
@@ -2641,6 +2680,12 @@ class LiveRunner:
                                   now_ms: int, trigger_why: str) -> None:
         sym = str(it["symbol"])
         d, inv = int(it["direction"]), float(it["invalid"])
+        error = entry_contract_error(d, exec_px, inv, it.get("target_1"), it)
+        if error:
+            it["status"] = "canceled"
+            self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": error, "exec_px": exec_px})
+            self._notify_watch(it, "关注作废", error)
+            return
         if d * (exec_px - inv) <= 0.0:
             it["status"] = "canceled"
             self._notify_watch(it, "关注作废", "执行参考价已越过失效位")
@@ -2689,7 +2734,8 @@ class LiveRunner:
         self.positions[sym] = {
             "symbol": sym, "tf_label": tf_lbl, "direction": it["direction"],
             "qty": it["qty"], "entry": price, "invalid": it["invalid"],
-            "target_1": it["target_1"], "event_id": it["event_id"],
+            "target_1": execution_target(it, it["target_1"]), "event_id": it["event_id"],
+            "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "opened_ts": ts, "mark": price}
         self._touch_campaigns()              # 新仓:冷档里的 pm 事实必须同步
@@ -2698,7 +2744,7 @@ class LiveRunner:
             if risk > 0.0:
                 try:
                     cs.pm.open(sym, it["direction"], price, it["invalid"],
-                               it["target_1"], it["event_id"], ts,
+                               execution_target(it, it["target_1"]), it["event_id"], ts,
                                len(cs.cog_bars))
                 except ValueError as e:
                     self.tg.send_alert(f"{sym} pm 建仓拒绝:{e}")
@@ -2723,6 +2769,8 @@ class LiveRunner:
                       if self.mode == "live" and it.get("fill_price_source") != "fills"
                       else f"开仓({self.mode})"), it["qty"], price,
                 note=f"{it['event_id']} {it['route']}"
+                     + (f" · 结构目标 {it['target_1']} 仅观察，不触发锁利/减仓"
+                        if it.get("target_1") is not None and execution_target(it, it["target_1"]) is None else "")
                      + (f" · 系统Watch触发 {it.get('watch_trigger') or '价格条件满足'}" if it.get("watch_entry") else "")
                      + (" · 参考价暂记，成交均价待回执校正" if self.mode == "live" and it.get("fill_price_source") != "fills" else ""),
                 tf_label=tf_lbl, direction=it["direction"],
@@ -2744,6 +2792,8 @@ class LiveRunner:
                        "tf_label": tf_lbl,
                        "opened_ts": int(ts),
                        "event_id": it["event_id"],
+                       "structural_target": it.get("structural_target", it.get("target_1")),
+                       "execution_target": execution_target(it, it.get("target_1")),
                        "role": "entry", "mode": self.mode,
                        "origin": origin,
                        "stop_source": it.get("stop_source"),

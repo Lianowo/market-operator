@@ -71,6 +71,7 @@ v4 增量(docs/v4-protocol.md §1-G3,执行路径细化;不改变任何既有市
 """
 
 from __future__ import annotations
+from .hypothesis import entry_contract_error
 
 import bisect
 import hashlib
@@ -416,17 +417,20 @@ class Broker:
             if bool(od.meta.get("mic")) != bool(mic_only):
                 kept.append(od)
                 continue
-            if hour_label > od.expiry_ts:
+            exact_window = od.meta.get("execution_step_ms")
+            window_label = int(ts) if exact_window else hour_label
+            if window_label > od.expiry_ts:
                 rows.append(self._timeout(od, int(ts)))
                 continue
             barred = (od.fill_after_ts if od.fill_after_ts is not None
                       else od.armed_at_ts)
-            if hour_label <= barred:
+            if window_label <= barred:
                 kept.append(od)                       # 决策 bar 覆盖区间,不可成交
                 continue
             if od.role == "entry" and od.meta.get("watch_entry"):
                 max_wait_h = od.meta.get("max_wait_hours")
-                if max_wait_h is not None and (od.wait_bars + 1) > int(max_wait_h):
+                if (not exact_window and max_wait_h is not None
+                        and (od.wait_bars + 1) > int(max_wait_h)):
                     rows.append(self._timeout(od, int(ts)))
                     continue
                 prog_px = od.meta.get("prog_price")
@@ -527,7 +531,10 @@ class Broker:
         self.pending.setdefault(od.symbol, []).append(_Pending(
             intent=intent, decision_ts=int(ts), direction=od.direction,
             invalid=od.invalid, target_1=od.target_1, event_id=od.event_id,
-            meta={**od.meta, "entry_mode": mode,
+            meta={**od.meta,
+                  **({"execution_not_before": int(ts) + int(od.meta["execution_step_ms"])}
+                     if od.meta.get("execution_step_ms") else {}),
+                  "entry_mode": mode,
                   "limit_price": od.limit_price, "fill_wait_bars": od.wait_bars,
                   "trigger_ts": int(ts), "armed_at_ts": int(od.armed_at_ts)}))
         return self._admin_row(
@@ -662,6 +669,9 @@ class Broker:
         side = "buy" if d > 0 else "sell"
         price = od.limit_price
         ref = {"armed_at_ts": od.armed_at_ts, "intent_reason": od.reason}
+        error = entry_contract_error(d, price, od.invalid, od.target_1, od.meta)
+        if error:
+            return self._limit_skip(od, ts, error, "structure entry contract failed", ref)
         if sym in self.positions:
             return self._limit_skip(od, ts, "DUP_POSITION",
                                     f"position already open for {sym}", ref)
@@ -796,6 +806,9 @@ class Broker:
         if kept:
             self.pending[symbol] = kept + self.pending.get(symbol, [])
         for po in orders:
+            if ts < po.meta.get("execution_not_before", ts):
+                self.pending.setdefault(symbol, []).append(po)
+                continue
             if ts <= po.decision_ts:
                 raise AssertionError(
                     f"fill ts {ts} <= decision ts {po.decision_ts} "
@@ -831,6 +844,9 @@ class Broker:
         d = po.direction
         side = "buy" if d > 0 else "sell"
         price = self._slipped(o, side, sym)
+        error = entry_contract_error(d, price, po.invalid, po.target_1, po.meta)
+        if error:
+            return self._skip_row(po, ts, error, "structure entry contract failed", price=price)
 
         if sym in self.positions:
             return self._skip_row(po, ts, "DUP_POSITION",

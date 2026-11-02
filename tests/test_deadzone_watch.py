@@ -91,6 +91,7 @@ def test_router_deadzone_watch_f1_clamp_and_boundaries():
     d_low_r = r_on.on_bar("BTCUSDT", (T0 + 2 * MS_1H, 100.0, 102.8, 99.2, 102.5, 10.0),
                           12, view, 2.0, [ev], position_open=False, entry_resting=False)
     assert len(d_low_r) == 1 and d_low_r[0].kind == "market"
+    assert d_low_r[0].meta["entry_min_rr"] == 0.0  # Watch interval is not admission.
 
 
 def test_broker_watch_entry_near_bounce_played_out_and_4h_timeout():

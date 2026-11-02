@@ -79,6 +79,8 @@ def main() -> int:
     parser.add_argument("--equity", type=float, default=300.0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if not math.isfinite(args.equity) or args.equity <= 0:
+        parser.error("--equity must be finite and positive")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     strategy_path, live_path = ROOT / "config/strategy.json", ROOT / "config/live.json"
@@ -94,13 +96,17 @@ def main() -> int:
         "risk": risk, "scenarios": {},
         "hashes": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                    for p in (strategy_path, live_path, ROOT / "data/manifest.json", ROOT / "data/contracts.json")},
+        "source_hashes": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                          for p in sorted((ROOT / "src/market_operator").glob("*.py"))},
+        "working_tree_status": subprocess.check_output(
+            ["git", "status", "--short"], cwd=ROOT, text=True),
         "limitations": [
             "Production canonical campaigns, not a tick-by-tick execution of live_runner.",
             "Fixed four-symbol universe; no historical dynamic universe, outages or API failures.",
             "Live daily-loss/order-rate circuit breakers are not simulated by run_campaigns.",
             "Slippage is embedded in fill prices; do not deduct slippage_cost twice.",
             "Tail removal is attribution of original trades, not a counterfactual recompounding replay.",
-            "dev/test are independent 300-USDT starts, not additive portions of full compounded PnL.",
+            f"dev/test independently start at {args.equity:g} USDT; their PnL is not additive to full.",
         ],
     }
     (out / "strategy.snapshot.json").write_bytes(strategy_path.read_bytes())
