@@ -1,0 +1,35 @@
+{
+  "note": "Clean HEAD baseline. n_a is the ACCEPT consecutive-close count; trigger_2h_30m observes 2h structure on 30m closes. No limit-order fallback.",
+  "rows": [
+    {
+      "variant": "baseline",
+      "segment": "dev",
+      "cost": 1.0,
+      "closed": 370,
+      "pnl_net": 59.073833229053456,
+      "ending_equity": 163.0738332290536,
+      "max_dd_usdt": 14.139167888067448,
+      "max_dd_pct": 0.08893247480209218,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 331,
+        "v21": 33,
+        "§8.5": 6
+      }
+    },
+    {
+      "variant": "trigger_2h_30m",
+      "segment": "dev",
+      "cost": 1.0,
+      "closed": 486,
+      "pnl_net": 64.73282779762668,
+      "ending_equity": 168.7328277976271,
+      "max_dd_usdt": 18.415476689569715,
+      "max_dd_pct": 0.11291357332174953,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 444,
+        "v21": 36,
+        "§8.5": 6
+      }
+    }
+  ]
+}
