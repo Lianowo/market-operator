@@ -347,10 +347,11 @@ class PositionManager:
     def on_price(self, symbol: str, *, ts: int, price: float,
                  ref_price: Optional[float] = None,
                  atr: float = 0.0) -> list[OrderIntent]:
-        """Fresh quote: advance an existing entitlement; never infer a bar close.
+        """Fresh quote: advance an existing entitlement; never grant one.
 
-        A negative frac is a closed-bar rule: quotes only ratchet an already
-        armed lock. A positive frac explicitly means touch, so a quote may arm.
+        Arming belongs to the bar clock (2H or 15m). Quotes only ratchet an
+        already-armed lock, enforce the structural defense, or exit when the
+        giveback budget is exhausted.
         """
         import math
 
@@ -370,11 +371,6 @@ class PositionManager:
         if (self.giveback_atr_k is not None and atr > 0.0
                 and pos.giveback_unit is None):
             pos.giveback_unit = float(atr)
-        armed_now = bool(pos.armed)
-        if not armed_now and frac > 0.0:
-            armed_now = opp_lock_arm_hit(
-                pos.direction, pos.target_1, frac,
-                high=px, low=px, close=px)
         budget = (min(self.giveback_atr_k * pos.giveback_unit,
                       abs(pos.target_1 - pos.entry))
                   if self.giveback_atr_k is not None
@@ -384,8 +380,7 @@ class PositionManager:
             return []
         ld = opp_lock_protection_step(
             direction=pos.direction, peak=pos._best, budget=budget,
-            ref_px=ref, armed=armed_now)
-        pos.armed = pos.armed or armed_now
+            ref_px=ref, armed=bool(pos.armed))
         if ld.action == "exit":
             return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
                                 qty_frac=pos.size_frac, ref_price=ref, ts=ts,

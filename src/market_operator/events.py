@@ -290,42 +290,25 @@ class EventDetector:
                 if not hold:
                     continue
                 cd.count += 1
-            direction = +1 if cd.role is res_role else -1
-            ref = cd.hi if cd.role is res_role else cd.lo
-            ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-            fast_ok = False
-            if p.use_balance_detector:
-                not_counter = (
-                    (cur_regime is not Regime.TREND_DOWN)
-                    if direction > 0
-                    else (cur_regime is not Regime.TREND_UP)
-                )
-                close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
-                progressing = (
-                    (c >= cd.start_close and c > o and close_pos >= 0.50)
-                    if direction > 0
-                    else (c <= cd.start_close and c < o and close_pos >= 0.50)
-                )
-                max_ext = float(p.accept_max_ext_atr or 1.50)
-                fast_candidate = (p.fast_accept_atr is not None
-                                  and cd.count == 1)
-                if fast_candidate:
-                    # Conditional fast path: only a decisive first close
-                    # (large excursion, close near the extreme, still in the
-                    # direction of travel) may skip the n_a countdown. Weak
-                    # first bars keep waiting for the normal n_a confirmation.
-                    fast_ok = (
-                        not_counter and progressing
-                        and close_pos >= 0.65
-                        and ext_dist >= float(p.fast_accept_atr) * atr
-                        and ext_dist <= max_ext * atr
+            if cd.count >= n_a:
+                direction = +1 if cd.role is res_role else -1
+                ref = cd.hi if cd.role is res_role else cd.lo
+                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                if p.use_balance_detector:
+                    not_counter = (
+                        (cur_regime is not Regime.TREND_DOWN)
+                        if direction > 0
+                        else (cur_regime is not Regime.TREND_UP)
                     )
-                if cd.count >= n_a or fast_ok:
+                    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
+                    progressing = (
+                        (c >= cd.start_close and c > o and close_pos >= 0.50)
+                        if direction > 0
+                        else (c <= cd.start_close and c < o and close_pos >= 0.50)
+                    )
+                    max_ext = float(p.accept_max_ext_atr or 1.50)
                     if not_counter and progressing and ext_dist <= max_ext * atr:
-                        sub_kind = ("A3_FAST" if fast_ok
-                                    else ("A2_OVEREXTENDED"
-                                          if ext_dist > 0.80 * atr
-                                          else "A1_TIGHT"))
+                        sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
                         events.append(MarketEvent(
                             id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
                             attrs={
@@ -335,16 +318,9 @@ class EventDetector:
                                 "started": cd.started,
                                 "sub_kind": sub_kind,
                                 "ext_atr": (ext_dist / atr) if atr > 0.0 else 0.0,
-                                "fast": fast_ok,
                             },
                         ))
-                        continue
-                    if cd.count >= n_a:
-                        # At the normal count with failed quality: existing
-                        # behavior drops the candidate rather than re-arming it.
-                        continue
-            else:
-                if cd.count >= n_a:
+                else:
                     events.append(MarketEvent(
                         id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
                         attrs={
@@ -354,7 +330,7 @@ class EventDetector:
                             "started": cd.started,
                         },
                     ))
-                    continue
+                continue
             kept.append(cd)
         self._candidates = kept
 

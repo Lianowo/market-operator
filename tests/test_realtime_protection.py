@@ -28,12 +28,6 @@ def test_quote_never_arms_close_mode():
     assert not p.armed and p.invalid == pytest.approx(95.0)
 
 
-def test_quote_arms_touch_mode():
-    pm, p = _pm(0.25)
-    pm.on_price("BTCUSDT", ts=NOW, price=110.0)
-    assert p.armed and p.invalid == pytest.approx(102.5)
-
-
 def test_armed_close_mode_ratchets_on_quote():
     pm, p = _pm(-0.25)
     p.armed = True

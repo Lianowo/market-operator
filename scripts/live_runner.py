@@ -707,15 +707,14 @@ class LiveRunner:
         self._stops_live_ids: Optional[set] = None
         self._stops_live_rows: Optional[list] = None   # 同上快照的原始行(去重用)
         # Price-protection clock (independent of entry/event clocks):
-        #   bar  = legacy 2H sub-bar only
-        #   15m  = closed 15m bars arm the target lock; fresh quotes ratchet
-        #   quote = fresh quotes only (negative frac still never arms there)
+        #   bar = legacy 2H sub-bar only
+        #   15m = closed 15m bars arm the target lock; fresh quotes ratchet
         self.price_clock = str((cfg.get("protection") or {})
                                .get("price_clock", "bar")).lower()
-        if self.price_clock not in ("bar", "15m", "quote"):
+        if self.price_clock not in ("bar", "15m"):
             raise RuntimeError(
                 f"protection.price_clock 非法: {self.price_clock!r}"
-                f"(仅允许 bar|15m|quote)")
+                f"(仅允许 bar|15m)")
         self._price_seen: dict[str, int] = {}
         self._price_last: dict[str, int] = {}
         self._load_state()
@@ -1691,12 +1690,10 @@ class LiveRunner:
     def _poll_position_prices(self, now_ms: int) -> None:
         """Fresh quotes ratchet an existing defense between 15m closes.
 
-        Negative frac is a closed-bar rule: this path never arms it. It only
-        updates the peak and tightens an already-armed lock (or, with a positive
-        frac, honors the explicit touch-arming rule). The 15m clock is the
-        arming source for the recommended production mode.
+        Arming belongs to the 15m bar clock. Quotes only update the peak,
+        tighten an already-armed lock, or exit on a breached defense.
         """
-        if self.price_clock not in ("15m", "quote") or not self.positions:
+        if self.price_clock != "15m" or not self.positions:
             return
         if not hasattr(self.client, "tickers"):
             return
