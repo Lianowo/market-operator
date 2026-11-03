@@ -67,7 +67,7 @@
   "protection": {
     "price_clock": "15m",
     "max_quote_age_seconds": 30,
-    "note": "价格保护时钟与入场/事件时钟独立：15m=已收盘15m bar 授予/推进目标锁利，之后新鲜报价每轮推进峰值/防线；bar=旧2H子bar。目标锁利仍是峰值锚定回吐预算，不是止盈挂单；交易所TPSL仍是固定止损后备。REST轮询不是逐笔行情，采样间极值可能漏掉。"
+    "note": "价格保护时钟与入场/事件时钟独立：已收盘15m bar 授予/推进目标锁利，之后每轮新鲜报价推进已武装峰值/防线；bar保留旧2H子bar行为。交易所TPSL继续兜底。REST轮询可能漏掉采样间极值。"
   },
   "heartbeat": {
     "enabled": true,

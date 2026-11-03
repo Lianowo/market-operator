@@ -21,6 +21,7 @@ from .events import (
     TREND_RESUMED,
     EventDetector,
     MarketEvent,
+    fast_accept_ok,
 )
 from .hypothesis import StructureView
 from .structure import (
@@ -371,9 +372,9 @@ class MicTracker:
                 if not hold:
                     continue
                 cd.count += 1
+            direction = +1 if cd.role is res_role else -1
+            ref = cd.hi if cd.role is res_role else cd.lo
             if cd.count >= req_count:
-                direction = +1 if cd.role is res_role else -1
-                ref = cd.hi if cd.role is res_role else cd.lo
                 if p.use_balance_detector:
                     ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
                     not_counter = (
@@ -400,6 +401,8 @@ class MicTracker:
                                     "started": cd.started,
                                     "sub_kind": sub_kind,
                                     "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
+                                    "fast": False,
+                                    "fast_bars": 0,
                                 },
                             )
                         )
@@ -416,7 +419,29 @@ class MicTracker:
                         )
                     )
                 continue
+            fast, fast_bars = fast_accept_ok(
+                p, cd, direction=direction, o=o, h=h, l=l, c=c,
+                atr=ctx.atr, regime=ctx.regime)
+            if fast:
+                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                events.append(
+                    self._mk(
+                        BREAKOUT_ACCEPTED, direction, ts, a,
+                        {
+                            "zone": cd.zone.clone(),
+                            "ref": ref,
+                            "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                            "started": cd.started,
+                            "sub_kind": "A3_FAST",
+                            "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
+                            "fast": True,
+                            "fast_bars": fast_bars,
+                        },
+                    )
+                )
+                continue
             kept_cd.append(cd)
+
         self._candidates = kept_cd
 
 

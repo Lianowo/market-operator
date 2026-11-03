@@ -1,5 +1,4 @@
 """Real-time protection clock vs arming evidence (clean production chain)."""
-import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +12,7 @@ from market_operator.events import LEVEL_REJECTED
 from market_operator.position import PositionManager
 from market_operator.structure import Params
 from test_live_runtime import _cfg_min, _FakeClient, _FakeTG, _pos, _runner, NOW
+import live_runner as lr
 
 
 def _pm(frac):
@@ -102,3 +102,109 @@ def test_invalid_price_clock_fails_closed(tmp_path):
     cfg.setdefault("protection", {})["price_clock"] = "tick"
     with pytest.raises(RuntimeError, match="price_clock"):
         _runner(tmp_path, _FakeClient(), _FakeTG(), cfg=cfg)
+
+
+def test_initial_price_clock_ts_skips_entry_history():
+    """Restart anchors at the last closed 15m bar, not at the entry bar."""
+    step = 15 * 60 * 1000
+    now = 1_800_000_000_000
+    old_entry = now - 96 * step
+    assert lr.initial_price_clock_ts(now, step, old_entry) == \
+        (now // step) * step - step
+
+    # A position opened inside the current bar must not look before its entry.
+    entry = (now // step) * step
+    assert lr.initial_price_clock_ts(now, step, entry) == entry
+
+
+def test_price_clock_resyncs_after_long_gap(tmp_path):
+    """A stalled process must not crawl the missed 15m history."""
+    step = 15 * 60 * 1000
+    r, _client, _p, now = _attach_15m(tmp_path)
+    r._price_last["BTCUSDT"] = now - 20 * step
+    r._advance_price_clock(now)
+    assert r._price_last["BTCUSDT"] >= (now // step) * step - step
+
+
+@pytest.mark.parametrize("age_ms", [30_001, -1])
+def test_stale_or_future_quote_does_not_advance(tmp_path, monkeypatch, age_ms):
+    r, client, p, now = _attach_15m(tmp_path)
+    r._advance_price_clock(now)
+    before = (p.invalid, p._best)
+    monkeypatch.setattr(lr.time, "time", lambda: now / 1000)
+    client.tickers = lambda: [{
+        "symbol": "BTCUSDT", "lastPr": "115", "markPrice": "115",
+        "ts": str(now - age_ms)}]
+    r._poll_position_prices(now)
+    assert (p.invalid, p._best) == before
+    assert "BTCUSDT" not in r._price_seen
+
+
+def test_duplicate_quote_does_not_advance_again(tmp_path, monkeypatch):
+    r, client, p, now = _attach_15m(tmp_path)
+    r._advance_price_clock(now)
+    monkeypatch.setattr(lr.time, "time", lambda: now / 1000)
+    quote = {"symbol": "BTCUSDT", "lastPr": "115", "markPrice": "115",
+             "ts": str(now)}
+    client.tickers = lambda: [quote]
+    r._poll_position_prices(now)
+    assert p.invalid == pytest.approx(107.5)
+    before = p._best
+    quote.update(lastPr="125", markPrice="125")
+    r._poll_position_prices(now)
+    assert p.invalid == pytest.approx(107.5)
+    assert p._best == before
+
+
+def test_unconfirmed_entry_does_not_arm_or_ratchet(tmp_path, monkeypatch):
+    r, client, p, now = _attach_15m(tmp_path)
+    r.positions["BTCUSDT"]["price_source"] = "ref"
+    monkeypatch.setattr(lr.time, "time", lambda: now / 1000)
+    client.tickers = lambda: [{
+        "symbol": "BTCUSDT", "lastPr": "115", "markPrice": "115",
+        "ts": str(now)}]
+    r._advance_price_clock(now)
+    r._poll_position_prices(now)
+    assert not p.armed
+    assert p.invalid == pytest.approx(95.0)
+
+
+def test_unclosed_15m_bar_cannot_arm(tmp_path):
+    r, client, p, now = _attach_15m(tmp_path)
+    client.history_candles = lambda *a, **k: [
+        (now, 101.0, 112.0, 100.5, 111.0, 15.0)]
+    r._advance_price_clock(now)
+    assert not p.armed
+    assert p.invalid == pytest.approx(95.0)
+
+
+def test_new_position_clears_previous_clock_anchors(tmp_path):
+    r, _, _, now = _attach_15m(tmp_path)
+    r._price_last["BTCUSDT"] = now - 100_000_000
+    r._price_seen["BTCUSDT"] = now - 1
+    intent = {
+        "oid": "new-position", "tf_label": "2h", "direction": 1,
+        "qty": 1.0, "invalid": 95.0, "target_1": 110.0,
+        "event_id": LEVEL_REJECTED, "route": "e3_market"}
+    r._register_position("BTCUSDT", intent, 100.0, now)
+    assert "BTCUSDT" not in r._price_last
+    assert "BTCUSDT" not in r._price_seen
+
+
+def test_closed_position_clears_clock_anchors(tmp_path):
+    r, _, _, now = _attach_15m(tmp_path)
+    r._price_seen["BTCUSDT"] = now - 1
+    r._reconcile_closed("BTCUSDT", r.positions["BTCUSDT"])
+    assert "BTCUSDT" not in r.positions
+    assert "BTCUSDT" not in r._price_last
+    assert "BTCUSDT" not in r._price_seen
+
+
+def test_production_protection_clock_configuration():
+    import json
+
+    path = Path(__file__).resolve().parents[1] / "config" / "live.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["loop"]["poll_seconds"] == 5
+    assert raw["protection"]["price_clock"] == "15m"
+    assert raw["protection"]["max_quote_age_seconds"] == 30

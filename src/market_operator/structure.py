@@ -46,6 +46,9 @@ class Params:
     box_keep_broken_bars: int = 12
     box_keep_active_bars: int = 24
     accept_max_ext_atr: float = 1.50
+    # A decisive first close may skip n_a only in the matching trend.
+    # None preserves ordinary confirmation; range/transition always use n_a.
+    fast_accept_atr: Optional[float] = None
     box_reentry_enabled: bool = False
     box_reentry_max_bars: int = 96
 

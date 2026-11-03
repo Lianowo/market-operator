@@ -85,6 +85,23 @@ STRATEGY_CONFIG = ROOT / "config" / "strategy.json"   # 生产策略配置(唯�
 MS_1H = 3_600_000
 N_FILL_H = 12                                    # canonical N_fill(墙钟小时)
 TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400}
+#: Longest 15m catch-up window the price clock will replay. A longer gap means
+#: the process was stalled/restarted; re-anchor to the last closed bar instead
+#: of crawling days of history and acting on stale closes.
+PRICE_CLOCK_MAX_CATCHUP_STEPS = 4
+
+
+def initial_price_clock_ts(now_ms: int, step: int, opened_ts: int) -> int:
+    """Startup anchor for the 15m price clock: the last closed bar, not entry.
+
+    ``_best`` / ``invalid`` / ``armed`` are persisted in ``campaigns.json``; a
+    restart must not walk the whole position history 100 bars at a time. Doing
+    so would replay days-old closes and could execute an exit at a stale price.
+    We only need the most recent closed 15m bar (plus the entry bar for a brand
+    new position so the first fetch is not wasted).
+    """
+    floor = (int(now_ms) // step) * step
+    return max(floor - step, (int(opened_ts) // step) * step)
 
 
 # ---------------------------------------------------------------------------
@@ -1644,7 +1661,15 @@ class LiveRunner:
                 continue
             last = int(self._price_last.get(sym, 0))
             if last <= 0:
-                last = (int(pm_pos.opened_ts) // step) * step
+                last = initial_price_clock_ts(
+                    now_ms, step, int(pm_pos.opened_ts))
+                self._price_last[sym] = last
+            elif now_ms - last > step * PRICE_CLOCK_MAX_CATCHUP_STEPS:
+                # Stalled/resumed process: skip the missed history. The 2H gap
+                # recovery owns structural catch-up; this clock only acts on
+                # fresh closes, never on a stale one.
+                last = initial_price_clock_ts(
+                    now_ms, step, int(pm_pos.opened_ts))
                 self._price_last[sym] = last
             if now_ms < last + step:
                 continue
@@ -1676,11 +1701,18 @@ class LiveRunner:
                 for intent in intents:
                     if getattr(intent.kind, "value", None) == "EXIT":
                         reason = str(intent.reason)
+                        # §8.1 is a close-based *decision*, not a resting stop
+                        # touch: if the exchange TPSL is merely resting (mark
+                        # never crossed), waiting for it would leave the
+                        # position open. Lock giveback is likewise local.
                         executor = ("local_market"
-                                    if "lock_giveback" in reason or "profit|" in reason
+                                    if ("lock_giveback" in reason
+                                        or "profit|" in reason
+                                        or "§8.1" in reason)
                                     else "exchange_stop")
+                        ref_px = float(pos.get("mark") or bar[4])
                         self._sub_bar_close_out(
-                            cs, pm_pos, pos, ts, float(bar[4]),
+                            cs, pm_pos, pos, ts, ref_px,
                             why="price_bar_exit", route=reason,
                             executor=executor)
                         break
@@ -2889,6 +2921,11 @@ class LiveRunner:
             "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "opened_ts": ts, "mark": price}
+        # New position: drop any clock anchor left by a previous position on
+        # this symbol. Otherwise the 15m clock would fetch from that old anchor
+        # and walk the whole history in 100-bar pages.
+        self._price_last.pop(sym, None)
+        self._price_seen.pop(sym, None)
         self._touch_campaigns()              # 新仓:冷档里的 pm 事实必须同步
         if cs is not None:
             risk = it["direction"] * (price - it["invalid"])
@@ -3664,6 +3701,8 @@ class LiveRunner:
             cs.pm.positions.pop(sym, None)
         st = self.stops.pop(sym, None)       # 取证据:触发前那张保护单的价位
         self.positions.pop(sym, None)
+        self._price_last.pop(sym, None)
+        self._price_seen.pop(sym, None)
         self._missing_streak.pop(sym, None)
         self._exit_settle.pop(sym, None)     # 仓已确认归零:无需再校正回执
         self._exit_retry.pop(sym, None)      # 同上:重试队列也随仓位归零作废
