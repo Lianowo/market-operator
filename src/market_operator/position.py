@@ -342,6 +342,64 @@ class PositionManager:
             pos._best = px
         return True
 
+    # -- 实时价格裁决 -----------------------------------------------------------
+
+    def on_price(self, symbol: str, *, ts: int, price: float,
+                 ref_price: Optional[float] = None,
+                 atr: float = 0.0) -> list[OrderIntent]:
+        """Fresh quote: advance an existing entitlement; never infer a bar close.
+
+        A negative frac is a closed-bar rule: quotes only ratchet an already
+        armed lock. A positive frac explicitly means touch, so a quote may arm.
+        """
+        import math
+
+        pos = self.positions.get(symbol)
+        px = float(price)
+        ref = px if ref_price is None else float(ref_price)
+        if pos is None or not all(math.isfinite(v) and v > 0 for v in (px, ref)):
+            return []
+        pos._best = min(pos._best, px) if pos.direction < 0 else max(pos._best, px)
+        if pos.direction * (ref - pos.invalid) <= 0:
+            return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
+                                qty_frac=pos.size_frac, ref_price=ref, ts=ts,
+                                reason="PRICE_STOP|observed defense breached")]
+        frac = float(self.reject_opp_lock_frac)
+        if pos.target_1 is None or frac == 0.0:
+            return []
+        if (self.giveback_atr_k is not None and atr > 0.0
+                and pos.giveback_unit is None):
+            pos.giveback_unit = float(atr)
+        armed_now = bool(pos.armed)
+        if not armed_now and frac > 0.0:
+            armed_now = opp_lock_arm_hit(
+                pos.direction, pos.target_1, frac,
+                high=px, low=px, close=px)
+        budget = (min(self.giveback_atr_k * pos.giveback_unit,
+                      abs(pos.target_1 - pos.entry))
+                  if self.giveback_atr_k is not None
+                  and pos.giveback_unit is not None
+                  else opp_lock_budget(pos.entry, pos.target_1, frac))
+        if budget is None:
+            return []
+        ld = opp_lock_protection_step(
+            direction=pos.direction, peak=pos._best, budget=budget,
+            ref_px=ref, armed=armed_now)
+        pos.armed = pos.armed or armed_now
+        if ld.action == "exit":
+            return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
+                                qty_frac=pos.size_frac, ref_price=ref, ts=ts,
+                                reason="PRICE_LOCK|giveback_exhausted")]
+        if ld.action == "tighten":
+            old = pos.invalid
+            pos.invalid = (max(old, ld.stop_px) if pos.direction > 0
+                           else min(old, ld.stop_px))
+            if pos.invalid != old:
+                pos.log.append(
+                    f"price_lock|observed={px:.8g} peak={pos._best:.8g} "
+                    f"invalid {old:.8g}->{pos.invalid:.8g}")
+        return []
+
     # -- 逐 bar 裁决 -----------------------------------------------------------
 
     def on_bar(self, symbol: str, bar, atr: float,

@@ -1,0 +1,43 @@
+{
+  "note": "Clean HEAD baseline. 15m OHLC execution; target/stop proxies use whole execution bars, not tick-level causality. cadence_* variants change the arming close to 15m and are not the same as live negative-frac + quote.",
+  "rows": [
+    {
+      "variant": "baseline",
+      "segment": "dev",
+      "cost": 1.0,
+      "closed": 634,
+      "pnl_net": 116.27214004845986,
+      "ending_equity": 219.6790344180936,
+      "max_dd_usdt": 28.275391845924105,
+      "max_dd_pct": 0.16773495577818348,
+      "target_reached_proxy_n": 121,
+      "target_reached_then_net_loss_proxy_n": 13,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 587,
+        "§8.5": 17,
+        "v21": 30
+      },
+      "equity_start_utc": "2024-10-15T20:00:00+00:00",
+      "equity_end_utc": "2026-10-19T03:00:00+00:00"
+    },
+    {
+      "variant": "cadence_close_15m",
+      "segment": "dev",
+      "cost": 1.0,
+      "closed": 639,
+      "pnl_net": 101.87736939958174,
+      "ending_equity": 205.2842637692159,
+      "max_dd_usdt": 30.82693009747055,
+      "max_dd_pct": 0.19317237352700822,
+      "target_reached_proxy_n": 125,
+      "target_reached_then_net_loss_proxy_n": 9,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 601,
+        "§8.5": 18,
+        "v21": 20
+      },
+      "equity_start_utc": "2024-10-15T20:00:00+00:00",
+      "equity_end_utc": "2026-10-19T03:00:00+00:00"
+    }
+  ]
+}

@@ -46,6 +46,9 @@ class Params:
     box_keep_broken_bars: int = 12
     box_keep_active_bars: int = 24
     accept_max_ext_atr: float = 1.50
+    # Conditional fast ACCEPT: a decisive first close may skip the n_a count.
+    # None ⇒ legacy fixed-count behavior.
+    fast_accept_atr: Optional[float] = None
     box_reentry_enabled: bool = False
     box_reentry_max_bars: int = 96
 

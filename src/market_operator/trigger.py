@@ -371,25 +371,38 @@ class MicTracker:
                 if not hold:
                     continue
                 cd.count += 1
-            if cd.count >= req_count:
-                direction = +1 if cd.role is res_role else -1
-                ref = cd.hi if cd.role is res_role else cd.lo
-                if p.use_balance_detector:
-                    ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-                    not_counter = (
-                        (ctx.regime is not Regime.TREND_DOWN)
-                        if direction > 0
-                        else (ctx.regime is not Regime.TREND_UP)
+            direction = +1 if cd.role is res_role else -1
+            ref = cd.hi if cd.role is res_role else cd.lo
+            fast_ok = False
+            if p.use_balance_detector:
+                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                not_counter = (
+                    (ctx.regime is not Regime.TREND_DOWN)
+                    if direction > 0
+                    else (ctx.regime is not Regime.TREND_UP)
+                )
+                close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
+                progressing = (
+                    (c >= cd.start_close and c > o and close_pos >= 0.50)
+                    if direction > 0
+                    else (c <= cd.start_close and c < o and close_pos >= 0.50)
+                )
+                max_ext = float(p.accept_max_ext_atr or 1.50)
+                fast_candidate = (p.fast_accept_atr is not None
+                                  and cd.count == 1)
+                if fast_candidate:
+                    fast_ok = (
+                        not_counter and progressing
+                        and close_pos >= 0.65
+                        and ext_dist >= float(p.fast_accept_atr) * ctx.atr
+                        and ext_dist <= max_ext * ctx.atr
                     )
-                    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
-                    progressing = (
-                        (c >= cd.start_close and c > o and close_pos >= 0.50)
-                        if direction > 0
-                        else (c <= cd.start_close and c < o and close_pos >= 0.50)
-                    )
-                    max_ext = float(p.accept_max_ext_atr or 1.50)
+                if cd.count >= req_count or fast_ok:
                     if not_counter and progressing and ext_dist <= max_ext * ctx.atr:
-                        sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * ctx.atr else "A1_TIGHT"
+                        sub_kind = ("A3_FAST" if fast_ok
+                                    else ("A2_OVEREXTENDED"
+                                          if ext_dist > 0.80 * ctx.atr
+                                          else "A1_TIGHT"))
                         events.append(
                             self._mk(
                                 BREAKOUT_ACCEPTED, direction, ts, a,
@@ -400,10 +413,15 @@ class MicTracker:
                                     "started": cd.started,
                                     "sub_kind": sub_kind,
                                     "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
+                                    "fast": fast_ok,
                                 },
                             )
                         )
-                else:
+                        continue
+                    if cd.count >= req_count:
+                        continue
+            else:
+                if cd.count >= req_count:
                     events.append(
                         self._mk(
                             BREAKOUT_ACCEPTED, direction, ts, a,
@@ -415,7 +433,7 @@ class MicTracker:
                             },
                         )
                     )
-                continue
+                    continue
             kept_cd.append(cd)
         self._candidates = kept_cd
 

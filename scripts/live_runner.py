@@ -706,6 +706,18 @@ class LiveRunner:
         self._stops_checked_at = 0.0               # 交易所止损单存在性校验 TTL
         self._stops_live_ids: Optional[set] = None
         self._stops_live_rows: Optional[list] = None   # 同上快照的原始行(去重用)
+        # Price-protection clock (independent of entry/event clocks):
+        #   bar  = legacy 2H sub-bar only
+        #   15m  = closed 15m bars arm the target lock; fresh quotes ratchet
+        #   quote = fresh quotes only (negative frac still never arms there)
+        self.price_clock = str((cfg.get("protection") or {})
+                               .get("price_clock", "bar")).lower()
+        if self.price_clock not in ("bar", "15m", "quote"):
+            raise RuntimeError(
+                f"protection.price_clock 非法: {self.price_clock!r}"
+                f"(仅允许 bar|15m|quote)")
+        self._price_seen: dict[str, int] = {}
+        self._price_last: dict[str, int] = {}
         self._load_state()
         # 启动即落一次心跳:看护立刻看到新 pid + 新 started_ms,不会把上一具
         # 尸体留下的旧 loop_ts_ms 误判成"卡死"并对新进程动手。
@@ -1576,6 +1588,8 @@ class LiveRunner:
             self._settle_exits(now_ms)      # 决策型离场:用权威成交价校正回执
             self._settle_entries(now_ms)    # 开仓:用权威成交均价校正 entry(§6a)
             self._sync_live_fills(now_ms)
+            self._advance_price_clock(now_ms)
+            self._poll_position_prices(now_ms)
         base_ms = 7200 * 1000
         for sym, cs in sorted(self.campaigns.items()):
             try:
@@ -1610,6 +1624,145 @@ class LiveRunner:
                 self._reconcile()
         self._daily_tick(now_ms)
         self._api_error_streak = 0          # 本轮无异常:连续错计数复位
+
+    def _advance_price_clock(self, now_ms: int) -> None:
+        """Closed 15m bars arm/tighten the target lock (no 2H wait).
+
+        Execution-clock only: calls the same ``PositionManager.on_bar(
+        price_only=True)`` used by replay, so arming semantics do not fork.
+        The 2H ``_on_sub_bar`` target block is skipped while this clock is
+        active; its fixed-stop check remains as a fallback.
+        """
+        if self.price_clock != "15m" or not self.positions:
+            return
+        step = 15 * 60 * 1000
+        for sym, pos in list(self.positions.items()):
+            if pos.get("price_source", "ref") == "ref":
+                continue
+            cs = self._get_cs_for(sym, pos.get("tf_label"))
+            pm_pos = cs.pm.positions.get(sym) if cs is not None else None
+            if cs is None or pm_pos is None:
+                continue
+            last = int(self._price_last.get(sym, 0))
+            if last <= 0:
+                last = (int(pm_pos.opened_ts) // step) * step
+                self._price_last[sym] = last
+            if now_ms < last + step:
+                continue
+            try:
+                bars = self.client.history_candles(
+                    sym, "15m", start_ms=last + 1, limit=100)
+            except BitgetError as exc:
+                self._journal("price_bar_error",
+                              {"symbol": sym, "why": str(exc)[:160]})
+                continue
+            for bar in bars:
+                ts = int(bar[0])
+                if ts <= last or ts + step > now_ms:
+                    continue
+                last = ts
+                if ts < int(pm_pos.opened_ts):
+                    continue
+                old = float(pm_pos.invalid)
+                intents = cs.pm.on_bar(
+                    sym, bar, float(cs.detector.structure.atr() or 0.0),
+                    price_only=True, skip_trail=True)
+                if abs(float(pm_pos.invalid) - old) > 1e-12:
+                    pos["invalid"] = float(pm_pos.invalid)
+                    self._touch_campaigns()
+                    self._journal("price_defense", {
+                        "symbol": sym, "clock": "15m", "bar_ts": ts,
+                        "old_invalid": old, "invalid": float(pm_pos.invalid),
+                        "armed": bool(pm_pos.armed), "peak": pm_pos._best})
+                for intent in intents:
+                    if getattr(intent.kind, "value", None) == "EXIT":
+                        reason = str(intent.reason)
+                        executor = ("local_market"
+                                    if "lock_giveback" in reason or "profit|" in reason
+                                    else "exchange_stop")
+                        self._sub_bar_close_out(
+                            cs, pm_pos, pos, ts, float(bar[4]),
+                            why="price_bar_exit", route=reason,
+                            executor=executor)
+                        break
+                    self._exec_mgmt(cs, intent, bar)
+            self._price_last[sym] = last
+
+    def _poll_position_prices(self, now_ms: int) -> None:
+        """Fresh quotes ratchet an existing defense between 15m closes.
+
+        Negative frac is a closed-bar rule: this path never arms it. It only
+        updates the peak and tightens an already-armed lock (or, with a positive
+        frac, honors the explicit touch-arming rule). The 15m clock is the
+        arming source for the recommended production mode.
+        """
+        if self.price_clock not in ("15m", "quote") or not self.positions:
+            return
+        if not hasattr(self.client, "tickers"):
+            return
+        try:
+            ticks = self.client.tickers()
+        except BitgetError as exc:
+            self._journal("price_poll_error", {"why": str(exc)[:160]})
+            self._alert_throttled(
+                "price_poll", "持仓实时行情获取失败，保留交易所保护单；"
+                              "本轮不推进峰值")
+            return
+        received = max(now_ms, int(time.time() * 1000))
+        max_age = int(float((self.cfg.get("protection") or {})
+                            .get("max_quote_age_seconds", 30)) * 1000)
+        for tick in ticks:
+            sym = str(tick.get("symbol") or "")
+            pos = self.positions.get(sym)
+            if pos is None or sym in self._exit_retry:
+                continue
+            try:
+                observed = int(tick.get("ts") or 0)
+                last, mark = float(tick["lastPr"]), float(tick["markPrice"])
+                if (observed <= self._price_seen.get(sym, 0)
+                        or observed < int(pos.get("opened_ts") or 0)
+                        or not 0 <= received - observed <= max_age
+                        or not all(v == v and v > 0 for v in (last, mark))):
+                    continue
+            except (KeyError, ValueError, TypeError):
+                continue
+            self._price_seen[sym] = observed
+            pos["mark"], pos["mark_ts"] = mark, observed
+            cs = self._get_cs_for(sym, pos.get("tf_label"))
+            pm_pos = cs.pm.positions.get(sym) if cs is not None else None
+            if cs is None or pm_pos is None:
+                continue
+            d = int(pos["direction"])
+            if d * (mark - float(pm_pos.invalid)) <= 0:
+                self._sub_bar_close_out(
+                    cs, pm_pos, pos, observed, mark,
+                    why="price_protective_stop",
+                    route="PRICE_STOP|fresh mark", executor="exchange_stop")
+                continue
+            if pos.get("price_source", "ref") == "ref":
+                continue
+            old, armed = float(pm_pos.invalid), bool(pm_pos.armed)
+            ref = min(last, mark) if d > 0 else max(last, mark)
+            intents = cs.pm.on_price(
+                sym, ts=observed, price=last, ref_price=ref,
+                atr=float(cs.detector.structure.atr() or 0.0))
+            if float(pm_pos.invalid) != old or bool(pm_pos.armed) != armed:
+                pos["invalid"] = float(pm_pos.invalid)
+                self._touch_campaigns()
+                self._journal("price_defense", {
+                    "symbol": sym, "quote_ts": observed, "last": last,
+                    "mark": mark, "clock": self.price_clock,
+                    "old_invalid": old, "invalid": float(pm_pos.invalid),
+                    "armed": bool(pm_pos.armed), "peak": pm_pos._best})
+            quote_bar = (observed, last, last, last, last, 0.0)
+            for intent in intents:
+                if getattr(intent.kind, "value", None) == "EXIT":
+                    self._sub_bar_close_out(
+                        cs, pm_pos, pos, observed, ref,
+                        why="price_lock_exhausted", route=intent.reason,
+                        executor="local_market")
+                else:
+                    self._exec_mgmt(cs, intent, quote_bar)
 
     def _api_note(self, e: Exception) -> None:
         """API 错计数与熔断(fail-closed)。
@@ -2023,7 +2176,8 @@ class LiveRunner:
         #    同一函数)。子周期只负责"更早看到同一事实",不引入第二套语义:
         #      未 arming ⇒ 保持结构防线;保护侧 ⇒ 推进(可多次棘轮);
         #      回吐超预算 ⇒ 立刻市价离场。三态穷尽,没有"拒单原地等"的裸奔态。
-        if pos_pm.target_1 is not None and not pos_pm.pending_reduce:
+        if (self.price_clock == "bar"
+                and pos_pm.target_1 is not None and not pos_pm.pending_reduce):
             target = float(pos_pm.target_1)
             frac_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
             old_inv = float(pos_pm.invalid)

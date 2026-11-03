@@ -1,0 +1,185 @@
+{
+  "note": "Clean HEAD baseline. n_a is the ACCEPT consecutive-close count; trigger_2h_30m observes 2h structure on 30m closes. No limit-order fallback.",
+  "rows": [
+    {
+      "variant": "baseline",
+      "segment": "test",
+      "cost": 1.0,
+      "closed": 213,
+      "pnl_net": 51.356662162247275,
+      "ending_equity": 155.53451301918813,
+      "max_dd_usdt": 13.935919538148184,
+      "max_dd_pct": 0.12456404895679526,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 178,
+        "v21": 33,
+        "§8.5": 2
+      }
+    },
+    {
+      "variant": "baseline",
+      "segment": "test",
+      "cost": 1.5,
+      "closed": 211,
+      "pnl_net": 34.13865963769111,
+      "ending_equity": 138.18384982348516,
+      "max_dd_usdt": 19.924312446300448,
+      "max_dd_pct": 0.18125428765265877,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 178,
+        "v21": 31,
+        "§8.5": 2
+      }
+    },
+    {
+      "variant": "baseline",
+      "segment": "full",
+      "cost": 1.0,
+      "closed": 586,
+      "pnl_net": 141.4466180388522,
+      "ending_equity": 245.76530654874554,
+      "max_dd_usdt": 22.315939988130424,
+      "max_dd_pct": 0.12664947255919531,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 512,
+        "v21": 66,
+        "§8.5": 8
+      }
+    },
+    {
+      "variant": "baseline",
+      "segment": "full",
+      "cost": 1.5,
+      "closed": 565,
+      "pnl_net": 44.901534116464276,
+      "ending_equity": 149.01241720687648,
+      "max_dd_usdt": 26.376391249204374,
+      "max_dd_pct": 0.21260939692751105,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 495,
+        "v21": 62,
+        "§8.5": 8
+      }
+    },
+    {
+      "variant": "n_a_2",
+      "segment": "test",
+      "cost": 1.0,
+      "closed": 221,
+      "pnl_net": 49.032238619491714,
+      "ending_equity": 154.34901572153336,
+      "max_dd_usdt": 15.236627399908997,
+      "max_dd_pct": 0.13716332477596763,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 185,
+        "v21": 33,
+        "§8.5": 3
+      }
+    },
+    {
+      "variant": "n_a_2",
+      "segment": "test",
+      "cost": 1.5,
+      "closed": 219,
+      "pnl_net": 29.297036523996592,
+      "ending_equity": 134.4200455188074,
+      "max_dd_usdt": 23.71121755743563,
+      "max_dd_pct": 0.21706393724552556,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 185,
+        "v21": 31,
+        "§8.5": 3
+      }
+    },
+    {
+      "variant": "n_a_2",
+      "segment": "full",
+      "cost": 1.0,
+      "closed": 639,
+      "pnl_net": 172.87344774884974,
+      "ending_equity": 280.0675306531192,
+      "max_dd_usdt": 35.5922385497407,
+      "max_dd_pct": 0.17102011995414457,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 560,
+        "v21": 66,
+        "§8.5": 13
+      }
+    },
+    {
+      "variant": "n_a_2",
+      "segment": "full",
+      "cost": 1.5,
+      "closed": 615,
+      "pnl_net": 61.81039201756889,
+      "ending_equity": 167.12795206345524,
+      "max_dd_usdt": 39.26856887525203,
+      "max_dd_pct": 0.265466713412266,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 539,
+        "v21": 63,
+        "§8.5": 13
+      }
+    },
+    {
+      "variant": "n_a_1",
+      "segment": "test",
+      "cost": 1.0,
+      "closed": 265,
+      "pnl_net": 51.857268110122725,
+      "ending_equity": 155.66157966570526,
+      "max_dd_usdt": 18.228754525360188,
+      "max_dd_pct": 0.16251324780773652,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 231,
+        "v21": 30,
+        "§8.5": 4
+      }
+    },
+    {
+      "variant": "n_a_1",
+      "segment": "test",
+      "cost": 1.5,
+      "closed": 260,
+      "pnl_net": 29.029258570695543,
+      "ending_equity": 134.27693527157362,
+      "max_dd_usdt": 24.32367096494778,
+      "max_dd_pct": 0.22399353844985723,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 227,
+        "v21": 29,
+        "§8.5": 4
+      }
+    },
+    {
+      "variant": "n_a_1",
+      "segment": "full",
+      "cost": 1.0,
+      "closed": 766,
+      "pnl_net": 214.32065800649582,
+      "ending_equity": 319.5405429266508,
+      "max_dd_usdt": 45.29180346212891,
+      "max_dd_pct": 0.18856725970343824,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 689,
+        "v21": 62,
+        "§8.5": 15
+      }
+    },
+    {
+      "variant": "n_a_1",
+      "segment": "full",
+      "cost": 1.5,
+      "closed": 746,
+      "pnl_net": 79.09366948186158,
+      "ending_equity": 182.69515171130078,
+      "max_dd_usdt": 51.02524983744466,
+      "max_dd_pct": 0.30147765622403916,
+      "exit_reasons": {
+        "PROTECTIVE_STOP": 672,
+        "v21": 58,
+        "§8.5": 16
+      }
+    }
+  ]
+}
