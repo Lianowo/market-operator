@@ -602,6 +602,21 @@ class Broker:
                 return r_frac
         return self.dynamic_risk_tiers[-1][1]
 
+    def risk_capital(self) -> float:
+        """可承担风险的资本 = 已落袋现金;浮盈不是本金。
+
+        两个口径必须分开,否则同一个数字会同时被当成两种东西:
+
+        - **风险资本**:亏得起多少。只有已实现现金才算。浮盈是市场暂时借给
+          你的估值,价格回吐就消失,不能拿它当"已经拥有"的钱去放大下一笔。
+        - **偿付能力**:能撑多大名义仓位。用盯市权益(含浮盈)。浮盈可以撑保证金,
+          这是事实;但它不改变"这笔钱还不是你的"。
+
+        与 ``current_risk_frac`` 同源(档位本来就按现金选),避免"用现金选档、
+        用含浮盈权益算金额"的自相矛盾。
+        """
+        return max(0.0, float(self.cash) - self.funding_accrued())
+
     # -- 风险预算:唯一口径见 capacity 模块 ---------------------------------
     def _budget_headroom(self, equity: float, symbol: Optional[str], *,
                          moment: str) -> tuple[float, str, float]:
@@ -638,27 +653,87 @@ class Broker:
                                                      moment=moment)
         return frac, frac * equity - headroom, headroom, name
 
+    def claim_headroom(self, symbol: str, direction: int, capital: float,
+                       *, moment: str = "fill") -> tuple[float, str, float]:
+        """同一"标的×方向"的市场判断,共享同一份预算。
+
+        语义:周期是观察尺度,不是账户。ETH@2h/@4h/@12h/@1d 同时做空,是**同一笔**
+        对 ETH 下跌的下注被四个尺度各确认了一次,不是四份独立风险。因此它们共用
+        一份预算(取该主张所属周期的比例),而不是每个周期各拿一份。
+
+        返回 ``(剩余额度, 池名, 上限占比)``;未配置周期比例 ⇒ ``inf``(不限)。
+        """
+        tf = capacity.timeframe_of(symbol)
+        frac = self.risk_budget.per_timeframe_frac.get(tf) if tf else None
+        if frac is None:
+            return math.inf, "", 0.0
+        root = capacity.symbol_root(symbol)
+        used = 0.0
+        include_costs = self.risk_budget.includes_costs(moment)
+        for key, pos in self.positions.items():
+            if capacity.symbol_root(key) != root or pos.direction != direction:
+                continue
+            used += capacity.position_exposure(
+                pos.qty, pos.direction, self.last_mark.get(key, pos.entry),
+                pos.invalid, taker_fee=self.taker_fee,
+                slippage=self.slippage).measure(include_costs=include_costs)
+        headroom = float(frac) * float(capital) - used
+        return headroom, f"claim:{root}:{direction:+d}", float(frac)
+
+    def opposite_claim_open(self, symbol: str, direction: int) -> Optional[str]:
+        """同标的是否已有反向在仓;有则返回那把仓位键。
+
+        语义:对同一标的,"会涨"和"会跌"不可能同时为真。两张相反仓位净敞口为零,
+        却各付一份成本、各占一份预算、各等一个止损 —— 那不是两个判断,是一个
+        没有方向的账户在付费。
+        """
+        root = capacity.symbol_root(symbol)
+        for key, pos in self.positions.items():
+            if capacity.symbol_root(key) == root and pos.direction != direction:
+                return key
+        return None
+
     def qty_within_risk_budget(self, equity: float, price: float,
                                risk_per_unit: float,
-                               symbol: Optional[str] = None) -> float:
-        """按成交时刻口径反解数量(与决策门同一分母,故两边同解)。"""
+                               symbol: Optional[str] = None,
+                               direction: Optional[int] = None) -> float:
+        """按成交时刻口径反解数量(与决策门同一分母,故两边同解)。
+
+        ``direction`` 非 None 时,额外受"同一标的×方向的主张预算"约束。
+        """
+        headroom = self._available_stop_risk(equity, symbol)
+        if direction is not None:
+            claim, _name, _frac = self.claim_headroom(
+                symbol, direction, equity, moment=capacity.FILL)
+            headroom = min(headroom, claim)
         return capacity.qty_for_budget(
-            self._available_stop_risk(equity, symbol), price, risk_per_unit,
+            headroom, price, risk_per_unit,
             taker_fee=self.taker_fee, slippage=self.slippage,
             include_costs=self.risk_budget.includes_costs(capacity.FILL))
 
-    def qty_for_entry(self, equity: float, price: float, stop: Optional[float],
+    def qty_for_entry(self, capital: float, price: float, stop: Optional[float],
                       symbol: Optional[str] = None, *, size_mult: float = 1.0,
-                      use_budget: bool = True) -> float:
-        """统一建仓数量 = 单笔风险 ∩ 账户名义上限 (∩ 风险预算),未取整。"""
+                      use_budget: bool = True,
+                      notional_equity: Optional[float] = None,
+                      direction: Optional[int] = None) -> float:
+        """统一建仓数量 = 单笔风险 ∩ 账户名义上限 (∩ 风险预算),未取整。
+
+        ``capital`` 是**风险资本**(已落袋现金),决定"亏得起多少";
+        ``notional_equity`` 是**偿付能力口径**(盯市权益),只约束杠杆上限。
+        两者分开:浮盈能撑保证金,但不能被当成已拥有的本金放大风险。
+
+        ``notional_equity=None`` ⇒ 与旧口径逐位一致(直接调用方不受影响)。
+        """
         risk_per_unit = abs(price - stop) if stop is not None else 0.0
-        if risk_per_unit <= 0.0 or equity <= 0.0:
+        if risk_per_unit <= 0.0 or capital <= 0.0:
             return 0.0
-        qty = min(self.current_risk_frac() * size_mult * equity / risk_per_unit,
-                  self._available_entry_notional(equity) / price)
+        solvency = float(capital) if notional_equity is None else float(notional_equity)
+        qty = min(self.current_risk_frac() * size_mult * capital / risk_per_unit,
+                  self._available_entry_notional(solvency) / price)
         if use_budget:
-            qty = min(qty, self.qty_within_risk_budget(equity, price,
-                                                       risk_per_unit, symbol))
+            qty = min(qty, self.qty_within_risk_budget(capital, price,
+                                                       risk_per_unit, symbol,
+                                                       direction))
         return max(0.0, qty)
 
     def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
@@ -679,12 +754,19 @@ class Broker:
             return self._limit_skip(od, ts, "BAD_INVALID",
                                     f"limit {price} not protective vs "
                                     f"invalid={od.invalid}", ref)
-        equity = self.equity_mtm()
+        equity = self.equity_mtm()        # 偿付能力:含浮盈
+        capital = self.risk_capital()     # 风险资本:已落袋现金
         risk_per_unit = abs(price - od.invalid)
+        opposite = self.opposite_claim_open(sym, d)
+        if opposite is not None:
+            return self._limit_skip(od, ts, "OPPOSITE_CLAIM",
+                                    f"opposite claim already open: {opposite}", ref)
         # v14 C5/C4:size_mult(quality tier × 1/切份数;缺省 1.0 ⇒ 逐位旧口径)
         size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
-        qty = floor_step(self.qty_for_entry(equity, price, od.invalid, sym,
-                                             size_mult=size_mult),
+        qty = floor_step(self.qty_for_entry(capital, price, od.invalid, sym,
+                                             size_mult=size_mult,
+                                             notional_equity=equity,
+                                             direction=d),
                           spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
@@ -856,12 +938,21 @@ class Broker:
                                   f"fill {price} not protective vs "
                                   f"invalid={po.invalid}", price=price)
 
-        equity = self.equity_mtm()
+        equity = self.equity_mtm()        # 偿付能力:含浮盈,用于杠杆/名义上限
+        capital = self.risk_capital()     # 风险资本:只认已落袋现金
         risk_per_unit = abs(price - po.invalid)
+        # 同一标的不能同时持两个相反主张:那等于账户付两份钱等两个相反的答案
+        opposite = self.opposite_claim_open(sym, po.direction)
+        if opposite is not None:
+            return self._skip_row(po, ts, "OPPOSITE_CLAIM",
+                                  f"opposite claim already open: {opposite}",
+                                  price=price)
         # v14 C5:size_mult(quality tier;缺省 1.0 ⇒ 逐位旧口径)
         size_mult = float(po.meta.get("size_mult", 1.0) or 1.0)
-        qty = floor_step(self.qty_for_entry(equity, price, po.invalid, sym,
-                                             size_mult=size_mult),
+        qty = floor_step(self.qty_for_entry(capital, price, po.invalid, sym,
+                                             size_mult=size_mult,
+                                             notional_equity=equity,
+                                             direction=po.direction),
                           spec.size_step, spec.size_place)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:

@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
-from .events import TREND_RESUMED, STRUCTURE_BROKEN, MarketEvent
+from .events import BREAKOUT_ACCEPTED, TREND_RESUMED, STRUCTURE_BROKEN, MarketEvent
 from .hypothesis import Hypothesis
 from .broker import OrderIntent, OrderKind
 from .structure import Params, Pivot, PivotKind, _bar_parts
@@ -240,6 +240,9 @@ class Position:
     lock_off_logged: bool = False  # 锁利参数域不成立(目标在 entry 反侧)只记一次
     giveback_unit: Optional[float] = None  # ATR 预算单位(建仓后首根冻结)
     reenter_invalid_px: Optional[float] = None  # ACCEPT 重返箱内证伪锚点(被破箱沿内侧或箱中轴)
+    claim_completed_ts: Optional[object] = None  # 主张履约时刻(到达对侧);None = 未完成
+    claim_migrated_ts: Optional[object] = None   # 该仓被新迁移事实重新承保的时刻
+    claim_id: Optional[tuple] = None             # 主张身份 (box/uid, role, geometry_version)
 
 
     @property
@@ -290,7 +293,8 @@ class PositionManager:
 
     def open(self, symbol: str, direction: int, entry: float, invalid: float,
              target_1: Optional[float], event_id: str, ts: object,
-             index: int, *, reenter_invalid_px: Optional[float] = None) -> Position:
+             index: int, *, reenter_invalid_px: Optional[float] = None,
+             claim_id: Optional[tuple] = None) -> Position:
         risk = direction * (entry - invalid)
         if risk <= 0.0:
             raise ValueError(f"invalid not protective: entry={entry} "
@@ -300,7 +304,8 @@ class PositionManager:
                        event_id=event_id, opened_ts=ts, opened_index=index,
                        initial_risk=float(risk),
                        reenter_invalid_px=(float(reenter_invalid_px)
-                                           if reenter_invalid_px is not None else None))
+                                           if reenter_invalid_px is not None else None),
+                       claim_id=claim_id)
         self.positions[symbol] = pos
         return pos
 
@@ -400,6 +405,37 @@ class PositionManager:
                 return [self._exit(pos, ts, c, reason)]
 
         intents: list[OrderIntent] = []
+
+        # 2.5 主张生命周期(语义契约)
+        #   REJECT 的主张是"这次边界拒绝会把价格送到对侧"。价格到达对侧 = **行程完成**。
+        #   完成是价格事实,不需要等收盘"接受"再确认:把完成判据绑到收盘,
+        #   会让"已经走完却从未越过收盘"的仓位继续扛着出发时的远止损(实测 33 笔
+        #   到过目标后回到全额止损)。
+        #
+        #   完成后的处置不是"默认续期成趋势仓",而是:
+        #     - 无迁移事实 ⇒ 主张已履约,该仓的风险预算改为"峰值锚定的回吐预算"
+        #       (锁利 arming),不再享有"未完成主张"的宽结构止损;
+        #     - 同根出现同向外侧接受 ⇒ 换签为迁移主张(target 清空,交给 §8.3)。
+        if (not price_only and pos.target_1 is not None
+                and pos.claim_completed_ts is None
+                and pos.direction * (pos.target_1 - pos.entry) > 0.0):
+            reached = ((low <= pos.target_1) if pos.direction < 0
+                       else (h >= pos.target_1))
+            if reached:
+                migrated = any(ev.id == BREAKOUT_ACCEPTED
+                               and ev.direction == pos.direction
+                               for ev in new_events)
+                if migrated:
+                    pos.claim_migrated_ts = ts
+                    pos.log.append(
+                        f"claim|re-underwritten|completed at {pos.target_1:.8g} "
+                        f"with migration acceptance; new claim = 外侧驻留")
+                    pos.target_1 = None
+                else:
+                    pos.claim_completed_ts = ts
+                    pos.log.append(
+                        f"claim|completed|target={pos.target_1:.8g} reached at {ts};"
+                        f" recorded as fact only (risk re-base requires acceptance close)")
 
         # 3. §8.2 target_1 触及 ⇒ 对侧锁利 / 传统减仓 50%
         #    锁利唯一出口 `opp_lock_step`(与 live_runner._on_sub_bar 同一函数,

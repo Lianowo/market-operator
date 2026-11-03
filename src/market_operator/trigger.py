@@ -89,6 +89,7 @@ class _MicEpisode:
     ex: float
     ex_index: int
     puncture_index: Optional[int] = None
+    outside_closes: int = 0
 
 
 @dataclass
@@ -215,10 +216,10 @@ class MicTracker:
         s = det.structure
         ctx = self._make_context(s)
         self._ctx = ctx
-        live_ids = {id(z) for z in ctx.zones}
+        live_ids = {z.zone_id for z in ctx.zones}
         self._broken = {zid for zid in self._broken if zid in live_ids}
         self._broken |= {
-            id(z) for z in ctx.zones
+            z.zone_id for z in ctx.zones
             if z.state in (ZoneState.BROKEN, ZoneState.RETESTED)
         }
         self._e6_fired = None
@@ -269,8 +270,8 @@ class MicTracker:
             flippable = (ZoneState.BROKEN, ZoneState.RETESTED)
             self._retests = [rt for rt in self._retests if live.get(id(rt.zone)) is not None]
             for z in ctx.zones:
-                if z.state in flippable and id(z) not in self._adopted_retests:
-                    self._adopted_retests.add(id(z))
+                if z.state in flippable and z.zone_id not in self._adopted_retests:
+                    self._adopted_retests.add(z.zone_id)
                     self._retests.append(
                         _MicRetest(
                             zone=z,
@@ -325,7 +326,7 @@ class MicTracker:
         # 细周期 A2 实时触碰开 _MicEpisode (仅在平衡箱模式下启用, 消除等大周期收盘的 10~20h 入场迟缓!)
         if p.use_balance_detector and prev_c is not None:
             for z in ctx.zones:
-                if z.state is not ZoneState.ACTIVE or id(z) in self._broken:
+                if z.state is not ZoneState.ACTIVE or z.zone_id in self._broken:
                     continue
                 if any(ep.zone is z for ep in self._episodes):
                     continue
@@ -340,13 +341,13 @@ class MicTracker:
 
         # ① 破位登记
         for z in ctx.zones:
-            if z.state is not ZoneState.ACTIVE or id(z) in self._broken:
+            if z.state is not ZoneState.ACTIVE or z.zone_id in self._broken:
                 continue
             res = z.role is res_role
             broke = (c > z.hi + bm) if res else (c < z.lo - bm)
             if not broke:
                 continue
-            self._broken.add(id(z))
+            self._broken.add(z.zone_id)
             self._episodes = [ep for ep in self._episodes if ep.zone is not z]
             self._candidates = [cd for cd in self._candidates if cd.zone is not z]
             self._candidates.append(
@@ -355,8 +356,8 @@ class MicTracker:
                     count=1, started=a, start_close=c,
                 )
             )
-            if not p.use_balance_detector and id(z) not in self._adopted_retests:
-                self._adopted_retests.add(id(z))
+            if not p.use_balance_detector and z.zone_id not in self._adopted_retests:
+                self._adopted_retests.add(z.zone_id)
                 self._retests.append(_MicRetest(zone=z, armed=False, extreme=None, started=a))
 
         kept_cd: list[_MicCandidate] = []
@@ -431,7 +432,10 @@ class MicTracker:
             res = z.role is res_role
             edge = z.hi if res else z.lo
             extreme_first = (c < o) if res else (c >= o)
-            if extreme_first:
+            # Same close-based evidence contract as EventDetector: the completed
+            # trigger bar's trial extreme belongs to the rejection and its stop,
+            # regardless of whether that bar closed above or below its open.
+            if p.use_balance_detector or extreme_first:
                 new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                 if new_ex != ep.ex:
                     ep.ex, ep.ex_index = new_ex, a
@@ -443,7 +447,30 @@ class MicTracker:
             fired: Optional[MarketEvent] = None
             close_pos = (h - c) / rng if res else (c - l) / rng
             if p.use_balance_detector:
-                if (extreme_first or ep.ex_index < a) and a - ep.ex_index <= self.n_f_mic:
+                # R3 失败突破回收:与认知层同一契约(退出 1–2 根后收盘回到箱内)。
+                # 触发层此前只在破位时移除 episode、没有 outside_closes 证据,
+                # 于是"同一个原语"在两层覆盖不同事实。这里补齐,不新增参数。
+                if 1 <= ep.outside_closes <= 2 and (
+                        (c < z.lo and close_pos >= 0.50) if res
+                        else (c > z.hi and close_pos >= 0.50)):
+                    direction = -1 if res else +1
+                    inv_r3 = ((max(z.hi, ep.ex) + bm) if res
+                              else (min(z.lo, ep.ex) - bm))
+                    fired = self._mk(
+                        LEVEL_REJECTED, direction, ts, a,
+                        {
+                            "zone": z.clone(),
+                            "ref": edge,
+                            "invalid": inv_r3,
+                            "ex": ep.ex,
+                            "ex_index": ep.ex_index,
+                            "puncture_index": ep.puncture_index,
+                            "outside_closes": ep.outside_closes,
+                            "sub_kind": "R3_TRAP",
+                        },
+                    )
+                    new_rejections.append(fired)
+                if fired is None and a - ep.ex_index <= self.n_f_mic:
                     real_retreat = (ep.ex - c) if res else (c - ep.ex)
                     back_inside = (c <= z.lo) if res else (c >= z.hi)
                     against_trend = (
@@ -481,10 +508,14 @@ class MicTracker:
             if fired is not None:
                 events.append(fired)
             else:
-                if not extreme_first:
+                if not p.use_balance_detector and not extreme_first:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, a
+                # 与认知层同步:收盘落在箱外就是"外侧驻留"的证据,下一根才可判 R3。
+                if p.use_balance_detector and (
+                        (c > z.hi + bm) if res else (c < z.lo - bm)):
+                    ep.outside_closes += 1
                 if not p.use_balance_detector or (a - ep.opened) <= (p.n_f + 1):
                     survivors.append(ep)
         self._episodes = survivors

@@ -347,7 +347,11 @@ class EventDetector:
             edge = z.hi if res else z.lo
             extreme_first = (c < o) if res else (c >= o)
 
-            if extreme_first:
+            # Balance REJECT is decided from the completed bar's close. Every
+            # trial extreme is already known then; candle colour cannot establish
+            # the intrabar high/low order or justify omitting the current trial.
+            # Legacy rejection uses intrabar retreat and keeps its old ordering.
+            if p.use_balance_detector or extreme_first:
                 new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                 if new_ex != ep.ex:
                     ep.ex, ep.ex_index = new_ex, t
@@ -400,7 +404,7 @@ class EventDetector:
                 fired is None
                 and ep.outside_closes == 0
                 and z.state is ZoneState.ACTIVE
-                and (extreme_first or ep.ex_index < t)
+                and (p.use_balance_detector or extreme_first or ep.ex_index < t)
                 and t - ep.ex_index <= n_f
             ):
                 if p.use_balance_detector:
@@ -431,7 +435,7 @@ class EventDetector:
             if fired is not None:
                 events.append(fired)
             else:
-                if not extreme_first:
+                if not p.use_balance_detector and not extreme_first:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, t

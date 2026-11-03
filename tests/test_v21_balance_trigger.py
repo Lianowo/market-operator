@@ -165,6 +165,9 @@ def test_v21_per_tf_capacity_and_dynamic_risk_tiers():
     # 1. 仅极值触及 90.0 但收盘 92.0 未突破对侧 -> 不锁利、不减仓,原止损 105.0 不动
     intents1 = pm.on_bar("BTCUSDT", (2000, 98.0, 99.0, 89.5, 92.0, 1.0), 2.0)
     assert intents1 == []
+    # semantics: touching the opposite edge is a completion FACT, not acceptance.
+    # Risk re-base requires a close beyond the target, so the structural stop
+    # (105.0) stays in force until that acceptance happens.
     assert pos.invalid == 105.0
     assert pos.reduced is False
     # 2. 收盘 89.0 真正突破对侧 90.0 ⇒ arming;峰值 88.5 / 预算 ½·10 = 5

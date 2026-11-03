@@ -52,6 +52,7 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
 from __future__ import annotations
 
 from bisect import bisect_left
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -436,13 +437,15 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 if fine_execution:
                     rows = broker.on_15m_bar(key, ts, _o, _h, _l, c, mic_only=True)
                     _apply_resting_rows(st, broker, key, ts, rows, counters)
-                    if not had_position and broker.position_of(key) is not None:
-                        # Limit entry and stop in the same OHLC bar: assume the
-                        # adverse path, never let a new fill evade protection.
-                        stop_row = broker.execute_protective_stop(key, ts, _o, _h, _l)
-                        if stop_row is not None:
-                            _apply_open_rows(st, broker, key, ts, [stop_row], counters)
-                            counters["protective_stop_fills"] += 1
+                if not had_position and broker.position_of(key) is not None:
+                    # Limit entry and stop in the same OHLC bar: assume the
+                    # adverse path, never let a new fill evade protection.
+                    # 该复查必须在两条执行路径上都发生:保护是事实,不是快路径的
+                    # 特权。此前只在 fine_execution 下检查,粗路径存在当根裸奔缺口。
+                    stop_row = broker.execute_protective_stop(key, ts, _o, _h, _l)
+                    if stop_row is not None:
+                        _apply_open_rows(st, broker, key, ts, [stop_row], counters)
+                        counters["protective_stop_fills"] += 1
                 # ③ 持仓路径解决:同根因果序 ①先于② 结构性解决(同 v4 声明)
                 # ④ mark-to-market(执行细 bar 收盘;强平保护沿用,预期 0)
                 broker.mark(key, ts + f.ms_exec if fine_execution else ts, c)
@@ -521,6 +524,15 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     return res
 
 
+def _claim_id(meta: dict) -> Optional[tuple]:
+    """账本 meta 里的主张身份 → 可哈希 tuple(box/uid, role, geometry_version)。"""
+    raw = meta.get("claim_id")
+    if not raw:
+        return None
+    box, role, version = raw
+    return (tuple(box), str(role), int(version))
+
+
 def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                      rows: list, counters: dict) -> None:
     """on_bar_open 账本行的战役侧处理(①;canonical 与 mic 触发共用)。"""
@@ -536,7 +548,8 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                             float(m["invalid"]), execution_target(m, m.get("target_1")),
                             str(m.get("event_id")), ts,
                             _cog_index_of(f, ts),
-                            reenter_invalid_px=re_px)
+                            reenter_invalid_px=re_px,
+                            claim_id=_claim_id(m))
             counters["opens_filled"] += 1
             if m.get("entry_mode") == "virtual_limit":
                 _increment_counter(counters, "virtual_entry_fills")
@@ -577,7 +590,8 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                                 float(m["invalid"]), execution_target(m, m.get("target_1")),
                                 str(m.get("event_id")), ts,
                                 _cog_index_of(f, ts),
-                                reenter_invalid_px=re_px)
+                                reenter_invalid_px=re_px,
+                                claim_id=_claim_id(m))
         elif k == "EXPIRED":
             counters["limit_expired"] += 1
         elif k == "TRIGGER" and row["reason_code"] == "VIRTUAL_TRIGGER":
@@ -825,23 +839,42 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
-        # 组合容量(口径唯一,见 capacity):FIFO 决策时刻整笔跳过,不缩量
+        # 组合容量(口径唯一,见 capacity):FIFO 决策时刻整笔跳过,不缩量。
+        # 风险金额与成交裁剪同用「风险资本」;杠杆上限仍用盯市权益(偿付能力)。
         equity = broker.equity_mtm()
+        capital = broker.risk_capital()
         risk_per_unit = abs(d.intent.ref_price - d.hyp.invalid)
-        qty_full = broker.qty_for_entry(equity, d.intent.ref_price,
-                                        d.hyp.invalid, key, use_budget=False)
+        direction = int(d.hyp.direction)
+        # 相反主张:同一标的只能有一个答案,先了结旧的才允许新的。
+        opposite = broker.opposite_claim_open(key, direction)
+        qty_full = (0.0 if opposite is not None else
+                    broker.qty_for_entry(capital, d.intent.ref_price,
+                                         d.hyp.invalid, key, use_budget=False,
+                                         notional_equity=equity,
+                                         direction=direction))
         cap_frac, used, _headroom, pool = broker.capacity_usage(
-            equity, key, moment=capacity.DECISION)
+            capital, key, moment=capacity.DECISION)
         delta = capacity.delta_exposure(
             qty_full, d.intent.ref_price, risk_per_unit,
             taker_fee=broker.taker_fee, slippage=broker.slippage,
             include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
         cap_blocked = False
         skip_reason = "PORTFOLIO_CAP"
-        if broker.risk_budget.is_active and (
-                qty_full <= 0.0 or used + delta > cap_frac * equity + 1e-9):
+        if opposite is not None:
+            cap_blocked = True
+            skip_reason = "OPPOSITE_CLAIM"
+        elif broker.risk_budget.is_active and (
+                qty_full <= 0.0 or used + delta > cap_frac * capital + 1e-9):
             cap_blocked = True
             skip_reason = "TF_CAP" if pool == "tf" else "PORTFOLIO_CAP"
+        # 主张预算:同一标的同方向的全部在仓(跨周期)共用一份,周期不叠加
+        if not cap_blocked:
+            claim, claim_pool, _cf = broker.claim_headroom(
+                key, direction, capital, moment=capacity.DECISION)
+            if used + delta > 0 and math.isfinite(claim) and delta > max(claim, 0.0) + 1e-9:
+                cap_blocked = True
+                skip_reason = "CLAIM_CAP"
+                pool = claim_pool
 
         # v22:同向净风险上限 (directional_cap_frac, §6.4)
         dir_cap = broker.risk_budget.directional_cap_frac
@@ -851,7 +884,7 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                 direction=int(d.hyp.direction),
                 taker_fee=broker.taker_fee, slippage=broker.slippage
             ).measure(include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
-            if dir_used + delta > dir_cap * equity + 1e-9:
+            if dir_used + delta > dir_cap * capital + 1e-9:
                 cap_blocked = True
                 skip_reason = "DIRECTIONAL_CAP"
                 cap_frac = dir_cap
@@ -864,7 +897,7 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                 "direction": d.hyp.direction, "route": d.route,
                 "reason_code": skip_reason,
                 "worst_case": used + delta, "budget_frac": cap_frac,
-                "equity": equity})
+                "equity": equity, "risk_capital": capital})
             continue
 
 

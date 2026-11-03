@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import itertools
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
@@ -14,6 +15,9 @@ from typing import Optional, Union
 import pandas as pd
 
 from .true_balance import TrueBalanceDetector, TrueBalanceParams
+
+#: 兜底身份分配器:只保证"不重用",不代表任何市场含义。
+_ZONE_UID = itertools.count(1)
 
 
 def _key_id(key: str) -> str:
@@ -132,6 +136,32 @@ class Zone:
     box_width_atr: float = 0.0               # v21.5:平衡箱宽度(ATR 倍数)
     box_rotations: int = 0                   # v21.5:平衡箱来回旋转次数
     source_kind: str = "BOX_EDGE"            # "BOX_EDGE" | "FLIPPED_BOX_EDGE"
+    # --- 身份(与价格无关;只由结构事件推进) -------------------------------
+    zone_uid: int = field(default=0, compare=False, repr=False)  # 进程内兜底身份,不参与结构等价
+    box_id: Optional[int] = None             # 来自 TrueBalanceBox,跨重建稳定
+    parent_box_id: Optional[int] = None      # FLIP 后的来源箱
+    geometry_version: int = 0                # 合并/重建/翻转/退役时 +1
+
+    def __post_init__(self) -> None:
+        if not self.zone_uid:
+            self.zone_uid = next(_ZONE_UID)
+
+    @property
+    def zone_id(self) -> tuple:
+        """区域身份(不含几何版本):用于"同一箱是否已破位"这类跨越对象重建的记忆。"""
+        key = (("box", self.box_id) if self.box_id is not None
+               else ("uid", self.zone_uid))
+        return (key, str(self.role))
+
+    @property
+    def claim_id(self) -> tuple:
+        """主张身份:箱体(或兜底 uid)+ 角色 + 几何版本。
+
+        价格相同不等于同一机会;对象重建(``clone``/重算)不等于换机会。
+        """
+        key = (("box", self.box_id) if self.box_id is not None
+               else ("uid", self.zone_uid))
+        return (key, str(self.role), int(self.geometry_version))
 
     def clone(self) -> "Zone":
         return Zone(
@@ -145,6 +175,10 @@ class Zone:
             box_width_atr=self.box_width_atr,
             box_rotations=self.box_rotations,
             source_kind=self.source_kind,
+            zone_uid=self.zone_uid,
+            box_id=self.box_id,
+            parent_box_id=self.parent_box_id,
+            geometry_version=self.geometry_version,
         )
 
 
@@ -345,6 +379,12 @@ class ZoneBook:
                     origin_known=min(z.origin_known, new.origin_known),
                     last_change_known=known,
                     merged=z.merged + new.merged,
+                    zone_uid=z.zone_uid or new.zone_uid,
+                    box_id=new.box_id if new.box_id is not None else z.box_id,
+                    parent_box_id=new.parent_box_id,
+                    # 合并 = 边界集合变了:同一身份进入新几何版本,旧证据不得沿用
+                    geometry_version=max(z.geometry_version,
+                                         new.geometry_version) + 1,
                 )
                 self.zones.pop(i)
                 changed = True
@@ -394,6 +434,15 @@ class ZoneBook:
                     matched = z
                     break
             if matched is not None:
+                new_box = getattr(lvl, "box_id", None)
+                if new_box is not None and matched.box_id is not None \
+                        and new_box != matched.box_id:
+                    # 同一个角色位置换成了另一只箱:身份变了,几何版本必须+1,
+                    # 否则旧候选/旧证据会偷渡到新边界上。
+                    matched.box_id = new_box
+                    matched.geometry_version += 1
+                elif matched.box_id is None:
+                    matched.box_id = new_box
                 matched.lo = zlo
                 matched.hi = zhi
                 bm_now = self.p.k_bm * atr_val
@@ -423,6 +472,7 @@ class ZoneBook:
                     box_width_atr=w_atr,
                     box_rotations=rot,
                     source_kind=sk,
+                    box_id=getattr(lvl, "box_id", None),
                 )
                 self.zones.append(nz)
                 alive_ids.add(id(nz))
@@ -521,6 +571,7 @@ class ZoneBook:
                 touches=z.touches, rejects=z.rejects,
                 origin_known=z.origin_known, last_change_known=index,
                 merged=z.merged,
+                parent_box_id=z.box_id,
             )
             z.state = ZoneState.FLIPPED
             z.last_change_known = index

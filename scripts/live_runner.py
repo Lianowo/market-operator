@@ -616,6 +616,8 @@ class LiveRunner:
         self.leverage_by_sym: dict[str, int] = {}  # 各品种实际生效杠杆
         self.equity: Optional[float] = \
             float(equity0) if equity0 is not None else None
+        # 未实现盈亏(交易所口径);风险资本 = equity − unrealized_pl
+        self.unrealized_pl: float = 0.0
         self.state_path = Path(state_path) if state_path else \
             paths.resolve(self.loop_cfg["state_path"])
         # 冷数据同目录:热档 state.json(每步) + 冷档 campaigns.json(变更/60s)
@@ -1543,6 +1545,9 @@ class LiveRunner:
         if self.mode == "live":
             bal = self.client.balance()
             self.equity = float(bal["equity"])
+            # 风险资本 = 权益 − 未实现盈亏(即"已落袋"部分);与回放 Broker.risk_capital
+            # 同一口径。浮盈能撑保证金,但不是可以拿去下注的本金。
+            self.unrealized_pl = float(bal.get("unrealized_pl") or 0.0)
         if self.equity is None:
             raise RuntimeError("equity 未定(live 取交易所权益;paper 需 "
                                "equity0)")
@@ -2040,6 +2045,17 @@ class LiveRunner:
                     extreme = low if pos_pm.direction < 0 else h
                     self._exec_mgmt(cs, cs.pm._reduce(pos_pm, ts, c, extreme), bar)
             else:
+                # 主张完成 = 价格到达对侧,这是**事实**,记下来;但风险重定基
+                # 需要"接受"(收盘越过),否则一次插针就会把整段行程的持有权改掉。
+                # 归因实验:触价即重定基会把趋势右尾剪掉(净 −19.4k、回撤 +12pp)。
+                reached = (low <= target) if pos_pm.direction < 0 else (h >= target)
+                if (reached
+                        and pos_pm.direction * (target - pos_pm.entry) > 0.0
+                        and getattr(pos_pm, "claim_completed_ts", None) is None):
+                    pos_pm.claim_completed_ts = ts
+                    pos_pm.log.append(
+                        f"claim|completed|target={target:.8g} reached at {ts};"
+                        f" recorded as fact only (risk re-base requires acceptance close)")
                 ld = opp_lock_step(
                     direction=pos_pm.direction, entry=pos_pm.entry, target=target,
                     frac=frac_cfg, peak=pos_pm._best, high=h, low=low, close=c,
@@ -2320,6 +2336,8 @@ class LiveRunner:
         "degenerate_risk": "仅参考 · 参考价已越过失效位(风险距离为 0)",
         "TF_CAP": "",
         "PORTFOLIO_CAP": "仅参考 · 组合容量已满,本系统本拍未开仓",
+        "OPPOSITE_CLAIM": "仅参考 · 同标的已有反向持仓,本系统本拍未开仓",
+        "CLAIM_CAP": "仅参考 · 该标的同向判断的风险额度已用完,本系统本拍未开仓",
         "MIN_NOTIONAL": "仅参考 · 数量低于交易所最小下单,本系统本拍未开仓",
         "DAILY_LOSS_BREAKER": "仅参考 · 当日亏损熔断,本系统暂停新开仓",
         "RATE_LIMIT": "仅参考 · 触达下单频率上限,本系统本拍未开仓",
@@ -2331,6 +2349,8 @@ class LiveRunner:
         "degenerate_risk": (),
         "TF_CAP": (("tf_cap_skips", 1), ("cap_skips", 1)),
         "PORTFOLIO_CAP": (("cap_skips", 1),),
+        "OPPOSITE_CLAIM": (("cap_skips", 1),),
+        "CLAIM_CAP": (("cap_skips", 1),),
         "MIN_NOTIONAL": (("min_notional_skips", 1),),
         "DAILY_LOSS_BREAKER": (("breaker_blocks", 1),),
         "RATE_LIMIT": (("rate_skips", 1),),
@@ -2362,6 +2382,7 @@ class LiveRunner:
             hyp.event_id, hyp.direction)
         size_mult *= edge_mult
         equity = float(self.equity)
+        capital = max(0.0, equity - float(self.unrealized_pl or 0.0))
         eff_rf = self.current_risk_frac(equity)
         # ---- 与容量无关的结构事实:一次算清,信号与执行共用同一份 ----
         regime = hyp.regime.value if hyp.regime is not None else ""
@@ -2405,7 +2426,8 @@ class LiveRunner:
                 # Size against the adverse quote as well as the decision price.
                 risk_per_unit = max(risk_per_unit, abs(execution_quote - invalid))
         if block is None:
-            qty = eff_rf * size_mult * equity / risk_per_unit
+            # 定仓用"风险资本"(已落袋),杠杆上限仍用交易所权益(偿付能力)
+            qty = eff_rf * size_mult * capital / risk_per_unit
             # 用该品种实际生效杠杆(而非统一上限):低上限品种按 20x 算出的数量
             # 会超出交易所可用保证金而被拒
             eff_lev = float(self.leverage_by_sym.get(sym)
@@ -2429,11 +2451,27 @@ class LiveRunner:
                                            p["invalid"], self.risk["taker_fee"])
                     for p in self.positions.values()
                     if p.get("tf_label", "12h") == cs.tf_label)
-                if tf_out + candidate > float(tf_cap) * equity:
+                if tf_out + candidate > float(tf_cap) * capital:
                     block = "TF_CAP"
             if block is None and outstanding + candidate > \
-                    self.risk["portfolio_cap_frac"] * equity:
+                    self.risk["portfolio_cap_frac"] * capital:
                 block = "PORTFOLIO_CAP"
+            # 同一标的不能同时持两个相反主张(净敞口为零却双倍成本/双倍风险)
+            if block is None and any(
+                    p["direction"] == -hyp.direction
+                    for key, p in self.positions.items()
+                    if key.split("@")[0] == sym):
+                block = "OPPOSITE_CLAIM"
+            # 主张预算:同标的同方向的全部在仓(跨周期)共用一份,周期不叠加
+            if block is None and tf_cap is not None:
+                group = sum(
+                    worst_case_of_position(p["direction"], p["qty"],
+                                           p.get("mark") or p["entry"],
+                                           p["invalid"], self.risk["taker_fee"])
+                    for key, p in self.positions.items()
+                    if key.split("@")[0] == sym and p["direction"] == hyp.direction)
+                if group + candidate > float(tf_cap) * capital:
+                    block = "CLAIM_CAP"
             if block is None and qty * entry_ref < max(
                     spec.min_trade_usdt, spec.size_min * entry_ref):
                 block = "MIN_NOTIONAL"

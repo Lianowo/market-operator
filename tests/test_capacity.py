@@ -146,14 +146,20 @@ def test_qty_for_budget_is_inverse_of_delta_exposure():
 # ---------------------------------------------------------------------------
 
 
-def test_admission_mode_checks_only_timeframe_pool_at_decision():
+def test_admission_mode_includes_account_pool_at_decision():
+    """账户是唯一预算主体:准入时刻也必须受账户池约束。
+
+    旧行为让周期池在准入时刻取代账户池,结果是"账户最多同时亏多少"从未被定义
+    (4 个周期池可相加)。语义修正:账户池在所有时点参与,周期池只是它的内部分配。
+    """
     budget = capacity.RiskBudget(portfolio_frac=0.12,
                                  per_timeframe_frac={"2h": 0.0225},
                                  mode=capacity.ADMISSION_FULL_COST)
     pools = budget.pools("2h", moment=capacity.DECISION)
-    assert [p[0] for p in pools] == ["tf"]
+    assert [p[0] for p in pools] == ["tf", "portfolio"]
     assert pools[0][1] == pytest.approx(0.0225)
-    # 成交时刻才把账户池并进来(取更紧者)
+    assert pools[1][1] == pytest.approx(0.12)
+    # 成交时刻同一组池:决策与成交不再用两套定义
     assert [p[0] for p in budget.pools("2h", moment=capacity.FILL)] \
         == ["tf", "portfolio"]
 

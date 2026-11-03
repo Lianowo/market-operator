@@ -54,6 +54,11 @@ def _event_provenance(ev: MarketEvent) -> dict:
         })
         if getattr(zone, "box_opposite", None) is not None:
             prov["box_opposite"] = float(zone.box_opposite)
+        # 主张身份:价格相同不等于同一机会,对象重建也不等于换机会。
+        prov["claim_id"] = (tuple(zone.claim_id[0]), zone.claim_id[1],
+                            int(zone.claim_id[2]))
+        prov["box_id"] = getattr(zone, "box_id", None)
+        prov["geometry_version"] = int(getattr(zone, "geometry_version", 0))
     return prov
 
 

@@ -163,11 +163,16 @@ class RiskBudget:
         sym_pools = ((("symbol", float(sym_frac), f"sym:{symbol}"),)
                      if sym_frac is not None else ())
         if self.mode == ADMISSION_FULL_COST and moment == DECISION:
+            # 账户池是唯一预算主体的总额度;周期池只是它的内部分配。
+            # 原实现让周期池在准入时刻取代账户池,于是"账户最多同时亏多少"
+            # 根本没有被任何一处定义(4×12% 可相加成 48%)。语义优先:账户池
+            # 在所有时点参与,周期池不再相加成新总额度。
+            pools: list[tuple[str, float, Optional[str]]] = []
             if tf_frac is not None:
-                return (("tf", float(tf_frac), timeframe),) + sym_pools
+                pools.append(("tf", float(tf_frac), timeframe))
             if self.portfolio_frac is not None:
-                return (("portfolio", float(self.portfolio_frac), None),) + sym_pools
-            return sym_pools
+                pools.append(("portfolio", float(self.portfolio_frac), None))
+            return tuple(pools) + sym_pools
         pools: list[tuple[str, float, Optional[str]]] = []
         if tf_frac is not None:
             pools.append(("tf", float(tf_frac), timeframe))
