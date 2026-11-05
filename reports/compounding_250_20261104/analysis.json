@@ -1,0 +1,160 @@
+{
+  "equity_start": 250.0,
+  "equity_end": 22801.394689254656,
+  "multiple": 91.20557875701863,
+  "cagr_like": 2.0808,
+  "calendar_days": 1464,
+  "milestones": [
+    {
+      "level": 250,
+      "first_reached": "2024-10-15 20:00",
+      "trading_days": 0.0,
+      "return_from_start": 0.0
+    },
+    {
+      "level": 500,
+      "first_reached": "2024-11-12 06:00",
+      "trading_days": 27.4,
+      "return_from_start": 1.0
+    },
+    {
+      "level": 1000,
+      "first_reached": "2025-01-27 01:00",
+      "trading_days": 103.2,
+      "return_from_start": 3.0
+    },
+    {
+      "level": 2500,
+      "first_reached": "2025-02-25 07:00",
+      "trading_days": 132.5,
+      "return_from_start": 9.0
+    },
+    {
+      "level": 5000,
+      "first_reached": "2025-09-22 05:00",
+      "trading_days": 341.4,
+      "return_from_start": 19.0
+    },
+    {
+      "level": 10000,
+      "first_reached": "2026-01-31 17:00",
+      "trading_days": 472.9,
+      "return_from_start": 39.0
+    },
+    {
+      "level": 20000,
+      "first_reached": "2026-09-03 15:00",
+      "trading_days": 687.8,
+      "return_from_start": 79.0
+    },
+    {
+      "level": 25000,
+      "first_reached": "2026-10-08 17:00",
+      "trading_days": 722.9,
+      "return_from_start": 99.0
+    }
+  ],
+  "worst_drawdown": {
+    "frac": 0.522895,
+    "peak": "2026-06-06 04:00 = 13026.97",
+    "trough": "2026-08-16 23:00 = 6215.24",
+    "usdt": 6811.74,
+    "recovery": "2026-08-19 21:00",
+    "recovery_days": 2.9
+  },
+  "underwater": {
+    "sample_share": 0.9824,
+    "longest_days": 135.5,
+    "longest_window": "2025-05-09 11:00 -> 2025-09-22 00:00"
+  },
+  "costs": {
+    "gross_pnl": 28394.17,
+    "fees": 5410.92,
+    "funding": 600.37,
+    "net_closed": 22382.87,
+    "cost_of_gross": 0.2117,
+    "fees_over_equity_end": 0.2373
+  },
+  "sizing_by_quartile": [
+    {
+      "quartile": 1,
+      "window": "2024-10-19 12:00 -> 2025-04-16 16:00",
+      "n": 169,
+      "avg_risk_usdt": 48.75,
+      "avg_notional": 1514.09,
+      "avg_leverage": 1.39,
+      "avg_net": 18.8
+    },
+    {
+      "quartile": 2,
+      "window": "2025-04-17 18:00 -> 2025-11-02 16:00",
+      "n": 169,
+      "avg_risk_usdt": 138.77,
+      "avg_notional": 5427.26,
+      "avg_leverage": 1.44,
+      "avg_net": 19.19
+    },
+    {
+      "quartile": 3,
+      "window": "2025-11-04 12:00 -> 2026-05-02 00:00",
+      "n": 169,
+      "avg_risk_usdt": 225.27,
+      "avg_notional": 7900.87,
+      "avg_leverage": 1.0,
+      "avg_net": 9.42
+    },
+    {
+      "quartile": 4,
+      "window": "2026-05-02 00:00 -> 2026-10-18 20:00",
+      "n": 169,
+      "avg_risk_usdt": 274.64,
+      "avg_notional": 12880.22,
+      "avg_leverage": 1.19,
+      "avg_net": 85.0
+    }
+  ],
+  "monthly": {
+    "n_months": 25,
+    "positive_months": 17,
+    "negative_months": 8,
+    "compounded_product": 91.2056,
+    "best": {
+      "month": "2025-01",
+      "equity_end": 1143.2802584577635,
+      "pnl": 791.8648456779888,
+      "return_frac": 2.25335832430957
+    },
+    "worst": {
+      "month": "2025-12",
+      "equity_end": 5275.088733065653,
+      "pnl": -2006.3046064364607,
+      "return_frac": -0.2755385560002789
+    },
+    "median_return": 0.0376
+  },
+  "quality": {
+    "mean_r": 0.3041,
+    "median_r": -0.2854,
+    "risk_deployed_x_equity0": 464.7,
+    "risk_deployed_x_live_equity": 22.2,
+    "tier_time_share": {
+      "<= 1,000 U (5%)": 0.1407,
+      "<= 5,000 U (4%)": 0.3341,
+      "<= 10,000 U (3%)": 0.3409,
+      "<= 50,000 U (2%)": 0.1842,
+      "<= 1,000,000,000 U (1%)": 0.0
+    }
+  },
+  "reconciliation": {
+    "closed_net": 22382.87,
+    "open_trades": {
+      "n": 2,
+      "fees": 6.3,
+      "realized_net": -6.3
+    },
+    "unrealized_end": 180.51,
+    "unsettled_funding_end": 5.7
+  },
+  "n_unrealized_note": 2,
+  "capacity_skips": 288
+}

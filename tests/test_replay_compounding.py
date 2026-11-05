@@ -31,3 +31,39 @@ def test_csv_accepts_fields_missing_from_first_row(tmp_path):
     path = tmp_path / "trades.csv"
     replay.write_csv(path, [{"net": 1}, {"net": 2, "exit_reason_code": "STOP"}])
     assert "exit_reason_code" in path.read_text(encoding="utf-8-sig")
+
+
+def test_symbol_filter_defaults_to_configured_universe():
+    allowed = ("BTCUSDT", "ETHUSDT")
+    assert replay.select_symbols(None, allowed) == (allowed, False)
+
+
+def test_symbol_filter_accepts_subset_and_normalises_case():
+    allowed = ("BTCUSDT", "ETHUSDT")
+    assert replay.select_symbols(" btcusdt ", allowed) == (("BTCUSDT",), True)
+    assert replay.select_symbols("BTCUSDT,ETHUSDT", allowed) == (allowed, False)
+
+
+@pytest.mark.parametrize("requested", ["BTCUSDT,XRPUSDT", "", " , ", "BTCUSDT,BTCUSDT"])
+def test_symbol_filter_rejects_unknown_empty_or_duplicate(requested):
+    with pytest.raises(ValueError):
+        replay.select_symbols(requested, ("BTCUSDT", "ETHUSDT"))
+
+
+def test_build_runner_passes_experiment_config_to_scenario_runner(monkeypatch, tmp_path):
+    config = tmp_path / "experiment.json"
+    captured = {}
+
+    def fake_runner(symbols, config_path, *, progress):
+        captured.update(symbols=symbols, config_path=config_path, progress=progress)
+        return object()
+
+    monkeypatch.setattr(replay, "ScenarioRunner", fake_runner)
+    result = replay.build_runner(("BTCUSDT",), config, progress=False)
+
+    assert result is not None
+    assert captured == {
+        "symbols": ("BTCUSDT",),
+        "config_path": config,
+        "progress": False,
+    }

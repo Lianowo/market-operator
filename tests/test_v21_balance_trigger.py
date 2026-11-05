@@ -257,6 +257,7 @@ def test_live_runner_v21_multi_tf_campaigns(tmp_path):
     import live_runner as lr
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
     want = int(cfg["cognition"]["warmup_trigger_bars"])
@@ -304,6 +305,7 @@ def test_live_runner_v21_adaptive_warmup_for_new_listings(tmp_path):
     import live_runner as lr
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
     # NEW1: 130 根 2H (~10.8 天) -> 足够开启 2h(>=60) 和 4h(>=120),暂不足 12h(需360) 与 1d(需720)
@@ -567,6 +569,7 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
     import live_runner as lr
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
     bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
@@ -657,6 +660,7 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     import live_runner as lr
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
     # 396 根 2H (刚好 66 根完整 12h 结束:396 % 6 == 0)
@@ -874,6 +878,7 @@ def test_live_sub_bar_lock_peak_anchor_and_ratchet(tmp_path):
         raise AssertionError("缺 arm_config.reject_opp_lock_frac 时必须报错")
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
     bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
@@ -941,6 +946,7 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
     import live_runner as lr
 
     cfg = json.loads((root / "config" / "live.json").read_text("utf-8"))
+    cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
     bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]

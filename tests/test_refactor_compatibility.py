@@ -27,6 +27,11 @@ def test_reconstructed_trade_preserves_accounting_and_provenance():
     provenance = {
         "route": "structure_broken_weak_limit", "l_star": 99.0,
         "weak_bars": 3, "e6_margin": 0.4, "e6_impulse": 1.2,
+        "claim_id": (("box", 7), "ZoneRole.SUPPORT", 3),
+        "box_id": 7, "geometry_version": 3,
+        "claim_created_ts": 0, "claim_confirmed_ts": 0,
+        "claim_created_price": 99.5, "claim_confirmed_price": 100.0,
+        "zone_lo": 98.0, "zone_hi": 99.0,
     }
     opening = {
         "trade_id": 1, "kind": "LIMIT_FILL", "symbol": "BTCUSDT",
@@ -45,7 +50,9 @@ def test_reconstructed_trade_preserves_accounting_and_provenance():
     )
     assert len(trades) == 1
     trade = trades[0]
-    assert {key: trade[key] for key in provenance} == provenance
+    direct = {key: value for key, value in provenance.items()
+              if key not in ("zone_lo", "zone_hi")}
+    assert {key: trade[key] for key in direct} == direct
     assert trade["closed"] is True
     assert trade["entry_mode"] == "limit"
     assert trade["exit_price"] == 110.0
@@ -54,3 +61,7 @@ def test_reconstructed_trade_preserves_accounting_and_provenance():
     assert trade["funding"] == pytest.approx(0.3)
     assert trade["net_pnl"] == pytest.approx(19.4)
     assert trade["r_multiple"] == pytest.approx(1.94)
+    assert trade["claim_filled_ts"] == 1000
+    assert trade["claim_filled_price"] == 100.0
+    assert trade["claim_zone_lo"] == 98.0
+    assert trade["claim_zone_hi"] == 99.0

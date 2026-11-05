@@ -1,0 +1,403 @@
+{
+  "environment": {
+    "by_regime": {
+      "RANGE": {
+        "n": 10,
+        "net": 56.33,
+        "mean_r": 0.213,
+        "winrate": 0.4,
+        "mean_mfe": 1.28,
+        "median_hold_h": 53.5
+      },
+      "TRANSITION": {
+        "n": 50,
+        "net": 125.91,
+        "mean_r": 0.269,
+        "winrate": 0.5,
+        "mean_mfe": 1.4,
+        "median_hold_h": 21.0
+      },
+      "TREND_DOWN": {
+        "n": 40,
+        "net": -53.55,
+        "mean_r": 0.093,
+        "winrate": 0.425,
+        "mean_mfe": 1.36,
+        "median_hold_h": 22.5
+      },
+      "TREND_UP": {
+        "n": 50,
+        "net": 60.1,
+        "mean_r": 0.123,
+        "winrate": 0.42,
+        "mean_mfe": 1.35,
+        "median_hold_h": 22.0
+      }
+    },
+    "by_regime_x_dir": {
+      "TREND_UP|long": {
+        "n": 33,
+        "net": 61.57,
+        "mean_r": 0.183,
+        "winrate": 0.424,
+        "mean_mfe": 1.43,
+        "median_hold_h": 22.0
+      },
+      "TREND_UP|short": {
+        "n": 17,
+        "net": -1.47,
+        "mean_r": 0.006,
+        "winrate": 0.412,
+        "mean_mfe": 1.19,
+        "median_hold_h": 20.0
+      },
+      "TREND_DOWN|long": {
+        "n": 16,
+        "net": -1.21,
+        "mean_r": 0.292,
+        "winrate": 0.438,
+        "mean_mfe": 1.58,
+        "median_hold_h": 27.0
+      },
+      "TREND_DOWN|short": {
+        "n": 24,
+        "net": -52.34,
+        "mean_r": -0.04,
+        "winrate": 0.417,
+        "mean_mfe": 1.21,
+        "median_hold_h": 22.5
+      },
+      "RANGE|long": {
+        "n": 6,
+        "net": 22.94,
+        "mean_r": 0.217,
+        "winrate": 0.333,
+        "mean_mfe": 1.11,
+        "median_hold_h": 48.0
+      },
+      "RANGE|short": {
+        "n": 4,
+        "net": 33.39,
+        "mean_r": 0.206,
+        "winrate": 0.5,
+        "mean_mfe": 1.55,
+        "median_hold_h": 61.0
+      },
+      "TRANSITION|long": {
+        "n": 26,
+        "net": 135.72,
+        "mean_r": 0.514,
+        "winrate": 0.5,
+        "mean_mfe": 1.75,
+        "median_hold_h": 19.0
+      },
+      "TRANSITION|short": {
+        "n": 24,
+        "net": -9.81,
+        "mean_r": 0.004,
+        "winrate": 0.5,
+        "mean_mfe": 1.02,
+        "median_hold_h": 22.5
+      }
+    },
+    "counter_trend": {
+      "n": 33,
+      "net": -2.68,
+      "mean_r": 0.145,
+      "winrate": 0.424,
+      "mean_mfe": 1.38,
+      "median_hold_h": 20.0
+    },
+    "with_trend": {
+      "n": 117,
+      "net": 191.46,
+      "mean_r": 0.177,
+      "winrate": 0.453,
+      "mean_mfe": 1.36,
+      "median_hold_h": 23.0
+    }
+  },
+  "box": {
+    "n": 80,
+    "rmult_mean": 1.3,
+    "rmult_median": 0.86,
+    "share_rmult_lt1": 0.55,
+    "share_rmult_lt0p5": 0.25,
+    "box_frac_median": 0.538,
+    "by_rmult": {
+      "0-0.5R": {
+        "n": 20,
+        "net": 7.33,
+        "mean_r": 0.049,
+        "winrate": 0.7,
+        "mean_mfe": 0.62,
+        "median_hold_h": 10.0
+      },
+      "0.5-1R": {
+        "n": 24,
+        "net": -0.38,
+        "mean_r": -0.043,
+        "winrate": 0.5,
+        "mean_mfe": 0.96,
+        "median_hold_h": 17.5
+      },
+      "1.5-2R": {
+        "n": 17,
+        "net": 76.89,
+        "mean_r": 0.433,
+        "winrate": 0.294,
+        "mean_mfe": 1.98,
+        "median_hold_h": 36.0
+      },
+      "2-9R": {
+        "n": 19,
+        "net": 66.26,
+        "mean_r": 0.646,
+        "winrate": 0.316,
+        "mean_mfe": 2.43,
+        "median_hold_h": 38.0
+      }
+    },
+    "by_tf": {
+      "2h": {
+        "n": 25,
+        "net": -33.49,
+        "mean_r": -0.162,
+        "winrate": 0.48,
+        "mean_mfe": 0.83,
+        "median_hold_h": 6.0,
+        "rmult_median": 0.57,
+        "share_rmult_lt1": 0.72
+      },
+      "4h": {
+        "n": 22,
+        "net": 75.05,
+        "mean_r": 0.264,
+        "winrate": 0.545,
+        "mean_mfe": 1.34,
+        "median_hold_h": 17.5,
+        "rmult_median": 0.83,
+        "share_rmult_lt1": 0.682
+      },
+      "12h": {
+        "n": 23,
+        "net": 46.17,
+        "mean_r": 0.421,
+        "winrate": 0.391,
+        "mean_mfe": 1.8,
+        "median_hold_h": 48.0,
+        "rmult_median": 1.65,
+        "share_rmult_lt1": 0.348
+      },
+      "1d": {
+        "n": 10,
+        "net": 62.37,
+        "mean_r": 0.812,
+        "winrate": 0.4,
+        "mean_mfe": 2.36,
+        "median_hold_h": 166.0,
+        "rmult_median": 1.79,
+        "share_rmult_lt1": 0.3
+      }
+    }
+  },
+  "entry_lag": {
+    "by_task_tf": {
+      "2h": {
+        "n": 53,
+        "net": -96.98,
+        "mean_r": -0.084,
+        "winrate": 0.491,
+        "mean_mfe": 0.97,
+        "median_hold_h": 10.0,
+        "entry_delay_h_median": 2.0,
+        "dist_from_ext_r_median": 1.15,
+        "bars_since_ext_median": 7
+      },
+      "4h": {
+        "n": 51,
+        "net": 142.12,
+        "mean_r": 0.198,
+        "winrate": 0.431,
+        "mean_mfe": 1.4,
+        "median_hold_h": 22.0,
+        "entry_delay_h_median": 4.0,
+        "dist_from_ext_r_median": 1.47,
+        "bars_since_ext_median": 7
+      },
+      "12h": {
+        "n": 32,
+        "net": 78.83,
+        "mean_r": 0.353,
+        "winrate": 0.438,
+        "mean_mfe": 1.68,
+        "median_hold_h": 62.0,
+        "entry_delay_h_median": 12.0,
+        "dist_from_ext_r_median": 0.93,
+        "bars_since_ext_median": 2.5
+      },
+      "1d": {
+        "n": 14,
+        "net": 64.82,
+        "mean_r": 0.612,
+        "winrate": 0.357,
+        "mean_mfe": 2.0,
+        "median_hold_h": 96.0,
+        "entry_delay_h_median": 24.0,
+        "dist_from_ext_r_median": 0.94,
+        "bars_since_ext_median": 4.0
+      }
+    },
+    "by_dist": {
+      "0.25-0.5R": {
+        "n": 2,
+        "net": -5.62,
+        "mean_r": -0.295,
+        "winrate": 0.5,
+        "mean_mfe": 1.09,
+        "median_hold_h": 25.0
+      },
+      "0.5-1.0R": {
+        "n": 67,
+        "net": 78.41,
+        "mean_r": 0.236,
+        "winrate": 0.463,
+        "mean_mfe": 1.41,
+        "median_hold_h": 22.0
+      },
+      "1.0-99R": {
+        "n": 81,
+        "net": 116.0,
+        "mean_r": 0.126,
+        "winrate": 0.432,
+        "mean_mfe": 1.33,
+        "median_hold_h": 23.0
+      }
+    },
+    "by_dist_x_tf": {
+      "2h|0.5-1.0R": {
+        "n": 21,
+        "net": -47.19,
+        "mean_r": -0.2,
+        "winrate": 0.524,
+        "mean_mfe": 0.77,
+        "median_hold_h": 7.0
+      },
+      "2h|1.0-99R": {
+        "n": 32,
+        "net": -49.79,
+        "mean_r": -0.008,
+        "winrate": 0.469,
+        "mean_mfe": 1.1,
+        "median_hold_h": 12.0
+      },
+      "4h|0.5-1.0R": {
+        "n": 19,
+        "net": -14.37,
+        "mean_r": 0.019,
+        "winrate": 0.474,
+        "mean_mfe": 1.04,
+        "median_hold_h": 16.0
+      },
+      "4h|1.0-99R": {
+        "n": 32,
+        "net": 156.49,
+        "mean_r": 0.304,
+        "winrate": 0.406,
+        "mean_mfe": 1.61,
+        "median_hold_h": 26.5
+      }
+    }
+  },
+  "exit_lag": {
+    "n_reject_with_target": 80,
+    "reached_target_n": 38,
+    "reached_target_share": 0.475,
+    "reached_target": {
+      "n": 38,
+      "net": 687.23,
+      "mean_r": 1.507,
+      "winrate": 0.921,
+      "mean_mfe": 2.51,
+      "median_hold_h": 19.0
+    },
+    "reached_but_nonpositive_n": 3,
+    "reached_but_nonpositive": {
+      "n": 3,
+      "net": -21.18,
+      "mean_r": -0.548,
+      "winrate": 0.0,
+      "mean_mfe": 0.37,
+      "median_hold_h": 28.0
+    },
+    "realised_minus_rmult_r": 0.64,
+    "not_reached": {
+      "n": 42,
+      "net": -537.13,
+      "mean_r": -0.897,
+      "winrate": 0.048,
+      "mean_mfe": 0.47,
+      "median_hold_h": 18.5
+    },
+    "exit_delay_h_median": 24.0,
+    "exit_delay_h_mean": 67.1,
+    "by_event": {
+      "LEVEL_REJECTED": {
+        "n": 80,
+        "net": 150.1,
+        "mean_r": 0.245,
+        "winrate": 0.463,
+        "mean_mfe": 1.44,
+        "median_hold_h": 19.0,
+        "realised_over_mfe": 0.17,
+        "share_mfe_ge2": 0.163
+      },
+      "BREAKOUT_ACCEPTED": {
+        "n": 70,
+        "net": 38.68,
+        "mean_r": 0.084,
+        "winrate": 0.429,
+        "mean_mfe": 1.28,
+        "median_hold_h": 28.0,
+        "realised_over_mfe": 0.066,
+        "share_mfe_ge2": 0.186
+      }
+    }
+  },
+  "regime_x_box": {
+    "TREND_UP": {
+      "n": 21,
+      "rmult_median": 1.51,
+      "reached_share": 0.429,
+      "net": 7.83,
+      "mean_r": 0.072
+    },
+    "TREND_DOWN": {
+      "n": 16,
+      "rmult_median": 1.18,
+      "reached_share": 0.375,
+      "net": -1.21,
+      "mean_r": 0.292
+    },
+    "RANGE": {
+      "n": 5,
+      "rmult_median": 0.98,
+      "reached_share": 0.6,
+      "net": 59.13,
+      "mean_r": 0.466
+    },
+    "TRANSITION": {
+      "n": 38,
+      "rmult_median": 0.84,
+      "reached_share": 0.526,
+      "net": 84.35,
+      "mean_r": 0.291
+    }
+  },
+  "notes": [
+    "dist_from_ext_r = 成交价距信号 bar 之前 12 根同周期 K 线极值的距离（R 计）",
+    "box_frac = 1/(1+r_mult)，进场点在箱体内的位置（0=止损边，1=对侧沿）",
+    "entry_delay_h = 信号 bar 收盘 → 成交；exit_delay_h = 平仓决策 → 成交",
+    "注意：excursion_bars 是执行 1h bar 计数，hold_bars 是战役周期 bar，单位不同，本文件不使用两者之差"
+  ]
+}

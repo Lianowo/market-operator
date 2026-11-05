@@ -33,6 +33,8 @@ v6 增量(docs/v6-protocol.md §2-S2,加性开关,默认参数行为逐位不变
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -269,7 +271,9 @@ class PositionManager:
                  time_stop: bool = True,
                  reject_opp_lock_frac: float = 0.0,
                  giveback_atr_k: Optional[float] = None,
-                 accept_reenter_box_exit: bool = False) -> None:
+                 accept_reenter_box_exit: bool = False,
+                 mfe_protect_r: Optional[float] = None,
+                 mfe_protect_lock_r: float = 0.50) -> None:
 
         self.p = params or Params()
         self.allow_add = allow_add
@@ -280,6 +284,9 @@ class PositionManager:
         # ATR 单位回吐预算(None ⇒ span 比例口径,逐位旧行为)
         self.giveback_atr_k = (None if giveback_atr_k is None
                                else float(giveback_atr_k))
+        self.mfe_protect_r = (None if mfe_protect_r is None
+                              else float(mfe_protect_r))
+        self.mfe_protect_lock_r = float(mfe_protect_lock_r)
 
         # 符号是 arming 口径(不是"两把尺子"):<0 收盘突破(acceptance),
         # >0 盘中触及(touch);|frac| 决定回吐预算 (1−|frac|)·|target−entry|。
@@ -346,6 +353,57 @@ class PositionManager:
         if pos._best is None or pos.direction * (pos._best - px) < 0.0:
             pos._best = px
         return True
+
+    # -- 实时价格裁决 -----------------------------------------------------------
+
+    def on_price(self, symbol: str, *, ts: int, price: float,
+                 ref_price: Optional[float] = None,
+                 atr: float = 0.0) -> list[OrderIntent]:
+        """Fresh quote: advance an existing entitlement; never grant one.
+
+        Arming belongs to the bar clock (2H or 15m). Quotes only ratchet an
+        already-armed lock, enforce the structural defense, or exit when the
+        giveback budget is exhausted.
+        """
+        pos = self.positions.get(symbol)
+        px = float(price)
+        ref = px if ref_price is None else float(ref_price)
+        if pos is None or not all(math.isfinite(v) and v > 0 for v in (px, ref)):
+            return []
+        pos._best = min(pos._best, px) if pos.direction < 0 else max(pos._best, px)
+        if pos.direction * (ref - pos.invalid) <= 0:
+            return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
+                                qty_frac=pos.size_frac, ref_price=ref, ts=ts,
+                                reason="PRICE_STOP|observed defense breached")]
+        frac = float(self.reject_opp_lock_frac)
+        if pos.target_1 is None or frac == 0.0:
+            return []
+        if (self.giveback_atr_k is not None and atr > 0.0
+                and pos.giveback_unit is None):
+            pos.giveback_unit = float(atr)
+        budget = (min(self.giveback_atr_k * pos.giveback_unit,
+                      abs(pos.target_1 - pos.entry))
+                  if self.giveback_atr_k is not None
+                  and pos.giveback_unit is not None
+                  else opp_lock_budget(pos.entry, pos.target_1, frac))
+        if budget is None:
+            return []
+        ld = opp_lock_protection_step(
+            direction=pos.direction, peak=pos._best, budget=budget,
+            ref_px=ref, armed=bool(pos.armed))
+        if ld.action == "exit":
+            return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
+                                qty_frac=pos.size_frac, ref_price=ref, ts=ts,
+                                reason="PRICE_LOCK|giveback_exhausted")]
+        if ld.action == "tighten":
+            old = pos.invalid
+            pos.invalid = (max(old, ld.stop_px) if pos.direction > 0
+                           else min(old, ld.stop_px))
+            if pos.invalid != old:
+                pos.log.append(
+                    f"price_lock|observed={px:.8g} peak={pos._best:.8g} "
+                    f"invalid {old:.8g}->{pos.invalid:.8g}")
+        return []
 
     # -- 逐 bar 裁决 -----------------------------------------------------------
 
@@ -523,6 +581,25 @@ class PositionManager:
         # §8.3: confirmed counter-direction pivots only tighten the stop.
         if not skip_trail:
             self._trail(pos, new_pivots, atr)
+
+        # 4.5 波段脱离后的腰部利润保护:
+        #     在浮盈未脱离 1:1 初始结构风险半径(mfe_protect_r,如 1.25R)前绝不推保本制造蚊子肉;
+        #     一旦浮盈突破 >= mfe_protect_r,将保护防线单调推进至 entry ± mfe_protect_lock_r·R(如 +0.50R),
+        #     既锁定扎实的腰部利润、杜绝走出波段后坐过山车倒亏 -1R,又留出充足的回踩呼吸空间。
+        if (self.mfe_protect_r is not None
+                and self.mfe_protect_r > 0.0
+                and pos._best is not None
+                and pos.mfe_r >= self.mfe_protect_r):
+            lock_px = pos.entry + pos.direction * self.mfe_protect_lock_r * pos.initial_risk
+            if stop_protect_dist(pos.direction, lock_px, c) > OPP_LOCK_EPS:
+                old = pos.invalid
+                pos.invalid = (min(pos.invalid, lock_px) if pos.direction < 0
+                               else max(pos.invalid, lock_px))
+                if abs(pos.invalid - old) > 1e-12:
+                    pos.log.append(
+                        f"mfe_protect|mfe={pos.mfe_r:.2f}R "
+                        f"lock_r={self.mfe_protect_lock_r:.2f}R "
+                        f"invalid {old:.8g}->{pos.invalid:.8g}")
 
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
         if (not price_only) and self.allow_add and not pos.added \

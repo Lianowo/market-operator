@@ -42,6 +42,7 @@ clientOid 前缀(OID_PREFIX)对账,异己单一律不触碰。
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 import gzip
 import hashlib
 import json
@@ -67,7 +68,7 @@ from market_operator.broker import (                            # noqa: E402
 from market_operator.events import EventDetector, canonical_event_id  # noqa: E402
 from market_operator.heartbeat import (                          # noqa: E402
     SCHEMA as HB_SCHEMA, HeartbeatGuard, iso_utc)
-from market_operator.hypothesis import StructureView, entry_contract_error, execution_target  # noqa: E402
+from market_operator.hypothesis import StructureView, entry_contract_error, entry_cost_error, execution_target  # noqa: E402
 from market_operator.position import (                          # noqa: E402
     Position, PositionManager, opp_lock_step)
 from market_operator import adopt as adopt_mod                   # noqa: E402
@@ -85,6 +86,23 @@ STRATEGY_CONFIG = ROOT / "config" / "strategy.json"   # 生产策略配置(唯�
 MS_1H = 3_600_000
 N_FILL_H = 12                                    # canonical N_fill(墙钟小时)
 TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400}
+#: Longest 15m catch-up window the price clock will replay. A longer gap means
+#: the process was stalled/restarted; re-anchor to the last closed bar instead
+#: of crawling days of history and acting on stale closes.
+PRICE_CLOCK_MAX_CATCHUP_STEPS = 4
+
+
+def initial_price_clock_ts(now_ms: int, step: int, opened_ts: int) -> int:
+    """Startup anchor for the 15m price clock: the last closed bar, not entry.
+
+    ``_best`` / ``invalid`` / ``armed`` are persisted in ``campaigns.json``; a
+    restart must not walk the whole position history 100 bars at a time. Doing
+    so would replay days-old closes and could execute an exit at a stale price.
+    We only need the most recent closed 15m bar (plus the entry bar for a brand
+    new position so the first fetch is not wasted).
+    """
+    floor = (int(now_ms) // step) * step
+    return max(floor - step, (int(opened_ts) // step) * step)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +166,10 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
         reject_opp_lock_frac=float(arm_cfg["reject_opp_lock_frac"]),
         giveback_atr_k=(None if arm_cfg.get("giveback_atr_k") is None
                         else float(arm_cfg["giveback_atr_k"])),
+        accept_reenter_box_exit=bool(arm_cfg.get("accept_reenter_box_exit", False)),
+        mfe_protect_r=(None if arm_cfg.get("mfe_protect_r") is None
+                       else float(arm_cfg["mfe_protect_r"])),
+        mfe_protect_lock_r=float(arm_cfg.get("mfe_protect_lock_r", 0.50)),
 
         # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
         # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。
@@ -537,6 +559,20 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
     return detector, tracker
 
 
+def trigger_origin_ms(cs: CampaignState) -> int:
+    """The same trigger-index zero used by the cropped cognition warmup.
+
+    Raw 2h history is retained for charts/management. Its first bar is not
+    necessarily the first bar replayed into the tracker. The first 4h bucket
+    can also be partial, so counting raw bars is not a valid trigger index.
+    """
+    first_cog = int(cs.cog_bars[0][0])
+    start = bisect_left(cs.trig_bars, first_cog, key=lambda b: int(b[0]))
+    first = int(cs.trig_bars[start][0])
+    step = int(cs.trigger_tf_seconds) * 1000
+    return first - first % step
+
+
 
 def reconcile_positions(ours: dict, exchange: list) -> list:
     """runner↔exchange 持仓对账:方向/数量(相对容差 1e-6);exchange_only
@@ -611,6 +647,10 @@ class LiveRunner:
                 f"cognition.engine={engine!r} 不再支持:实盘只有 v21 一条生产链"
                 "(v20/lifecycle 已退役,见 reports/refactor_20261023/DESIGN.md D9)")
         self.raw_strat, self.params, self.rp, self.rp_by_tf = load_strategy_params()
+        directional = self.risk.get("directional_cap_frac", self.raw_strat.get("directional_cap_frac"))
+        self.directional_cap_frac = float(directional) if directional is not None else None
+        if self.directional_cap_frac is not None and not (0.0 < self.directional_cap_frac <= 1.0):
+            raise ValueError("directional_cap_frac must be in (0,1]")
         self.contracts = contracts or {}
         self.contract_raw = contract_raw or {}     # 交易所原始合约条目(maxLever 等)
         self.leverage_by_sym: dict[str, int] = {}  # 各品种实际生效杠杆
@@ -708,6 +748,17 @@ class LiveRunner:
         self._stops_checked_at = 0.0               # 交易所止损单存在性校验 TTL
         self._stops_live_ids: Optional[set] = None
         self._stops_live_rows: Optional[list] = None   # 同上快照的原始行(去重用)
+        # Price-protection clock (independent of entry/event clocks):
+        #   bar = legacy 2H sub-bar only
+        #   15m = closed 15m bars arm the target lock; fresh quotes ratchet
+        self.price_clock = str((cfg.get("protection") or {})
+                               .get("price_clock", "bar")).lower()
+        if self.price_clock not in ("bar", "15m"):
+            raise RuntimeError(
+                f"protection.price_clock 非法: {self.price_clock!r}"
+                f"(仅允许 bar|15m)")
+        self._price_seen: dict[str, int] = {}
+        self._price_last: dict[str, int] = {}
         self._load_state()
         # 启动即落一次心跳:看护立刻看到新 pid + 新 started_ms,不会把上一具
         # 尸体留下的旧 loop_ts_ms 误判成"卡死"并对新进程动手。
@@ -1581,6 +1632,8 @@ class LiveRunner:
             self._settle_exits(now_ms)      # 决策型离场:用权威成交价校正回执
             self._settle_entries(now_ms)    # 开仓:用权威成交均价校正 entry(§6a)
             self._sync_live_fills(now_ms)
+            self._advance_price_clock(now_ms)
+            self._poll_position_prices(now_ms)
         base_ms = 7200 * 1000
         for sym, cs in sorted(self.campaigns.items()):
             try:
@@ -1615,6 +1668,158 @@ class LiveRunner:
                 self._reconcile()
         self._daily_tick(now_ms)
         self._api_error_streak = 0          # 本轮无异常:连续错计数复位
+
+    def _advance_price_clock(self, now_ms: int) -> None:
+        """Closed 15m bars arm/tighten the target lock (no 2H wait).
+
+        Execution-clock only: calls the same ``PositionManager.on_bar(
+        price_only=True)`` used by replay, so arming semantics do not fork.
+        The 2H ``_on_sub_bar`` target block is skipped while this clock is
+        active; its fixed-stop check remains as a fallback.
+        """
+        if self.price_clock != "15m" or not self.positions:
+            return
+        step = 15 * 60 * 1000
+        for sym, pos in list(self.positions.items()):
+            if pos.get("price_source", "ref") == "ref":
+                continue
+            cs = self._get_cs_for(sym, pos.get("tf_label"))
+            pm_pos = cs.pm.positions.get(sym) if cs is not None else None
+            if cs is None or pm_pos is None:
+                continue
+            last = int(self._price_last.get(sym, 0))
+            if last <= 0:
+                last = initial_price_clock_ts(
+                    now_ms, step, int(pm_pos.opened_ts))
+                self._price_last[sym] = last
+            elif now_ms - last > step * PRICE_CLOCK_MAX_CATCHUP_STEPS:
+                # Stalled/resumed process: skip the missed history. The 2H gap
+                # recovery owns structural catch-up; this clock only acts on
+                # fresh closes, never on a stale one.
+                last = initial_price_clock_ts(
+                    now_ms, step, int(pm_pos.opened_ts))
+                self._price_last[sym] = last
+            if now_ms < last + step:
+                continue
+            try:
+                bars = self.client.history_candles(
+                    sym, "15m", start_ms=last + 1, limit=100)
+            except BitgetError as exc:
+                self._journal("price_bar_error",
+                              {"symbol": sym, "why": str(exc)[:160]})
+                continue
+            for bar in bars:
+                ts = int(bar[0])
+                if ts <= last or ts + step > now_ms:
+                    continue
+                last = ts
+                if ts < int(pm_pos.opened_ts):
+                    continue
+                old = float(pm_pos.invalid)
+                intents = cs.pm.on_bar(
+                    sym, bar, float(cs.detector.structure.atr() or 0.0),
+                    price_only=True, skip_trail=True)
+                if abs(float(pm_pos.invalid) - old) > 1e-12:
+                    pos["invalid"] = float(pm_pos.invalid)
+                    self._touch_campaigns()
+                    self._journal("price_defense", {
+                        "symbol": sym, "clock": "15m", "bar_ts": ts,
+                        "old_invalid": old, "invalid": float(pm_pos.invalid),
+                        "armed": bool(pm_pos.armed), "peak": pm_pos._best})
+                for intent in intents:
+                    if getattr(intent.kind, "value", None) == "EXIT":
+                        reason = str(intent.reason)
+                        # §8.1 is a close-based *decision*, not a resting stop
+                        # touch: if the exchange TPSL is merely resting (mark
+                        # never crossed), waiting for it would leave the
+                        # position open. Lock giveback is likewise local.
+                        executor = ("local_market"
+                                    if ("lock_giveback" in reason
+                                        or "profit|" in reason
+                                        or "§8.1" in reason)
+                                    else "exchange_stop")
+                        ref_px = float(pos.get("mark") or bar[4])
+                        self._sub_bar_close_out(
+                            cs, pm_pos, pos, ts, ref_px,
+                            why="price_bar_exit", route=reason,
+                            executor=executor)
+                        break
+                    self._exec_mgmt(cs, intent, bar)
+            self._price_last[sym] = last
+
+    def _poll_position_prices(self, now_ms: int) -> None:
+        """Fresh quotes ratchet an existing defense between 15m closes.
+
+        Arming belongs to the 15m bar clock. Quotes only update the peak,
+        tighten an already-armed lock, or exit on a breached defense.
+        """
+        if self.price_clock != "15m" or not self.positions:
+            return
+        if not hasattr(self.client, "tickers"):
+            return
+        try:
+            ticks = self.client.tickers()
+        except BitgetError as exc:
+            self._journal("price_poll_error", {"why": str(exc)[:160]})
+            self._alert_throttled(
+                "price_poll", "持仓实时行情获取失败，保留交易所保护单；"
+                              "本轮不推进峰值")
+            return
+        received = max(now_ms, int(time.time() * 1000))
+        max_age = int(float((self.cfg.get("protection") or {})
+                            .get("max_quote_age_seconds", 30)) * 1000)
+        for tick in ticks:
+            sym = str(tick.get("symbol") or "")
+            pos = self.positions.get(sym)
+            if pos is None or sym in self._exit_retry:
+                continue
+            try:
+                observed = int(tick.get("ts") or 0)
+                last, mark = float(tick["lastPr"]), float(tick["markPrice"])
+                if (observed <= self._price_seen.get(sym, 0)
+                        or observed < int(pos.get("opened_ts") or 0)
+                        or not 0 <= received - observed <= max_age
+                        or not all(v == v and v > 0 for v in (last, mark))):
+                    continue
+            except (KeyError, ValueError, TypeError):
+                continue
+            self._price_seen[sym] = observed
+            pos["mark"], pos["mark_ts"] = mark, observed
+            cs = self._get_cs_for(sym, pos.get("tf_label"))
+            pm_pos = cs.pm.positions.get(sym) if cs is not None else None
+            if cs is None or pm_pos is None:
+                continue
+            d = int(pos["direction"])
+            if d * (mark - float(pm_pos.invalid)) <= 0:
+                self._sub_bar_close_out(
+                    cs, pm_pos, pos, observed, mark,
+                    why="price_protective_stop",
+                    route="PRICE_STOP|fresh mark", executor="exchange_stop")
+                continue
+            if pos.get("price_source", "ref") == "ref":
+                continue
+            old, armed = float(pm_pos.invalid), bool(pm_pos.armed)
+            ref = min(last, mark) if d > 0 else max(last, mark)
+            intents = cs.pm.on_price(
+                sym, ts=observed, price=last, ref_price=ref,
+                atr=float(cs.detector.structure.atr() or 0.0))
+            if float(pm_pos.invalid) != old or bool(pm_pos.armed) != armed:
+                pos["invalid"] = float(pm_pos.invalid)
+                self._touch_campaigns()
+                self._journal("price_defense", {
+                    "symbol": sym, "quote_ts": observed, "last": last,
+                    "mark": mark, "clock": self.price_clock,
+                    "old_invalid": old, "invalid": float(pm_pos.invalid),
+                    "armed": bool(pm_pos.armed), "peak": pm_pos._best})
+            quote_bar = (observed, last, last, last, last, 0.0)
+            for intent in intents:
+                if getattr(intent.kind, "value", None) == "EXIT":
+                    self._sub_bar_close_out(
+                        cs, pm_pos, pos, observed, ref,
+                        why="price_lock_exhausted", route=intent.reason,
+                        executor="local_market")
+                else:
+                    self._exec_mgmt(cs, intent, quote_bar)
 
     def _api_note(self, e: Exception) -> None:
         """API 错计数与熔断(fail-closed)。
@@ -1703,7 +1908,7 @@ class LiveRunner:
                     t_bar = (bar if trig_scale == 1
                              else aggregate_bucket(cs.trig_bars[-trig_scale:],
                                                    bar[0] + base_ms - trig_ms))
-                    k = len(cs.trig_bars) // trig_scale - 1
+                    k = (int(t_bar[0]) - trigger_origin_ms(cs)) // trig_ms
                     ts, o, h, low, c, _v = t_bar
                     emitted = cs.tracker.on_trigger_bar(k, ts, o, h, low, c)
                     if emitted:
@@ -2028,7 +2233,8 @@ class LiveRunner:
         #    同一函数)。子周期只负责"更早看到同一事实",不引入第二套语义:
         #      未 arming ⇒ 保持结构防线;保护侧 ⇒ 推进(可多次棘轮);
         #      回吐超预算 ⇒ 立刻市价离场。三态穷尽,没有"拒单原地等"的裸奔态。
-        if pos_pm.target_1 is not None and not pos_pm.pending_reduce:
+        if (self.price_clock == "bar"
+                and pos_pm.target_1 is not None and not pos_pm.pending_reduce):
             target = float(pos_pm.target_1)
             frac_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
             old_inv = float(pos_pm.invalid)
@@ -2138,20 +2344,52 @@ class LiveRunner:
         i = len(cs.cog_bars)
         trig_s = max(7200, int(cs.trigger_tf_seconds))
         obs_s = max(7200, int(cs.obs_tf_seconds))
-        scale = max(1, obs_s // trig_s)
-        hi = max(0, len(cs.trig_bars) // max(1, trig_s // 7200) - 1)
         if cs.tracker is not None:
+            # Historical episode anchors must map to their own trigger spans,
+            # not to the current cognition bucket. Match warmup's timestamp grid.
+            origin = trigger_origin_ms(cs)
+            step = trig_s * 1000
+
+            def span_start(p):
+                historical = cog_bar if p == i else cs.cog_bars[p]
+                return max(0, (int(historical[0]) - origin + step - 1) // step)
+
+            def span_end(p):
+                # Future trend deadlines retain warmup's current-context clamp.
+                p = min(p, i)
+                historical = cog_bar if p == i else cs.cog_bars[p]
+                return (int(historical[0]) + obs_s * 1000 - origin) // step - 1
+
             cs.tracker.sync(i, cs.detector,
-                            lambda p: max(0, hi - scale + 1),
-                            lambda p, _h=hi: _h)
+                            span_start, span_end)
         cs.cog_bars.append(cog_bar)
         atr = s.atr()
         sym = cs.symbol
-        # §8 持仓管理(入场成交的认知 bar 不做裁决,canonical 同口径)
+        # §8 持仓管理:若仓位在本根认知 bar 内成交(opened_ts > cog_bar[0]),
+        # 取成交后已收盘子周期区间极值推进价格型保护,消除建仓当根大周期裸奔盲区。
         pos_pm = cs.pm.positions.get(sym)
-        if pos_pm is not None and not (pos_pm.opened_ts > cog_bar[0]):
+        if pos_pm is not None:
             old_inv = float(pos_pm.invalid)
-            mgmt = cs.pm.on_bar(sym, cog_bar, atr, new_pivots, emitted or [])
+            if pos_pm.opened_ts > cog_bar[0]:
+                scale_n = max(1, obs_s // 7200)
+                sub_bars = [
+                    b for b in cs.trig_bars[-scale_n:]
+                    if int(b[0]) >= int(pos_pm.opened_ts)
+                ]
+                if sub_bars:
+                    sub_cog = (
+                        cog_bar[0],
+                        sub_bars[0][1],
+                        max(b[2] for b in sub_bars),
+                        min(b[3] for b in sub_bars),
+                        sub_bars[-1][4],
+                        sum(b[5] for b in sub_bars),
+                    )
+                    mgmt = cs.pm.on_bar(sym, sub_cog, atr, (), [], price_only=True)
+                else:
+                    mgmt = []
+            else:
+                mgmt = cs.pm.on_bar(sym, cog_bar, atr, new_pivots, emitted or [])
             if abs(float(pos_pm.invalid) - old_inv) > 1e-12:
                 pos_dict = self.positions.get(sym)
                 self._touch_campaigns()      # 防线推进:冷档必须留住
@@ -2338,6 +2576,7 @@ class LiveRunner:
         "PORTFOLIO_CAP": "仅参考 · 组合容量已满,本系统本拍未开仓",
         "OPPOSITE_CLAIM": "仅参考 · 同标的已有反向持仓,本系统本拍未开仓",
         "CLAIM_CAP": "仅参考 · 该标的同向判断的风险额度已用完,本系统本拍未开仓",
+        "DIRECTIONAL_CAP": "仅参考 · 同向风险额度已用完,本系统本拍未开仓",
         "MIN_NOTIONAL": "仅参考 · 数量低于交易所最小下单,本系统本拍未开仓",
         "DAILY_LOSS_BREAKER": "仅参考 · 当日亏损熔断,本系统暂停新开仓",
         "RATE_LIMIT": "仅参考 · 触达下单频率上限,本系统本拍未开仓",
@@ -2351,11 +2590,37 @@ class LiveRunner:
         "PORTFOLIO_CAP": (("cap_skips", 1),),
         "OPPOSITE_CLAIM": (("cap_skips", 1),),
         "CLAIM_CAP": (("cap_skips", 1),),
+        "DIRECTIONAL_CAP": (("cap_skips", 1),),
         "MIN_NOTIONAL": (("min_notional_skips", 1),),
         "DAILY_LOSS_BREAKER": (("breaker_blocks", 1),),
         "RATE_LIMIT": (("rate_skips", 1),),
         "DUPLICATE": (),
     }
+
+    def _directional_entry_blocked(self, direction: int, qty: float, price: float,
+                                   invalid: float, *, exclude_oid: Optional[str] = None) -> bool:
+        """Derive same-side in-flight exposure; no reservation state to leak.
+
+        Live admission already uses full costs. Keep that unit at trigger/fill
+        checks too, and exclude the intent currently being executed.
+        """
+        frac = self.directional_cap_frac
+        if frac is None:
+            return False
+        capital = max(0.0, float(self.equity) - float(self.unrealized_pl or 0.0))
+        fee, slip = float(self.risk["taker_fee"]), float(self.risk["slippage_per_side"])
+        used = sum(worst_case_of_position(direction, p["qty"], p.get("mark") or p["entry"],
+                                          p["invalid"], fee + slip)
+                   for p in self.positions.values() if p["direction"] == direction)
+        for oid, it in self.open_intents.items():
+            if (oid == exclude_oid or it.get("status") != "armed"
+                    or it.get("role") != "entry" or it["direction"] != direction
+                    or it["symbol"] in self.positions):
+                continue
+            ref = float(it.get("limit_price") or it["ref_px"])
+            used += float(it["qty"]) * (abs(ref - float(it["invalid"])) + ref * 2.0 * (fee + slip))
+        candidate = qty * (abs(price - invalid) + price * 2.0 * (fee + slip))
+        return used + candidate > frac * capital + 1e-9
 
     def _submit_open(self, cs: CampaignState, d, t: int, *, mic: bool,
                      view=None) -> None:
@@ -2375,6 +2640,13 @@ class LiveRunner:
         invalid = float(hyp.invalid)
         risk_per_unit = abs(entry_ref - invalid)
         spec = self._spec(sym)
+        try:
+            cost_limited = not float(d.meta.get("max_cost_frac") or 0.0) <= 0.0
+        except (TypeError, ValueError):
+            cost_limited = True  # malformed explicit constraints fail closed below
+        fitted_entry = (self.fit_price(sym, entry_ref, hyp.direction)
+                        if self.mode == "live" and d.kind == "limit"
+                        and not d.meta.get("watch_entry") else entry_ref)
         size_mult = float(d.meta.get("size_mult") or 1.0)
         # 事件 × 方向期望值权重(只缩不放;代码内下限 10%,见函数 docstring)
         edge_mult = edge_size_multiplier(
@@ -2413,13 +2685,18 @@ class LiveRunner:
         chart_pivots = self._chart_pivots(getattr(view, "pivots", ())) \
             if on_cog else []
         # ---- 闸门:只产出 block 码,不决定要不要通知 ----
-        block: Optional[str] = None
+        block: Optional[str] = entry_cost_error(hyp.direction, fitted_entry, invalid, d.meta)
         qty = 0.0
         if self.mode == "live" and self.api_halted:
             block = "API_HALT"
         elif risk_per_unit <= 0.0:
             block = "degenerate_risk"
-        elif self.mode == "live" and d.kind == "market" and d.meta.get("bounded_entry"):
+        elif block is not None:
+            pass
+        elif self.mode == "live" and d.kind == "limit" and cost_limited:
+            block = entry_contract_error(hyp.direction, fitted_entry, invalid,
+                                         hyp.target_1, d.meta)
+        elif self.mode == "live" and d.kind == "market" and (d.meta.get("bounded_entry") or cost_limited):
             block = (entry_contract_error(hyp.direction, execution_quote, invalid,
                      hyp.target_1, d.meta) if execution_quote is not None else "EXECUTION_QUOTE_UNAVAILABLE")
             if block is None:
@@ -2475,6 +2752,11 @@ class LiveRunner:
             if block is None and qty * entry_ref < max(
                     spec.min_trade_usdt, spec.size_min * entry_ref):
                 block = "MIN_NOTIONAL"
+            if block is None and self._directional_entry_blocked(
+                    hyp.direction, qty,
+                    (execution_quote if self.mode == "live" and d.kind == "market"
+                     and execution_quote is not None else fitted_entry), invalid):
+                block = "DIRECTIONAL_CAP"
             if block is None and self.breaker.should_stop(equity):
                 block = "DAILY_LOSS_BREAKER"
             if block is None and not self.rate.allow():
@@ -2558,6 +2840,9 @@ class LiveRunner:
                   "decision_ts": t, "mic": mic,
                   "expiry_ts": confirm_ts + wait_h * MS_1H, "status": "armed",
                   "exchange_order_id": None}
+        if cost_limited:
+            intent.update(max_cost_frac=d.meta["max_cost_frac"],
+                          cost_per_side=d.meta["cost_per_side"])
         self.open_intents[oid] = intent
         if self.mode == "live":
             try:
@@ -2567,7 +2852,7 @@ class LiveRunner:
                 elif d.kind == "limit":
                     resp = self.client.place_limit_order(
                         sym, side=side, size=qty,
-                        price=self.fit_price(sym, entry_ref, hyp.direction),
+                        price=fitted_entry,
                         client_oid=oid, trade_side=self.open_trade_side())
                     intent["exchange_order_id"] = str(resp.get("orderId") or "")
                     self.counters["orders_placed"] += 1
@@ -2735,6 +3020,11 @@ class LiveRunner:
             qty = min(qty, floor_step(risk_cap / abs(exec_px - inv), spec.size_step, spec.size_place))
         if qty <= 0.0 or qty * exec_px < max(spec.min_trade_usdt, spec.size_min * exec_px):
             return
+        if self._directional_entry_blocked(d, qty, exec_px, inv, exclude_oid=oid):
+            it["status"] = "canceled"
+            self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": "DIRECTIONAL_CAP"})
+            self._notify_watch(it, "关注作废", "DIRECTIONAL_CAP")
+            return
         if self.breaker.should_stop(self.equity) or not self.rate.allow():
             return
         try:
@@ -2776,6 +3066,11 @@ class LiveRunner:
             "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "opened_ts": ts, "mark": price}
+        # New position: drop any clock anchor left by a previous position on
+        # this symbol. Otherwise the 15m clock would fetch from that old anchor
+        # and walk the whole history in 100-bar pages.
+        self._price_last.pop(sym, None)
+        self._price_seen.pop(sym, None)
         self._touch_campaigns()              # 新仓:冷档里的 pm 事实必须同步
         if cs is not None:
             risk = it["direction"] * (price - it["invalid"])
@@ -3037,6 +3332,8 @@ class LiveRunner:
                 it.setdefault("ref_px", float(it.get("limit_price") or price))
                 it["fill_price_source"] = "fills"
                 self._register_position(it["symbol"], it, price, now_ms)
+                self._audit_entry_cost(it, price)
+                self._audit_directional_fill(it)
             else:
                 self._live_close_filled(it, ref_price=price)
 
@@ -3464,6 +3761,10 @@ class LiveRunner:
             d = int(rec["direction"])
             slip_bps = (d * (px - ref) / ref * 1e4) if ref > 0.0 else 0.0
             applied = self._apply_entry_fill(sym, px)
+            it = self.open_intents.get(rec["oid"])
+            if it is not None:
+                self._audit_entry_cost(it, px)
+                self._audit_directional_fill(it)
             self._journal("entry_settle",
                           {"symbol": sym, "oid": rec["oid"],
                            "order_id": rec["order_id"],
@@ -3477,6 +3778,39 @@ class LiveRunner:
                     f"{sym} 开仓成交价 {px:.8g} ≠ 信号参考价 {ref:.8g}"
                     f"({slip_bps:+.0f} bps,逆向为正);entry 已按成交价重记,"
                     f"实际 R 与计划 R 的偏差请以本条为准")
+
+    def _audit_directional_fill(self, it: dict) -> None:
+        """Report actual exposure without pretending an executed order can be rejected."""
+        if it.get("directional_cap_breach") or not self._directional_entry_blocked(
+                int(it["direction"]), 0.0, 0.0, 0.0, exclude_oid=it["oid"]):
+            return
+        it["directional_cap_breach"] = True
+        self.counters["directional_cap_breaches"] = self.counters.get("directional_cap_breaches", 0) + 1
+        self._journal("directional_cap_breach", {"oid": it["oid"], "symbol": it["symbol"],
+                                                "directional_cap_frac": self.directional_cap_frac})
+        self.tg.send_alert(f"{it['symbol']} 成交回执时同向在途风险超限;"
+                           "已保留真实持仓与保护规则,后续入场受同向上限约束")
+
+    def _audit_entry_cost(self, it: dict, fill_px: float) -> None:
+        """A fill is a fact, not a rejectable candidate. Record ceiling breaches.
+
+        A market order cannot guarantee its eventual execution price. Never
+        erase a filled position or invent an automatic liquidation policy.
+        """
+        if not it.get("max_cost_frac") or it.get("entry_cost_breach"):
+            return
+        error = entry_contract_error(int(it["direction"]), float(fill_px),
+                                     float(it["invalid"]), it.get("target_1"),
+                                     {"max_cost_frac": it["max_cost_frac"],
+                                      "cost_per_side": it.get("cost_per_side")})
+        if error:
+            it["entry_cost_breach"] = error
+            self.counters["entry_cost_breaches"] = self.counters.get("entry_cost_breaches", 0) + 1
+            self._journal("entry_cost_breach", {"oid": it["oid"], "symbol": it["symbol"],
+                                               "fill_px": fill_px, "invalid": it["invalid"],
+                                               "max_cost_frac": it["max_cost_frac"], "why": error})
+            self.tg.send_alert(f"{it['symbol']} 成交回执超出入场成本约束({error});"
+                               "已保留真实持仓与保护规则,未自动平仓")
 
     def _entry_fill_fact(self, sym: str, order_id: str
                          ) -> Optional[tuple[float, Optional[int], float]]:
@@ -3551,6 +3885,8 @@ class LiveRunner:
             cs.pm.positions.pop(sym, None)
         st = self.stops.pop(sym, None)       # 取证据:触发前那张保护单的价位
         self.positions.pop(sym, None)
+        self._price_last.pop(sym, None)
+        self._price_seen.pop(sym, None)
         self._missing_streak.pop(sym, None)
         self._exit_settle.pop(sym, None)     # 仓已确认归零:无需再校正回执
         self._exit_retry.pop(sym, None)      # 同上:重试队列也随仓位归零作废
@@ -3859,6 +4195,12 @@ class LiveRunner:
             it["status"] = "void"
             self.tg.send_alert(f"{sym} 成交价穿越失效位,放弃建仓"
                                f"(price={price} invalid={it['invalid']})")
+            return
+        if self._directional_entry_blocked(int(it["direction"]), float(it["qty"]), price,
+                                           float(it["invalid"]), exclude_oid=oid):
+            it["status"] = "void"
+            self._journal("paper_entry_void", {"oid": oid, "symbol": sym,
+                                               "why": "DIRECTIONAL_CAP", "price": price})
             return
         fee = it["qty"] * price * self.risk["taker_fee"]
         self.equity -= fee

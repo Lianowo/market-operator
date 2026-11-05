@@ -22,7 +22,8 @@
   "e5_edge_atr": 0.75,
   "use_balance_detector": true,
   "balance_quality_min": 0.35,
-  "accept_max_ext_atr": 99.0,
+  "accept_max_ext_atr": null,
+  "fast_accept_atr": null,
   "box_reentry_enabled": true,
   "risk_frac": 0.0075,
   "leverage_cap": 20.0,
@@ -58,6 +59,7 @@
     "reject_use_struct_stop": true,
     "reject_target_mode": "opposite",
     "accept_use_struct_stop": false,
+    "zone_departure_reset": true,
     "max_cost_frac": null,
     "cost_per_side": 0.0008,
     "deadzone_watch_enabled": true,
@@ -75,33 +77,23 @@
 
   "router_params_by_tf": {
     "2h": {
-      "struct_impulse_confirm": true,
-      "zone_departure_reset": true,
-      "reject_use_struct_stop": true,
-      "reject_target_mode": "opposite"
+      "struct_impulse_confirm": true
     },
     "4h": {
-      "struct_impulse_confirm": true,
-      "zone_departure_reset": true,
-      "reject_use_struct_stop": true,
-      "reject_target_mode": "opposite"
+      "struct_impulse_confirm": true
     },
     "12h": {
-      "struct_impulse_confirm": false,
-      "zone_departure_reset": true,
-      "reject_use_struct_stop": true,
-      "reject_target_mode": "opposite"
+      "struct_impulse_confirm": false
     },
     "1d": {
-      "struct_impulse_confirm": false,
-      "zone_departure_reset": true,
-      "reject_use_struct_stop": true,
-      "reject_target_mode": "opposite"
+      "struct_impulse_confirm": false
     }
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": -0.25
+    "reject_opp_lock_frac": -0.25,
+    "mfe_protect_r": 1.25,
+    "mfe_protect_lock_r": 0.50
   },
   "small_account_compounding": {
     "equity0": 104.0,

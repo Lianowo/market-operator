@@ -132,6 +132,39 @@ def _reject(eid: str, direction: int, z: Zone, t: int, ts: object, bm: float,
     return MarketEvent(id=eid, direction=direction, ts=ts, known_index=t, attrs=attrs)
 
 
+def fast_accept_ok(p: Params, cd, *, direction: int, o: float, h: float,
+                   l: float, c: float, atr: float, regime: Regime
+                   ) -> tuple[bool, int]:
+    """仅顺趋势的第一根强收盘允许提前确认;其余候选继续普通 n_a。
+
+    两个事件时钟共用此门。报价不能触发 ACCEPT,非趋势没有快速入口。
+    """
+    if not p.use_balance_detector or p.fast_accept_atr is None:
+        return False, 0
+    if cd.count != 1 or atr <= 0.0:
+        return False, 0
+    if direction not in (-1, 1):
+        return False, 0
+    trend = Regime.TREND_UP if direction > 0 else Regime.TREND_DOWN
+    if regime is not trend:
+        return False, 0
+    rng = max(h - l, 1e-12)
+    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
+    progressing = (
+        (c >= cd.start_close and c > o and close_pos >= 0.50)
+        if direction > 0
+        else (c <= cd.start_close and c < o and close_pos >= 0.50)
+    )
+    if not progressing:
+        return False, 0
+    ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+    if p.accept_max_ext_atr is not None and ext_dist > float(p.accept_max_ext_atr) * atr:
+        return False, 0
+    if close_pos >= 0.65 and ext_dist >= float(p.fast_accept_atr) * atr:
+        return True, 1
+    return False, 0
+
+
 # ---------------------------------------------------------------------------
 # EventDetector
 # ---------------------------------------------------------------------------
@@ -290,9 +323,9 @@ class EventDetector:
                 if not hold:
                     continue
                 cd.count += 1
+            direction = +1 if cd.role is res_role else -1
+            ref = cd.hi if cd.role is res_role else cd.lo
             if cd.count >= n_a:
-                direction = +1 if cd.role is res_role else -1
-                ref = cd.hi if cd.role is res_role else cd.lo
                 ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
                 if p.use_balance_detector:
                     not_counter = (
@@ -306,8 +339,11 @@ class EventDetector:
                         if direction > 0
                         else (c <= cd.start_close and c < o and close_pos >= 0.50)
                     )
-                    max_ext = float(p.accept_max_ext_atr or 1.50)
-                    if not_counter and progressing and ext_dist <= max_ext * atr:
+                    ext_ok = (
+                        p.accept_max_ext_atr is None
+                        or ext_dist <= float(p.accept_max_ext_atr) * atr
+                    )
+                    if not_counter and progressing and ext_ok:
                         sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
                         events.append(MarketEvent(
                             id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
@@ -318,6 +354,8 @@ class EventDetector:
                                 "started": cd.started,
                                 "sub_kind": sub_kind,
                                 "ext_atr": (ext_dist / atr) if atr > 0.0 else 0.0,
+                                "fast": False,
+                                "fast_bars": 0,
                             },
                         ))
                 else:
@@ -330,6 +368,25 @@ class EventDetector:
                             "started": cd.started,
                         },
                     ))
+                continue
+            fast, fast_bars = fast_accept_ok(
+                p, cd, direction=direction, o=o, h=h, l=l, c=c,
+                atr=atr, regime=cur_regime)
+            if fast:
+                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                events.append(MarketEvent(
+                    id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
+                    attrs={
+                        "zone": cd.zone.clone(),
+                        "ref": ref,
+                        "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                        "started": cd.started,
+                        "sub_kind": "A3_FAST",
+                        "ext_atr": (ext_dist / atr) if atr > 0.0 else 0.0,
+                        "fast": True,
+                        "fast_bars": fast_bars,
+                    },
+                ))
                 continue
             kept.append(cd)
         self._candidates = kept
@@ -413,8 +470,8 @@ class EventDetector:
                     against_trend = (
                         (cur_regime is Regime.TREND_UP) if res else (cur_regime is Regime.TREND_DOWN)
                     )
-                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.45)
-                    if real_retreat >= rj and back_inside and close_pos >= 0.45 and bar_dir_ok:
+                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.50)
+                    if real_retreat >= rj and back_inside and close_pos >= 0.50 and bar_dir_ok:
                         direction = -1 if res else +1
                         extra_rej = {
                             "ex": ep.ex,
@@ -498,7 +555,7 @@ class EventDetector:
 
     def _band(self) -> Optional[tuple]:
         """A8 合成带:最近至多 range_max_pivots 个 confirmed pivots。"""
-        recent = self.structure.pivots[-self.params.range_max_pivots:]
+        recent = self.structure.pivot_slice(-self.params.range_max_pivots)
         if len(recent) < 4:
             return None
         highs = [pv.price for pv in recent if pv.kind is PivotKind.HIGH]

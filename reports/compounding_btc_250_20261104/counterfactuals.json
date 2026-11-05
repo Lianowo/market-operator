@@ -1,0 +1,60 @@
+{
+  "A_edge_entry": {
+    "n": 79,
+    "fill_rate": 0.329,
+    "actual_sum_r_all": 20.62,
+    "edge_sum_r_if_filled": -23.79,
+    "edge_mean_r_if_filled": -0.915,
+    "actual_mean_r_same_subset": -0.974,
+    "by_tf": {
+      "2h": {
+        "n_all": 25,
+        "filled": 8,
+        "fill_rate": 0.32,
+        "mean_r_actual": -1.084,
+        "mean_r_edge": -1.115
+      },
+      "4h": {
+        "n_all": 21,
+        "filled": 3,
+        "fill_rate": 0.143,
+        "mean_r_actual": -1.064,
+        "mean_r_edge": -1.108
+      },
+      "12h": {
+        "n_all": 23,
+        "filled": 11,
+        "fill_rate": 0.478,
+        "mean_r_actual": -0.841,
+        "mean_r_edge": -0.671
+      },
+      "1d": {
+        "n_all": 10,
+        "filled": 4,
+        "fill_rate": 0.4,
+        "mean_r_actual": -1.052,
+        "mean_r_edge": -1.04
+      }
+    }
+  },
+  "B_hard_target": {
+    "n": 38,
+    "sum_r_actual": 57.27,
+    "sum_r_hard_target": 32.95,
+    "delta_r": -24.32,
+    "actual_over_target": 1.74
+  },
+  "C_accept_breakeven": {
+    "n_touched_1r": 29,
+    "be_triggered": 7,
+    "be_trigger_rate": 0.241,
+    "sum_r_actual": 36.52,
+    "sum_r_with_be": 35.86,
+    "delta_r": -0.67
+  },
+  "notes": [
+    "A: 边沿 = 信号 bar 与上一根的极值（长取最低/短取最高），主张窗 n_f+1=4 根；成交后仍沿用原出场价，属同出场价算术反事实",
+    "B: 只对触及对侧沿的 REJECT；硬目标 = r_mult_planned",
+    "C: 只对触及 +1R 的 ACCEPT；保本 = 回到成本即平（用后续 bar 的 low/high 判定）"
+  ]
+}

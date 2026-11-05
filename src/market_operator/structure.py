@@ -49,7 +49,10 @@ class Params:
     box_min_rotations: int = 1
     box_keep_broken_bars: int = 12
     box_keep_active_bars: int = 24
-    accept_max_ext_atr: float = 1.50
+    accept_max_ext_atr: Optional[float] = 1.50
+    # A decisive first close may skip n_a only in the matching trend.
+    # None preserves ordinary confirmation; range/transition always use n_a.
+    fast_accept_atr: Optional[float] = None
     box_reentry_enabled: bool = False
     box_reentry_max_bars: int = 96
 
@@ -633,7 +636,7 @@ class MarketStructure:
         self._swing = SwingTracker(params.k_rev)
         self._zones = ZoneBook(params)
         self._pivots: list[Pivot] = []
-        self._pivots_tuple: tuple[Pivot, ...] = ()
+        self._pivots_tuple: Optional[tuple[Pivot, ...]] = ()
         self.last_high_pivot: Optional[Pivot] = None
         self.last_low_pivot: Optional[Pivot] = None
         self._bars: list[tuple] = []
@@ -656,7 +659,7 @@ class MarketStructure:
                 close_extreme=float(self._bars[pivot.forming_index][4]),
             )
             self._pivots.append(pivot)
-            self._pivots_tuple = tuple(self._pivots)
+            self._pivots_tuple = None
             if pivot.kind is PivotKind.HIGH:
                 self.last_high_pivot = pivot
             else:
@@ -667,7 +670,19 @@ class MarketStructure:
 
     @property
     def pivots(self) -> tuple[Pivot, ...]:
+        """完整历史的不可变快照;只有请求时才构建,新 pivot 使缓存失效。"""
+        if self._pivots_tuple is None:
+            self._pivots_tuple = tuple(self._pivots)
         return self._pivots_tuple
+
+    @property
+    def pivot_count(self) -> int:
+        return len(self._pivots)
+
+    def pivot_slice(self, start: Optional[int] = None,
+                    stop: Optional[int] = None) -> tuple[Pivot, ...]:
+        """只复制需要的历史片段,切片语义与 ``pivots[start:stop]`` 一致。"""
+        return tuple(self._pivots[start:stop])
 
     @property
     def zones(self) -> tuple[Zone, ...]:

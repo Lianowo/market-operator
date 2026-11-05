@@ -74,25 +74,61 @@ def utc(ts: int) -> str:
     return datetime.fromtimestamp(ts / 1000, timezone.utc).isoformat()
 
 
+def select_symbols(requested: str | None, allowed: tuple) -> tuple[tuple[str, ...], bool]:
+    """解析 --symbols；返回 (本次回放品种, 是否发生过滤)。
+
+    只允许配置宇宙的子集：换品种集等于换一个场景，不能让拼写错误静默变成
+    "只跑了一部分标的还当成全宇宙结果"。
+    """
+    if requested is None:
+        return tuple(allowed), False
+    chosen = tuple(s.strip().upper() for s in requested.split(",") if s.strip())
+    if not chosen:
+        raise ValueError("--symbols 解析为空集")
+    unknown = [s for s in chosen if s not in allowed]
+    if unknown:
+        raise ValueError(f"--symbols 必须是 {', '.join(allowed)} 的子集; 未知: {', '.join(unknown)}")
+    if len(set(chosen)) != len(chosen):
+        raise ValueError("--symbols 含重复品种")
+    return chosen, chosen != tuple(allowed)
+
+
+def build_runner(symbols: tuple[str, ...], strategy_path: Path, *, progress: bool):
+    """按本次实验配置装配场景，禁止报告快照与实际执行配置分叉。"""
+    return ScenarioRunner(symbols, config_path=strategy_path, progress=progress)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--equity", type=float, default=300.0)
+    parser.add_argument("--symbols", default=None,
+                        help="逗号分隔的品种子集(默认用 live.json 的 symbols_core);"
+                             "仅过滤本次回放,不改配置")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="策略配置路径(默认 config/strategy.json);用于不改生产配置的实验")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not math.isfinite(args.equity) or args.equity <= 0:
         parser.error("--equity must be finite and positive")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    strategy_path, live_path = ROOT / "config/strategy.json", ROOT / "config/live.json"
+    strategy_path = ((args.config or (ROOT / "config/strategy.json")).resolve())
+    live_path = ROOT / "config/live.json"
     live = json.loads(live_path.read_text(encoding="utf-8"))
     risk = live["risk"]
-    runner = ScenarioRunner(tuple(live["symbols_core"]), progress=True)
+    allowed = tuple(live["symbols_core"])
+    try:
+        chosen, filtered = select_symbols(args.symbols, allowed)
+    except ValueError as exc:
+        parser.error(str(exc))
+    runner = build_runner(chosen, strategy_path, progress=True)
     settings = runner.settings
     assert risk["dynamic_risk_tiers"] == settings.raw["small_account_compounding"]["dynamic_risk_tiers"]
     report = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "equity0": args.equity, "symbols": list(runner.market.symbols),
+        "symbols_config": list(allowed), "symbols_filtered": filtered,
         "risk": risk, "scenarios": {},
         "hashes": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                    for p in (strategy_path, live_path, ROOT / "data/manifest.json", ROOT / "data/contracts.json")},
@@ -102,8 +138,14 @@ def main() -> int:
             ["git", "status", "--short"], cwd=ROOT, text=True),
         "limitations": [
             "Production canonical campaigns, not a tick-by-tick execution of live_runner.",
-            "Fixed four-symbol universe; no historical dynamic universe, outages or API failures.",
+            (f"Symbol subset {list(chosen)} replayed, but capacity/portfolio risk is no longer "
+             f"shared with the configured universe {list(allowed)}; this is a standalone "
+             f"single-portfolio run, NOT a per-symbol decomposition of the four-symbol run."
+             if filtered else
+             "Fixed four-symbol universe; no historical dynamic universe, outages or API failures."),
             "Live daily-loss/order-rate circuit breakers are not simulated by run_campaigns.",
+            *(["Historical funding rates are loaded for the whole configured universe; "
+               "only the traded subset consumes them."] if filtered else []),
             "Slippage is embedded in fill prices; do not deduct slippage_cost twice.",
             "Tail removal is attribution of original trades, not a counterfactual recompounding replay.",
             f"dev/test independently start at {args.equity:g} USDT; their PnL is not additive to full.",
@@ -186,6 +228,7 @@ def main() -> int:
         write_csv(out / f"{key}.equity.csv", [dict(zip(
             ("ts", "equity", "cash", "unrealized", "funding", "open_positions"), r)) for r in rows])
         write_csv(out / f"{key}.cap_skips.csv", result.cap_skips)
+        write_csv(out / f"{key}.claim_events.csv", result.claim_events)
         write_csv(out / f"{key}.top10pct.csv", sorted(closed, key=lambda t: t["net_pnl"], reverse=True)[:math.ceil(len(closed) * 0.1)])
         (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"{key}: equity={final[1]:.6f}, closed={len(closed)}, dd={max_dd:.4%}", flush=True)

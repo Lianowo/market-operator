@@ -8,6 +8,7 @@ import pytest
 from market_operator import campaign
 from market_operator.broker import Broker, ContractSpec, OrderIntent, OrderKind, RestingLimitOrder
 from market_operator.replay import prepare_cognition
+from market_operator.routing import RouterParams
 from market_operator.structure import Params
 
 STEP = 900_000
@@ -109,3 +110,18 @@ def test_preserved_event_routes_original_coarse_bar(monkeypatch):
                                frozenset(), 12, execution_only=True)
     assert calls[0][1] == original
     assert calls[0][2] == 12
+
+
+def test_go_counter_uses_same_canonical_event_ids_as_router():
+    params = RouterParams(whitelist=frozenset({("ACCEPT", 1), ("REJECT", -1)}))
+    events = [
+        SimpleNamespace(id="BREAKOUT_ACCEPTED", direction=1),
+        SimpleNamespace(id="LEVEL_REJECTED", direction=-1),
+    ]
+    counters = Counter()
+
+    assert campaign._count_go(
+        counters, events, params._normalized_whitelist, mic=True
+    ) == 2
+    assert counters["go_events"] == 2
+    assert counters["mic_go_events"] == 2

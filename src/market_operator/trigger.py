@@ -21,6 +21,7 @@ from .events import (
     TREND_RESUMED,
     EventDetector,
     MarketEvent,
+    fast_accept_ok,
 )
 from .hypothesis import StructureView
 from .structure import (
@@ -82,7 +83,7 @@ def resolve_trigger_tf(obs_tf_seconds: int, *, tf_map: dict = None,
 
 @dataclass
 class _MicEpisode:
-    """触发层接近过程跟踪。"""
+    """触发层接近过程;时间锚点均为 trigger 索引,认知身份单独保存。"""
 
     zone: Zone
     opened: int
@@ -90,6 +91,7 @@ class _MicEpisode:
     ex_index: int
     puncture_index: Optional[int] = None
     outside_closes: int = 0
+    cog_opened: Optional[int] = None
 
 
 @dataclass
@@ -200,6 +202,8 @@ class MicTracker:
         self.n_f_mic = params.n_f * self.scale
         self._ctx: Optional[_Context] = None
         self._episodes: list[_MicEpisode] = []
+        # 本认知区间自建的 episode(含已发射/淘汰者),sync 后绑定认知身份并去重。
+        self._unsynced_eps: list[_MicEpisode] = []
         self._candidates: list[_MicCandidate] = []
         self._retests: list[_MicRetest] = []
         self._e4: list[_MicE4] = []
@@ -226,25 +230,36 @@ class MicTracker:
 
         live = {id(z): z for z in ctx.zones}
         cog_eps = {(id(ep.zone), ep.opened) for ep in det._episodes}
+        span_start, span_end = span_start_of(i), span_end_of(i)
+        active_eps = {id(ep) for ep in self._episodes}
         kept: list[_MicEpisode] = []
-        for ep in self._episodes:
+        # 已结束的自建 episode 也登记身份,避免认知收盘时重新采用并重复发射。
+        pending = [ep for ep in self._unsynced_eps if id(ep) not in active_eps]
+        for ep in self._episodes + pending:
+            cog_opened = ep.cog_opened
+            if cog_opened is None and span_start <= ep.opened <= span_end:
+                cog_opened = i
             z = live.get(id(ep.zone))
             if z is not None:
-                if z.state is ZoneState.ACTIVE and (id(ep.zone), ep.opened) in cog_eps:
-                    kept.append(ep)
-                continue
-            for z2 in ctx.zones:
-                if (
+                if z.state is not ZoneState.ACTIVE or (id(z), cog_opened) not in cog_eps:
+                    continue
+            else:
+                z = next((z2 for z2 in ctx.zones if (
                     z2.role is ep.zone.role
                     and z2.state is ZoneState.ACTIVE
                     and z2.lo <= ep.zone.lo
                     and z2.hi >= ep.zone.hi
-                    and (id(z2), ep.opened) in cog_eps
-                ):
-                    ep.zone = z2
-                    kept.append(ep)
-                    break
+                    and (id(z2), cog_opened) in cog_eps
+                )), None)
+                if z is None:
+                    continue
+            ep.zone = z
+            ep.cog_opened = cog_opened
+            self._adopted_eps.add((id(z), cog_opened))
+            if id(ep) in active_eps:
+                kept.append(ep)
         self._episodes = kept
+        self._unsynced_eps.clear()
 
         # 采用认知 episode(open=A2 触碰,只发生在认知收盘);窗口锚点取该认知
         # bar 覆盖的**首根** trigger bar([刺穿 anchored]:窗口最早关闭,保守)
@@ -256,9 +271,10 @@ class MicTracker:
             puncture = (span_start_of(ep.puncture_index)
                         if ep.puncture_index is not None else None)
             self._episodes.append(_MicEpisode(
-                zone=ep.zone, opened=ep.opened, ex=ep.ex,
+                zone=ep.zone, opened=span_start_of(ep.opened), ex=ep.ex,
                 ex_index=span_start_of(ep.ex_index),
-                puncture_index=puncture))
+                puncture_index=puncture, outside_closes=ep.outside_closes,
+                cog_opened=ep.opened))
 
         live_states = {id(z): z.state for z in ctx.zones}
         self._candidates = [
@@ -338,6 +354,7 @@ class MicTracker:
                     if (h > z.hi + bm) if res else (l < z.lo - bm):
                         ep.puncture_index = a
                     self._episodes.append(ep)
+                    self._unsynced_eps.append(ep)
 
         # ① 破位登记
         for z in ctx.zones:
@@ -348,7 +365,12 @@ class MicTracker:
             if not broke:
                 continue
             self._broken.add(z.zone_id)
-            self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+            if p.use_balance_detector:
+                escape = (h - z.hi) if res else (z.lo - l)
+                if escape > 1.25 * ctx.atr:
+                    self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+            else:
+                self._episodes = [ep for ep in self._episodes if ep.zone is not z]
             self._candidates = [cd for cd in self._candidates if cd.zone is not z]
             self._candidates.append(
                 _MicCandidate(
@@ -372,9 +394,9 @@ class MicTracker:
                 if not hold:
                     continue
                 cd.count += 1
+            direction = +1 if cd.role is res_role else -1
+            ref = cd.hi if cd.role is res_role else cd.lo
             if cd.count >= req_count:
-                direction = +1 if cd.role is res_role else -1
-                ref = cd.hi if cd.role is res_role else cd.lo
                 if p.use_balance_detector:
                     ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
                     not_counter = (
@@ -388,8 +410,11 @@ class MicTracker:
                         if direction > 0
                         else (c <= cd.start_close and c < o and close_pos >= 0.50)
                     )
-                    max_ext = float(p.accept_max_ext_atr or 1.50)
-                    if not_counter and progressing and ext_dist <= max_ext * ctx.atr:
+                    ext_ok = (
+                        p.accept_max_ext_atr is None
+                        or ext_dist <= float(p.accept_max_ext_atr) * ctx.atr
+                    )
+                    if not_counter and progressing and ext_ok:
                         sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * ctx.atr else "A1_TIGHT"
                         events.append(
                             self._mk(
@@ -401,6 +426,8 @@ class MicTracker:
                                     "started": cd.started,
                                     "sub_kind": sub_kind,
                                     "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
+                                    "fast": False,
+                                    "fast_bars": 0,
                                 },
                             )
                         )
@@ -416,6 +443,27 @@ class MicTracker:
                             },
                         )
                     )
+                continue
+            fast, fast_bars = fast_accept_ok(
+                p, cd, direction=direction, o=o, h=h, l=l, c=c,
+                atr=ctx.atr, regime=ctx.regime)
+            if fast:
+                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
+                events.append(
+                    self._mk(
+                        BREAKOUT_ACCEPTED, direction, ts, a,
+                        {
+                            "zone": cd.zone.clone(),
+                            "ref": ref,
+                            "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
+                            "started": cd.started,
+                            "sub_kind": "A3_FAST",
+                            "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
+                            "fast": True,
+                            "fast_bars": fast_bars,
+                        },
+                    )
+                )
                 continue
             kept_cd.append(cd)
         self._candidates = kept_cd
@@ -470,22 +518,23 @@ class MicTracker:
                         },
                     )
                     new_rejections.append(fired)
-                if fired is None and a - ep.ex_index <= self.n_f_mic:
+                    self._broken.discard(z.zone_id)
+                    self._candidates = [cd for cd in self._candidates if cd.zone is not z]
+                elif ep.outside_closes == 0 and a - ep.ex_index <= self.n_f_mic:
                     real_retreat = (ep.ex - c) if res else (c - ep.ex)
                     back_inside = (c <= z.lo) if res else (c >= z.hi)
                     against_trend = (
                         (ctx.regime is Regime.TREND_UP) if res else (ctx.regime is Regime.TREND_DOWN)
                     )
-                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.45)
-                    if real_retreat >= rj_trig and back_inside and close_pos >= 0.45 and bar_dir_ok:
+                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.50)
+                    if real_retreat >= rj_trig and back_inside and close_pos >= 0.50 and bar_dir_ok:
                         direction = -1 if res else +1
-                        inv_rej = (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
                         fired = self._mk(
                             LEVEL_REJECTED, direction, ts, a,
                             {
                                 "zone": z.clone(),
                                 "ref": edge,
-                                "invalid": inv_rej,
+                                "invalid": (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm),
                                 "ex": ep.ex,
                                 "ex_index": ep.ex_index,
                                 "sub_kind": "R1_MIC",
@@ -512,11 +561,14 @@ class MicTracker:
                     new_ex = max(ep.ex, h) if res else min(ep.ex, l)
                     if new_ex != ep.ex:
                         ep.ex, ep.ex_index = new_ex, a
-                # 与认知层同步:收盘落在箱外就是"外侧驻留"的证据,下一根才可判 R3。
+                # 与认知层同步:收盘落在箱外就是"外侧驻留"的证据,下一根才可判 R3(超过 2 根则假突破窗口结束)。
                 if p.use_balance_detector and (
                         (c > z.hi + bm) if res else (c < z.lo - bm)):
                     ep.outside_closes += 1
-                if not p.use_balance_detector or (a - ep.opened) <= (p.n_f + 1):
+                    if ep.outside_closes > 2:
+                        continue
+                # v22 的 N_f+1 是认知根数;按 v10 数量闸门换算为 trigger 根数。
+                if not p.use_balance_detector or (a - ep.opened) <= (p.n_f + 1) * self.scale:
                     survivors.append(ep)
         self._episodes = survivors
 

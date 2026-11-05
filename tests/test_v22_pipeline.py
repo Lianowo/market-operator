@@ -387,3 +387,202 @@ def test_struct_impulse_confirm_and_zone_departure_reset():
     assert len(d_retest) == 1
 
 
+def test_accept_reenter_box_exit_when_enabled():
+    """显式开启 accept_reenter_box_exit 时,BREAKOUT_ACCEPTED 仓位在认知 bar 收盘跌穿被破箱沿远端(reenter_invalid_px)触发 §8.1b 退出。"""
+    from market_operator.position import PositionManager
+
+    pm = PositionManager(Params(), accept_reenter_box_exit=True)
+    assert pm.accept_reenter_box_exit is True
+    pm.open(
+        "BTCUSDT", direction=+1, entry=131.0, invalid=122.0,
+        target_1=None, event_id=BREAKOUT_ACCEPTED, ts=1000, index=10,
+        reenter_invalid_px=127.0,
+    )
+    intents = pm.on_bar("BTCUSDT", (2000, 130.0, 130.5, 125.5, 126.0, 100.0), atr=3.0)
+    assert len(intents) == 1
+    assert "§8.1b|accept_reentered_box" in intents[0].reason
+
+
+def test_reject_requires_clean_close_back_inside_value_area_edge():
+    """LEVEL_REJECTED 必须收盘真正收复价值区内沿(多头 c >= z.hi / 空头 c <= z.lo),未出内沿不在带内半腰抢跑。"""
+    p = Params(use_balance_detector=True, k_bm=0.1, k_rj=0.3)
+    det = EventDetector(p)
+    z = Zone(lo=100.0, hi=102.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+             box_opposite=112.0, box_quality=0.6, box_width_atr=6.0, box_rotations=3)
+    det.structure._zones.zones = [z]
+    det.structure._regime = Regime.RANGE
+
+    # 1) 刺穿下沿 99.0 后仅收在带内 101.2 (< z.hi=102.0, 尚未收复内沿) -> 不抢跑发射
+    ev_in_band = det._zone_events(1, 3_600_000, 100.5, 102.0, 99.0, 101.2, 103.0, 2.0)
+    assert [e for e in ev_in_band if e.id == LEVEL_REJECTED] == []
+
+    # 2) 下一根真正收复价值区内沿 102.5 (>= z.hi=102.0) -> 确认发射 LEVEL_REJECTED,且极值保留 99.0
+    ev_confirmed = det._zone_events(2, 7_200_000, 101.2, 103.0, 101.0, 102.5, 101.2, 2.0)
+    assert len(ev_confirmed) == 1 and ev_confirmed[0].id == LEVEL_REJECTED
+    assert ev_confirmed[0].attrs["ex"] == pytest.approx(99.0)
+
+
+def test_breakout_requires_full_n_a_confirmation_without_fast_accept():
+    """关闭 fast_accept_atr 时,箱外突破必须完成完整 n_a=3 根驻留确认,绝不在第 1~2 根抢跑假突破。"""
+    p = Params(use_balance_detector=True, balance_quality_min=0.35,
+               n_a=3, fast_accept_atr=None)
+    det = EventDetector(p)
+    for b in _make_box_bars(cycles=4):
+        det.update(b)
+    rz = [z for z in det.structure.zones if z.role is ZoneRole.RESISTANCE and z.state is ZoneState.ACTIVE][0]
+    atr = det.structure.atr()
+    t0 = _make_box_bars(cycles=4)[-1][0]
+    step = 3_600_000
+
+    c1 = rz.hi + 0.60 * atr
+    ev1 = det.update((t0 + step, rz.lo, c1 + 0.1 * atr, rz.lo, c1, 150.0))
+    assert [e for e in ev1 if e.id == BREAKOUT_ACCEPTED] == []
+
+    c2 = rz.hi + 0.70 * atr
+    ev2 = det.update((t0 + 2 * step, c1, c2 + 0.1 * atr, c1 - 0.05 * atr, c2, 180.0))
+    assert [e for e in ev2 if e.id == BREAKOUT_ACCEPTED] == []
+
+    c3 = rz.hi + 0.80 * atr
+    ev3 = det.update((t0 + 3 * step, c2, c3 + 0.1 * atr, c2 - 0.05 * atr, c3, 180.0))
+    acc = [e for e in ev3 if e.id == BREAKOUT_ACCEPTED]
+    assert len(acc) == 1
+    assert acc[0].attrs["fast"] is False
+
+
+def test_mfe_protect_locks_waist_profit_only_after_structural_expansion():
+    """在浮盈未达 1.25R 前绝不推保本制造蚊子肉;达到 >= 1.25R 后将保护位推至 +0.50R 腰部利润区。"""
+    from market_operator.position import PositionManager
+
+    pm = PositionManager(
+        Params(), time_stop=False, reject_opp_lock_frac=-0.25,
+        mfe_protect_r=1.25, mfe_protect_lock_r=0.50,
+    )
+    pos = pm.open("BTCUSDT", 1, entry=100.0, invalid=95.0, target_1=110.0,
+                  event_id=LEVEL_REJECTED, ts=1000, index=0)
+    # 1. 仅走出 +0.8R (high=104.0 < 106.25): 保持原始结构止损 95.0, 绝不推 +0.10R 制造蚊子肉
+    pm.on_bar("BTCUSDT", (2000, 100.0, 104.0, 99.5, 103.0, 50.0), atr=2.0)
+    assert pos.invalid == pytest.approx(95.0)
+
+    # 2. 走出 >= 1.25R (high=108.0, MFE=1.6R >= 1.25R): 止损推进至 102.5 (+0.50R 腰部利润)
+    pm.on_bar("BTCUSDT", (3000, 103.0, 108.0, 102.8, 106.0, 50.0), atr=2.0)
+    assert pos.invalid == pytest.approx(102.5)
+
+
+
+def test_multitf_amt_boundary_defers_mic_outward_breakout_but_allows_reentry_and_reject():
+    """多尺度 AMT 职责边界:
+    - 细周期触发(mic=True)允许触发向大周期价值区内部回归的信号(BOX_EDGE 拒绝 + FLIPPED_BOX_EDGE 重返入箱);
+    - 推翻大周期平衡箱向外突破(BOX_EDGE 外向 BREAKOUT_ACCEPTED)若仅在 mic=True 上触发,必须交还大周期认知收盘确认,
+      且不得误撤既有挂单。
+    """
+    router = MarketRouter(RouterParams(
+        whitelist=WHITELIST_BALANCE,
+        reject_use_struct_stop=True,
+        reject_target_mode="opposite",
+    ))
+    z_box = Zone(lo=108.0, hi=110.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+                 box_opposite=98.0, box_quality=0.65, box_width_atr=6.0, box_rotations=4,
+                 source_kind="BOX_EDGE")
+    z_flip = Zone(lo=98.0, hi=100.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+                  box_opposite=110.0, box_quality=0.65, box_width_atr=6.0, box_rotations=4,
+                  source_kind="FLIPPED_BOX_EDGE")
+    view = StructureView(regime=Regime.RANGE, zones=(z_box, z_flip), atr=2.0)
+
+    # 1) mic=True 的 BOX_EDGE 外向突破: 不得越权开仓, 也不得触发 e1_cancel_orders 误撤挂单
+    ev_mic_out = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=1000, known_index=5,
+        attrs={"zone": z_box, "ref": 110.0, "invalid": 107.8, "mic": True},
+    )
+    dec_mic_out = router.on_bar(
+        "BTCUSDT", (1000, 110.2, 111.5, 110.0, 111.2, 50.0),
+        5, view, 2.0, [ev_mic_out], position_open=False, entry_resting=True,
+    )
+    assert dec_mic_out == []
+    assert router.counters.get("restraint_mic_outward_accept_reject") == 1
+    assert router.counters.get("e1_cancel_orders", 0) == 0
+
+    # 2) 认知收盘(mic=False)的 BOX_EDGE 外向突破: 正常确认入场
+    ev_cog_out = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=2000, known_index=6,
+        attrs={"zone": z_box, "ref": 110.0, "invalid": 107.8},
+    )
+    dec_cog_out = router.on_bar(
+        "BTCUSDT", (2000, 110.2, 111.5, 110.0, 111.2, 50.0),
+        6, view, 2.0, [ev_cog_out], position_open=False, entry_resting=False,
+    )
+    assert len(dec_cog_out) == 1 and dec_cog_out[0].route == ROUTE_BREAKOUT_ACCEPTED
+
+    # 3) mic=True 的 FLIPPED_BOX_EDGE 重返入箱突破: 属于回归既有大周期价值区, 正常放行
+    ev_mic_reentry = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=3000, known_index=7,
+        attrs={"zone": z_flip, "ref": 100.0, "invalid": 97.8, "mic": True},
+    )
+    dec_reentry = router.on_bar(
+        "BTCUSDT", (3000, 100.1, 101.4, 99.9, 101.1, 50.0),
+        7, view, 2.0, [ev_mic_reentry], position_open=False, entry_resting=False,
+    )
+    assert len(dec_reentry) == 1 and dec_reentry[0].meta["trade_context"] == "重新入箱"
+
+
+def test_trigger_layer_r3_trap_end_to_end_survives_outside_close_and_unlocks_zone():
+    """触发层完整 R3_TRAP 生命周期:
+    细周期第 1 根收盘非逃逸越界(<=1.25*ATR)不得销毁 _MicEpisode;
+    第 2 根强力收回价值区内沿时发射 R3_TRAP,清除同区假突破候选并释放 _broken 锁定。
+    """
+    from types import SimpleNamespace
+    from market_operator.trigger import MicTracker
+
+    p = Params(use_balance_detector=True, n_a=3, n_f=3, k_bm=0.1, k_rj=0.3)
+    z = Zone(lo=100.0, hi=102.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+             box_opposite=90.0, box_quality=0.65, box_width_atr=6.0, box_rotations=4)
+    s_mock = SimpleNamespace(
+        atr=lambda: 2.0, regime=lambda: Regime.RANGE, pivots=(),
+        last_low_pivot=None, last_high_pivot=None,
+        _zones=SimpleNamespace(zones=[z]),
+    )
+    det_mock = SimpleNamespace(structure=s_mock, _episodes=[], _trend_candidates=[])
+    tracker = MicTracker(p, scale=6, trigger_tf_seconds=7200, obs_tf_seconds=43200)
+    tracker.sync(0, det_mock, lambda i: 0, lambda i: 5)
+    tracker._prev_trig_close = 99.0
+
+    # 第 1 根 2h: 从正面触碰并收盘刺出外沿 102.0 + 0.2 = 102.2 (high=103.0, escape=0.5*ATR <= 1.25*ATR)
+    ev1 = tracker.on_trigger_bar(0, 7_200_000, 99.5, 103.0, 99.4, 102.6)
+    assert ev1 == []
+    assert len(tracker._episodes) == 1
+    assert tracker._episodes[0].outside_closes == 1
+    assert len(tracker._candidates) == 1
+    assert z.zone_id in tracker._broken
+
+    # 第 2 根 2h: 诱多失败大阴线砸回价值区内沿之下(close=99.2 < 100.0, close_pos > 0.50)
+    ev2 = tracker.on_trigger_bar(1, 14_400_000, 102.5, 102.8, 98.8, 99.2)
+    assert len(ev2) == 1
+    assert ev2[0].id == LEVEL_REJECTED and ev2[0].direction == -1
+    assert ev2[0].attrs["sub_kind"] == "R3_TRAP"
+    assert ev2[0].attrs["outside_closes"] == 1
+    assert tracker._candidates == []
+    assert z.zone_id not in tracker._broken
+
+
+def test_null_accept_max_ext_atr_and_midpoint_close_pos_contract():
+    """配置收束契约: accept_max_ext_atr=None 原生放行过伸确认(无需 99.0 魔法数),且拒绝确认统一要求跨越 K 线几何中点(0.50)。"""
+    import json
+    from pathlib import Path
+
+    cfg_path = Path(__file__).resolve().parents[1] / "config" / "strategy.json"
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    p = Params.from_json(cfg_path)
+    assert raw["accept_max_ext_atr"] is None
+    assert p.accept_max_ext_atr is None
+    assert raw["router_params"]["zone_departure_reset"] is True
+    assert set(raw["router_params_by_tf"]["2h"].keys()) == {"struct_impulse_confirm"}
+
+    det = EventDetector(Params(use_balance_detector=True, k_bm=0.1, k_rj=0.3))
+    z = Zone(lo=98.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+             box_opposite=110.0, box_quality=0.6, box_width_atr=6.0, box_rotations=3)
+    det.structure._zones.zones = [z]
+    det.structure._regime = Regime.RANGE
+
+    # close_pos = (100.47 - 98.5) / (102.5 - 98.5) = 1.97 / 4.0 = 0.4925 < 0.50 -> 未过 K 线中轴不发射
+    ev_below_mid = det._zone_events(1, 3_600_000, 101.0, 102.5, 98.5, 100.47, 101.0, 2.0)
+    assert [e for e in ev_below_mid if e.id == LEVEL_REJECTED] == []
+

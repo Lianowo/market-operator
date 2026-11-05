@@ -1,0 +1,37 @@
+{
+  "reject": {
+    "n": 80,
+    "touched_target": 38,
+    "touched_share": 0.475,
+    "bars_to_touch_median": 1.0,
+    "hours_touch_to_exit_median": 12.0,
+    "bars_touch_to_exit_median": 2.2,
+    "exit_ge_target": 26,
+    "exit_below_target": 12,
+    "exit_below_target_share": 0.316,
+    "gave_back_mean_exit_r": 0.353,
+    "gave_back_shortfall_usdt": 118.71
+  },
+  "accept": {
+    "n": 70,
+    "touched_1R": 29,
+    "held_1R": 11,
+    "held_1R_share": 0.379,
+    "mean_exit_r_after_1R": 1.33,
+    "shortfall_usdt_vs_1R": 200.17,
+    "touched_2R": 13,
+    "held_2R": 6,
+    "held_2R_share": 0.462,
+    "mean_exit_r_after_2R": 2.65,
+    "shortfall_usdt_vs_2R": 82.32,
+    "touched_3R": 6,
+    "held_3R": 4,
+    "held_3R_share": 0.667,
+    "mean_exit_r_after_3R": 4.33,
+    "shortfall_usdt_vs_3R": 8.47
+  },
+  "notes": [
+    "触及判定用战役周期 bar 的 high/low，比执行层 15m/1h 粗，所以『触及目标』是保守下界",
+    "exit_ge_target 用 0.05R 容差"
+  ]
+}

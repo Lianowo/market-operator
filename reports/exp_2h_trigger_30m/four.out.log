@@ -1,0 +1,12 @@
+[prep] BTCUSDT 认知就绪
+[prep] ETHUSDT 认知就绪
+[prep] SOLUSDT 认知就绪
+[prep] DOGEUSDT 认知就绪
+Running full_1x
+full_1x: equity=22801.394689, closed=674, dd=52.2895%
+Running dev_1x
+dev_1x: equity=8518.810926, closed=449, dd=47.9273%
+Running test_1x
+test_1x: equity=995.204579, closed=197, dd=67.2772%
+Running full_1.5x
+full_1.5x: equity=12299.154206, closed=656, dd=64.4134%

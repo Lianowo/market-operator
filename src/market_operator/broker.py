@@ -374,6 +374,14 @@ class Broker:
         po = _Pending(intent=intent, decision_ts=int(decision_ts),
                       direction=direction, invalid=invalid, target_1=target_1,
                       event_id=event_id, meta=dict(meta or {}))
+        if intent.kind is OrderKind.OPEN and self.directional_blocked(
+                direction, intent.ref_price, invalid, intent.symbol,
+                meta=po.meta, moment=capacity.DECISION):
+            self.ledger.append(self._skip_row(
+                po, int(decision_ts), "DIRECTIONAL_CAP",
+                "same-direction positions and entry intents exceed budget",
+                price=intent.ref_price))
+            return
         self.pending.setdefault(intent.symbol, []).append(po)
 
     # -- v4 挂单(docs/v4-protocol.md §1-G3) ------------------------------------
@@ -388,6 +396,12 @@ class Broker:
             raise ValueError("entry limit requires invalid")
         if order.role == "reduce" and order.reduce_qty is None:
             raise ValueError("reduce limit requires reduce_qty snapshot")
+        if order.role == "entry" and self.directional_blocked(
+                order.direction, order.limit_price, order.invalid, order.symbol,
+                meta=order.meta, moment=capacity.DECISION):
+            self._limit_skip(order, int(order.armed_at_ts), "DIRECTIONAL_CAP",
+                             "same-direction positions and entry intents exceed budget", {})
+            return
         self.resting.setdefault(order.symbol, []).append(order)
 
     def has_entry_limit(self, symbol: str) -> bool:
@@ -413,13 +427,15 @@ class Broker:
         hour_label = int(ts) - (int(ts) % MS_1H)
         rows: list[dict] = []
         kept: list[RestingLimitOrder] = []
-        for od in self.resting.pop(symbol, []):
+        orders = self.resting.get(symbol, [])[:]
+        for od in orders:
             if bool(od.meta.get("mic")) != bool(mic_only):
                 kept.append(od)
                 continue
             exact_window = od.meta.get("execution_step_ms")
             window_label = int(ts) if exact_window else hour_label
             if window_label > od.expiry_ts:
+                self.resting[symbol].remove(od)
                 rows.append(self._timeout(od, int(ts)))
                 continue
             barred = (od.fill_after_ts if od.fill_after_ts is not None
@@ -431,6 +447,7 @@ class Broker:
                 max_wait_h = od.meta.get("max_wait_hours")
                 if (not exact_window and max_wait_h is not None
                         and (od.wait_bars + 1) > int(max_wait_h)):
+                    self.resting[symbol].remove(od)
                     rows.append(self._timeout(od, int(ts)))
                     continue
                 prog_px = od.meta.get("prog_price")
@@ -445,6 +462,7 @@ class Broker:
                     already_ran = (h >= prog_f) if od.direction > 0 else (l <= prog_f)
                     touched_watch = (l <= od.limit_price) if od.direction > 0 else (h >= od.limit_price)
                     if already_ran and not touched_watch:
+                        self.resting[symbol].remove(od)
                         detail = (f"reached {prog_f:.8g} ({float(max_prog):.0%} to target) before pullback"
                                   if max_prog is not None and od.target_1 is not None
                                   else f"reached {prog_f:.8g} before pullback")
@@ -465,6 +483,7 @@ class Broker:
                             raise AssertionError(
                                 f"trigger ts {ts} <= armed_at_ts {od.armed_at_ts}")
                         od.limit_price = float(c)
+                        self.resting[symbol].remove(od)
                         rows.append(self._trigger_to_pending(od, int(ts)))
                         continue
             od.wait_bars += 1
@@ -476,11 +495,14 @@ class Broker:
             if int(ts) <= od.armed_at_ts:             # 因果硬断言:成交晚于武装
                 raise AssertionError(
                     f"limit fill ts {ts} <= armed_at_ts {od.armed_at_ts}")
+            self.resting[symbol].remove(od)
             row = (self._fill_open_limit(od, int(ts)) if od.role == "entry"
                    else self._fill_reduce_limit(od, int(ts)))
             rows.append(row)
         if kept:
             self.resting[symbol] = kept
+        else:
+            self.resting.pop(symbol, None)
         return rows
 
     def _timeout(self, od: RestingLimitOrder, ts: int) -> dict:
@@ -736,6 +758,64 @@ class Broker:
                                                        direction))
         return max(0.0, qty)
 
+    def directional_usage(self, direction: int, *, moment: str,
+                          capital: Optional[float] = None,
+                          notional_equity: Optional[float] = None) -> float:
+        """同向在仓 + 活跃 OPEN/entry 意图;不维护额外预留状态。
+
+        待成交数量按当前风险资本、size_mult 与名义上限重新派生,不受普通
+        风险池裁剪。决策/成交各沿用 capacity_mode 的成本单位;撤单、过期、
+        watch 转 pending 均直接反映在活跃订单集合中。撮合先移除当前订单,
+        再以真实成交数量另计一次,其余未处理订单仍可见。
+        """
+        include_costs = self.risk_budget.includes_costs(moment)
+        used = capacity.outstanding_exposure(
+            self.positions, self.last_mark, direction=direction,
+            taker_fee=self.taker_fee, slippage=self.slippage).measure(
+                include_costs=include_costs)
+        capital = self.risk_capital() if capital is None else capital
+        equity = self.equity_mtm() if notional_equity is None else notional_equity
+        entries = [(po.intent.symbol, po.direction, po.intent.ref_price,
+                    po.invalid, po.meta)
+                   for orders in self.pending.values() for po in orders
+                   if po.intent.kind is OrderKind.OPEN]
+        entries.extend((od.symbol, od.direction, od.limit_price, od.invalid, od.meta)
+                       for orders in self.resting.values() for od in orders
+                       if od.role == "entry")
+        for symbol, d, price, stop, meta in entries:
+            if d != direction:
+                continue
+            qty = self.qty_for_entry(
+                capital, price, stop, symbol, use_budget=False,
+                size_mult=float(meta.get("size_mult", 1.0) or 1.0),
+                notional_equity=equity, direction=d)
+            used += capacity.delta_exposure(
+                qty, price, abs(price - stop), taker_fee=self.taker_fee,
+                slippage=self.slippage, include_costs=include_costs)
+        return used
+
+    def directional_blocked(self, direction: int, price: float,
+                            stop: float, symbol: str, *, moment: str,
+                            meta: Optional[dict] = None,
+                            qty: Optional[float] = None) -> bool:
+        """同向上限只作整笔拒绝,绝不混入普通预算的数量裁剪。"""
+        frac = self.risk_budget.directional_cap_frac
+        if frac is None:
+            return False
+        capital, equity = self.risk_capital(), self.equity_mtm()
+        if qty is None:
+            qty = self.qty_for_entry(
+                capital, price, stop, symbol, use_budget=False,
+                size_mult=float((meta or {}).get("size_mult", 1.0) or 1.0),
+                notional_equity=equity, direction=direction)
+        delta = capacity.delta_exposure(
+            qty, price, abs(price - stop), taker_fee=self.taker_fee,
+            slippage=self.slippage,
+            include_costs=self.risk_budget.includes_costs(moment))
+        used = self.directional_usage(direction, moment=moment, capital=capital,
+                                      notional_equity=equity)
+        return used + delta > frac * capital + 1e-9
+
     def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
         """入场挂单成交:limit_price 精确成交(无滑点),maker 费,sizing 同 OPEN。"""
         sym = od.symbol
@@ -768,6 +848,10 @@ class Broker:
                                              notional_equity=equity,
                                              direction=d),
                           spec.size_step, spec.size_place)
+        if self.directional_blocked(d, price, od.invalid, sym,
+                                    moment=capacity.FILL, qty=qty):
+            return self._limit_skip(od, ts, "DIRECTIONAL_CAP",
+                                    "actual fill exceeds same-direction budget", ref)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
             return self._limit_skip(
@@ -885,9 +969,11 @@ class Broker:
                 if bool(po.meta.get("mic")) != bool(mic_only)]
         orders = [po for po in orders
                   if bool(po.meta.get("mic")) == bool(mic_only)]
-        if kept:
-            self.pending[symbol] = kept + self.pending.get(symbol, [])
+        # Keep unprocessed orders visible to same-direction fill validation.
+        if kept or orders:
+            self.pending[symbol] = kept + orders
         for po in orders:
+            self.pending[symbol].remove(po)
             if ts < po.meta.get("execution_not_before", ts):
                 self.pending.setdefault(symbol, []).append(po)
                 continue
@@ -903,6 +989,8 @@ class Broker:
                 row = self._fill_close(po, ts, open_price)
             rows.append(row)
             self.ledger.append(row)
+        if not self.pending.get(symbol):
+            self.pending.pop(symbol, None)
         return rows
 
     def _slip_for(self, symbol: Optional[str]) -> float:
@@ -954,6 +1042,10 @@ class Broker:
                                              notional_equity=equity,
                                              direction=po.direction),
                           spec.size_step, spec.size_place)
+        if self.directional_blocked(d, price, po.invalid, sym,
+                                    moment=capacity.FILL, qty=qty):
+            return self._skip_row(po, ts, "DIRECTIONAL_CAP",
+                                  "actual fill exceeds same-direction budget", price=price)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
             return self._skip_row(po, ts, "MIN_SIZE",

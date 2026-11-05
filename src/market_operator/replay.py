@@ -37,6 +37,7 @@ class SymbolCognition:
     events_by: dict
     pivots_by: dict
     views: dict
+    regimes: list
 
 
 def prepare_cognition(
@@ -52,27 +53,30 @@ def prepare_cognition(
     events_by: dict = {}
     pivots_by: dict = {}
     views: dict = {}
+    regimes: list = []
+    n_pivots_before = 0
     for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
         bar = (
             int(row.ts), float(row.open), float(row.high),
             float(row.low), float(row.close), float(row.volume),
         )
-        n_pivots_before = len(detector.structure.pivots)
         emitted = detector.update(bar)
         s = detector.structure
         t = s.bars_seen - 1
         bars.append(bar)
         atrs.append(s.atr())
-        new_pivots = list(s.pivots[n_pivots_before:])
-        if new_pivots:
-            pivots_by[t] = new_pivots
+        regimes.append(s.regime())
+        n_pivots = s.pivot_count
+        if n_pivots > n_pivots_before:
+            pivots_by[t] = list(s.pivot_slice(n_pivots_before))
+            n_pivots_before = n_pivots
         if emitted:
             events_by[t] = list(emitted)
             views[t] = StructureView(
                 regime=s.regime(),
                 zones=s.zones,
                 atr=s.atr(),
-                pivots=s.pivots[-params.range_max_pivots:],
+                pivots=s.pivot_slice(-params.range_max_pivots),
             )
     return SymbolCognition(
         symbol=symbol,
@@ -81,6 +85,7 @@ def prepare_cognition(
         events_by=events_by,
         pivots_by=pivots_by,
         views=views,
+        regimes=regimes,
     )
 
 
@@ -151,6 +156,7 @@ class BacktestResult:
     contracts: dict = field(default_factory=dict)
     cap_skips: list = field(default_factory=list)       # v6:组合容量 FIFO 跳过明细
     campaign_states: dict = field(default_factory=dict)  # v6:白盒内省(各战役状态)
+    claim_events: list = field(default_factory=list)     # 只读 claim 生命周期事实流
 
 
 def assert_fill_after_decision(ledger: list) -> None:
@@ -213,6 +219,23 @@ def reconstruct_trades(ledger: list, seg_bounds: dict) -> list:
             "r_mult_planned": m.get("r_mult"),
             "invalid": m.get("invalid"),
             "target_1": m.get("target_1"),
+            "claim_id": m.get("claim_id"),
+            "box_id": m.get("box_id"),
+            "geometry_version": m.get("geometry_version"),
+            "claim_created_ts": m.get("claim_created_ts", open_row["decision_ts"]),
+            "claim_confirmed_ts": m.get("claim_confirmed_ts", open_row["decision_ts"]),
+            "claim_evidence_started_ts": m.get("claim_evidence_started_ts"),
+            "claim_filled_ts": open_row["ts"],
+            "claim_created_price": m.get("claim_created_price"),
+            "claim_confirmed_price": m.get("claim_confirmed_price"),
+            "claim_evidence_started_price": m.get("claim_evidence_started_price"),
+            "claim_filled_price": open_row["price"],
+            "claim_zone_lo": m.get("zone_lo"),
+            "claim_zone_hi": m.get("zone_hi"),
+            "claim_target": m.get("target_1"),
+            "claim_invalid": m.get("invalid"),
+            "claim_birth_regime": m.get("regime"),
+            "claim_confirm_regime": m.get("claim_confirm_regime", m.get("regime")),
             "risk_usdt": risk,
             "open_decision_ts": open_row["decision_ts"],
             "open_ts": open_row["ts"],

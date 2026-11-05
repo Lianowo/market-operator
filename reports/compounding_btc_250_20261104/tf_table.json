@@ -1,0 +1,38 @@
+{
+  "2h": {
+    "n": 53,
+    "net": -96.98,
+    "mean_r": -0.084,
+    "stop_pct": 1.5,
+    "cost_over_risk": 0.082,
+    "room_median": 0.57,
+    "capture": -0.087
+  },
+  "4h": {
+    "n": 51,
+    "net": 142.12,
+    "mean_r": 0.198,
+    "stop_pct": 2.21,
+    "cost_over_risk": 0.054,
+    "room_median": 0.83,
+    "capture": 0.141
+  },
+  "12h": {
+    "n": 32,
+    "net": 78.83,
+    "mean_r": 0.353,
+    "stop_pct": 3.16,
+    "cost_over_risk": 0.045,
+    "room_median": 1.65,
+    "capture": 0.21
+  },
+  "1d": {
+    "n": 14,
+    "net": 64.82,
+    "mean_r": 0.612,
+    "stop_pct": 4.22,
+    "cost_over_risk": 0.027,
+    "room_median": 1.79,
+    "capture": 0.305
+  }
+}

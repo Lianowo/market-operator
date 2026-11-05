@@ -36,11 +36,39 @@ def execution_target(meta: dict, structural_target: Optional[float]) -> Optional
     return meta.get("execution_target", structural_target)
 
 
+def entry_cost_error(direction: int, entry: float, invalid: float,
+                     meta: dict) -> Optional[str]:
+    """Check the configured cost/risk ceiling at a candidate or execution price.
+
+    The cost estimate is the router's frozen per-side estimate, not a second
+    fee/slippage model. Missing/disabled constraints preserve legacy behavior.
+    """
+    limit = meta.get("max_cost_frac")
+    if limit is None:
+        return None
+    try:
+        limit = float(limit)
+        if limit <= 0.0:
+            return None
+        entry, invalid = float(entry), float(invalid)
+        per_side = float(meta["cost_per_side"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "INVALID_COST_CONSTRAINT"
+    if (direction not in (-1, 1)
+            or not all(math.isfinite(float(x)) for x in (entry, invalid, limit, per_side))
+            or entry <= 0.0 or per_side < 0.0):
+        return "INVALID_COST_CONSTRAINT"
+    risk = direction * (entry - invalid)
+    if risk <= 0.0 or (2.0 * per_side * entry) / risk > limit:
+        return "ENTRY_COST"
+    return None
+
+
 def entry_contract_error(direction: int, entry: float, invalid: float,
                          target: Optional[float], meta: dict) -> Optional[str]:
     """Shared route/fill guard; only bounded structure trades require a target."""
     if not meta.get("bounded_entry"):
-        return None
+        return entry_cost_error(direction, entry, invalid, meta)
     if target is None or not all(math.isfinite(float(x)) for x in (entry, invalid, target)):
         return "MISSING_STRUCTURE_TARGET"
     risk = direction * (entry - invalid)
@@ -51,9 +79,12 @@ def entry_contract_error(direction: int, entry: float, invalid: float,
         return "TARGET_ALREADY_PASSED"
     if room / risk < float(meta.get("entry_min_rr", 0.0)):
         return "INSUFFICIENT_REMAINING_RR"
-    return None
+    return entry_cost_error(direction, entry, invalid, meta)
 
 from .events import RANGE_ROTATED, MarketEvent
+
+
+
 from .structure import Params, Regime, ZoneRole, ZoneState
 
 TARGET_STATES = (ZoneState.ACTIVE, ZoneState.RETESTED, ZoneState.FLIPPED)

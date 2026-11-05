@@ -24,7 +24,7 @@ from .events import (
     MarketEvent,
     canonical_event_id,
 )
-from .hypothesis import Hypothesis, StructureView, entry_contract_error
+from .hypothesis import Hypothesis, StructureView, entry_contract_error, entry_cost_error
 from .structure import PivotKind, _bar_parts
 
 _REF_REL_TOL = 1e-9
@@ -35,6 +35,11 @@ def _event_provenance(ev: MarketEvent) -> dict:
     prov: dict = {
         "event_extreme": ev.attrs.get("ex"),
         "event_sub_kind": ev.attrs.get("sub_kind"),
+        "evidence_started_index": (
+            ev.attrs.get("started")
+            if ev.attrs.get("started") is not None
+            else ev.attrs.get("ex_index")
+        ),
         "ev_ref": (
             float(ev.attrs["ref"]) if ev.attrs.get("ref") is not None else None
         ),
@@ -51,6 +56,8 @@ def _event_provenance(ev: MarketEvent) -> dict:
             "zone_lo": float(zone.lo),
             "zone_hi": float(zone.hi),
             "zone_touches": int(zone.touches),
+            "zone_origin_known": int(zone.origin_known),
+            "zone_last_change_known": int(zone.last_change_known),
         })
         if getattr(zone, "box_opposite", None) is not None:
             prov["box_opposite"] = float(zone.box_opposite)
@@ -216,6 +223,26 @@ class MarketRouter:
         atr = float(atr)
 
         wl = self.params._normalized_whitelist
+        # 拍卖市场理论多尺度职责边界:
+        # 降档细周期(mic=True)仅负责"向既有大周期价值区内部回归"的触发(BOX_EDGE 拒绝回归 + FLIPPED_BOX_EDGE 重返入箱);
+        # 推翻活跃大周期平衡箱向外建立新价值(BOX_EDGE 外向 BREAKOUT_ACCEPTED)必须由大周期自身认知收盘确认。
+        filtered_events: list[MarketEvent] = []
+        for e in new_events:
+            if (
+                e.attrs.get("mic")
+                and canonical_event_id(e.id) == BREAKOUT_ACCEPTED
+                and e.attrs.get("zone") is not None
+                and getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE") == "BOX_EDGE"
+            ):
+                self._bump("restraint_mic_outward_accept_reject")
+                self._notes.append(
+                    f"mic_outward_accept|{symbol} {e.id} BOX_EDGE outward breakout "
+                    "deferred to HTF cognition close"
+                )
+                continue
+            filtered_events.append(e)
+        new_events = filtered_events
+
         e1_fires = any(
             canonical_event_id(e.id) == BREAKOUT_ACCEPTED
             and (BREAKOUT_ACCEPTED, e.direction) in wl
@@ -286,6 +313,10 @@ class MarketRouter:
                 self._notes.append(f"unknown_event|{symbol} {ev.id}")
                 decision = None
             if decision is not None:
+                if self.params.max_cost_frac is not None and self.params.max_cost_frac > 0.0:
+                    decision = replace(decision, meta={
+                        **decision.meta, "max_cost_frac": self.params.max_cost_frac,
+                        "cost_per_side": self.params.cost_per_side})
                 decisions.append(decision)
                 armed = True
         if not decisions and not new_events:
@@ -328,9 +359,13 @@ class MarketRouter:
     ) -> Optional[RouteDecision]:
         zone = ev.attrs.get("zone")
         cid = canonical_event_id(ev.id)
+        sk = getattr(zone, "source_kind", "BOX_EDGE") if zone is not None else "BOX_EDGE"
         reentry = (cid == BREAKOUT_ACCEPTED and zone is not None
-                   and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE")
+                   and sk == "FLIPPED_BOX_EDGE")
+        flip_reject = (cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and zone is not None
+                       and sk == "FLIPPED_BOX_EDGE")
         bounded = ((cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+                    and not flip_reject
                     and self.params.reject_target_mode != "none")
                    or (reentry and self.params.reentry_use_box_target))
         opp = getattr(zone, "box_opposite", None)
@@ -342,13 +377,31 @@ class MarketRouter:
         if dec is None:
             self._zone_lock = prior_locks
             return None
+        if dec.kind == "limit" and not self._cost_ok(
+                symbol, ev, float(dec.limit_price), dec.hyp.invalid, dec.route):
+            self._zone_lock = prior_locks
+            return None
+        # Preserve historical candidate counters, including candidates rejected
+        # by the later structural contract. Cost-rejected plans are not armed.
+        if dec.meta.get("a2_retest_limit"):
+            self._bump("a2_retest_limit_armed")
+        elif dec.meta.get("pullback_limit"):
+            self._bump("pullback_limit_armed")
+        elif dec.meta.get("watch_entry"):
+            self._bump("accept_watch_armed" if cid == BREAKOUT_ACCEPTED
+                       else "deadzone_watch_armed")
         floor = max(self.params.min_box_rr, self.params.bounded_min_rr) if bounded else 0.0
         meta = {**dec.meta, "bounded_entry": bounded, "entry_min_rr": floor,
                 "structural_target": dec.hyp.target_1,
                 "execution_target": (None if reentry and not self.params.reentry_target_management
                                      else dec.hyp.target_1),
                 "confirm_close": float(close), "confirm_ts": ev.attrs.get("close_ts"),
-                "trade_context": "重新入箱" if reentry else ("箱沿拒绝" if cid in (BREAKOUT_FAILED, LEVEL_REJECTED) else "箱外突破")}
+                "trade_context": (
+                    "重新入箱" if reentry
+                    else ("回踩确认" if flip_reject
+                          else ("箱沿拒绝" if cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+                                else "箱外突破"))
+                )}
         if zone is not None and atr > 0.0:
             inner = float(zone.hi if ev.direction > 0 else zone.lo)
             meta["confirm_distance_atr"] = ev.direction * (close - inner) / atr
@@ -397,7 +450,6 @@ class MarketRouter:
                 )
                 reason = (f"{ev.id}|{side} {ROUTE_BREAKOUT_ACCEPTED_LIMIT} "
                           f"A2过伸突破回踩前缘限价 limit_px={limit_px:.8g} invalid={invalid:.8g}")
-                self._bump("a2_retest_limit_armed")
                 return RouteDecision(
                     kind="limit", route=ROUTE_BREAKOUT_ACCEPTED_LIMIT,
                     intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
@@ -458,7 +510,6 @@ class MarketRouter:
                               f"确认K线过长转50%/内沿回抽限价 entry_ref={close:.8g} "
                               f"limit_px={limit_px:.8g} invalid={hyp.invalid:.8g} "
                               f"target_1={target_1} r_mult={r_mult}")
-                    self._bump("pullback_limit_armed")
                     return RouteDecision(
                         kind="limit", route=ROUTE_LEVEL_REJECTED_LIMIT,
                         intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
@@ -572,7 +623,6 @@ class MarketRouter:
             f"watch_px={watch_px:.8g} near_px={near_px} "
             f"prog_px={prog_px} invalid={inv_px:.8g}"
         )
-        self._bump("accept_watch_armed")
         return RouteDecision(
             kind="limit",
             route=ROUTE_BREAKOUT_ACCEPTED_LIMIT,
@@ -650,7 +700,6 @@ class MarketRouter:
             f"watch_px={watch_px:.8g} near_px={near_px} "
             f"invalid={inv_px:.8g} target_1={target_1} r_mult={new_r}"
         )
-        self._bump("deadzone_watch_armed")
         return RouteDecision(
             kind="limit",
             route=ROUTE_LEVEL_REJECTED_LIMIT,
@@ -700,6 +749,7 @@ class MarketRouter:
         self._bump("e7_matched_episode")
         weak_bars = bar_index - pend.bar_index
         side = "long" if ev.direction > 0 else "short"
+        prior_locks = dict(self._zone_lock)
         hyp = self._gates(symbol, ev, view, close, atr, ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT)
         if hyp is None:
             return None
@@ -710,6 +760,9 @@ class MarketRouter:
                 f"no_zone|{symbol} FLIP_RETESTED|{side} limit requires zone front edge (G3)")
             return None
         limit = float(zone.lo if ev.direction < 0 else zone.hi)
+        if not self._cost_ok(symbol, ev, limit, hyp.invalid, ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT):
+            self._zone_lock = prior_locks
+            return None
         reason = (f"FLIP_RETESTED|{side} {ROUTE_STRUCTURE_BROKEN_WEAK_LIMIT} weak-STRUCTURE_BROKEN 同 episode 回踩拒绝入场 "
                   f"entry_ref={close:.8g} invalid={hyp.invalid:.8g} "
                   f"target_1={hyp.target_1} r_mult={hyp.r_mult} "
@@ -725,6 +778,26 @@ class MarketRouter:
                   **_event_provenance(ev)})
 
     # -- 闸门(turtle 唯一语义:F1 + 2·atr 防线;无目标,不做 room/r_min) ---------
+
+    def _cost_ok(self, symbol: str, ev: MarketEvent, entry: float,
+                 invalid: float, route: str) -> bool:
+        """显式成本上限按候选入场价与防线计算,确认价和最终限价共用。"""
+        p = self.params
+        if p.max_cost_frac is None or p.max_cost_frac <= 0.0:
+            return True
+        dist = ev.direction * (entry - invalid)
+        cost_r = ((2.0 * float(p.cost_per_side) * float(entry)) / dist
+                  if dist > 0.0 else float("inf"))
+        if entry_cost_error(ev.direction, entry, invalid,
+                            {"max_cost_frac": p.max_cost_frac,
+                             "cost_per_side": p.cost_per_side}):
+            side = "long" if ev.direction > 0 else "short"
+            self._bump(f"f1_cost_reject_{route}")
+            self._notes.append(
+                f"f1_cost|{symbol} {ev.id}|{side} cost/risk={cost_r:.4f} > "
+                f"max_cost_frac={float(p.max_cost_frac):.4f} ⇒ 无交易(成本地板)")
+            return False
+        return True
 
     def _gates(self, symbol: str, ev: MarketEvent, view: StructureView,
                close: float, atr: float, route: str) -> Optional[Hypothesis]:
@@ -745,13 +818,7 @@ class MarketRouter:
         # A3:优先用**钱的占比**(往返成本/风险)表达同一件事;`k_is` 仅作旧口径回退。
         dist = ev.direction * (close - invalid)
         if p.max_cost_frac is not None and p.max_cost_frac > 0.0:
-            cost_r = ((2.0 * float(p.cost_per_side) * float(close)) / dist
-                      if dist > 0.0 else float("inf"))
-            if cost_r > float(p.max_cost_frac):
-                self._bump(f"f1_cost_reject_{route}")
-                self._notes.append(
-                    f"f1_cost|{symbol} {ev.id}|{side} cost/risk={cost_r:.4f} > "
-                    f"max_cost_frac={float(p.max_cost_frac):.4f} ⇒ 无交易(成本地板)")
+            if not self._cost_ok(symbol, ev, close, invalid, route):
                 return None
         elif dist < p.k_is * atr:
             self._bump(f"f1_reject_{route}")
@@ -876,7 +943,11 @@ class MarketRouter:
             self._zone_lock[zkey] = (cts, step_ms)
         target_1: Optional[float] = None
         r_mult: Optional[float] = None
-        if cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and p.reject_target_mode != "none" and zone is not None:
+        sk_gate = getattr(zone, "source_kind", "BOX_EDGE") if zone is not None else "BOX_EDGE"
+        if (cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+                and sk_gate != "FLIPPED_BOX_EDGE"
+                and p.reject_target_mode != "none"
+                and zone is not None):
             opp = getattr(zone, "box_opposite", None)
             if opp is not None:
                 opp_f = float(opp)

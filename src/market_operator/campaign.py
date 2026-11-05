@@ -106,6 +106,8 @@ class ExecutionConfig:
     # `1.0–1.5R` 区间被实测为死区(均净 +0.019R),正是这种尺度不一致的机械后果。
     giveback_atr_k: Optional[float] = None
     accept_reenter_box_exit: bool = False
+    mfe_protect_r: Optional[float] = None
+    mfe_protect_lock_r: float = 0.50
 
 
 
@@ -340,10 +342,17 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 giveback_atr_k=(arm.giveback_atr_k if arm is not None
                                 else None),
                 accept_reenter_box_exit=(arm.accept_reenter_box_exit if arm is not None
-                                         else False)),
+                                         else False),
+                mfe_protect_r=(arm.mfe_protect_r if arm is not None
+                               else None),
+                mfe_protect_lock_r=(arm.mfe_protect_lock_r if arm is not None
+                                    else 0.50)),
 
             lo=lo, hi=hi)
-    go_set = base_rp.whitelist
+    # 事件对象使用规范 ID(BREAKOUT_ACCEPTED/LEVEL_REJECTED)，配置允许使用
+    # ACCEPT/REJECT 等别名。路由器内部已经按规范集合判定；诊断计数必须使用
+    # 同一集合，否则实际发生的 mic/canonical GO 会被静默记成 0。
+    go_set = base_rp._normalized_whitelist
 
     broker = Broker(equity=equity0, risk_frac=risk_frac, leverage_cap=leverage_cap,
                     taker_fee=taker_fee, slippage_per_side=slippage_per_side,
@@ -362,6 +371,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
 
     equity_rows: list = []
     cap_skips: list = []
+    claim_events: list = []
     # go_events/mic_go_events 的口径见 _count_go(送入路由的次数,非去重后事件数)
     counters = {"go_events": 0, "open_intents": 0, "opens_filled": 0,
                 "min_size_skips": 0, "liquidations": 0,
@@ -419,24 +429,26 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 _ts, _o, _h, _l, c, _v = q
                 # ① 开盘撮合(认知决策 ⇒ 下一执行细 bar 开盘成交)
                 rows = broker.on_bar_open(key, ts, _o)
-                _apply_open_rows(st, broker, key, ts, rows, counters)
+                _apply_open_rows(st, broker, key, ts, rows, counters, claim_events)
                 if fine_execution:
                     rows = broker.on_bar_open(key, ts, _o, mic_only=True)
-                    _apply_open_rows(st, broker, key, ts, rows, counters)
+                    _apply_open_rows(st, broker, key, ts, rows, counters, claim_events)
                 # ①.5 保护性止损:结构失效价 stop-market,逐执行细 bar 检查
                 #     (触发即成交于失效价/缺口开盘价;兑现止损位,消除 §8.1
                 #     收盘越界→次开盘口径导致的平均亏损 ≈2R 超调)
                 stop_row = broker.execute_protective_stop(key, ts, _o, _h, _l)
                 if stop_row is not None:
-                    _apply_open_rows(st, broker, key, ts, [stop_row], counters)
+                    _apply_open_rows(st, broker, key, ts, [stop_row], counters,
+                                     claim_events)
                     counters["protective_stop_fills"] += 1
                 # ② 挂单处理(严格穿过成交;超时撤单/转市价)
                 had_position = broker.position_of(key) is not None
                 rows = broker.on_15m_bar(key, ts, _o, _h, _l, c)
-                _apply_resting_rows(st, broker, key, ts, rows, counters)
+                _apply_resting_rows(st, broker, key, ts, rows, counters, claim_events)
                 if fine_execution:
                     rows = broker.on_15m_bar(key, ts, _o, _h, _l, c, mic_only=True)
-                    _apply_resting_rows(st, broker, key, ts, rows, counters)
+                    _apply_resting_rows(st, broker, key, ts, rows, counters,
+                                        claim_events)
                 if not had_position and broker.position_of(key) is not None:
                     # Limit entry and stop in the same OHLC bar: assume the
                     # adverse path, never let a new fill evade protection.
@@ -444,7 +456,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     # 特权。此前只在 fine_execution 下检查,粗路径存在当根裸奔缺口。
                     stop_row = broker.execute_protective_stop(key, ts, _o, _h, _l)
                     if stop_row is not None:
-                        _apply_open_rows(st, broker, key, ts, [stop_row], counters)
+                        _apply_open_rows(st, broker, key, ts, [stop_row], counters,
+                                         claim_events)
                         counters["protective_stop_fills"] += 1
                 # ③ 持仓路径解决:同根因果序 ①先于② 结构性解决(同 v4 声明)
                 # ④ mark-to-market(执行细 bar 收盘;强平保护沿用,预期 0)
@@ -460,28 +473,33 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     pm_pos = st.pos_mgr.positions.get(sym)
                     if (pm_pos is not None
                             and broker.position_of(key) is not None
-                            and int(ts) > int(pm_pos.opened_ts)):
+                            and int(ts) >= int(pm_pos.opened_ts)):
                         # v21.6:细尺度 pivot 只在本执行细 bar 收盘才确认,
                         # 逐根喂入才能提前推进§8.3(空列表 ⇒ 与旧路径等价)
                         pv = f.exec_pivots.get(ts, ()) if pivot_exec else ()
                         if exit_exec or pv:
                             _increment_counter(counters, "exit_exec_ticks" if exit_exec
                                 else "pivot_exec_ticks")
+                            before = _claim_state(pm_pos)
                             m2 = st.pos_mgr.on_bar(sym, q, st.last_atr,
                                                    new_pivots=pv,
                                                    price_only=True,
                                                    skip_trail=not exit_exec_trail)
+                            _record_claim_transitions(
+                                claim_events, key, broker, pm_pos, before, ts,
+                                source="execution")
                             broker.update_protective_invalid(key, pm_pos.invalid)
                             _apply_mgmt(st, broker, m2, ts, counters, n_fill)
                 # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
                 for i in f.close_edge.get(ts, ()):
                     _cognition_step(st, broker, i, counters, cap_skips,
-                                    seg_bounds[key], go_set, n_fill)
+                                    seg_bounds[key], go_set, n_fill, claim_events)
             if enable_mic:
                 a = mic_index[key].get(ts)
                 if a is not None:
                     _mic_trigger_step(st, broker, a, ts, counters, cap_skips,
                                       seg_bounds[key], go_set, n_fill,
+                                      claim_events,
                                       execution_only=fine_execution)
         if ts in exec_set:
             equity_rows.append((ts, broker.equity_mtm(), broker.cash,
@@ -494,6 +512,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
         for k, v in states[key].router.counters.items():
             counters[k] = counters.get(k, 0) + v
     counters["campaigns"] = per_campaign
+    # 成交侧拒绝原因(主张前提/结构契约/容量/最小步长):只增字段,不改账目
+    counters["entry_skips"] = dict(sorted(broker.n_skips.items()))
     # v10:mic 决策决定时刻可晚至段末认知 bar 覆盖区间内(标签 > 末 bar 标签)
     # ⇒ 段归属窗的上界延至末认知 bar 最末 trigger bar(只对 mic 回放;
     # ts_lo/ts_hi 在 seg_bounds 内的 canonical 口径不变,对外存储不变)
@@ -508,6 +528,19 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                      - mic.trigger_tf_seconds * 1000}
             attr_bounds[key] = b
     trades = _reconstruct_trades(broker.ledger, attr_bounds)
+    completed_by_trade: dict = {}
+    migrated_by_trade: dict = {}
+    for event in claim_events:
+        tid = event.get("trade_id")
+        if not tid:
+            continue
+        if event["event"] == "COMPLETED":
+            completed_by_trade.setdefault(tid, event["ts"])
+        elif event["event"] == "MIGRATED":
+            migrated_by_trade.setdefault(tid, event["ts"])
+    for trade in trades:
+        trade["claim_completed_ts"] = completed_by_trade.get(trade["trade_id"])
+        trade["claim_migrated_ts"] = migrated_by_trade.get(trade["trade_id"])
     # A2:右尾量度(mfe_r/mae_r/hold_bars/n_partial_legs);纯增量,不改账目
     annotate_excursions(trades, frames)
     res = BacktestResult(segment=segment, cost_multiplier=cost_multiplier,
@@ -519,7 +552,8 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                          cap_skips=cap_skips,
                          campaign_states={k: {"pos_mgr": states[k].pos_mgr,
                                               "router": states[k].router}
-                                          for k in keys})
+                                           for k in keys},
+                          claim_events=claim_events)
     assert_fill_after_decision(res.ledger)
     return res
 
@@ -533,8 +567,75 @@ def _claim_id(meta: dict) -> Optional[tuple]:
     return (tuple(box), str(role), int(version))
 
 
+def _claim_state(pos) -> tuple:
+    """持仓 claim 状态快照；仅用于检测状态机已发生的事实变化。"""
+    return (getattr(pos, "claim_completed_ts", None),
+            getattr(pos, "claim_migrated_ts", None))
+
+
+def _record_claim_transitions(events: list, key: str, broker: Broker, pos,
+                              before: tuple, ts: int, *, source: str) -> None:
+    """把 PositionManager 已完成的生命周期变化复制到只读事件流。"""
+    trade = broker.position_of(key)
+    trade_id = trade.trade_id if trade is not None else None
+    completed_before, migrated_before = before
+    completed = getattr(pos, "claim_completed_ts", None)
+    migrated = getattr(pos, "claim_migrated_ts", None)
+    common = {"trade_id": trade_id, "campaign": key, "symbol": pos.symbol,
+              "claim_id": pos.claim_id, "source": source}
+    if completed_before is None and completed is not None:
+        events.append({**common, "event": "COMPLETED", "ts": int(completed),
+                       "target": pos.target_1})
+    if migrated_before is None and migrated is not None:
+        events.append({**common, "event": "MIGRATED", "ts": int(migrated),
+                       "target": pos.target_1})
+
+
+def _claim_event_for_trade(events: list, trade_id: str) -> dict:
+    """返回该交易最早的 claim 身份事实，供退出成交关联。"""
+    return next((event for event in events
+                 if event.get("trade_id") == trade_id
+                 and event.get("event") == "CREATED"), {})
+
+
+def _record_claim_exit(events: list, key: str, row: dict) -> None:
+    if row.get("kind") not in ("EXIT", "LIQUIDATION") or not row.get("trade_id"):
+        return
+    origin = _claim_event_for_trade(events, row["trade_id"])
+    events.append({
+        "trade_id": row["trade_id"], "campaign": key,
+        "symbol": origin.get("symbol"), "claim_id": origin.get("claim_id"),
+        "box_id": origin.get("box_id"),
+        "geometry_version": origin.get("geometry_version"),
+        "event": "EXITED", "ts": int(row["ts"]), "price": row.get("price"),
+        "reason_code": row.get("reason_code"),
+    })
+
+
+def _record_claim_open(events: list, key: str, symbol: str, row: dict) -> None:
+    """成交后用 trade_id 回填此前已发生的创建、确认和下单事实。"""
+    m = row["meta"]
+    common = {"trade_id": row["trade_id"], "campaign": key, "symbol": symbol,
+              "claim_id": m.get("claim_id"), "box_id": m.get("box_id"),
+              "geometry_version": m.get("geometry_version")}
+    events.extend((
+        {**common, "event": "CREATED",
+         "ts": int(m.get("claim_created_ts", row["decision_ts"])),
+         "price": m.get("claim_created_price"),
+         "regime": m.get("claim_birth_regime")},
+        {**common, "event": "CONFIRMED",
+         "ts": int(m.get("claim_confirmed_ts", row["decision_ts"])),
+         "price": m.get("claim_confirmed_price"),
+         "regime": m.get("claim_confirm_regime", m.get("regime"))},
+        {**common, "event": "ORDERED", "ts": int(row["decision_ts"]),
+         "price": m.get("limit_price", m.get("claim_confirmed_price"))},
+        {**common, "event": "FILLED", "ts": int(row["ts"]),
+         "price": row["price"]},
+    ))
+
+
 def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
-                     rows: list, counters: dict) -> None:
+                     rows: list, counters: dict, claim_events: Optional[list] = None) -> None:
     """on_bar_open 账本行的战役侧处理(①;canonical 与 mic 触发共用)。"""
     f = st.frame
     sym = f.symbol
@@ -550,6 +651,8 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                             _cog_index_of(f, ts),
                             reenter_invalid_px=re_px,
                             claim_id=_claim_id(m))
+            if claim_events is not None:
+                _record_claim_open(claim_events, key, sym, row)
             counters["opens_filled"] += 1
             if m.get("entry_mode") == "virtual_limit":
                 _increment_counter(counters, "virtual_entry_fills")
@@ -561,6 +664,8 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                 broker.update_protective_invalid(
                     key, st.pos_mgr.positions[sym].invalid)
         elif k in ("EXIT", "LIQUIDATION"):
+            if claim_events is not None:
+                _record_claim_exit(claim_events, key, row)
             st.pos_mgr.positions.pop(sym, None)
             rows_cancel = broker.cancel_resting(
                 key, ts, reason_code="POSITION_CLOSED",
@@ -572,7 +677,8 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 
 def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
-                        rows: list, counters: dict) -> None:
+                        rows: list, counters: dict,
+                        claim_events: Optional[list] = None) -> None:
     """on_15m_bar 账本行的战役侧处理(②;canonical 与 mic 触发共用)。"""
     f = st.frame
     sym = f.symbol
@@ -592,6 +698,8 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
                                 _cog_index_of(f, ts),
                                 reenter_invalid_px=re_px,
                                 claim_id=_claim_id(m))
+                if claim_events is not None:
+                    _record_claim_open(claim_events, key, sym, row)
         elif k == "EXPIRED":
             counters["limit_expired"] += 1
         elif k == "TRIGGER" and row["reason_code"] == "VIRTUAL_TRIGGER":
@@ -608,7 +716,8 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
                       counters: dict, cap_skips: list, bounds: dict,
-                      go_set: frozenset, n_fill: int, *, execution_only: bool = False) -> None:
+                      go_set: frozenset, n_fill: int, claim_events: Optional[list] = None,
+                      *, execution_only: bool = False) -> None:
     """v10 §A trigger bar 收盘推进:①' mic 市价撮合 → ②' mic 挂单 → mic 路由。
 
     §8 收割/mark/费用计提不在此处(canonical 粒度不变);决策只在已收盘
@@ -623,12 +732,13 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     # no-op —— mic_only 只撮 meta["mic"] 单)
     if not execution_only:
         _apply_open_rows(st, broker, key, ts,
-                         broker.on_bar_open(key, ts, _o, mic_only=True), counters)
+                         broker.on_bar_open(key, ts, _o, mic_only=True), counters,
+                         claim_events)
     # ②' mic 挂单(自次一 trigger bar 可成交;非 mic 挂单不消耗窗口)
     if not execution_only:
         _apply_resting_rows(st, broker, key, ts,
                             broker.on_15m_bar(key, ts, _o, _h, _l, c, mic_only=True),
-                            counters)
+                            counters, claim_events)
     # ⑤' mic 路由(段内才启用 OPEN;白名单/闸门在 router 内部)
     i = mic.cog_index_of[a]
     lo, hi = bounds["lo"], bounds["hi"]
@@ -761,7 +871,7 @@ def _cancel_structurally_dead_entries(st: "_CampaignState", broker: Broker, key:
 
 def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                     counters: dict, cap_skips: list, bounds: dict,
-                    go_set: frozenset, n_fill: int) -> None:
+                    go_set: frozenset, n_fill: int, claim_events: list) -> None:
     """认知 bar i 收盘:§8 持仓管理 → v6 路由(段内才启用 OPEN)。"""
     f = st.frame
     key, sym = f.key, f.symbol
@@ -778,12 +888,36 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     # "结构前提是否还成立"的最新事实。
     _cancel_structurally_dead_entries(st, broker, key, bar, atr, counters)
 
-    # §8 六条(入场成交的认知 bar 不做裁决,同 v4/v5 声明)
+    # §8 六条:若仓位在本根认知 bar 区间内(opened_ts > bar[0])由降档触发或限价成交,
+    # 截取 [opened_ts, t + TF) 的成交后真实子区间极值参与价格型保护裁决,消除建仓当根大周期裸奔盲区。
     pos_pm = st.pos_mgr.positions.get(sym)
     if pos_pm is not None and pos_pm.opened_ts > bar[0]:
-        mgmt = []
+        sub_labels = [
+            ts_sub for ts_sub in f.exec_index_of.get(i, ())
+            if int(ts_sub) >= int(pos_pm.opened_ts)
+        ]
+        if sub_labels:
+            sub_bars = [f.exec_bars[ts_sub] for ts_sub in sub_labels]
+            sub_bar = (
+                bar[0],
+                sub_bars[0][1],
+                max(b[2] for b in sub_bars),
+                min(b[3] for b in sub_bars),
+                sub_bars[-1][4],
+                sum(b[5] for b in sub_bars),
+            )
+            before = _claim_state(pos_pm)
+            mgmt = st.pos_mgr.on_bar(sym, sub_bar, atr, (), (), price_only=True)
+            _record_claim_transitions(claim_events, key, broker, pos_pm, before, t,
+                                      source="cognition")
+        else:
+            mgmt = []
     else:
+        before = _claim_state(pos_pm) if pos_pm is not None else None
         mgmt = st.pos_mgr.on_bar(sym, bar, atr, new_pivots, new_events)
+        if pos_pm is not None:
+            _record_claim_transitions(claim_events, key, broker, pos_pm, before, t,
+                                      source="cognition")
     if sym in st.pos_mgr.positions and broker.position_of(key) is not None:
         broker.update_protective_invalid(key, st.pos_mgr.positions[sym].invalid)
     _apply_mgmt(st, broker, mgmt, t, counters, n_fill)
@@ -879,16 +1013,26 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
         # v22:同向净风险上限 (directional_cap_frac, §6.4)
         dir_cap = broker.risk_budget.directional_cap_frac
         if not cap_blocked and dir_cap is not None and dir_cap > 0.0:
-            dir_used = capacity.outstanding_exposure(
-                broker.positions, broker.last_mark,
-                direction=int(d.hyp.direction),
-                taker_fee=broker.taker_fee, slippage=broker.slippage
-            ).measure(include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
-            if dir_used + delta > dir_cap * capital + 1e-9:
+            dir_used = broker.directional_usage(
+                direction, moment=capacity.DECISION, capital=capital,
+                notional_equity=equity)
+            # 同向意图用实际计划入场价及 size_mult,与 direct broker 准入一致;
+            # 普通池的既有整笔判断/成交裁剪口径不变。
+            dir_price = d.intent.ref_price if d.kind == "market" else d.limit_price
+            dir_qty = broker.qty_for_entry(
+                capital, dir_price, d.hyp.invalid, key, use_budget=False,
+                size_mult=float(d.meta.get("size_mult", 1.0) or 1.0),
+                notional_equity=equity, direction=direction)
+            dir_delta = capacity.delta_exposure(
+                dir_qty, dir_price, abs(dir_price - d.hyp.invalid),
+                taker_fee=broker.taker_fee, slippage=broker.slippage,
+                include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
+            if dir_used + dir_delta > dir_cap * capital + 1e-9:
                 cap_blocked = True
                 skip_reason = "DIRECTIONAL_CAP"
                 cap_frac = dir_cap
                 used = dir_used
+                delta = dir_delta
 
         if cap_blocked:
             counters["portfolio_cap_skips"] += 1
@@ -902,6 +1046,42 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
 
 
         counters["open_intents"] += 1
+        origin = d.meta.get("zone_origin_known")
+        if origin is not None and 0 <= int(origin) < len(st.frame.cog.bars):
+            origin = int(origin)
+            birth_bar = st.frame.cog.bars[origin]
+            birth_meta = {
+                "claim_created_ts": int(birth_bar[0]),
+                "claim_created_price": float(birth_bar[4]),
+                "claim_birth_regime": st.frame.cog.regimes[origin].value,
+            }
+        else:
+            birth_meta = {
+                "claim_created_ts": int(d.hyp.ts),
+                "claim_created_price": d.intent.ref_price,
+                "claim_birth_regime": d.hyp.regime.value,
+            }
+        lifecycle_meta = {
+            **birth_meta,
+            "claim_confirmed_ts": int(d.hyp.ts),
+            "claim_confirmed_price": d.intent.ref_price,
+            "claim_confirm_regime": d.hyp.regime.value,
+        }
+        evidence_index = d.meta.get("evidence_started_index")
+        if evidence_index is not None:
+            evidence_index = int(evidence_index)
+            evidence_bars = (st.frame.mic.bars
+                             if extra_meta.get("mic") and st.frame.mic is not None
+                             else st.frame.cog.bars)
+            if 0 <= evidence_index < len(evidence_bars):
+                evidence_bar = evidence_bars[evidence_index]
+                lifecycle_meta.update({
+                    "claim_evidence_started_ts": int(evidence_bar[0]),
+                    "claim_evidence_started_price": float(
+                        d.meta.get("event_extreme")
+                        if d.meta.get("event_extreme") is not None
+                        else evidence_bar[4]),
+                })
         if d.kind == "market":
             broker.submit(
                 _rekey(d.intent, key), decision_ts=t,
@@ -911,7 +1091,7 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       "regime": d.hyp.regime.value,
                       "r_mult": d.hyp.r_mult,
                       "route": d.route,
-                      **d.meta, **extra_meta})
+                      **lifecycle_meta, **d.meta, **extra_meta})
         else:
             wait_h = (int(d.meta.get("max_wait_hours") or n_fill)
                       if d.meta.get("watch_entry") else int(n_fill))
@@ -929,7 +1109,7 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                       "regime": d.hyp.regime.value,
                       "r_mult": d.hyp.r_mult,
                       "route": d.route,
-                      **d.meta, **extra_meta}))
+                      **lifecycle_meta, **d.meta, **extra_meta}))
             counters["limits_armed"] += 1
             if d.meta.get("watch_entry"):
                 _increment_counter(counters, "watch_entries_armed")

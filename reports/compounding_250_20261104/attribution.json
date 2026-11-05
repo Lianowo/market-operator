@@ -1,0 +1,1079 @@
+{
+  "head": {
+    "n": 68,
+    "gross": 52781.91,
+    "fees": 873.33,
+    "funding": 255.04,
+    "net": 51653.54,
+    "wins_n": 68,
+    "wins_sum": 51653.54,
+    "avg_win": 759.61,
+    "loss_n": 0,
+    "loss_sum": 0,
+    "avg_loss": null,
+    "mean_r": 3.752,
+    "median_r": 2.6638,
+    "sum_r": 255.13,
+    "avg_notional": 11352.13,
+    "avg_risk": 238.02,
+    "avg_eq_at_entry": 9808.88,
+    "avg_hold_h": 144.6,
+    "first_open": 1740153600000,
+    "last_open": 1791986400000
+  },
+  "rest": {
+    "n": 606,
+    "gross": -24387.74,
+    "fees": 4537.59,
+    "funding": 345.33,
+    "net": -29270.66,
+    "wins_n": 234,
+    "wins_sum": 21318.31,
+    "avg_win": 91.1,
+    "loss_n": 372,
+    "loss_sum": -50588.97,
+    "avg_loss": -135.99,
+    "mean_r": -0.0828,
+    "median_r": -0.4504,
+    "sum_r": -50.2,
+    "avg_notional": 6420.92,
+    "avg_risk": 163.52,
+    "avg_eq_at_entry": 5962.08,
+    "avg_hold_h": 49.2,
+    "first_open": 1729339200000,
+    "last_open": 1792353600000
+  },
+  "head_flat": {
+    "n": 68,
+    "net_at_const_250": 3189.18
+  },
+  "rest_flat": {
+    "n": 606,
+    "net_at_const_250": -627.53
+  },
+  "rest_buckets": {
+    "year": {
+      "2024": {
+        "n": 65,
+        "gross": 264.7,
+        "fees": 40.68,
+        "funding": 4.04,
+        "net": 219.99,
+        "wins_n": 31,
+        "wins_sum": 737.72,
+        "avg_win": 23.8,
+        "loss_n": 34,
+        "loss_sum": -517.73,
+        "avg_loss": -15.23,
+        "mean_r": 0.5623,
+        "median_r": -0.3464,
+        "sum_r": 36.55,
+        "avg_notional": 537.5,
+        "avg_risk": 15.91,
+        "avg_eq_at_entry": 342.1,
+        "avg_hold_h": 34.2,
+        "first_open": 1729339200000,
+        "last_open": 1735646400000
+      },
+      "2025": {
+        "n": 309,
+        "gross": -4365.73,
+        "fees": 1654.17,
+        "funding": 121.49,
+        "net": -6141.4,
+        "wins_n": 133,
+        "wins_sum": 12245.78,
+        "avg_win": 92.07,
+        "loss_n": 176,
+        "loss_sum": -18387.17,
+        "avg_loss": -104.47,
+        "mean_r": -0.0064,
+        "median_r": -0.311,
+        "sum_r": -1.97,
+        "avg_notional": 4644.38,
+        "avg_risk": 126.71,
+        "avg_eq_at_entry": 3675.68,
+        "avg_hold_h": 49.1,
+        "first_open": 1735689600000,
+        "last_open": 1767196800000
+      },
+      "2026": {
+        "n": 232,
+        "gross": -20286.71,
+        "fees": 2842.75,
+        "funding": 219.81,
+        "net": -23349.26,
+        "wins_n": 70,
+        "wins_sum": 8334.81,
+        "avg_win": 119.07,
+        "loss_n": 162,
+        "loss_sum": -31684.07,
+        "avg_loss": -195.58,
+        "mean_r": -0.3654,
+        "median_r": -0.5314,
+        "sum_r": -84.78,
+        "avg_notional": 10435.46,
+        "avg_risk": 253.9,
+        "avg_eq_at_entry": 10581.9,
+        "avg_hold_h": 53.5,
+        "first_open": 1767326400000,
+        "last_open": 1792353600000
+      }
+    },
+    "tf": {
+      "12h": {
+        "n": 90,
+        "gross": -6579.15,
+        "fees": 537.87,
+        "funding": 69.91,
+        "net": -7186.93,
+        "wins_n": 31,
+        "wins_sum": 3104.58,
+        "avg_win": 100.15,
+        "loss_n": 59,
+        "loss_sum": -10291.51,
+        "avg_loss": -174.43,
+        "mean_r": -0.2126,
+        "median_r": -0.6368,
+        "sum_r": -19.13,
+        "avg_notional": 5153.02,
+        "avg_risk": 181.25,
+        "avg_eq_at_entry": 6871.12,
+        "avg_hold_h": 77.6,
+        "first_open": 1733443200000,
+        "last_open": 1792022400000
+      },
+      "1d": {
+        "n": 48,
+        "gross": -3318.55,
+        "fees": 194.55,
+        "funding": 87.44,
+        "net": -3600.55,
+        "wins_n": 12,
+        "wins_sum": 1614.78,
+        "avg_win": 134.57,
+        "loss_n": 36,
+        "loss_sum": -5215.33,
+        "avg_loss": -144.87,
+        "mean_r": -0.3098,
+        "median_r": -0.633,
+        "sum_r": -14.87,
+        "avg_notional": 3565.66,
+        "avg_risk": 208.23,
+        "avg_eq_at_entry": 8064.6,
+        "avg_hold_h": 241.9,
+        "first_open": 1734998400000,
+        "last_open": 1791763200000
+      },
+      "2h": {
+        "n": 273,
+        "gross": -7975.99,
+        "fees": 2386.52,
+        "funding": 82.1,
+        "net": -10444.62,
+        "wins_n": 109,
+        "wins_sum": 9246.96,
+        "avg_win": 84.83,
+        "loss_n": 164,
+        "loss_sum": -19691.58,
+        "avg_loss": -120.07,
+        "mean_r": -0.0418,
+        "median_r": -0.3547,
+        "sum_r": -11.41,
+        "avg_notional": 7488.31,
+        "avg_risk": 149.84,
+        "avg_eq_at_entry": 5241.1,
+        "avg_hold_h": 17.0,
+        "first_open": 1729339200000,
+        "last_open": 1791273600000
+      },
+      "4h": {
+        "n": 195,
+        "gross": -6514.04,
+        "fees": 1418.64,
+        "funding": 105.88,
+        "net": -8038.57,
+        "wins_n": 82,
+        "wins_sum": 7351.99,
+        "avg_win": 89.66,
+        "loss_n": 113,
+        "loss_sum": -15390.55,
+        "avg_loss": -136.2,
+        "mean_r": -0.0246,
+        "median_r": -0.3622,
+        "sum_r": -4.79,
+        "avg_notional": 6214.6,
+        "avg_risk": 163.49,
+        "avg_eq_at_entry": 6034.36,
+        "avg_hold_h": 33.6,
+        "first_open": 1729526400000,
+        "last_open": 1792353600000
+      }
+    },
+    "symbol": {
+      "BTCUSDT": {
+        "n": 145,
+        "gross": -8521.33,
+        "fees": 1424.4,
+        "funding": 64.46,
+        "net": -10010.19,
+        "wins_n": 56,
+        "wins_sum": 3950.56,
+        "avg_win": 70.55,
+        "loss_n": 89,
+        "loss_sum": -13960.75,
+        "avg_loss": -156.86,
+        "mean_r": -0.2494,
+        "median_r": -0.5113,
+        "sum_r": -36.16,
+        "avg_notional": 8380.22,
+        "avg_risk": 163.32,
+        "avg_eq_at_entry": 5962.68,
+        "avg_hold_h": 49.8,
+        "first_open": 1729872000000,
+        "last_open": 1791763200000
+      },
+      "DOGEUSDT": {
+        "n": 149,
+        "gross": -2627.33,
+        "fees": 975.16,
+        "funding": 58.75,
+        "net": -3661.23,
+        "wins_n": 67,
+        "wins_sum": 6732.49,
+        "avg_win": 100.48,
+        "loss_n": 82,
+        "loss_sum": -10393.72,
+        "avg_loss": -126.75,
+        "mean_r": 0.152,
+        "median_r": -0.2878,
+        "sum_r": 22.65,
+        "avg_notional": 5560.62,
+        "avg_risk": 158.53,
+        "avg_eq_at_entry": 5782.96,
+        "avg_hold_h": 56.3,
+        "first_open": 1729526400000,
+        "last_open": 1791417600000
+      },
+      "ETHUSDT": {
+        "n": 150,
+        "gross": -7152.77,
+        "fees": 1214.33,
+        "funding": 109.89,
+        "net": -8476.99,
+        "wins_n": 50,
+        "wins_sum": 4794.14,
+        "avg_win": 95.88,
+        "loss_n": 100,
+        "loss_sum": -13271.13,
+        "avg_loss": -132.71,
+        "mean_r": -0.1483,
+        "median_r": -0.3859,
+        "sum_r": -22.25,
+        "avg_notional": 7052.33,
+        "avg_risk": 174.18,
+        "avg_eq_at_entry": 6522.68,
+        "avg_hold_h": 46.6,
+        "first_open": 1729339200000,
+        "last_open": 1792353600000
+      },
+      "SOLUSDT": {
+        "n": 162,
+        "gross": -6086.32,
+        "fees": 923.71,
+        "funding": 112.23,
+        "net": -7122.26,
+        "wins_n": 61,
+        "wins_sum": 5841.11,
+        "avg_win": 95.76,
+        "loss_n": 101,
+        "loss_sum": -12963.37,
+        "avg_loss": -128.35,
+        "mean_r": -0.0891,
+        "median_r": -0.4884,
+        "sum_r": -14.44,
+        "avg_notional": 4873.85,
+        "avg_risk": 158.42,
+        "avg_eq_at_entry": 5607.23,
+        "avg_hold_h": 44.3,
+        "first_open": 1730142000000,
+        "last_open": 1792022400000
+      }
+    },
+    "event": {
+      "BREAKOUT_ACCEPTED": {
+        "n": 286,
+        "gross": -10215.61,
+        "fees": 1826.36,
+        "funding": 192.46,
+        "net": -12234.43,
+        "wins_n": 101,
+        "wins_sum": 9402.53,
+        "avg_win": 93.09,
+        "loss_n": 185,
+        "loss_sum": -21636.96,
+        "avg_loss": -116.96,
+        "mean_r": -0.0516,
+        "median_r": -0.3751,
+        "sum_r": -14.75,
+        "avg_notional": 5371.93,
+        "avg_risk": 161.92,
+        "avg_eq_at_entry": 5854.53,
+        "avg_hold_h": 55.4,
+        "first_open": 1729872000000,
+        "last_open": 1792353600000
+      },
+      "LEVEL_REJECTED": {
+        "n": 320,
+        "gross": -14172.13,
+        "fees": 2711.23,
+        "funding": 152.87,
+        "net": -17036.23,
+        "wins_n": 133,
+        "wins_sum": 11915.78,
+        "avg_win": 89.59,
+        "loss_n": 187,
+        "loss_sum": -28952.02,
+        "avg_loss": -154.82,
+        "mean_r": -0.1108,
+        "median_r": -0.5097,
+        "sum_r": -35.45,
+        "avg_notional": 7358.46,
+        "avg_risk": 164.95,
+        "avg_eq_at_entry": 6058.21,
+        "avg_hold_h": 43.6,
+        "first_open": 1729339200000,
+        "last_open": 1791763200000
+      }
+    },
+    "direction": {
+      "-1": {
+        "n": 306,
+        "gross": -9105.26,
+        "fees": 2037.77,
+        "funding": -32.17,
+        "net": -11110.85,
+        "wins_n": 126,
+        "wins_sum": 11894.84,
+        "avg_win": 94.4,
+        "loss_n": 180,
+        "loss_sum": -23005.69,
+        "avg_loss": -127.81,
+        "mean_r": -0.0642,
+        "median_r": -0.3687,
+        "sum_r": -19.64,
+        "avg_notional": 5663.61,
+        "avg_risk": 156.47,
+        "avg_eq_at_entry": 5645.05,
+        "avg_hold_h": 46.0,
+        "first_open": 1729339200000,
+        "last_open": 1792353600000
+      },
+      "1": {
+        "n": 300,
+        "gross": -15282.48,
+        "fees": 2499.83,
+        "funding": 377.51,
+        "net": -18159.81,
+        "wins_n": 108,
+        "wins_sum": 9423.47,
+        "avg_win": 87.25,
+        "loss_n": 192,
+        "loss_sum": -27583.29,
+        "avg_loss": -143.66,
+        "mean_r": -0.1019,
+        "median_r": -0.4599,
+        "sum_r": -30.56,
+        "avg_notional": 7193.38,
+        "avg_risk": 170.72,
+        "avg_eq_at_entry": 6285.46,
+        "avg_hold_h": 52.4,
+        "first_open": 1729670400000,
+        "last_open": 1791763200000
+      }
+    },
+    "entry_mode": {
+      "limit": {
+        "n": 35,
+        "gross": -3430.05,
+        "fees": 254.75,
+        "funding": 25.05,
+        "net": -3709.85,
+        "wins_n": 7,
+        "wins_sum": 562.4,
+        "avg_win": 80.34,
+        "loss_n": 28,
+        "loss_sum": -4272.26,
+        "avg_loss": -152.58,
+        "mean_r": -0.1276,
+        "median_r": -0.9517,
+        "sum_r": -4.47,
+        "avg_notional": 9142.49,
+        "avg_risk": 151.74,
+        "avg_eq_at_entry": 5367.62,
+        "avg_hold_h": 33.7,
+        "first_open": 1729692000000,
+        "last_open": 1791032400000
+      },
+      "market": {
+        "n": 571,
+        "gross": -20957.68,
+        "fees": 4282.84,
+        "funding": 320.29,
+        "net": -25560.81,
+        "wins_n": 227,
+        "wins_sum": 20755.91,
+        "avg_win": 91.44,
+        "loss_n": 344,
+        "loss_sum": -46316.72,
+        "avg_loss": -134.64,
+        "mean_r": -0.0801,
+        "median_r": -0.3916,
+        "sum_r": -45.74,
+        "avg_notional": 6254.1,
+        "avg_risk": 164.24,
+        "avg_eq_at_entry": 5998.52,
+        "avg_hold_h": 50.1,
+        "first_open": 1729339200000,
+        "last_open": 1792353600000
+      }
+    },
+    "exit": {
+      "PROTECTIVE_STOP": {
+        "n": 555,
+        "gross": -26605.8,
+        "fees": 4233.16,
+        "funding": 336.97,
+        "net": -31175.93,
+        "wins_n": 195,
+        "wins_sum": 18333.12,
+        "avg_win": 94.02,
+        "loss_n": 360,
+        "loss_sum": -49509.05,
+        "avg_loss": -137.53,
+        "mean_r": -0.1434,
+        "median_r": -0.5113,
+        "sum_r": -79.56,
+        "avg_notional": 6541.73,
+        "avg_risk": 165.84,
+        "avg_eq_at_entry": 6070.38,
+        "avg_hold_h": 49.7,
+        "first_open": 1729339200000,
+        "last_open": 1792353600000
+      },
+      "v21": {
+        "n": 35,
+        "gross": 2938.37,
+        "fees": 211.72,
+        "funding": 2.92,
+        "net": 2723.74,
+        "wins_n": 35,
+        "wins_sum": 2723.74,
+        "avg_win": 77.82,
+        "loss_n": 0,
+        "loss_sum": 0,
+        "avg_loss": null,
+        "mean_r": 0.659,
+        "median_r": 0.5041,
+        "sum_r": 23.07,
+        "avg_notional": 5046.28,
+        "avg_risk": 141.18,
+        "avg_eq_at_entry": 4959.57,
+        "avg_hold_h": 9.8,
+        "first_open": 1732161600000,
+        "last_open": 1788969600000
+      },
+      "§8.5": {
+        "n": 16,
+        "gross": -720.3,
+        "fees": 92.71,
+        "funding": 5.45,
+        "net": -818.47,
+        "wins_n": 4,
+        "wins_sum": 261.46,
+        "avg_win": 65.36,
+        "loss_n": 12,
+        "loss_sum": -1079.92,
+        "avg_loss": -89.99,
+        "mean_r": 0.3936,
+        "median_r": -0.5072,
+        "sum_r": 6.3,
+        "avg_notional": 5237.57,
+        "avg_risk": 132.07,
+        "avg_eq_at_entry": 4398.43,
+        "avg_hold_h": 118.4,
+        "first_open": 1730606400000,
+        "last_open": 1791993600000
+      }
+    }
+  },
+  "head_exit_mix": {
+    "PROTECTIVE_STOP": {
+      "n": 53,
+      "gross": 43169.27,
+      "fees": 640.32,
+      "funding": 194.69,
+      "net": 42334.26,
+      "wins_n": 53,
+      "wins_sum": 42334.26,
+      "avg_win": 798.76,
+      "loss_n": 0,
+      "loss_sum": 0,
+      "avg_loss": null,
+      "mean_r": 3.898,
+      "median_r": 2.86,
+      "sum_r": 206.6,
+      "avg_notional": 10674.34,
+      "avg_risk": 234.57,
+      "avg_eq_at_entry": 9494.12,
+      "avg_hold_h": 151.7,
+      "first_open": 1743854400000,
+      "last_open": 1791986400000
+    },
+    "v21": {
+      "n": 13,
+      "gross": 8758.97,
+      "fees": 197.04,
+      "funding": 53.48,
+      "net": 8508.45,
+      "wins_n": 13,
+      "wins_sum": 8508.45,
+      "avg_win": 654.5,
+      "loss_n": 0,
+      "loss_sum": 0,
+      "avg_loss": null,
+      "mean_r": 3.393,
+      "median_r": 2.5396,
+      "sum_r": 44.11,
+      "avg_notional": 13554.06,
+      "avg_risk": 259.93,
+      "avg_eq_at_entry": 11709.07,
+      "avg_hold_h": 127.5,
+      "first_open": 1740153600000,
+      "last_open": 1790985600000
+    },
+    "§8.5": {
+      "n": 2,
+      "gross": 853.66,
+      "fees": 35.96,
+      "funding": 6.87,
+      "net": 810.82,
+      "wins_n": 2,
+      "wins_sum": 810.82,
+      "avg_win": 405.41,
+      "loss_n": 0,
+      "loss_sum": 0,
+      "avg_loss": null,
+      "mean_r": 2.2147,
+      "median_r": 2.2147,
+      "sum_r": 4.43,
+      "avg_notional": 15001.08,
+      "avg_risk": 186.92,
+      "avg_eq_at_entry": 5798.83,
+      "avg_hold_h": 67.0,
+      "first_open": 1758276000000,
+      "last_open": 1786111200000
+    }
+  },
+  "trade_size_timing": {
+    "head_avg_eq_at_entry": 9808.88,
+    "rest_avg_eq_at_entry": 5962.08,
+    "equity_multiple_head_vs_rest": 1.65
+  },
+  "rest_detail": {
+    "gross_win_loss": {
+      "gross_wins_n": 238,
+      "gross_wins_sum": 23003.37,
+      "gross_loss_n": 368,
+      "gross_loss_sum": -47391.1,
+      "avg_gross_win": 96.65,
+      "avg_gross_loss": -128.78,
+      "breakeven_winrate": 0.5713
+    },
+    "mfe_buckets": {
+      "mfe<0.25R": {
+        "n": 157,
+        "share": 0.2591
+      },
+      "0.25-0.5R": {
+        "n": 77,
+        "share": 0.1271
+      },
+      "0.5-1R": {
+        "n": 135,
+        "share": 0.2228
+      },
+      ">=1R": {
+        "n": 237,
+        "share": 0.3911
+      }
+    },
+    "by_year": {
+      "2024": {
+        "n": 65,
+        "gross": 264.7,
+        "fees": 40.68,
+        "funding": 4.04,
+        "net": 219.99,
+        "wins_n": 31,
+        "wins_sum": 737.72,
+        "avg_win": 23.8,
+        "loss_n": 34,
+        "loss_sum": -517.73,
+        "avg_loss": -15.23,
+        "mean_r": 0.5623,
+        "median_r": -0.3464,
+        "sum_r": 36.55,
+        "avg_notional": 537.5,
+        "avg_risk": 15.91,
+        "avg_eq_at_entry": 342.1,
+        "avg_hold_h": 34.2,
+        "first_open": 1729339200000,
+        "last_open": 1735646400000,
+        "gross_wins_n": 31,
+        "gross_wins_sum": 755.57,
+        "gross_loss_n": 34,
+        "gross_loss_sum": -490.87,
+        "avg_gross_win": 24.37,
+        "avg_gross_loss": -14.44,
+        "breakeven_winrate": 0.372,
+        "stop_share": 0.8923,
+        "mfe_ge_1r_share": 0.4,
+        "net_const_250": 456.86
+      },
+      "2025": {
+        "n": 309,
+        "gross": -4365.73,
+        "fees": 1654.17,
+        "funding": 121.49,
+        "net": -6141.4,
+        "wins_n": 133,
+        "wins_sum": 12245.78,
+        "avg_win": 92.07,
+        "loss_n": 176,
+        "loss_sum": -18387.17,
+        "avg_loss": -104.47,
+        "mean_r": -0.0064,
+        "median_r": -0.311,
+        "sum_r": -1.97,
+        "avg_notional": 4644.38,
+        "avg_risk": 126.71,
+        "avg_eq_at_entry": 3675.68,
+        "avg_hold_h": 49.1,
+        "first_open": 1735689600000,
+        "last_open": 1767196800000,
+        "gross_wins_n": 134,
+        "gross_wins_sum": 12992.69,
+        "gross_loss_n": 175,
+        "gross_loss_sum": -17358.42,
+        "avg_gross_win": 96.96,
+        "avg_gross_loss": -99.19,
+        "breakeven_winrate": 0.5057,
+        "stop_share": 0.9029,
+        "mfe_ge_1r_share": 0.4175,
+        "net_const_250": -24.6
+      },
+      "2026": {
+        "n": 232,
+        "gross": -20286.71,
+        "fees": 2842.75,
+        "funding": 219.81,
+        "net": -23349.26,
+        "wins_n": 70,
+        "wins_sum": 8334.81,
+        "avg_win": 119.07,
+        "loss_n": 162,
+        "loss_sum": -31684.07,
+        "avg_loss": -195.58,
+        "mean_r": -0.3654,
+        "median_r": -0.5314,
+        "sum_r": -84.78,
+        "avg_notional": 10435.46,
+        "avg_risk": 253.9,
+        "avg_eq_at_entry": 10581.9,
+        "avg_hold_h": 53.5,
+        "first_open": 1767326400000,
+        "last_open": 1792353600000,
+        "gross_wins_n": 73,
+        "gross_wins_sum": 9255.1,
+        "gross_loss_n": 159,
+        "gross_loss_sum": -29541.81,
+        "avg_gross_win": 126.78,
+        "avg_gross_loss": -185.8,
+        "breakeven_winrate": 0.5944,
+        "stop_share": 0.9397,
+        "mfe_ge_1r_share": 0.3534,
+        "net_const_250": -1059.79
+      }
+    },
+    "stop_vs_nonstop": {
+      "stop": {
+        "n": 555,
+        "gross": -26605.8,
+        "fees": 4233.16,
+        "funding": 336.97,
+        "net": -31175.93,
+        "wins_n": 195,
+        "wins_sum": 18333.12,
+        "avg_win": 94.02,
+        "loss_n": 360,
+        "loss_sum": -49509.05,
+        "avg_loss": -137.53,
+        "mean_r": -0.1434,
+        "median_r": -0.5113,
+        "sum_r": -79.56,
+        "avg_notional": 6541.73,
+        "avg_risk": 165.84,
+        "avg_eq_at_entry": 6070.38,
+        "avg_hold_h": 49.7,
+        "first_open": 1729339200000,
+        "last_open": 1792353600000
+      },
+      "non_stop": {
+        "n": 51,
+        "gross": 2218.07,
+        "fees": 304.43,
+        "funding": 8.37,
+        "net": 1905.27,
+        "wins_n": 39,
+        "wins_sum": 2985.19,
+        "avg_win": 76.54,
+        "loss_n": 12,
+        "loss_sum": -1079.92,
+        "avg_loss": -89.99,
+        "mean_r": 0.5757,
+        "median_r": 0.3799,
+        "sum_r": 29.36,
+        "avg_notional": 5106.29,
+        "avg_risk": 138.32,
+        "avg_eq_at_entry": 4783.52,
+        "avg_hold_h": 43.8,
+        "first_open": 1730606400000,
+        "last_open": 1791993600000
+      }
+    },
+    "head_size": {
+      "min_net": 306.04,
+      "max_net": 3016.95
+    }
+  },
+  "split_by_r_decile": {
+    "top10pct": {
+      "n": 68,
+      "gross": 44825.78,
+      "fees": 521.14,
+      "funding": 235.41,
+      "net": 44069.23,
+      "wins_n": 68,
+      "wins_sum": 44069.23,
+      "avg_win": 648.08,
+      "loss_n": 0,
+      "loss_sum": 0,
+      "avg_loss": null,
+      "mean_r": 4.6824,
+      "median_r": 3.419,
+      "sum_r": 318.4,
+      "avg_notional": 6981.75,
+      "avg_risk": 138.15,
+      "avg_eq_at_entry": 4913.76,
+      "avg_hold_h": 148.2,
+      "first_open": 1730808000000,
+      "last_open": 1791043200000
+    },
+    "rest90pct": {
+      "n": 606,
+      "gross": -16431.61,
+      "fees": 4889.78,
+      "funding": 364.96,
+      "net": -21686.35,
+      "wins_n": 234,
+      "wins_sum": 28902.62,
+      "avg_win": 123.52,
+      "loss_n": 372,
+      "loss_sum": -50588.97,
+      "avg_loss": -135.99,
+      "mean_r": -0.1872,
+      "median_r": -0.4504,
+      "sum_r": -113.47,
+      "avg_notional": 6911.33,
+      "avg_risk": 174.73,
+      "avg_eq_at_entry": 6511.37,
+      "avg_hold_h": 48.8,
+      "first_open": 1729339200000,
+      "last_open": 1792353600000
+    }
+  },
+  "half_by_time": {
+    "first_half": {
+      "n": 337,
+      "gross": 7649.04,
+      "fees": 1358.95,
+      "funding": 162.94,
+      "net": 6127.15,
+      "wins_n": 162,
+      "wins_sum": 20204.74,
+      "avg_win": 124.72,
+      "loss_n": 175,
+      "loss_sum": -14077.59,
+      "avg_loss": -80.44,
+      "mean_r": 0.3685,
+      "median_r": -0.1277,
+      "sum_r": 124.17,
+      "avg_notional": 3459.77,
+      "avg_risk": 93.54,
+      "avg_eq_at_entry": 2529.21,
+      "avg_hold_h": 52.8,
+      "first_open": 1729339200000,
+      "last_open": 1761840000000
+    },
+    "second_half": {
+      "n": 337,
+      "gross": 20745.13,
+      "fees": 4051.97,
+      "funding": 437.44,
+      "net": 16255.72,
+      "wins_n": 140,
+      "wins_sum": 52767.11,
+      "avg_win": 376.91,
+      "loss_n": 197,
+      "loss_sum": -36511.39,
+      "avg_loss": -185.34,
+      "mean_r": 0.2397,
+      "median_r": -0.3218,
+      "sum_r": 80.76,
+      "avg_notional": 10377.1,
+      "avg_risk": 248.53,
+      "avg_eq_at_entry": 10171.17,
+      "avg_hold_h": 64.8,
+      "first_open": 1762099200000,
+      "last_open": 1792353600000
+    }
+  },
+  "tail_shape": {
+    "rest_worst10_sum": -4244.75,
+    "rest_lt_minus1r": {
+      "n": 163,
+      "net": -30144.62
+    },
+    "rest_gt_2r": {
+      "n": 25,
+      "net": 3138.21
+    },
+    "months": {
+      "head": {
+        "2025-02": {
+          "n": 1,
+          "net": 348.87,
+          "mean_r": 5.881
+        },
+        "2025-04": {
+          "n": 2,
+          "net": 1024.49,
+          "mean_r": 4.816
+        },
+        "2025-05": {
+          "n": 2,
+          "net": 1359.57,
+          "mean_r": 6.126
+        },
+        "2025-06": {
+          "n": 1,
+          "net": 587.59,
+          "mean_r": 5.251
+        },
+        "2025-07": {
+          "n": 2,
+          "net": 773.44,
+          "mean_r": 2.899
+        },
+        "2025-09": {
+          "n": 6,
+          "net": 3079.86,
+          "mean_r": 4.157
+        },
+        "2025-10": {
+          "n": 3,
+          "net": 2423.78,
+          "mean_r": 4.618
+        },
+        "2025-11": {
+          "n": 3,
+          "net": 1382.34,
+          "mean_r": 2.42
+        },
+        "2026-01": {
+          "n": 7,
+          "net": 6000.34,
+          "mean_r": 4.422
+        },
+        "2026-02": {
+          "n": 1,
+          "net": 1015.8,
+          "mean_r": 4.217
+        },
+        "2026-03": {
+          "n": 3,
+          "net": 2204.94,
+          "mean_r": 3.082
+        },
+        "2026-04": {
+          "n": 3,
+          "net": 2387.56,
+          "mean_r": 3.502
+        },
+        "2026-05": {
+          "n": 4,
+          "net": 1615.23,
+          "mean_r": 1.863
+        },
+        "2026-06": {
+          "n": 6,
+          "net": 4544.6,
+          "mean_r": 3.791
+        },
+        "2026-08": {
+          "n": 7,
+          "net": 12252.12,
+          "mean_r": 8.248
+        },
+        "2026-09": {
+          "n": 10,
+          "net": 5810.75,
+          "mean_r": 1.613
+        },
+        "2026-10": {
+          "n": 7,
+          "net": 4842.24,
+          "mean_r": 1.613
+        }
+      },
+      "rest": {
+        "2024-10": {
+          "n": 13,
+          "net": -37.32,
+          "mean_r": -0.22
+        },
+        "2024-11": {
+          "n": 18,
+          "net": 209.29,
+          "mean_r": 1.311
+        },
+        "2024-12": {
+          "n": 34,
+          "net": 48.02,
+          "mean_r": 0.465
+        },
+        "2025-01": {
+          "n": 30,
+          "net": 1027.22,
+          "mean_r": 1.022
+        },
+        "2025-02": {
+          "n": 28,
+          "net": 662.37,
+          "mean_r": 0.544
+        },
+        "2025-03": {
+          "n": 27,
+          "net": 39.92,
+          "mean_r": 0.024
+        },
+        "2025-04": {
+          "n": 29,
+          "net": -103.63,
+          "mean_r": 0.023
+        },
+        "2025-05": {
+          "n": 27,
+          "net": -1453.28,
+          "mean_r": -0.397
+        },
+        "2025-06": {
+          "n": 30,
+          "net": -448.39,
+          "mean_r": -0.106
+        },
+        "2025-07": {
+          "n": 17,
+          "net": -714.1,
+          "mean_r": -0.316
+        },
+        "2025-08": {
+          "n": 24,
+          "net": -571.23,
+          "mean_r": -0.175
+        },
+        "2025-09": {
+          "n": 24,
+          "net": -979.87,
+          "mean_r": -0.324
+        },
+        "2025-10": {
+          "n": 19,
+          "net": -1149.47,
+          "mean_r": -0.313
+        },
+        "2025-11": {
+          "n": 24,
+          "net": -607.14,
+          "mean_r": -0.079
+        },
+        "2025-12": {
+          "n": 30,
+          "net": -1843.81,
+          "mean_r": -0.336
+        },
+        "2026-01": {
+          "n": 16,
+          "net": -470.21,
+          "mean_r": -0.122
+        },
+        "2026-02": {
+          "n": 15,
+          "net": -1723.62,
+          "mean_r": -0.444
+        },
+        "2026-03": {
+          "n": 34,
+          "net": -3895.65,
+          "mean_r": -0.454
+        },
+        "2026-04": {
+          "n": 33,
+          "net": -2522.28,
+          "mean_r": -0.296
+        },
+        "2026-05": {
+          "n": 30,
+          "net": -2315.1,
+          "mean_r": -0.37
+        },
+        "2026-06": {
+          "n": 16,
+          "net": -1580.77,
+          "mean_r": -0.25
+        },
+        "2026-07": {
+          "n": 28,
+          "net": -2571.78,
+          "mean_r": -0.369
+        },
+        "2026-08": {
+          "n": 29,
+          "net": -2961.16,
+          "mean_r": -0.43
+        },
+        "2026-09": {
+          "n": 19,
+          "net": -2797.46,
+          "mean_r": -0.397
+        },
+        "2026-10": {
+          "n": 12,
+          "net": -2511.24,
+          "mean_r": -0.459
+        }
+      }
+    }
+  }
+}

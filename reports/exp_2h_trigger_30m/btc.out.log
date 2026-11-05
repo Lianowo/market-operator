@@ -1,0 +1,9 @@
+[prep] BTCUSDT ÈÏÖª¾ÍÐ÷
+Running full_1x
+full_1x: equity=445.877856, closed=150, dd=66.1711%
+Running dev_1x
+dev_1x: equity=211.011506, closed=103, dd=51.9535%
+Running test_1x
+test_1x: equity=501.241230, closed=48, dd=41.4463%
+Running full_1.5x
+full_1.5x: equity=342.976522, closed=148, dd=71.6672%
