@@ -277,7 +277,9 @@ class PositionManager:
                  time_stop: bool = True,
                  reject_opp_lock_frac: float = 0.0,
                  giveback_atr_k: Optional[float] = None,
-                 accept_reenter_box_exit: bool = False) -> None:
+                 accept_reenter_box_exit: bool = False,
+                 vol_based_frac_map: Optional[dict] = None,
+                 partial_exit_enabled: bool = False) -> None:
 
         self.p = params or Params()
         self.allow_add = allow_add
@@ -285,6 +287,10 @@ class PositionManager:
         self.breakeven_on_reduce = breakeven_on_reduce  # v6 臂 A:False=禁保本
         self.time_stop = time_stop                      # v6 臂 B:False=关 §8.6
         self.reject_opp_lock_frac = float(reject_opp_lock_frac)
+        self.vol_based_frac_map = (dict(vol_based_frac_map)
+                                   if isinstance(vol_based_frac_map, dict)
+                                   else None)
+        self.partial_exit_enabled = bool(partial_exit_enabled)
         # ATR 单位回吐预算(None ⇒ span 比例口径,逐位旧行为)
         self.giveback_atr_k = (None if giveback_atr_k is None
                                else float(giveback_atr_k))
@@ -355,6 +361,31 @@ class PositionManager:
             pos._best = px
         return True
 
+    def _resolve_lock_frac(self, pos: Position, atr: float = 0.0) -> float:
+        """根据 vol_based_frac_map 解析当前持仓的锁利 frac。
+
+        优先级:
+        1. ATR/entry 波动率阈值映射(HIGH_VOL_THRESHOLD -> HIGH_VOL_FRAC, LOW_VOL_THRESHOLD -> LOW_VOL_FRAC);
+        2. DEFAULT_FRAC 或 self.reject_opp_lock_frac。
+        """
+        vmap = self.vol_based_frac_map
+        if not vmap:
+            return float(self.reject_opp_lock_frac)
+        if atr > 0.0 and pos.giveback_unit is None:
+            pos.giveback_unit = float(atr)
+        atr_ref = pos.giveback_unit if pos.giveback_unit is not None else float(atr)
+        if atr_ref > 0.0 and pos.entry > 0.0:
+            vol_ratio = atr_ref / float(pos.entry)
+            hi_th = vmap.get("HIGH_VOL_THRESHOLD")
+            if hi_th is not None and vol_ratio >= float(hi_th) and "HIGH_VOL_FRAC" in vmap:
+                return float(vmap["HIGH_VOL_FRAC"])
+            lo_th = vmap.get("LOW_VOL_THRESHOLD")
+            if lo_th is not None and vol_ratio <= float(lo_th) and "LOW_VOL_FRAC" in vmap:
+                return float(vmap["LOW_VOL_FRAC"])
+        if "DEFAULT_FRAC" in vmap:
+            return float(vmap["DEFAULT_FRAC"])
+        return float(self.reject_opp_lock_frac)
+
     # -- 实时价格裁决 -----------------------------------------------------------
 
     def on_price(self, symbol: str, *, ts: int, price: float,
@@ -376,7 +407,7 @@ class PositionManager:
             return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
                                 qty_frac=pos.size_frac, ref_price=ref, ts=ts,
                                 reason="PRICE_STOP|observed defense breached")]
-        frac = float(self.reject_opp_lock_frac)
+        frac = self._resolve_lock_frac(pos, atr)
         if pos.target_1 is None or frac == 0.0:
             return []
         if (self.giveback_atr_k is not None and atr > 0.0
@@ -393,6 +424,11 @@ class PositionManager:
             direction=pos.direction, peak=pos._best, budget=budget,
             ref_px=ref, armed=bool(pos.armed))
         if ld.action == "exit":
+            if self.partial_exit_enabled and not pos.reduced:
+                pos.log.append(
+                    f"price_lock|partial_exit_enabled|observed={px:.8g} peak={pos._best:.8g} "
+                    f"回吐={ld.drawdown:.8g} ≥ 预算={ld.budget:.8g} ⇒ 减仓50%并保本")
+                return [self._reduce(pos, ts, ref, ld.drawdown)]
             return [OrderIntent(kind=OrderKind.EXIT, symbol=symbol,
                                 qty_frac=pos.size_frac, ref_price=ref, ts=ts,
                                 reason="PRICE_LOCK|giveback_exhausted")]
@@ -509,8 +545,10 @@ class PositionManager:
         #    `reduced` 这个"一次性额度"标志)。
         if pos.target_1 is not None and not pos.pending_reduce:
 
-            frac_cfg = self.reject_opp_lock_frac
+            # 动态调整 frac: 根据 vol_based_frac_map 查表(支持按 symbol 或 ATR/entry 阈值)
+            frac_cfg = self._resolve_lock_frac(pos, atr)
             if frac_cfg == 0.0:
+
                 hit = (low <= pos.target_1) if pos.direction < 0 \
                     else (h >= pos.target_1)
                 if hit and not pos.reduced:
@@ -546,17 +584,24 @@ class PositionManager:
                             f"frac={frac_cfg:+.2f} ⇒ 不锁利、不减仓,"
                             f"保持结构防线 invalid={pos.invalid:.8g}")
                 elif ld.action == "exit":
-                    pos.log.append(
-                        f"v21|lock_giveback_exhausted|峰值={pos._best:.8g} "
-                        f"回吐={ld.drawdown:.8g} ≥ 预算={ld.budget:.8g} "
-                        f"(frac={abs(frac_cfg):.0%} "
-                        f"span={abs(pos.target_1 - pos.entry):.8g}) "
-                        f"ref={c:.8g} ⇒ 市价离场(不留永不触发的挂单)")
-                    return [self._exit(
-                        pos, ts, c,
-                        f"v21|lock_giveback_exhausted|peak={pos._best:.8g} "
-                        f"ref={c:.8g} budget={ld.budget:.8g} "
-                        f"giveback={ld.drawdown:.8g} exit all")]
+                    if self.partial_exit_enabled and not pos.reduced:
+                        pos.log.append(
+                            f"v21|partial_exit_enabled|峰值={pos._best:.8g} "
+                            f"回吐={ld.drawdown:.8g} ≥ 预算={ld.budget:.8g} "
+                            f"⇒ 减仓50%并保本")
+                        return [self._reduce(pos, ts, c, ld.drawdown)]
+                    else:
+                        pos.log.append(
+                            f"v21|lock_giveback_exhausted|峰值={pos._best:.8g} "
+                            f"回吐={ld.drawdown:.8g} ≥ 预算={ld.budget:.8g} "
+                            f"(frac={abs(frac_cfg):.0%} "
+                            f"span={abs(pos.target_1 - pos.entry):.8g}) "
+                            f"ref={c:.8g} ⇒ 市价离场(不留永不触发的挂单)")
+                        return [self._exit(
+                            pos, ts, c,
+                            f"v21|lock_giveback_exhausted|peak={pos._best:.8g} "
+                            f"ref={c:.8g} budget={ld.budget:.8g} "
+                            f"giveback={ld.drawdown:.8g} exit all")]
                 else:
                     if ld.armed and not pos.armed:
                         pos.armed = True
@@ -566,6 +611,11 @@ class PositionManager:
                             f"target={pos.target_1:.8g} "
                             f"预算={(1.0 - abs(frac_cfg)):.0%}·span "
                             f"⇒ 此后按峰值棘轮(可多次)")
+                        if self.partial_exit_enabled and not pos.reduced:
+                            pos.log.append(
+                                f"v21|partial_exit_on_arm|target={pos.target_1:.8g} "
+                                f"⇒ 减仓50%并移至保本,余仓交由棘轮/结构防线")
+                            intents.append(self._reduce(pos, ts, c, pos._best))
                     if ld.action == "tighten":
                         old = pos.invalid
                         stop_px = float(ld.stop_px)
@@ -695,7 +745,10 @@ class PositionManager:
                 pos.invalid = min(pos.invalid, pos.entry)
             else:
                 pos.invalid = max(pos.invalid, pos.entry)
-        reason = (f"§8.2|target_1 hit reduce 50% target={pos.target_1:.8g} "
+        reason = (f"§8.2|partial_exit target_1 hit reduce 50% target={pos.target_1:.8g} "
+                  f"extreme={extreme:.8g} breakeven invalid {old:.8g}"
+                  f"->{pos.invalid:.8g}" if self.partial_exit_enabled else
+                  f"§8.2|target_1 hit reduce 50% target={pos.target_1:.8g} "
                   f"extreme={extreme:.8g} breakeven invalid {old:.8g}"
                   f"->{pos.invalid:.8g}")
         self.last.append(reason)

@@ -85,7 +85,13 @@
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": -0.25
+    "reject_opp_lock_frac": -0.25,
+    "partial_exit_enabled": true,
+    "vol_based_frac_map": {
+      "HIGH_VOL_THRESHOLD": 0.02,
+      "HIGH_VOL_FRAC": -0.35,
+      "DEFAULT_FRAC": -0.25
+    }
   },
   "small_account_compounding": {
     "equity0": 104.0,

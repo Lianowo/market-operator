@@ -167,6 +167,8 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
         giveback_atr_k=(None if arm_cfg.get("giveback_atr_k") is None
                         else float(arm_cfg["giveback_atr_k"])),
         accept_reenter_box_exit=bool(arm_cfg.get("accept_reenter_box_exit", False)),
+        vol_based_frac_map=arm_cfg.get("vol_based_frac_map"),
+        partial_exit_enabled=bool(arm_cfg.get("partial_exit_enabled", False)),
 
         # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
         # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。

@@ -106,6 +106,9 @@ class ExecutionConfig:
     # `1.0–1.5R` 区间被实测为死区(均净 +0.019R),正是这种尺度不一致的机械后果。
     giveback_atr_k: Optional[float] = None
     accept_reenter_box_exit: bool = False
+    vol_based_frac_map: Optional[dict] = None
+    partial_exit_enabled: bool = False
+
 
 
 
@@ -340,7 +343,11 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 giveback_atr_k=(arm.giveback_atr_k if arm is not None
                                 else None),
                 accept_reenter_box_exit=(arm.accept_reenter_box_exit if arm is not None
-                                         else False)),
+                                         else False),
+                vol_based_frac_map=(arm.vol_based_frac_map if arm is not None
+                                    else None),
+                partial_exit_enabled=(arm.partial_exit_enabled if arm is not None
+                                      else False)),
 
             lo=lo, hi=hi)
     # 事件对象使用规范 ID(BREAKOUT_ACCEPTED/LEVEL_REJECTED)，配置允许使用
@@ -1180,6 +1187,8 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
 def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
                       decision_ts: int, n_fill: int) -> bool:
     """§8.2 减仓 → 目标(target_1)限价挂单(maker);无仓/无目标/取整 0 ⇒ 市价回退。"""
+    if intent.reason and ("partial_exit" in intent.reason):
+        return False
     f = st.frame
     key, sym = f.key, f.symbol
     pos_pm = st.pos_mgr.positions.get(sym)
