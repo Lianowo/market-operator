@@ -710,12 +710,26 @@ class MarketStructure:
     def atr_slow(self) -> float:
         return self._atr_slow.value
 
-    def macro_drift_atr(self, window: int = 40) -> float:
-        """当前收盘相对 window 根 K 线前收盘的 ATR 归一化宏观位移。"""
-        if len(self._bars) <= 10 or self._atr.value <= 0.0:
-            return 0.0
-        idx0 = max(0, len(self._bars) - 1 - int(window))
-        return (float(self._bars[-1][4]) - float(self._bars[idx0][4])) / self._atr.value
+    def macro_imbalance(self, k_room: Optional[float] = None) -> int:
+        """纯道氏/AMT 宏观主结构失衡状态(+1 宏观多头失衡 / -1 宏观空头失衡 / 0 平衡震荡)。
+        以当前确认的 8 个波段拐点(range_max_pivots)为结构观察窗口,
+        衡量当前收盘相对窗口起始锚点的位移与波段高低点迁移方向(0 日历天数先验)。
+        """
+        if self._atr.value <= 0.0 or len(self._pivots) < 4 or not self._bars:
+            return 0
+        kr = float(self.params.k_room if k_room is None else k_room)
+        pivs = self._pivots[-self.params.range_max_pivots:]
+        c = float(self._bars[-1][4])
+        disp = (c - pivs[0].price) / self._atr.value
+        highs = [p.price for p in pivs if p.kind is PivotKind.HIGH]
+        lows = [p.price for p in pivs if p.kind is PivotKind.LOW]
+        hi_mig = (highs[-1] - highs[0]) if len(highs) >= 2 else 0.0
+        lo_mig = (lows[-1] - lows[0]) if len(lows) >= 2 else 0.0
+        if disp >= kr and (hi_mig > 0.0 or lo_mig > 0.0):
+            return +1
+        if disp <= -kr and (hi_mig < 0.0 or lo_mig < 0.0):
+            return -1
+        return 0
 
     def regime(self) -> Regime:
         return self._regime

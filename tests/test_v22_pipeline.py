@@ -444,26 +444,6 @@ def test_breakout_requires_full_n_a_confirmation_without_fast_accept():
     assert acc[0].attrs["fast"] is False
 
 
-def test_mfe_protect_locks_waist_profit_only_after_structural_expansion():
-    """在浮盈未达 1.25R 前绝不推保本制造蚊子肉;达到 >= 1.25R 后将保护位推至 +0.50R 腰部利润区。"""
-    from market_operator.position import PositionManager
-
-    pm = PositionManager(
-        Params(), time_stop=False, reject_opp_lock_frac=-0.25,
-        mfe_protect_r=1.25, mfe_protect_lock_r=0.50,
-    )
-    pos = pm.open("BTCUSDT", 1, entry=100.0, invalid=95.0, target_1=110.0,
-                  event_id=LEVEL_REJECTED, ts=1000, index=0)
-    # 1. 仅走出 +0.8R (high=104.0 < 106.25): 保持原始结构止损 95.0, 绝不推 +0.10R 制造蚊子肉
-    pm.on_bar("BTCUSDT", (2000, 100.0, 104.0, 99.5, 103.0, 50.0), atr=2.0)
-    assert pos.invalid == pytest.approx(95.0)
-
-    # 2. 走出 >= 1.25R (high=108.0, MFE=1.6R >= 1.25R): 止损推进至 102.5 (+0.50R 腰部利润)
-    pm.on_bar("BTCUSDT", (3000, 103.0, 108.0, 102.8, 106.0, 50.0), atr=2.0)
-    assert pos.invalid == pytest.approx(102.5)
-
-
-
 def test_multitf_amt_boundary_defers_mic_outward_breakout_but_allows_reentry_and_reject():
     """多尺度 AMT 职责边界:
     - 细周期触发(mic=True)允许触发向大周期价值区内部回归的信号(BOX_EDGE 拒绝 + FLIPPED_BOX_EDGE 重返入箱);
@@ -582,17 +562,16 @@ def test_null_accept_max_ext_atr_and_midpoint_close_pos_contract():
     assert [e for e in ev_below_mid if e.id == LEVEL_REJECTED] == []
 
 
-def test_amt_time_decay_washout_macro_shock_and_opposite_edge_restraint():
-    """AMT 第一性原理四大新增契约验证:
-    1) 边界消耗(Time Decay, zone_exhaustion_rejects=3): 同一边界累计拒绝 >= 3 次后,
-       无刺穿的 R2_STALL 或缩量反弹(vol_ratio < 1.0)被克制拦截,唯有刺穿扫损(R1_WICK/R3_TRAP)且带量(vol_ratio >= 1.0)放行;
-    2) 对侧防守带位置克制(max_box_progress_frac=0.75): 确认或开盘成交价已走入箱体对侧 25% 防守区时判 BOX_OPPOSITE_THIRD_ENTERED 作废;
-    3) 宏观极端波动感知(macro_shock_range_atr=3.2): 异常巨震清算柱(range_atr > 3.2 或慢速波动失衡)暂停追单;
-    4) 2B 假突破放量清洗(R3_TRAP + vol_ratio >= 1.25): 免除等待滞后的 3 根极值突破(brk3)即刻确认。
+def test_opposite_third_entry_restraint_and_unbacked_stall_axiom():
+    """AMT 第一性原理空间与扫损公理验证:
+    1) 无上级价值区背书的单尺度帧(mic=False & struct_impulse_confirm=True):
+       未刺穿外沿的 R2_STALL 停滞按"无扫损无拒绝"公理拦截(restraint_unbacked_stall_reject);
+    2) 对侧防守带位置克制(max_box_progress_frac=0.75):
+       确认或开盘成交价已走入箱体对侧 25% 防守区时判 BOX_OPPOSITE_THIRD_ENTERED 作废。
     """
     z = Zone(
         lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
-        touches=4, rejects=3, origin_known=1, last_change_known=10,
+        touches=3, rejects=1, origin_known=1, last_change_known=10,
         box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=4,
     )
     view = StructureView(regime=Regime.RANGE, zones=(z,), atr=2.0)
@@ -602,56 +581,19 @@ def test_amt_time_decay_washout_macro_shock_and_opposite_edge_restraint():
             reject_use_struct_stop=True,
             reject_target_mode="opposite",
             max_box_progress_frac=0.75,
-            zone_exhaustion_rejects=3,
-            macro_shock_range_atr=3.2,
             struct_impulse_confirm=True,
         )
     )
 
-    # 1) 老化边界(rejects=3)上的 R2_STALL 无刺穿停顿 -> 被边界消耗规则拦截
+    # 1) 单尺度(mic=False)上的 R2_STALL 无刺穿停顿 -> 触发 restraint_unbacked_stall_reject 拦截
     ev_stall = MarketEvent(
         id=LEVEL_REJECTED, direction=1, ts=1000, known_index=12,
-        attrs={"zone": z, "ref": 99.0, "invalid": 98.0, "sub_kind": "R2_STALL", "vol_ratio": 1.5, "range_atr": 1.2},
+        attrs={"zone": z, "ref": 99.0, "invalid": 98.0, "sub_kind": "R2_STALL"},
     )
     assert router.on_bar("BTCUSDT", (1000, 100.0, 101.5, 99.5, 101.0, 100.0), 12, view, 2.0, [ev_stall], position_open=False, entry_resting=False) == []
-    assert router.counters.get("restraint_zone_exhaustion_reject") == 1
+    assert router.counters.get("restraint_unbacked_stall_reject") == 1
 
-    # 2) 老化边界(rejects=3)上的缩量刺穿(vol_ratio=0.8 < 1.0) -> 同样被拦截
-    ev_low_vol = MarketEvent(
-        id=LEVEL_REJECTED, direction=1, ts=2000, known_index=13,
-        attrs={"zone": z, "ref": 99.0, "invalid": 98.0, "sub_kind": "R1_WICK", "vol_ratio": 0.8, "range_atr": 1.2},
-    )
-    assert router.on_bar("BTCUSDT", (2000, 100.0, 101.5, 98.5, 101.0, 50.0), 13, view, 2.0, [ev_low_vol], position_open=False, entry_resting=False) == []
-    assert router.counters.get("restraint_zone_exhaustion_reject") == 2
-
-    # 3) 老化边界上的 R3_TRAP 放量清洗(vol_ratio=1.5 >= 1.25): 虽未突破前 3 根高点(106.0), 但通过 Washout 即刻确认!
-    eval_bars = (
-        (100, 106.0, 106.5, 104.0, 104.5),
-        (200, 104.5, 105.0, 102.5, 103.0),
-        (300, 103.0, 103.5, 101.0, 101.5),
-        (400, 101.5, 102.0, 98.2, 98.6),
-        (500, 98.6, 101.2, 98.4, 100.8),
-    )
-    ev_washout = MarketEvent(
-        id=LEVEL_REJECTED, direction=1, ts=3000, known_index=14,
-        attrs={
-            "zone": z, "ref": 99.0, "invalid": 98.0,
-            "sub_kind": "R3_TRAP", "vol_ratio": 1.5, "range_atr": 1.4,
-            "eval_bars": eval_bars,
-        },
-    )
-    d_ok = router.on_bar("BTCUSDT", (3000, 98.6, 101.2, 98.4, 100.8, 150.0), 14, view, 2.0, [ev_washout], position_open=False, entry_resting=False)
-    assert len(d_ok) == 1 and d_ok[0].kind == "market"
-
-    # 4) 宏观极端波动清算柱(range_atr=3.5 > 3.2) -> 触发 restraint_macro_vol_shock 拦截
-    ev_shock = MarketEvent(
-        id=LEVEL_REJECTED, direction=1, ts=4000, known_index=15,
-        attrs={"zone": z, "ref": 99.0, "invalid": 95.0, "sub_kind": "R3_TRAP", "vol_ratio": 2.0, "range_atr": 3.5},
-    )
-    assert router.on_bar("BTCUSDT", (4000, 99.0, 103.0, 96.0, 101.0, 300.0), 15, view, 2.0, [ev_shock], position_open=False, entry_resting=False) == []
-    assert router.counters.get("restraint_macro_vol_shock") == 1
-
-    # 5) 价格已走入箱体对侧 25% 防守区(inner=100, opp=110, close=108.0 -> prog=0.80 >= 0.75) -> 拦截作废
+    # 2) 价格已走入箱体对侧 25% 防守区(inner=100, opp=110, close=108.0 -> prog=0.80 >= 0.75) -> 拦截作废
     z_fresh = Zone(
         lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
         touches=2, rejects=1, origin_known=1, last_change_known=10,
@@ -659,7 +601,7 @@ def test_amt_time_decay_washout_macro_shock_and_opposite_edge_restraint():
     )
     ev_late = MarketEvent(
         id=LEVEL_REJECTED, direction=1, ts=5000, known_index=16,
-        attrs={"zone": z_fresh, "ref": 99.0, "invalid": 98.0, "sub_kind": "R1_WICK", "vol_ratio": 1.5, "range_atr": 1.5},
+        attrs={"zone": z_fresh, "ref": 99.0, "invalid": 98.0, "sub_kind": "R1_WICK"},
     )
     r_no_imp = MarketRouter(
         RouterParams(
@@ -765,14 +707,17 @@ def test_htf_wall_guard_blocks_headwind_and_caps_target():
     assert len(d4) == 1 and d4[0].hyp.direction == -1
 
 
-def test_r1_wick_washout_pinbar_passes_struct_impulse_confirm():
-    """2h/4h 单针刺穿扫损 Pinbar(R1_WICK + vol_ratio >= 1.15 + close_pos >= 0.60 + 顺向实体):
-    即使前 3 根为陡峭下跌导致当根收盘尚未越过 3 根前高点(brk3=False), 仍通过微观冲量确认即刻入场。
+def test_multitf_reject_true_engulfing_and_htf_macro_imbalance_semantics():
+    """验证多尺度拒绝实体扩张吞没确认(True Engulfing)与 8 拐点道氏宏观失衡对齐(macro_imbalance):
+    1) 多尺度(mic=True)LEVEL_REJECTED: 即使前 3 根陡峭下跌未过 3 根前高(brk3=False),
+       只要满足顺向实体扩张吞没(|c-o| > |c1-o1| 且吞没前根实体、收在 K 线顺向半区),即刻确认放行;
+    2) 当日线(tf_hours=24)或上级周期(tf_hours=12)处于反方向宏观主结构失衡(macro_imbalance == -direction)时,
+       restraint_htf_imbalance_reject 拦截逆大势接刀。
     """
     z = Zone(
         lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
         touches=2, rejects=1, origin_known=1, last_change_known=8,
-        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=3,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=4,
     )
     view = StructureView(regime=Regime.RANGE, zones=(z,), atr=2.0)
     router = MarketRouter(
@@ -781,146 +726,48 @@ def test_r1_wick_washout_pinbar_passes_struct_impulse_confirm():
             reject_use_struct_stop=True,
             reject_target_mode="opposite",
             struct_impulse_confirm=True,
+            htf_wall_filter=True,
+            min_box_rr=1.5,
         )
     )
     eval_bars = (
         (100, 106.0, 106.5, 104.0, 104.5),
         (200, 104.5, 105.0, 102.5, 103.0),
         (300, 103.0, 103.5, 101.0, 101.5),
-        (400, 101.5, 101.8, 99.8, 100.1),
-        (500, 100.1, 101.0, 98.5, 100.6),
+        (400, 100.5, 101.8, 99.8, 100.1),
+        (500, 100.0, 101.0, 98.5, 100.6),
     )
-    ev_r1_ok = MarketEvent(
+    ev_mic_rej = MarketEvent(
         id=LEVEL_REJECTED, direction=1, ts=5000, known_index=10,
         attrs={
             "zone": z, "ref": 99.0, "invalid": 98.3,
-            "sub_kind": "R1_WICK", "vol_ratio": 1.25, "range_atr": 1.25,
+            "sub_kind": "R1_WICK", "mic": True,
             "eval_bars": eval_bars,
         },
     )
     d_ok = router.on_bar(
-        "BTCUSDT", (5000, 100.1, 101.0, 98.5, 100.6, 125.0),
-        10, view, 2.0, [ev_r1_ok], position_open=False, entry_resting=False,
+        "BTCUSDT", (5000, 100.0, 101.0, 98.5, 100.6, 125.0),
+        10, view, 2.0, [ev_mic_rej], position_open=False, entry_resting=False,
     )
     assert len(d_ok) == 1 and d_ok[0].kind == "market"
 
-
-def test_position_life_cycle_defenses():
-    """三项持仓防线验证:
-    1) 滞留衰减(Time Decay): 满 6 根认知 bar 且 MFE < 0.5R → 锁损 -0.5R;
-    2) 箱体中轴半风险收缩(POC Half-Risk): LEVEL_REJECTED 突破 0.85R → 锁损 -0.45R(BREAKOUT_ACCEPTED 不受此限);
-    3) 裸奔兜底(MFE Naked Fallback): 曾达 1.25R 且当根收盘回落至 +0.50R 内侧 → 至少兜底保本(Entry)。
-    """
-    from market_operator.position import PositionManager
-
-    pm = PositionManager(
-        Params(),
-        time_stop=False,
-        reject_opp_lock_frac=-0.25,
-        time_decay_bars=6,
-        time_decay_mfe_r=0.50,
-        time_decay_stop_r=-0.50,
-        poc_halfrisk_r=0.85,
-        poc_halfrisk_stop_r=-0.45,
-        mfe_protect_r=1.25,
-        mfe_protect_lock_r=0.50,
-    )
-
-    # 建仓: entry=100, invalid=90 (R=10), target_1=120
-    pos = pm.open("BTCUSDT", 1, 100.0, 90.0, 120.0, LEVEL_REJECTED, 1000, 0)
-
-    # 1) TD 滞留: 连续 6 根认知 bar 最高仅 104.0 (MFE=0.40R < 0.50R) -> 第 6 根结束后止损收紧至 95.0 (-0.50R)
-    for k in range(6):
-        pm.on_bar("BTCUSDT", (2000 + k * 1000, 100.5, 104.0, 99.0, 101.0, 10.0), 2.0)
-    assert pos.bars_held == 6
-    assert abs(pos.invalid - 95.0) < 1e-9
-
-    # 2) POC Half-Risk: 盘中触及 108.6 (MFE=0.86R >= 0.85R) -> 止损从 95.0 收紧至 95.5 (-0.45R)
-    pm.on_bar("BTCUSDT", (9000, 101.0, 108.6, 100.5, 103.0, 10.0), 2.0)
-    assert abs(pos.invalid - 95.5) < 1e-9
-
-    # 对照: BREAKOUT_ACCEPTED 在 MFE=0.90R 时不触发 POC Half-Risk, 保留趋势回踩空间
-    pos_acc = pm.open("ETHUSDT", 1, 100.0, 90.0, None, BREAKOUT_ACCEPTED, 1000, 0)
-    pm.on_bar("ETHUSDT", (2000, 100.0, 109.0, 99.5, 104.0, 10.0), 2.0)
-    assert abs(pos_acc.invalid - 90.0) < 1e-9
-
-    # 3) MFE Naked Fallback: 盘中冲至 113.0 (MFE=1.30R >= 1.25R), 但当根回落收盘于 103.0 (< lock_px=105.0)
-    #    旧逻辑因 close < 105.0 不推进止损, 新逻辑至少兜底推进至保本位 100.0!
-    pm.on_bar("BTCUSDT", (10000, 103.0, 113.0, 102.0, 103.0, 10.0), 2.0)
-    assert abs(pos.invalid - 100.0) < 1e-9
-
-
-def test_htf_macro_drift_and_r2_stall_constraints():
-    """验证跨周期宏观失衡拦截(htf_macro_drift_atr)与 R2_STALL 防伪约束(r2_min_rotations / r2_min_close_pos)。"""
-    z_shallow = Zone(
-        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
-        touches=2, rejects=1, origin_known=1, last_change_known=5,
-        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=3,
-    )
-    z_mature = Zone(
-        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
-        touches=4, rejects=1, origin_known=1, last_change_known=5,
-        box_opposite=110.0, box_quality=0.70, box_width_atr=5.0, box_rotations=4,
-    )
-    view = StructureView(regime=Regime.RANGE, zones=(z_shallow, z_mature), atr=2.0)
-    router = MarketRouter(
-        RouterParams(
-            whitelist=WHITELIST_BALANCE,
-            reject_use_struct_stop=True,
-            reject_target_mode="opposite",
-            htf_wall_filter=True,
-            htf_macro_drift_atr=2.0,
-            r2_min_rotations=4,
-            r2_min_close_pos=0.58,
-        )
-    )
-
-    # 1) R2_STALL 在折返不足(box_rotations=3 < 4)的年轻箱体上 -> 拦截!
-    ev_r2_rot = MarketEvent(
-        id=LEVEL_REJECTED, direction=1, ts=1000, known_index=10,
-        attrs={
-            "zone": z_shallow, "ref": 99.0, "invalid": 98.5,
-            "sub_kind": "R2_STALL",
-            "eval_bars": ((900, 99.5, 101.0, 99.2, 100.8),),
-        },
-    )
-    assert router.on_bar(
-        "ENAUSDT", (1000, 99.5, 101.0, 99.2, 100.8, 100.0),
-        10, view, 2.0, [ev_r2_rot], position_open=False, entry_resting=False,
-    ) == []
-    assert router.counters.get("restraint_r2_stall_rotations_reject") == 1
-
-    # 2) R1_WICK (刺穿外沿的弹簧清扫) 不受 r2_min_rotations 限制 -> 放行!
-    ev_r1 = MarketEvent(
-        id=LEVEL_REJECTED, direction=1, ts=2000, known_index=11,
-        attrs={
-            "zone": z_shallow, "ref": 99.0, "invalid": 98.4,
-            "sub_kind": "R1_WICK",
-            "eval_bars": ((1900, 99.5, 101.0, 98.6, 100.5),),
-        },
-    )
-    d_r1 = router.on_bar(
-        "ENAUSDT", (2000, 99.5, 101.0, 98.6, 100.5, 100.0),
-        11, view, 2.0, [ev_r1], position_open=False, entry_resting=False,
-    )
-    assert len(d_r1) == 1
-
-    # 3) 当 1D 宏观位移处于深度单边下跌(macro_drift_atr = -2.5 < -2.0)时, 拦截逆宏观大势做多!
-    htf_bear = StructureView(regime=Regime.TREND_DOWN, zones=(), atr=8.0, macro_drift_atr=-2.5)
+    htf_bear = StructureView(regime=Regime.TREND_DOWN, zones=(), atr=8.0, macro_imbalance=-1, tf_hours=24)
     ev_macro_counter = MarketEvent(
-        id=LEVEL_REJECTED, direction=1, ts=3000, known_index=12,
+        id=LEVEL_REJECTED, direction=1, ts=6000, known_index=11,
         attrs={
-            "zone": z_mature, "ref": 99.0, "invalid": 98.4,
-            "sub_kind": "R1_WICK",
-            "eval_bars": ((2900, 99.5, 101.0, 98.6, 100.5),),
+            "zone": z, "ref": 99.0, "invalid": 98.3,
+            "sub_kind": "R1_WICK", "mic": True,
+            "eval_bars": eval_bars,
         },
     )
     assert router.on_bar(
-        "ENAUSDT", (3000, 99.5, 101.0, 98.6, 100.5, 100.0),
-        12, view, 2.0, [ev_macro_counter],
+        "BTCUSDT", (6000, 100.0, 101.0, 98.5, 100.6, 125.0),
+        11, view, 2.0, [ev_macro_counter],
         position_open=False, entry_resting=False, htf_views=(htf_bear,),
     ) == []
-    assert router.counters.get("restraint_htf_macro_drift_reject") == 1
+    assert router.counters.get("restraint_htf_imbalance_reject") == 1
+
+
 
 
 

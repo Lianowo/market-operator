@@ -108,7 +108,8 @@ class StructureView:
     # The minimum causally confirmed pivot history used by the current
     # structure model. Optional to preserve all frozen v1-v5 call sites.
     pivots: tuple = ()
-    macro_drift_atr: float = 0.0
+    macro_imbalance: int = 0
+    tf_hours: int = 0
 
 
 @dataclass(frozen=True)

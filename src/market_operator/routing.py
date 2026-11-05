@@ -129,9 +129,6 @@ class RouterParams:
     min_box_touches: int = 0         # >0 时要求 zone.touches >= min_box_touches
     min_box_quality: float = 0.0     # >0 时要求 zone.box_quality >= min_box_quality
     min_box_rotations: int = 0       # >0 时要求 zone.box_rotations >= min_box_rotations
-    htf_macro_drift_atr: float = 0.0
-    r2_min_rotations: int = 0        # R2_STALL 特殊约束
-    r2_min_close_pos: float = 0.0    # R2_STALL 特殊约束
     min_box_width_atr: float = 0.0   # >0 时要求 zone.box_width_atr >= min_box_width_atr
     min_box_rr: float = 0.0          # >0 时要求 |box_opposite - close| / stop_dist >= min_box_rr
     max_confirm_stop_atr: float = 1.2
@@ -146,8 +143,6 @@ class RouterParams:
     bounded_min_rr: float = 0.0     # Explicit candidate threshold; not a full-box-span proxy.
     max_box_progress_frac: Optional[float] = None
     max_accept_ext_atr: float = 1.5
-    zone_exhaustion_rejects: int = 0
-    macro_shock_range_atr: float = 0.0
     htf_wall_filter: bool = False
     htf_min_room_r: float = 1.0
     _normalized_whitelist: frozenset = field(init=False, repr=False, compare=False)
@@ -362,27 +357,32 @@ class MarketRouter:
 
     def _apply_htf_wall_guard(
         self,
+        cid: str,
         direction: int,
         close: float,
         atr: float,
         dec: RouteDecision,
         htf_views: Sequence[StructureView],
     ) -> Optional[RouteDecision]:
-        """跨周期上下级结构感知(Top-Down HTF Wall Guard):
-        1. 严禁小周期迎头撞进未突破的大周期活跃平衡箱反向墙内沿/带内追单;
-        2. 前方存在大周期反向箱沿且净空间 < htf_min_room_r·R 时直接放弃;
-        3. 前方大周期反向箱沿空间充足(>= htf_min_room_r·R)但挡在原 target_1 之前时,收缩 target_1 至大周期墙前缘。
+        """跨周期上下级拍卖结构感知(Top-Down HTF Imbalance & Wall Guard):
+        1. 分形失衡对齐:日线宏观主结构单边失衡(tf_hours>=24, macro_imbalance == -direction)时禁止下级周期逆大势接刀/追单;
+           低周期(struct_impulse_confirm=True)的箱沿拒绝(LEVEL_REJECTED)同样禁止逆上级中枢失衡(如 12H)接刀;
+        2. 严禁小周期迎头撞进未突破的大周期活跃平衡箱反向墙内沿/带内追单;
+        3. 前方存在大周期反向箱沿且净空间 < htf_min_room_r·R 时直接放弃;
+        4. 前方大周期反向箱沿空间充足但挡在原 target_1 之前时,收缩 target_1 至大周期墙前缘。
         """
         hyp = dec.hyp
         if hyp is None:
             return dec
-        if self.params.htf_macro_drift_atr > 0.0:
-            for hv in htf_views:
-                if hv is None:
-                    continue
-                md = float(getattr(hv, "macro_drift_atr", 0.0) or 0.0)
-                if direction * md < -float(self.params.htf_macro_drift_atr):
-                    self._bump("restraint_htf_macro_drift_reject")
+        is_rej = cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+        for hv in htf_views:
+            if hv is None:
+                continue
+            m_imb = int(getattr(hv, "macro_imbalance", 0) or 0)
+            tf_h = int(getattr(hv, "tf_hours", 0) or 0)
+            if m_imb == -direction:
+                if tf_h >= 24 or (self.params.struct_impulse_confirm and is_rej):
+                    self._bump("restraint_htf_imbalance_reject")
                     return None
         risk = direction * (close - hyp.invalid)
         capped_target = hyp.target_1
@@ -428,26 +428,6 @@ class MarketRouter:
             return replace(dec, hyp=new_hyp)
         return dec
 
-    def _check_r2_stall_constraints(
-        self, ev: MarketEvent, cid: str, zone: object, p: RouterParams
-    ) -> bool:
-        """校验 R2_STALL 特殊几何约束。"""
-        if cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and str(ev.attrs.get("sub_kind", "")) == "R2_STALL":
-            if p.r2_min_rotations > 0 and zone is not None:
-                if int(getattr(zone, "box_rotations", 0)) < p.r2_min_rotations:
-                    self._bump("restraint_r2_stall_rotations_reject")
-                    return False
-            if p.r2_min_close_pos > 0.0:
-                eb = ev.attrs.get("eval_bars") or ()
-                if eb:
-                    _, _bo, bh, bl, bc = eb[-1]
-                    rng_r2 = max(bh - bl, 1e-12)
-                    cpos_r2 = (bc - bl) / rng_r2 if ev.direction > 0 else (bh - bc) / rng_r2
-                    if cpos_r2 < p.r2_min_close_pos:
-                        self._bump("restraint_r2_stall_close_pos_reject")
-                        return False
-        return True
-
     def _route_market(
         self, symbol: str, ev: MarketEvent, view: StructureView,
         close: float, atr: float, route: str, tag: str, *,
@@ -474,7 +454,7 @@ class MarketRouter:
             self._zone_lock = prior_locks
             return None
         if self.params.htf_wall_filter and htf_views:
-            dec = self._apply_htf_wall_guard(ev.direction, close, atr, dec, htf_views)
+            dec = self._apply_htf_wall_guard(cid, ev.direction, close, atr, dec, htf_views)
             if dec is None:
                 self._zone_lock = prior_locks
                 return None
@@ -693,56 +673,39 @@ class MarketRouter:
                 self._bump("restraint_width_reject")
                 return None
 
-        if p.macro_shock_range_atr > 0.0:
-            range_atr = float(ev.attrs.get("range_atr", 0.0) or 0.0)
-            atr_slow_ratio = float(ev.attrs.get("atr_slow_ratio", 1.0) or 1.0)
-            if range_atr > p.macro_shock_range_atr or (
-                atr_slow_ratio > 2.2 and range_atr > 0.7 * p.macro_shock_range_atr
-            ):
-                self._bump("restraint_macro_vol_shock")
-                return None
-
+        # 无细周期触发背书(mic=False)时,全周期统一执行"无扫损无拒绝(No Sweep, No Rejection)"公理:
+        # 未刺穿外沿的 R2_STALL 停滞不构成有效流动性清扫,仅允许真实刺穿外沿的弹簧/假破位清扫(R1_WICK / R3_TRAP)。
+        is_mic = bool(ev.attrs.get("mic", False))
+        sub_k = str(ev.attrs.get("sub_kind", ""))
         if (
-            p.zone_exhaustion_rejects > 0
-            and zone is not None
+            not is_mic
             and cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+            and sub_k == "R2_STALL"
         ):
-            rejs = int(getattr(zone, "rejects", 0))
-            if rejs >= p.zone_exhaustion_rejects:
-                sub_k = str(ev.attrs.get("sub_kind", ""))
-                vol_r = float(ev.attrs.get("vol_ratio", 1.0) or 1.0)
-                if sub_k == "R2_STALL" or vol_r < 1.0:
-                    self._bump("restraint_zone_exhaustion_reject")
-                    return None
-
-        if not self._check_r2_stall_constraints(ev, cid, zone, p):
+            self._bump("restraint_unbacked_stall_reject")
             return None
 
         if p.struct_impulse_confirm:
             eval_bars = ev.attrs.get("eval_bars") or ()
             if len(eval_bars) >= 5:
-                _, _bo, bh, bl, bc = eval_bars[-1]
+                _, bo, bh, bl, bc = eval_bars[-1]
                 b1, b2, b3, b4 = eval_bars[-2], eval_bars[-3], eval_bars[-4], eval_bars[-5]
                 d = int(ev.direction)
-                brk3 = (bc < min(b1[3], b2[3], b3[3])) if d < 0 else (bc > max(b1[2], b2[2], b3[2]))
-                out1 = ((bh - bl) > (b1[2] - b1[3])) and (
-                    (bc < min(b1[1], b1[4])) if d < 0 else (bc > max(b1[1], b1[4]))
-                )
                 mid_ok = (bc < 0.5 * (bh + bl)) if d < 0 else (bc > 0.5 * (bh + bl))
+                dir_bar = (bc < bo) if d < 0 else (bc > bo)
+                eng_body = (bc < min(b1[1], b1[4])) if d < 0 else (bc > max(b1[1], b1[4]))
+                body_exp = abs(bc - bo) > abs(b1[4] - b1[1])
+                brk3 = (bc < min(b1[3], b2[3], b3[3])) if d < 0 else (bc > max(b1[2], b2[2], b3[2]))
+                out1 = ((bh - bl) > (b1[2] - b1[3])) and eng_body
                 rmax4 = (bh - bl) > max(b1[2] - b1[3], b2[2] - b2[3], b3[2] - b3[3], b4[2] - b4[3])
-                sub_k = str(ev.attrs.get("sub_kind", ""))
-                vol_r = float(ev.attrs.get("vol_ratio", 1.0) or 1.0)
-                rng_eval = max(bh - bl, 1e-12)
-                cpos_eval = (bh - bc) / rng_eval if d < 0 else (bc - bl) / rng_eval
-                washout_ok = (
-                    cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
-                    and (
-                        (sub_k == "R3_TRAP" and vol_r >= 1.25)
-                        or (sub_k == "R1_WICK" and vol_r >= 1.15 and cpos_eval >= 0.60)
-                    )
-                    and ((bc < _bo) if d < 0 else (bc > _bo))
-                )
-                if not ((brk3 or (rmax4 and out1) or washout_ok) and mid_ok):
+                # 价格行为角色分离确认(0 成交量阈值魔数):
+                # - 多尺度上下级边界拒绝(mic=True & LEVEL_REJECTED):测试已确立上级箱沿,要求标准实体扩张吞没(True Engulfing)或 3-bar 微观结构突破;
+                # - 突破追势(BREAKOUT_ACCEPTED)或单尺度独立帧:要求 3-bar 微观结构突破或 4-bar 最大振幅外包扩张。
+                if is_mic and cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                    confirmed = (brk3 or (dir_bar and eng_body and body_exp)) and mid_ok
+                else:
+                    confirmed = (brk3 or (rmax4 and out1)) and mid_ok
+                if not confirmed:
                     self._bump("restraint_struct_impulse_reject")
                     return None
         sk_rr = getattr(zone, "source_kind", "BOX_EDGE") if zone is not None else "BOX_EDGE"

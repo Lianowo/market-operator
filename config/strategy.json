@@ -62,13 +62,9 @@
     "zone_departure_reset": true,
     "max_accept_ext_atr": 1.5,
     "max_box_progress_frac": 0.75,
-    "zone_exhaustion_rejects": 3,
-    "macro_shock_range_atr": 3.2,
+    "min_box_rr": 1.5,
     "htf_wall_filter": true,
     "htf_min_room_r": 1.0,
-    "htf_macro_drift_atr": 2.0,
-    "r2_min_rotations": 4,
-    "r2_min_close_pos": 0.58,
     "max_cost_frac": null,
     "cost_per_side": 0.0008
   },
@@ -89,14 +85,7 @@
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": -0.25,
-    "mfe_protect_r": 1.25,
-    "mfe_protect_lock_r": 0.50,
-    "time_decay_bars": 6,
-    "time_decay_mfe_r": 0.50,
-    "time_decay_stop_r": -0.50,
-    "poc_halfrisk_r": 0.85,
-    "poc_halfrisk_stop_r": -0.45
+    "reject_opp_lock_frac": -0.25
   },
   "small_account_compounding": {
     "equity0": 104.0,

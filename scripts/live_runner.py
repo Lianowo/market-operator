@@ -167,15 +167,6 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
         giveback_atr_k=(None if arm_cfg.get("giveback_atr_k") is None
                         else float(arm_cfg["giveback_atr_k"])),
         accept_reenter_box_exit=bool(arm_cfg.get("accept_reenter_box_exit", False)),
-        mfe_protect_r=(None if arm_cfg.get("mfe_protect_r") is None
-                       else float(arm_cfg["mfe_protect_r"])),
-        mfe_protect_lock_r=float(arm_cfg.get("mfe_protect_lock_r", 0.50)),
-        time_decay_bars=int(arm_cfg.get("time_decay_bars", 0) or 0),
-        time_decay_mfe_r=float(arm_cfg.get("time_decay_mfe_r", 0.50)),
-        time_decay_stop_r=float(arm_cfg.get("time_decay_stop_r", -0.50)),
-        poc_halfrisk_r=(None if arm_cfg.get("poc_halfrisk_r") is None
-                        else float(arm_cfg["poc_halfrisk_r"])),
-        poc_halfrisk_stop_r=float(arm_cfg.get("poc_halfrisk_stop_r", -0.45)),
 
         # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
         # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。
@@ -2443,14 +2434,21 @@ class LiveRunner:
             ]
             htf_list = []
             for ocs in all_cs:
-                if ocs is None or (ocs.obs_tf_seconds < 3 * cs.obs_tf_seconds and ocs.obs_tf_seconds < 86400) or not ocs.cog_bars:
+                if (
+                    ocs is None
+                    or ocs.obs_tf_seconds <= cs.obs_tf_seconds
+                    or (ocs.obs_tf_seconds < 3 * cs.obs_tf_seconds and ocs.obs_tf_seconds < 86400)
+                    or not ocs.cog_bars
+                ):
                     continue
                 os_st = ocs.detector.structure
-                md = os_st.macro_drift_atr(40) if ocs.obs_tf_seconds == 86400 else 0.0
+                m_imb = os_st.macro_imbalance(os_st.params.k_room)
                 z_htf = os_st.zones if ocs.obs_tf_seconds >= 3 * cs.obs_tf_seconds else ()
                 htf_list.append(StructureView(
                     regime=os_st.regime(), zones=z_htf,
-                    atr=os_st.atr(), pivots=(), macro_drift_atr=md))
+                    atr=os_st.atr(), pivots=(),
+                    macro_imbalance=m_imb,
+                    tf_hours=int(ocs.obs_tf_seconds // 3600)))
             htf_views = tuple(htf_list)
         if htf_views:
             decisions = cs.router.on_bar(

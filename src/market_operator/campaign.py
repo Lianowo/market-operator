@@ -106,13 +106,6 @@ class ExecutionConfig:
     # `1.0–1.5R` 区间被实测为死区(均净 +0.019R),正是这种尺度不一致的机械后果。
     giveback_atr_k: Optional[float] = None
     accept_reenter_box_exit: bool = False
-    mfe_protect_r: Optional[float] = None
-    mfe_protect_lock_r: float = 0.50
-    time_decay_bars: int = 0
-    time_decay_mfe_r: float = 0.50
-    time_decay_stop_r: float = -0.50
-    poc_halfrisk_r: Optional[float] = None
-    poc_halfrisk_stop_r: float = -0.45
 
 
 
@@ -347,21 +340,7 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 giveback_atr_k=(arm.giveback_atr_k if arm is not None
                                 else None),
                 accept_reenter_box_exit=(arm.accept_reenter_box_exit if arm is not None
-                                         else False),
-                mfe_protect_r=(arm.mfe_protect_r if arm is not None
-                               else None),
-                mfe_protect_lock_r=(arm.mfe_protect_lock_r if arm is not None
-                                    else 0.50),
-                time_decay_bars=(arm.time_decay_bars if arm is not None
-                                 else 0),
-                time_decay_mfe_r=(arm.time_decay_mfe_r if arm is not None
-                                  else 0.50),
-                time_decay_stop_r=(arm.time_decay_stop_r if arm is not None
-                                   else -0.50),
-                poc_halfrisk_r=(arm.poc_halfrisk_r if arm is not None
-                                else None),
-                poc_halfrisk_stop_r=(arm.poc_halfrisk_stop_r if arm is not None
-                                     else -0.45)),
+                                         else False)),
 
             lo=lo, hi=hi)
     # 事件对象使用规范 ID(BREAKOUT_ACCEPTED/LEVEL_REJECTED)，配置允许使用
@@ -732,7 +711,7 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 
 def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple:
-    """获取同标的更高宏观周期(htf_hours >= 3 * tf_hours)及日线宏观位移在 close_moment_ms 前最新已收盘认知视图。"""
+    """获取同标的更高宏观周期(htf_hours >= 3 * tf_hours 或 1D 主锚点)在 close_moment_ms 前最新已收盘认知视图。"""
     if not states or not getattr(getattr(st.router, "params", None), "htf_wall_filter", False):
         return ()
     sym = st.frame.symbol
@@ -740,7 +719,7 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
     out = []
     for other in states.values():
         hf = other.frame
-        if hf.symbol != sym or (hf.tf_hours < 3 * tf_h and hf.tf_hours < 24):
+        if hf.symbol != sym or hf.tf_hours <= tf_h or (hf.tf_hours < 3 * tf_h and hf.tf_hours < 24):
             continue
         ms_htf = hf.tf_hours * MS_1H
         max_open_ts = int(close_moment_ms) - ms_htf
@@ -748,10 +727,10 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
         idx = bisect_right(bars, max_open_ts, key=lambda b: int(b[0])) - 1
         if idx >= 0:
             vw = hf.cog.views.get(idx) if hf.tf_hours >= 3 * tf_h else None
-            md = (
-                float(hf.cog.macro_drifts[idx])
-                if hf.tf_hours == 24 and idx < len(getattr(hf.cog, "macro_drifts", ()))
-                else 0.0
+            m_imb = (
+                int(hf.cog.macro_imbalances[idx])
+                if idx < len(getattr(hf.cog, "macro_imbalances", ()))
+                else 0
             )
             if vw is not None:
                 out.append(
@@ -760,17 +739,19 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
                         zones=vw.zones,
                         atr=vw.atr,
                         pivots=vw.pivots,
-                        macro_drift_atr=md,
+                        macro_imbalance=m_imb,
+                        tf_hours=hf.tf_hours,
                     )
                 )
-            elif hf.tf_hours == 24 and md != 0.0:
+            elif m_imb != 0:
                 out.append(
                     StructureView(
                         regime=hf.cog.regimes[idx],
                         zones=(),
                         atr=hf.cog.atrs[idx],
                         pivots=(),
-                        macro_drift_atr=md,
+                        macro_imbalance=m_imb,
+                        tf_hours=hf.tf_hours,
                     )
                 )
     return tuple(out)
