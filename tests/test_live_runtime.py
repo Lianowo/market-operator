@@ -1656,6 +1656,129 @@ def test_defense_title_separates_lock_from_trail():
 
 
 # ---------------------------------------------------------------------------
+# ⑫ 2026-11-05 策略改动的外围接线:波动率分档 frac + 50% 部分止盈
+#
+# 策略侧(`position.py`)新增 `vol_based_frac_map` / `partial_exit`,回放侧已由
+# `campaign._arm_reduce_limit` 强制市价。实盘/通知层若不同步,会出现
+# "pm 已按减仓后保本记账、交易所仍是整仓"以及"把 50% 减仓说成平仓"。
+# ---------------------------------------------------------------------------
+
+
+def _pm_real():
+    """真实 PositionManager(直接读生产 strategy.json 的 arm_config)。"""
+    raw = json.loads((ROOT / "config" / "strategy.json")
+                     .read_text(encoding="utf-8"))
+    return lr.new_position_manager(lr.Params(), raw)
+
+
+def _pm_campaign(pm, symbol="BTCUSDT", tf="2h", atr=3.0):
+    return types.SimpleNamespace(
+        symbol=symbol, tf_label=tf, pm=pm, trig_bars=[], cog_bars=[],
+        detector=types.SimpleNamespace(
+            structure=types.SimpleNamespace(atr=lambda: atr)))
+
+
+def test_defense_title_labels_partial_exit_as_breakeven():
+    r = lr.LiveRunner.__new__(lr.LiveRunner)
+    pos = types.SimpleNamespace(direction=1, entry=100.0, invalid=100.0,
+                                target_1=110.0)
+    assert r._defense_title(
+        pos, "v21|sub_bar_partial_exit_on_arm|target=110") == \
+        "减仓50% · 余仓保本防线"
+
+
+def test_sub_bar_lock_uses_vol_scaled_frac(tmp_path):
+    """高波动(ATR/entry=3% ≥ 2%)必须锁 35%,而不是静态 25%。"""
+    cfg = _cfg_min()
+    cfg["protection"]["price_clock"] = "bar"      # 子周期 TP1 分支
+    client, tg = _FillClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg, cfg=cfg)
+    pm = _pm_real()
+    pos_pm = pm.open("BTCUSDT", 1, 100.0, 94.0, 110.0, "EV1", 0, 0)
+    pos_pm.armed, pos_pm._best = True, 110.0
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=2.0,
+                                  mark=104.0)
+    cs = _pm_campaign(pm)
+
+    r._on_sub_bar(cs, (NOW, 104.0, 110.0, 100.0, 104.0, 1.0))
+
+    # frac=-0.35 ⇒ 预算 6.5;峰值 110 ⇒ 防线 103.5(静态 -0.25 只会到 102.5)
+    assert pos_pm.invalid == pytest.approx(103.5)
+    assert "已锁 35% TP1 行程" in tg.fills[-1]["title"]
+
+
+def test_sub_bar_giveback_exhaustion_takes_half_and_breakeven(tmp_path):
+    """预算耗尽 ⇒ 市价减仓 50% + 余仓保本,而不是整仓平仓/挂限价单。"""
+    cfg = _cfg_min()
+    cfg["protection"]["price_clock"] = "bar"
+    client, tg = _FillClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg, cfg=cfg)
+    pm = _pm_real()
+    pos_pm = pm.open("BTCUSDT", 1, 100.0, 94.0, 110.0, "EV1", 0, 0)
+    pos_pm.armed, pos_pm._best = True, 110.0
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=2.0,
+                                  mark=102.0)
+    cs = _pm_campaign(pm)
+
+    r._on_sub_bar(cs, (NOW, 102.0, 110.0, 101.0, 102.0, 1.0))
+
+    assert len(client.market_orders) == 1          # 市价,不是 target 限价
+    assert client.market_orders[0]["size"] == pytest.approx(1.0)
+    assert r.positions["BTCUSDT"]["qty"] == pytest.approx(1.0)
+    assert "BTCUSDT" in r.positions                # 余仓仍在
+    assert pos_pm.reduced is True
+    assert pos_pm.invalid == pytest.approx(100.0)  # 余仓移保本
+    assert tg.fills[-1]["title"] == "减仓50%并保本(live)"
+
+
+def test_partial_exit_reduce_never_rests_at_target(tmp_path):
+    """`_exec_mgmt` 收到 partial_exit 的 REDUCE ⇒ 市价(不挂 target_1 限价)。"""
+    client, tg = _FillClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=100.0, qty=2.0,
+                                  mark=103.0)
+    cs = types.SimpleNamespace(symbol="BTCUSDT", tf_label="2h",
+                               pm=types.SimpleNamespace(positions={}))
+    intent = types.SimpleNamespace(
+        kind=types.SimpleNamespace(value="REDUCE"), qty_frac=0.5,
+        reason="§8.2|partial_exit target_1 hit reduce 50% target=110",
+        ref_price=103.0)
+
+    r._exec_mgmt(cs, intent, (NOW, 103.0, 103.0, 103.0, 103.0, 1.0))
+
+    assert len(client.market_orders) == 1
+    assert client.market_orders[0]["size"] == pytest.approx(1.0)
+    assert tg.fills[-1]["title"] == "减仓50%并保本(live)"
+    assert r.positions["BTCUSDT"]["qty"] == pytest.approx(1.0)
+
+
+def test_paper_partial_exit_is_labeled_and_partial(tmp_path):
+    """paper 虚拟经纪同样按"部分减仓"记账与通知(不是整仓平仓)。"""
+    client, tg = _FillClient(), _FakeTG()
+    r = lr.LiveRunner("paper", _cfg_min(), client, tg,
+                      state_path=tmp_path / "state.json",
+                      journal_dir=tmp_path / "logs", equity0=1000.0,
+                      contracts={}, symbols=())
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=95.0, qty=2.0,
+                                  mark=103.0)
+    cs = types.SimpleNamespace(
+        symbol="BTCUSDT", tf_label="2h",
+        pm=types.SimpleNamespace(positions={"BTCUSDT": None}))
+    intent = types.SimpleNamespace(
+        kind=types.SimpleNamespace(value="REDUCE"), qty_frac=0.5,
+        reason="§8.2|partial_exit target_1 hit reduce 50% target=110",
+        ref_price=103.0)
+
+    r._exec_mgmt(cs, intent, (NOW, 103.0, 103.0, 103.0, 103.0, 1.0))
+    assert len(r.open_intents) == 1
+    r._paper_fill_pass("BTCUSDT",
+                       (NOW + 7_200_000, 104.0, 104.5, 103.5, 104.0, 1.0))
+
+    assert r.positions["BTCUSDT"]["qty"] == pytest.approx(1.0)
+    assert tg.fills[-1]["title"] == "减仓50%并保本(paper)"
+
+
+# ---------------------------------------------------------------------------
 # ⑪ 通知分通道 + 信号广播与容量闸门解耦
 #
 # 修前:信号广播写在 `_submit_open` 的闸门之后,任一闸门 `return` 都会连带

@@ -18,21 +18,41 @@ from market_operator.structure import (
 )
 
 
-def _prod_lock_frac() -> float:
+def _prod_lock_frac(atr: float | None = None,
+                    entry: float | None = None) -> float:
     """生产配置里的锁利 `frac`。
 
     这些用例断言的是**语义**(峰值锚定、预算 = (1−|frac|)·span、可多次棘轮),
     不是某个标定值 —— 标定会随数据更新(v21.7 从 −0.50 改到 −0.25),所以一律从
     `config/strategy.json` 取值,免得"调个参数就要改一堆断言"。
+
+    2026-11-05 起 `frac` 由 `arm_config.vol_based_frac_map` 按 ATR/entry 波动率
+    分档;给出 `atr`/`entry` 时按生产同样的优先级解析,否则回落到
+    `reject_opp_lock_frac`。
     """
     payload = json.loads((Path(__file__).resolve().parents[1]
                           / "config" / "strategy.json").read_text("utf-8"))
-    return float(payload["arm_config"]["reject_opp_lock_frac"])
+    arm = payload["arm_config"]
+    frac = float(arm["reject_opp_lock_frac"])
+    vmap = arm.get("vol_based_frac_map") or {}
+    if atr and entry and float(entry) > 0.0:
+        ratio = float(atr) / float(entry)
+        hi = vmap.get("HIGH_VOL_THRESHOLD")
+        if hi is not None and ratio >= float(hi) and "HIGH_VOL_FRAC" in vmap:
+            return float(vmap["HIGH_VOL_FRAC"])
+        lo = vmap.get("LOW_VOL_THRESHOLD")
+        if lo is not None and ratio <= float(lo) and "LOW_VOL_FRAC" in vmap:
+            return float(vmap["LOW_VOL_FRAC"])
+        if "DEFAULT_FRAC" in vmap:
+            return float(vmap["DEFAULT_FRAC"])
+    return frac
 
 
-def _prod_giveback(entry: float, target: float) -> float:
+def _prod_giveback(entry: float, target: float,
+                   atr: float | None = None) -> float:
     """生产 `frac` 下允许回吐的行程(价格单位)= (1−|frac|)·|target−entry|。"""
-    return (1.0 - abs(_prod_lock_frac())) * abs(float(target) - float(entry))
+    return ((1.0 - abs(_prod_lock_frac(atr, entry)))
+            * abs(float(target) - float(entry)))
 
 
 def _legacy_lock_px(entry: float, target: float, frac: float) -> float | None:
@@ -619,7 +639,8 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
     runner._advance(cs, t_sub1 + step2,
                     new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
                     run_paper_fills=True)
-    exp1 = 112.0 - _prod_giveback(100.0, 110.0)
+    exp1 = 112.0 - _prod_giveback(
+        100.0, 110.0, atr=float(cs.pm.positions["BTCUSDT"].giveback_unit))
     assert abs(runner.positions["BTCUSDT"]["invalid"] - exp1) < 1e-9
     assert abs(cs.pm.positions["BTCUSDT"].invalid - exp1) < 1e-9
     lock_fill = [f for f in fills if "锁利推进" in f[1]][-1]
@@ -636,6 +657,10 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
     it2 = dict(it, oid="mo21anch2", event_id="E4", invalid=95.0)
     runner._register_position("BTCUSDT", it2, 100.0, t_sub1)
     cs.pm.reject_opp_lock_frac = 0.50
+    # 兼容分支(生产已不用):静态 frac + 整仓离场;这里显式关掉波动率分档与
+    # 50% 部分止盈,验证"预算耗尽 ⇒ 整仓市价离场"这条老路径仍然自洽。
+    cs.pm.vol_based_frac_map = None
+    cs.pm.partial_exit_enabled = False
     t_sub2 = t_sub1 + step2
     runner._advance(cs, t_sub2 + step2,
                     new_bars=[(t_sub2, 105.0, 112.0, 104.0, 105.5, 20.0)],
@@ -721,7 +746,9 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     runner._advance(cs_12h, t_sub1 + step2,
                     new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
                     run_paper_fills=True)
-    exp_stop = 112.0 - _prod_giveback(100.0, 110.0)
+    exp_stop = 112.0 - _prod_giveback(
+        100.0, 110.0,
+        atr=float(cs_12h.pm.positions["BTCUSDT"].giveback_unit))
     assert runner.positions["BTCUSDT"]["invalid"] == exp_stop
     assert cs_12h.pm.positions["BTCUSDT"].invalid == exp_stop
     # 通知的**语义标题**必须是"锁利推进"(防线已进盈利侧),不是"止损推进"

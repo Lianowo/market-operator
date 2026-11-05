@@ -1,14 +1,15 @@
 {
   "version": "live-v21-2026-10-21",
-  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=1000U:5%, <=5000U:4%, <=10000U:3%, <=50000U:2%, >50000U:1%, 配置上界10亿U) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利(峰值锚定回吐预算,frac 见 strategy.json 的 arm_config.reject_opp_lock_frac) + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
+  "note": "实盘接入件配置(v21 统一架构):104 USDT 起步 × 20x 杠杆 × 阶梯动态复利(<=1000U:5%, <=5000U:4%, <=10000U:3%, <=50000U:2%, >50000U:1%, 配置上界10亿U) × 各周期独立风险容量池(tf_cap_by_tf=12%/TF, portfolio_cap_frac=0.50) × REJECT对侧突破锁利(峰值锚定回吐预算;frac 由 strategy.json 的 arm_config.vol_based_frac_map 按 ATR/entry 波动率分档,缺省回落 reject_opp_lock_frac) × 锁利武装/预算耗尽时 50% 部分止盈(市价,余仓移保本) + Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
   "meta": {
-    "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Dual-Bot Telegram K-Line Charts",
+    "semantics": "v21 BalanceDetector + ACCEPT/REJECT + M3c(2h/4h/12h->2h/1d->4h) + Per-TF Cap + Dynamic Compounding + Vol-Scaled Giveback Lock + 50% Partial Exit + Dual-Bot Telegram K-Line Charts",
     "strategy_config": "config/strategy.json",
     "cognition_frame": "支持 v21 多周期并发(2h/4h 同周期触发, 12h->2h 降档触发, 1d->4h 降档触发)及 12h->2h 单帧兼容模式",
     "execution_approximation": [
       "市价决策:canonical 于次一执行细 bar 开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
       "限价单:GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
       "持仓管理意图(破位/防线收紧/对侧突破锁利):canonical 以认知 bar 收盘裁决;实盘同步更新交易所计划止损单或立即市价执行",
+      "部分止盈(canonical §8.2 partial_exit):锁利武装或回吐预算耗尽时减仓 50% 并移保本;状态型触发,回放与实盘都只走市价,不在 target_1 挂可能永不成交的限价单",
       "Telegram 双通道通知:信号 Bot 只发信号广播(公开可订阅,不含账户数据),运营 Bot 发开仓/减仓/防线推进/平仓/日结/告警(未单独配置时回退到信号 Bot 并如实告警),均附带高清黑白 K 线结构图(箱体/事件区间/±R 标尺/pivot)",
       "信号广播与容量闸门解耦:检测到事件即推送结构事实,并用 exec_status 说明本系统是否真的开仓(容量满/熔断只影响执行,不影响通知)"
     ]

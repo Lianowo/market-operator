@@ -2179,6 +2179,9 @@ class LiveRunner:
             frac = (d * (stop - entry) / span) if span > 0 else 0.0
             return (f"锁利推进(已锁 {frac:.0%} TP1 行程)" if frac > 0
                     else "锁利推进(防线仍在成本侧)")
+        if "partial_exit" in last_log:
+            # 部分减仓把 invalid 推到 entry:这是"余仓保本",不是"继续收紧止损"
+            return "减仓50% · 余仓保本防线"
         if "§8.3|trail" in last_log:
             return "结构防线推进(§8.3 trail)"
         if d * (stop - entry) > 0:
@@ -2235,7 +2238,15 @@ class LiveRunner:
         if (self.price_clock == "bar"
                 and pos_pm.target_1 is not None and not pos_pm.pending_reduce):
             target = float(pos_pm.target_1)
-            frac_cfg = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
+            # 与 canonical `PositionManager.on_bar` 共用**同一个** frac 解析器:
+            # 策略自 2026-11-05 起按 ATR/entry 波动率分档(vol_based_frac_map),
+            # 这里若仍读静态 reject_opp_lock_frac,子周期会拿旧 frac 推演另一条
+            # 防线 —— 同一笔仓在两个时钟上得到不同的锁利预算。
+            try:
+                _atr_now = float(cs.detector.structure.atr() or 0.0)
+            except (AttributeError, TypeError, ValueError):
+                _atr_now = 0.0
+            frac_cfg = float(cs.pm._resolve_lock_frac(pos_pm, _atr_now))
             old_inv = float(pos_pm.invalid)
             # 换单参考价:本地收盘 c 与已知 mark 中**更保守**的一侧(空头取较高价、
             # 多头取较低价),避免换单瞬间现价已越过止损/锁利价。
@@ -2279,6 +2290,19 @@ class LiveRunner:
                     # 执行者必须是本进程:这个触发条件是"自峰值回撤 > 预算",
                     # 随行情连续变化,事前无法写成一张挂单价。
                     pos_pm.armed = True          # 事实:锁利已 arming(审计要一致)
+                    if (getattr(cs.pm, "partial_exit_enabled", False)
+                            and not pos_pm.reduced):
+                        # 与 canonical `PositionManager.on_bar` 同语义:预算耗尽
+                        # 先兑现一半并保本(一次性额度),余仓继续按棘轮/结构防线。
+                        pos_pm.log.append(
+                            f"v21|sub_bar_partial_exit|峰值={pos_pm._best:.8g} "
+                            f"回吐={ld.drawdown:.8g} ≥ 预算={ld.budget:.8g} "
+                            f"ref={ref_px:.8g} ⇒ 减仓50%并保本(余仓交棘轮)")
+                        intent = cs.pm._reduce(pos_pm, ts, c, ld.drawdown)
+                        pos_dict["invalid"] = float(pos_pm.invalid)
+                        self._touch_campaigns()
+                        self._exec_mgmt(cs, intent, bar)
+                        return
                     pos_pm.log.append(
                         f"v21|sub_bar_lock_giveback_exhausted|"
                         f"峰值={pos_pm._best:.8g} 回吐={ld.drawdown:.8g} "
@@ -2304,6 +2328,17 @@ class LiveRunner:
                             f"target={target:.8g} "
                             f"预算={(1.0 - abs(frac_cfg)):.0%}·span "
                             f"⇒ 此后按峰值棘轮(可多次)")
+                        if (getattr(cs.pm, "partial_exit_enabled", False)
+                                and not pos_pm.reduced):
+                            # 武装即兑现一半并移保本(canonical `partial_exit_on_arm`)
+                            pos_pm.log.append(
+                                f"v21|sub_bar_partial_exit_on_arm|"
+                                f"target={target:.8g} ⇒ 减仓50%并移至保本,"
+                                f"余仓交由棘轮/结构防线")
+                            intent = cs.pm._reduce(pos_pm, ts, c, pos_pm._best)
+                            pos_dict["invalid"] = float(pos_pm.invalid)
+                            self._touch_campaigns()
+                            self._exec_mgmt(cs, intent, bar)
                     if ld.action == "tighten":
                         stop_px = float(ld.stop_px)
                         pos_pm.invalid = (min(pos_pm.invalid, stop_px)
@@ -3197,8 +3232,12 @@ class LiveRunner:
             if qty <= 0.0:
                 return
             target = pos_pm.target_1 if pos_pm is not None else None
-            partial_market = str(intent.reason).startswith(
+            partial_market = (str(intent.reason).startswith(
                 "v16|target_partial|")           # S2 段落袋市价(canonical)
+                or "partial_exit" in str(intent.reason))
+            # partial_exit 是"预算耗尽/武装即减仓"的状态型触发(campaign 侧同样
+            # 只走市价):target_1 限价单在价格已回撤到预算线时不会成交 —— 挂出去
+            # 等于 pm 已按"减仓后保本"口径记账,交易所却仍是整仓在裸奔。
             # 掉线补做:缺口 bar 的限价单已无意义(价格早走开/可能一直不成交),
             # 按 reduce_policy 用市价把该减的仓位减掉,接受回撤换确定性。
             gap_market = self._gap_replay and str(
@@ -3285,6 +3324,19 @@ class LiveRunner:
                                       "kind": kind, "qty": qty,
                                       "reason": str(reason)[:80]})
 
+    def _close_action_label(self, it: dict) -> str:
+        """平仓/减仓通知的**动作类型**:部分减仓不得说成"平仓"。
+
+        50% 减仓后余仓仍在场内(且防线已移到保本),用户若把它读成"已平仓"
+        会直接误判账户风险敞口。
+        """
+        role = str(it.get("role") or "")
+        reason = str(it.get("route") or "")
+        if role == "reduce":
+            return (f"减仓50%并保本({self.mode})" if "partial_exit" in reason
+                    else f"减仓({self.mode})")
+        return f"平仓({self.mode},{role})"
+
     def _live_close_filled(self, it: dict, *, ref_price: float,
                            title: Optional[str] = None,
                            note: Optional[str] = None,
@@ -3311,7 +3363,7 @@ class LiveRunner:
         cs = self._get_cs_for(it["symbol"], pos.get("tf_label")) or self.campaigns.get(it["symbol"])
         chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
         self.tg.send_fill(
-            it["symbol"], title or f"平仓({self.mode},{it['role']})",
+            it["symbol"], title or self._close_action_label(it),
             qty, float(ref_price), pnl=pnl,
             note=str(it["route"])[:60] if note is None else str(note)[:160],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
@@ -4254,7 +4306,7 @@ class LiveRunner:
         cs = self._get_cs_for(sym, pos.get("tf_label")) or self.campaigns.get(sym)
         chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
         self.tg.send_fill(
-            sym, f"平仓(paper,{it['role']})", qty, price,
+            sym, self._close_action_label(it), qty, price,
             pnl=gross - fee, note=str(it["route"])[:60],
             tf_label=pos.get("tf_label", cs.tf_label if cs else "12h"),
             direction=pos["direction"],
