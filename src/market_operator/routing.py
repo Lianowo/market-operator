@@ -129,6 +129,9 @@ class RouterParams:
     min_box_touches: int = 0         # >0 时要求 zone.touches >= min_box_touches
     min_box_quality: float = 0.0     # >0 时要求 zone.box_quality >= min_box_quality
     min_box_rotations: int = 0       # >0 时要求 zone.box_rotations >= min_box_rotations
+    htf_macro_drift_atr: float = 0.0
+    r2_min_rotations: int = 0        # R2_STALL 特殊约束
+    r2_min_close_pos: float = 0.0    # R2_STALL 特殊约束
     min_box_width_atr: float = 0.0   # >0 时要求 zone.box_width_atr >= min_box_width_atr
     min_box_rr: float = 0.0          # >0 时要求 |box_opposite - close| / stop_dist >= min_box_rr
     max_confirm_stop_atr: float = 1.2
@@ -373,6 +376,14 @@ class MarketRouter:
         hyp = dec.hyp
         if hyp is None:
             return dec
+        if self.params.htf_macro_drift_atr > 0.0:
+            for hv in htf_views:
+                if hv is None:
+                    continue
+                md = float(getattr(hv, "macro_drift_atr", 0.0) or 0.0)
+                if direction * md < -float(self.params.htf_macro_drift_atr):
+                    self._bump("restraint_htf_macro_drift_reject")
+                    return None
         risk = direction * (close - hyp.invalid)
         capped_target = hyp.target_1
         for hv in htf_views:
@@ -416,6 +427,26 @@ class MarketRouter:
             new_hyp = replace(hyp, target_1=float(capped_target), r_mult=new_rm)
             return replace(dec, hyp=new_hyp)
         return dec
+
+    def _check_r2_stall_constraints(
+        self, ev: MarketEvent, cid: str, zone: object, p: RouterParams
+    ) -> bool:
+        """校验 R2_STALL 特殊几何约束。"""
+        if cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and str(ev.attrs.get("sub_kind", "")) == "R2_STALL":
+            if p.r2_min_rotations > 0 and zone is not None:
+                if int(getattr(zone, "box_rotations", 0)) < p.r2_min_rotations:
+                    self._bump("restraint_r2_stall_rotations_reject")
+                    return False
+            if p.r2_min_close_pos > 0.0:
+                eb = ev.attrs.get("eval_bars") or ()
+                if eb:
+                    _, _bo, bh, bl, bc = eb[-1]
+                    rng_r2 = max(bh - bl, 1e-12)
+                    cpos_r2 = (bc - bl) / rng_r2 if ev.direction > 0 else (bh - bc) / rng_r2
+                    if cpos_r2 < p.r2_min_close_pos:
+                        self._bump("restraint_r2_stall_close_pos_reject")
+                        return False
+        return True
 
     def _route_market(
         self, symbol: str, ev: MarketEvent, view: StructureView,
@@ -683,6 +714,9 @@ class MarketRouter:
                 if sub_k == "R2_STALL" or vol_r < 1.0:
                     self._bump("restraint_zone_exhaustion_reject")
                     return None
+
+        if not self._check_r2_stall_constraints(ev, cid, zone, p):
+            return None
 
         if p.struct_impulse_confirm:
             eval_bars = ev.attrs.get("eval_bars") or ()

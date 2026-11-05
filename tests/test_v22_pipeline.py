@@ -850,3 +850,77 @@ def test_position_life_cycle_defenses():
     assert abs(pos.invalid - 100.0) < 1e-9
 
 
+def test_htf_macro_drift_and_r2_stall_constraints():
+    """验证跨周期宏观失衡拦截(htf_macro_drift_atr)与 R2_STALL 防伪约束(r2_min_rotations / r2_min_close_pos)。"""
+    z_shallow = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=2, rejects=1, origin_known=1, last_change_known=5,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=3,
+    )
+    z_mature = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=4, rejects=1, origin_known=1, last_change_known=5,
+        box_opposite=110.0, box_quality=0.70, box_width_atr=5.0, box_rotations=4,
+    )
+    view = StructureView(regime=Regime.RANGE, zones=(z_shallow, z_mature), atr=2.0)
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            htf_wall_filter=True,
+            htf_macro_drift_atr=2.0,
+            r2_min_rotations=4,
+            r2_min_close_pos=0.58,
+        )
+    )
+
+    # 1) R2_STALL 在折返不足(box_rotations=3 < 4)的年轻箱体上 -> 拦截!
+    ev_r2_rot = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=1000, known_index=10,
+        attrs={
+            "zone": z_shallow, "ref": 99.0, "invalid": 98.5,
+            "sub_kind": "R2_STALL",
+            "eval_bars": ((900, 99.5, 101.0, 99.2, 100.8),),
+        },
+    )
+    assert router.on_bar(
+        "ENAUSDT", (1000, 99.5, 101.0, 99.2, 100.8, 100.0),
+        10, view, 2.0, [ev_r2_rot], position_open=False, entry_resting=False,
+    ) == []
+    assert router.counters.get("restraint_r2_stall_rotations_reject") == 1
+
+    # 2) R1_WICK (刺穿外沿的弹簧清扫) 不受 r2_min_rotations 限制 -> 放行!
+    ev_r1 = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=2000, known_index=11,
+        attrs={
+            "zone": z_shallow, "ref": 99.0, "invalid": 98.4,
+            "sub_kind": "R1_WICK",
+            "eval_bars": ((1900, 99.5, 101.0, 98.6, 100.5),),
+        },
+    )
+    d_r1 = router.on_bar(
+        "ENAUSDT", (2000, 99.5, 101.0, 98.6, 100.5, 100.0),
+        11, view, 2.0, [ev_r1], position_open=False, entry_resting=False,
+    )
+    assert len(d_r1) == 1
+
+    # 3) 当 1D 宏观位移处于深度单边下跌(macro_drift_atr = -2.5 < -2.0)时, 拦截逆宏观大势做多!
+    htf_bear = StructureView(regime=Regime.TREND_DOWN, zones=(), atr=8.0, macro_drift_atr=-2.5)
+    ev_macro_counter = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=3000, known_index=12,
+        attrs={
+            "zone": z_mature, "ref": 99.0, "invalid": 98.4,
+            "sub_kind": "R1_WICK",
+            "eval_bars": ((2900, 99.5, 101.0, 98.6, 100.5),),
+        },
+    )
+    assert router.on_bar(
+        "ENAUSDT", (3000, 99.5, 101.0, 98.6, 100.5, 100.0),
+        12, view, 2.0, [ev_macro_counter],
+        position_open=False, entry_resting=False, htf_views=(htf_bear,),
+    ) == []
+    assert router.counters.get("restraint_htf_macro_drift_reject") == 1
+
+
+

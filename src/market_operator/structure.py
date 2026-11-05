@@ -710,6 +710,13 @@ class MarketStructure:
     def atr_slow(self) -> float:
         return self._atr_slow.value
 
+    def macro_drift_atr(self, window: int = 40) -> float:
+        """当前收盘相对 window 根 K 线前收盘的 ATR 归一化宏观位移。"""
+        if len(self._bars) <= 10 or self._atr.value <= 0.0:
+            return 0.0
+        idx0 = max(0, len(self._bars) - 1 - int(window))
+        return (float(self._bars[-1][4]) - float(self._bars[idx0][4])) / self._atr.value
+
     def regime(self) -> Regime:
         return self._regime
 

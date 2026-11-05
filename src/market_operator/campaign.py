@@ -72,7 +72,7 @@ from .replay import (
 )
 from .broker import Broker, OrderIntent, OrderKind, RestingLimitOrder, floor_step
 from .position import PositionManager
-from .hypothesis import execution_target
+from .hypothesis import StructureView, execution_target
 from .split import split_boundary
 from .routing import RouterParams, MarketRouter
 from .structure import Params
@@ -732,7 +732,7 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 
 def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple:
-    """获取同标的更高宏观周期(htf_hours >= 3 * tf_hours)在 close_moment_ms 前最新已收盘认知视图。"""
+    """获取同标的更高宏观周期(htf_hours >= 3 * tf_hours)及日线宏观位移在 close_moment_ms 前最新已收盘认知视图。"""
     if not states or not getattr(getattr(st.router, "params", None), "htf_wall_filter", False):
         return ()
     sym = st.frame.symbol
@@ -740,16 +740,39 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
     out = []
     for other in states.values():
         hf = other.frame
-        if hf.symbol != sym or hf.tf_hours < 3 * tf_h:
+        if hf.symbol != sym or (hf.tf_hours < 3 * tf_h and hf.tf_hours < 24):
             continue
         ms_htf = hf.tf_hours * MS_1H
         max_open_ts = int(close_moment_ms) - ms_htf
         bars = hf.cog.bars
         idx = bisect_right(bars, max_open_ts, key=lambda b: int(b[0])) - 1
         if idx >= 0:
-            vw = hf.cog.views.get(idx)
+            vw = hf.cog.views.get(idx) if hf.tf_hours >= 3 * tf_h else None
+            md = (
+                float(hf.cog.macro_drifts[idx])
+                if hf.tf_hours == 24 and idx < len(getattr(hf.cog, "macro_drifts", ()))
+                else 0.0
+            )
             if vw is not None:
-                out.append(vw)
+                out.append(
+                    StructureView(
+                        regime=vw.regime,
+                        zones=vw.zones,
+                        atr=vw.atr,
+                        pivots=vw.pivots,
+                        macro_drift_atr=md,
+                    )
+                )
+            elif hf.tf_hours == 24 and md != 0.0:
+                out.append(
+                    StructureView(
+                        regime=hf.cog.regimes[idx],
+                        zones=(),
+                        atr=hf.cog.atrs[idx],
+                        pivots=(),
+                        macro_drift_atr=md,
+                    )
+                )
     return tuple(out)
 
 

@@ -38,6 +38,7 @@ class SymbolCognition:
     pivots_by: dict
     views: dict
     regimes: list
+    macro_drifts: list = field(default_factory=list)
 
 
 def prepare_cognition(
@@ -54,6 +55,7 @@ def prepare_cognition(
     pivots_by: dict = {}
     views: dict = {}
     regimes: list = []
+    macro_drifts: list = []
     n_pivots_before = 0
     for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
         bar = (
@@ -66,6 +68,7 @@ def prepare_cognition(
         bars.append(bar)
         atrs.append(s.atr())
         regimes.append(s.regime())
+        macro_drifts.append(s.macro_drift_atr(40))
         n_pivots = s.pivot_count
         if n_pivots > n_pivots_before:
             pivots_by[t] = list(s.pivot_slice(n_pivots_before))
@@ -86,6 +89,7 @@ def prepare_cognition(
         pivots_by=pivots_by,
         views=views,
         regimes=regimes,
+        macro_drifts=macro_drifts,
     )
 
 

@@ -66,6 +66,9 @@
     "macro_shock_range_atr": 3.2,
     "htf_wall_filter": true,
     "htf_min_room_r": 1.0,
+    "htf_macro_drift_atr": 2.0,
+    "r2_min_rotations": 4,
+    "r2_min_close_pos": 0.58,
     "max_cost_frac": null,
     "cost_per_side": 0.0008
   },

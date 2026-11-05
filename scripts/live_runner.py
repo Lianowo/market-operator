@@ -2443,12 +2443,14 @@ class LiveRunner:
             ]
             htf_list = []
             for ocs in all_cs:
-                if ocs is None or ocs.obs_tf_seconds < 3 * cs.obs_tf_seconds or not ocs.cog_bars:
+                if ocs is None or (ocs.obs_tf_seconds < 3 * cs.obs_tf_seconds and ocs.obs_tf_seconds < 86400) or not ocs.cog_bars:
                     continue
                 os_st = ocs.detector.structure
+                md = os_st.macro_drift_atr(40) if ocs.obs_tf_seconds == 86400 else 0.0
+                z_htf = os_st.zones if ocs.obs_tf_seconds >= 3 * cs.obs_tf_seconds else ()
                 htf_list.append(StructureView(
-                    regime=os_st.regime(), zones=os_st.zones,
-                    atr=os_st.atr(), pivots=()))
+                    regime=os_st.regime(), zones=z_htf,
+                    atr=os_st.atr(), pivots=(), macro_drift_atr=md))
             htf_views = tuple(htf_list)
         if htf_views:
             decisions = cs.router.on_bar(
