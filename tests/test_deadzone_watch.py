@@ -47,8 +47,8 @@ def _broker(**kwargs):
     )
 
 
-def test_router_deadzone_watch_f1_clamp_and_boundaries():
-    """仅当 [1.0, 1.5R) 死区且开启开关时转 WatchEntry,并对内沿做 F1 最小止损距离钳制。"""
+def test_router_market_only_no_deadzone_watch():
+    """路由层物理移除 WatchEntry 后,平衡箱拒绝统一走 market 入场(无 deadzone_watch 挂单)。"""
     z = Zone(
         lo=99.0, hi=99.6, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
         touches=3, origin_known=1, last_change_known=5,
@@ -60,38 +60,18 @@ def test_router_deadzone_watch_f1_clamp_and_boundaries():
         attrs={"zone": z, "ref": 99.6, "invalid": 98.8},
     )
 
-    r_off = MarketRouter(RouterParams(
+    r = MarketRouter(RouterParams(
         whitelist=WHITELIST_BALANCE, reject_use_struct_stop=True,
-        reject_target_mode="opposite", deadzone_watch_enabled=False,
+        reject_target_mode="opposite",
     ))
-    d_off = r_off.on_bar("BTCUSDT", (T0, 100.0, 102.0, 99.2, 101.6, 10.0),
-                         10, view, 2.0, [ev], position_open=False, entry_resting=False)
-    assert len(d_off) == 1 and d_off[0].kind == "market"
+    d = r.on_bar("BTCUSDT", (T0, 100.0, 102.0, 99.2, 101.6, 10.0),
+                 10, view, 2.0, [ev], position_open=False, entry_resting=False)
+    assert len(d) == 1 and d[0].kind == "market" and d[0].route == ROUTE_LEVEL_REJECTED
+    assert not d[0].meta.get("watch_entry")
 
-    r_on = MarketRouter(RouterParams(
-        whitelist=WHITELIST_BALANCE, reject_use_struct_stop=True,
-        reject_target_mode="opposite", deadzone_watch_enabled=True,
-    ))
-    d_on = r_on.on_bar("BTCUSDT", (T0, 100.0, 102.0, 99.2, 101.6, 10.0),
-                       10, view, 2.0, [ev], position_open=False, entry_resting=False)
-    assert len(d_on) == 1
-    dec = d_on[0]
-    assert dec.kind == "limit" and dec.route == ROUTE_LEVEL_REJECTED_LIMIT
-    assert dec.meta["watch_entry"] is True
-    assert dec.limit_price == pytest.approx(100.4)  # max(99.6, 98.8 + 0.8*2.0)
-    assert dec.meta["near_price"] == pytest.approx(100.7)
-    assert dec.meta["max_prog_frac"] == pytest.approx(0.65)
-    assert dec.meta["max_wait_hours"] == 4
-    assert r_on.counters["deadzone_watch_armed"] == 1
-
-    d_high_r = r_on.on_bar("BTCUSDT", (T0 + MS_1H, 100.0, 101.0, 99.2, 100.8, 10.0),
-                           11, view, 2.0, [ev], position_open=False, entry_resting=False)
+    d_high_r = r.on_bar("BTCUSDT", (T0 + MS_1H, 100.0, 101.0, 99.2, 100.8, 10.0),
+                        11, view, 2.0, [ev], position_open=False, entry_resting=False)
     assert len(d_high_r) == 1 and d_high_r[0].kind == "market" and d_high_r[0].route == ROUTE_LEVEL_REJECTED
-
-    d_low_r = r_on.on_bar("BTCUSDT", (T0 + 2 * MS_1H, 100.0, 102.8, 99.2, 102.5, 10.0),
-                          12, view, 2.0, [ev], position_open=False, entry_resting=False)
-    assert len(d_low_r) == 1 and d_low_r[0].kind == "market"
-    assert d_low_r[0].meta["entry_min_rr"] == 0.0  # Watch interval is not admission.
 
 
 def test_broker_watch_entry_near_bounce_played_out_and_4h_timeout():
@@ -249,8 +229,8 @@ def test_live_runner_15s_watch_polling_bounce_and_played_out(tmp_path):
     assert len(client.market_orders) == 1
 
 
-def test_router_accept_watch_long_short_and_tight_market():
-    """突破过伸系统价格关注:紧致突破仍市价;上破/下破过伸均转 WatchEntry 且预算 prog_price(无 target_1)。"""
+def test_router_accept_tight_market_and_overextended_restraint():
+    """紧致突破直接市价;过伸突破(A2_OVEREXTENDED)直接放弃,不再挂 accept_watch 限价单。"""
     z_res = Zone(
         lo=104.0, hi=105.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
         touches=3, origin_known=1, last_change_known=5,
@@ -262,16 +242,8 @@ def test_router_accept_watch_long_short_and_tight_market():
         box_opposite=105.0, box_quality=0.6, box_width_atr=3.0, box_rotations=3,
     )
     view = StructureView(regime=Regime.RANGE, zones=(z_res, z_sup), atr=2.0)
-    r = MarketRouter(RouterParams(
-        whitelist=WHITELIST_BALANCE,
-        accept_watch_enabled=True,
-        accept_watch_ext_atr=0.80,
-        accept_watch_near_frac=0.75,
-        accept_watch_max_run_atr=1.50,
-        accept_watch_wait_hours=4,
-    ))
+    r = MarketRouter(RouterParams(whitelist=WHITELIST_BALANCE))
 
-    # 1) 紧致上破 (close=106.2, ext=0.6 ATR <= 0.8 ATR) ⇒ 直接市价
     ev_tight = MarketEvent(
         id=BREAKOUT_ACCEPTED, direction=1, ts=T0, known_index=10,
         attrs={"zone": z_res, "ref": 105.0, "invalid": 103.8, "sub_kind": "A1_TIGHT"},
@@ -280,37 +252,23 @@ def test_router_accept_watch_long_short_and_tight_market():
                        10, view, 2.0, [ev_tight], position_open=False, entry_resting=False)
     assert len(d_tight) == 1 and d_tight[0].kind == "market" and d_tight[0].route == ROUTE_BREAKOUT_ACCEPTED
 
-    # 2) 过伸上破 (close=107.0, ext=1.0 ATR > 0.8 ATR) ⇒ WatchEntry 盯 105.0
     ev_up = MarketEvent(
         id=BREAKOUT_ACCEPTED, direction=1, ts=T0 + MS_1H, known_index=11,
         attrs={"zone": z_res, "ref": 105.0, "invalid": 103.8, "sub_kind": "A2_OVEREXTENDED"},
     )
     d_up = r.on_bar("BTCUSDT", (T0 + MS_1H, 105.5, 107.2, 105.4, 107.0, 10.0),
                     11, view, 2.0, [ev_up], position_open=False, entry_resting=False)
-    assert len(d_up) == 1
-    up = d_up[0]
-    assert up.kind == "limit" and up.route == ROUTE_BREAKOUT_ACCEPTED_LIMIT
-    assert up.meta["watch_entry"] is True
-    assert up.limit_price == pytest.approx(105.0)
-    assert up.meta["near_price"] == pytest.approx(105.5)
-    assert up.meta["prog_price"] == pytest.approx(110.0)  # 107.0 + 1.5 * 2.0
-    assert up.hyp.target_1 is None
+    assert d_up == []
+    assert r.counters["restraint_a2_overextended_reject"] == 1
 
-    # 3) 过伸下破下沿做空 (close=97.0, ref=99.0, ext=1.0 ATR > 0.8 ATR) ⇒ WatchEntry 盯 99.0
     ev_dn = MarketEvent(
         id=BREAKOUT_ACCEPTED, direction=-1, ts=T0 + 2 * MS_1H, known_index=12,
         attrs={"zone": z_sup, "ref": 99.0, "invalid": 100.2, "sub_kind": "A2_OVEREXTENDED"},
     )
     d_dn = r.on_bar("BTCUSDT", (T0 + 2 * MS_1H, 98.5, 98.6, 96.8, 97.0, 10.0),
                     12, view, 2.0, [ev_dn], position_open=False, entry_resting=False)
-    assert len(d_dn) == 1
-    dn = d_dn[0]
-    assert dn.kind == "limit" and dn.route == ROUTE_BREAKOUT_ACCEPTED_LIMIT
-    assert dn.meta["watch_entry"] is True
-    assert dn.limit_price == pytest.approx(99.0)
-    assert dn.meta["near_price"] == pytest.approx(98.5)
-    assert dn.meta["prog_price"] == pytest.approx(94.0)   # 97.0 - 1.5 * 2.0
-    assert dn.hyp.target_1 is None
+    assert d_dn == []
+    assert r.counters["restraint_a2_overextended_reject"] == 2
 
 
 def test_broker_accept_watch_without_target1_prog_price_and_short_bounce():

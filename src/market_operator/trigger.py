@@ -145,6 +145,7 @@ class _Context:
     h_star: Optional[float]         # 镜像:最后 high
     l_star_forming: Optional[int]   # STRUCTURE_BROKEN attrs 溯源(认知帧 forming 索引)
     h_star_forming: Optional[int]
+    atr_slow: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +215,9 @@ class MicTracker:
         self._e6_fired: Optional[tuple] = None
         self._prev_trig_close: Optional[float] = None
         self._recent_trig_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
+        self._recent_trig_vols: deque[float] = deque(maxlen=20)
+        self._last_trig_vol_ratio: float = 1.0
+        self._last_trig_range_atr: float = 0.0
 
     def sync(self, i: int, det: EventDetector, span_start_of, span_end_of) -> None:
         """在认知 bar 收盘后校准触发层状态并刷新冻结语境。"""
@@ -228,8 +232,8 @@ class MicTracker:
         }
         self._e6_fired = None
 
-        live = {id(z): z for z in ctx.zones}
-        cog_eps = {(id(ep.zone), ep.opened) for ep in det._episodes}
+        live = {z.zone_id: z for z in ctx.zones}
+        cog_eps = {(ep.zone.zone_id, ep.opened) for ep in det._episodes}
         span_start, span_end = span_start_of(i), span_end_of(i)
         active_eps = {id(ep) for ep in self._episodes}
         kept: list[_MicEpisode] = []
@@ -239,9 +243,9 @@ class MicTracker:
             cog_opened = ep.cog_opened
             if cog_opened is None and span_start <= ep.opened <= span_end:
                 cog_opened = i
-            z = live.get(id(ep.zone))
+            z = live.get(ep.zone.zone_id)
             if z is not None:
-                if z.state is not ZoneState.ACTIVE or (id(z), cog_opened) not in cog_eps:
+                if z.state is not ZoneState.ACTIVE or (z.zone_id, cog_opened) not in cog_eps:
                     continue
             else:
                 z = next((z2 for z2 in ctx.zones if (
@@ -249,13 +253,13 @@ class MicTracker:
                     and z2.state is ZoneState.ACTIVE
                     and z2.lo <= ep.zone.lo
                     and z2.hi >= ep.zone.hi
-                    and (id(z2), cog_opened) in cog_eps
+                    and (z2.zone_id, cog_opened) in cog_eps
                 )), None)
                 if z is None:
                     continue
             ep.zone = z
             ep.cog_opened = cog_opened
-            self._adopted_eps.add((id(z), cog_opened))
+            self._adopted_eps.add((z.zone_id, cog_opened))
             if id(ep) in active_eps:
                 kept.append(ep)
         self._episodes = kept
@@ -264,7 +268,7 @@ class MicTracker:
         # 采用认知 episode(open=A2 触碰,只发生在认知收盘);窗口锚点取该认知
         # bar 覆盖的**首根** trigger bar([刺穿 anchored]:窗口最早关闭,保守)
         for ep in det._episodes:
-            k = (id(ep.zone), ep.opened)
+            k = (ep.zone.zone_id, ep.opened)
             if k in self._adopted_eps:
                 continue
             self._adopted_eps.add(k)
@@ -276,15 +280,15 @@ class MicTracker:
                 puncture_index=puncture, outside_closes=ep.outside_closes,
                 cog_opened=ep.opened))
 
-        live_states = {id(z): z.state for z in ctx.zones}
+        live_states = {z.zone_id: z.state for z in ctx.zones}
         self._candidates = [
             cd for cd in self._candidates
-            if live_states.get(id(cd.zone)) in (ZoneState.BROKEN, ZoneState.RETESTED, None)
+            if live_states.get(cd.zone.zone_id) in (ZoneState.BROKEN, ZoneState.RETESTED, None)
         ]
 
         if not self.p.use_balance_detector:
             flippable = (ZoneState.BROKEN, ZoneState.RETESTED)
-            self._retests = [rt for rt in self._retests if live.get(id(rt.zone)) is not None]
+            self._retests = [rt for rt in self._retests if live.get(rt.zone.zone_id) is not None]
             for z in ctx.zones:
                 if z.state in flippable and z.zone_id not in self._adopted_retests:
                     self._adopted_retests.add(z.zone_id)
@@ -321,14 +325,21 @@ class MicTracker:
                 )
 
     def on_trigger_bar(
-        self, a: int, ts: object, o: float, h: float, l: float, c: float
+        self, a: int, ts: object, o: float, h: float, l: float, c: float,
+        v: float = 0.0,
     ) -> list[MarketEvent]:
         ctx = self._ctx
         prev_c = self._prev_trig_close
         self._prev_trig_close = c
         self._recent_trig_bars.append((int(ts), float(o), float(h), float(l), float(c)))
+        pos_vols = [x for x in self._recent_trig_vols if x > 0.0]
+        vol_ma = (sum(pos_vols) / len(pos_vols)) if len(pos_vols) >= 5 else 0.0
+        self._last_trig_vol_ratio = (float(v) / vol_ma) if (vol_ma > 0.0 and float(v) > 0.0) else 1.0
+        if float(v) > 0.0:
+            self._recent_trig_vols.append(float(v))
         if ctx is None or ctx.atr <= 0.0:
             return []
+        self._last_trig_range_atr = (float(h) - float(l)) / ctx.atr
         p = self.p
         scale_sqrt = max(1.0, self.scale ** 0.5)
         bm, rj = ctx.bm, ctx.rj
@@ -537,7 +548,8 @@ class MicTracker:
                                 "invalid": (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm),
                                 "ex": ep.ex,
                                 "ex_index": ep.ex_index,
-                                "sub_kind": "R1_MIC",
+                                "puncture_index": ep.puncture_index,
+                                "sub_kind": "R1_WICK" if ep.puncture_index is not None else "R2_STALL",
                             },
                         )
                         new_rejections.append(fired)
@@ -670,6 +682,12 @@ class MicTracker:
         attrs["reset_bars"] = reset_tail
         attrs["reset_step_ms"] = step_ms
         attrs["close_ts"] = int(ts) + step_ms
+        attrs.setdefault("vol_ratio", self._last_trig_vol_ratio)
+        attrs.setdefault("range_atr", self._last_trig_range_atr)
+        if self._ctx is not None and self._ctx.atr_slow > 0.0:
+            attrs.setdefault("atr_slow_ratio", self._ctx.atr / self._ctx.atr_slow)
+        else:
+            attrs.setdefault("atr_slow_ratio", 1.0)
         return MarketEvent(id=eid, direction=direction, ts=ts, known_index=a, attrs=attrs)
 
 
@@ -696,6 +714,8 @@ class MicTracker:
 
     def _make_context(self, s) -> _Context:
         atr = float(s.atr())
+        atr_slow_fn = getattr(s, "atr_slow", None)
+        atr_slow = float(atr_slow_fn() if callable(atr_slow_fn) else atr) or atr
         pivots = s.pivots
         last_low = s.last_low_pivot
         last_high = s.last_high_pivot
@@ -711,6 +731,7 @@ class MicTracker:
             h_star=last_high.price if last_high is not None else None,
             l_star_forming=last_low.forming_index if last_low is not None else None,
             h_star_forming=last_high.forming_index if last_high is not None else None,
+            atr_slow=atr_slow,
         )
 
     def _range_rotation(
@@ -851,8 +872,8 @@ def prepare_mic_cognition(
         # 本认知 bar 覆盖区间:以上一认知收盘冻结的语境逐 trigger bar 推进
         lo, hi = spans[i]
         while k <= hi:
-            ts, o, h, l, c, _ = trig[k]
-            emitted = tracker.on_trigger_bar(k, ts, o, h, l, c)
+            ts, o, h, l, c, v = trig[k]
+            emitted = tracker.on_trigger_bar(k, ts, o, h, l, c, v)
             atrs[k] = tracker._ctx.atr if tracker._ctx is not None else 0.0
             if emitted:
                 events_by[k] = emitted

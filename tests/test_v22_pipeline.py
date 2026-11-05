@@ -179,11 +179,8 @@ def test_step2_3_routing_compact_market_vs_overextended_pullback_limit():
         "BTCUSDT", (20_000, 127.5, 128.5, 115.5, 116.0, 300.0),
         25, view, 5.0, [ev_over], position_open=False, entry_resting=False,
     )
-    assert len(d_lim) == 1
-    assert d_lim[0].kind == "limit"
-    assert d_lim[0].route == ROUTE_LEVEL_REJECTED_LIMIT
-    assert 120.0 <= d_lim[0].limit_price <= 125.0
-    assert d_lim[0].meta.get("pullback_limit") is True
+    assert d_lim == []
+    assert router.counters.get("restraint_rr_reject", 0) == 1
 
     ev_a2 = MarketEvent(
         id=ACCEPT, direction=+1, ts=30_000, known_index=30,
@@ -193,10 +190,8 @@ def test_step2_3_routing_compact_market_vs_overextended_pullback_limit():
         "BTCUSDT", (30_000, 130.0, 136.0, 129.5, 135.0, 280.0),
         30, view, 5.0, [ev_a2], position_open=False, entry_resting=False,
     )
-    assert len(d_a2) == 1
-    assert d_a2[0].kind == "limit"
-    assert d_a2[0].route == ROUTE_BREAKOUT_ACCEPTED_LIMIT
-    assert d_a2[0].limit_price == pytest.approx(128.0)
+    assert d_a2 == []
+    assert router.counters.get("restraint_a2_overextended_reject", 0) == 1
 
 
 def test_step2_2_r3_two_bar_false_breakout_trap_also_recovered():
@@ -586,3 +581,225 @@ def test_null_accept_max_ext_atr_and_midpoint_close_pos_contract():
     ev_below_mid = det._zone_events(1, 3_600_000, 101.0, 102.5, 98.5, 100.47, 101.0, 2.0)
     assert [e for e in ev_below_mid if e.id == LEVEL_REJECTED] == []
 
+
+def test_amt_time_decay_washout_macro_shock_and_opposite_edge_restraint():
+    """AMT 第一性原理四大新增契约验证:
+    1) 边界消耗(Time Decay, zone_exhaustion_rejects=3): 同一边界累计拒绝 >= 3 次后,
+       无刺穿的 R2_STALL 或缩量反弹(vol_ratio < 1.0)被克制拦截,唯有刺穿扫损(R1_WICK/R3_TRAP)且带量(vol_ratio >= 1.0)放行;
+    2) 对侧防守带位置克制(max_box_progress_frac=0.75): 确认或开盘成交价已走入箱体对侧 25% 防守区时判 BOX_OPPOSITE_THIRD_ENTERED 作废;
+    3) 宏观极端波动感知(macro_shock_range_atr=3.2): 异常巨震清算柱(range_atr > 3.2 或慢速波动失衡)暂停追单;
+    4) 2B 假突破放量清洗(R3_TRAP + vol_ratio >= 1.25): 免除等待滞后的 3 根极值突破(brk3)即刻确认。
+    """
+    z = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=4, rejects=3, origin_known=1, last_change_known=10,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=4,
+    )
+    view = StructureView(regime=Regime.RANGE, zones=(z,), atr=2.0)
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            max_box_progress_frac=0.75,
+            zone_exhaustion_rejects=3,
+            macro_shock_range_atr=3.2,
+            struct_impulse_confirm=True,
+        )
+    )
+
+    # 1) 老化边界(rejects=3)上的 R2_STALL 无刺穿停顿 -> 被边界消耗规则拦截
+    ev_stall = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=1000, known_index=12,
+        attrs={"zone": z, "ref": 99.0, "invalid": 98.0, "sub_kind": "R2_STALL", "vol_ratio": 1.5, "range_atr": 1.2},
+    )
+    assert router.on_bar("BTCUSDT", (1000, 100.0, 101.5, 99.5, 101.0, 100.0), 12, view, 2.0, [ev_stall], position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_zone_exhaustion_reject") == 1
+
+    # 2) 老化边界(rejects=3)上的缩量刺穿(vol_ratio=0.8 < 1.0) -> 同样被拦截
+    ev_low_vol = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=2000, known_index=13,
+        attrs={"zone": z, "ref": 99.0, "invalid": 98.0, "sub_kind": "R1_WICK", "vol_ratio": 0.8, "range_atr": 1.2},
+    )
+    assert router.on_bar("BTCUSDT", (2000, 100.0, 101.5, 98.5, 101.0, 50.0), 13, view, 2.0, [ev_low_vol], position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_zone_exhaustion_reject") == 2
+
+    # 3) 老化边界上的 R3_TRAP 放量清洗(vol_ratio=1.5 >= 1.25): 虽未突破前 3 根高点(106.0), 但通过 Washout 即刻确认!
+    eval_bars = (
+        (100, 106.0, 106.5, 104.0, 104.5),
+        (200, 104.5, 105.0, 102.5, 103.0),
+        (300, 103.0, 103.5, 101.0, 101.5),
+        (400, 101.5, 102.0, 98.2, 98.6),
+        (500, 98.6, 101.2, 98.4, 100.8),
+    )
+    ev_washout = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=3000, known_index=14,
+        attrs={
+            "zone": z, "ref": 99.0, "invalid": 98.0,
+            "sub_kind": "R3_TRAP", "vol_ratio": 1.5, "range_atr": 1.4,
+            "eval_bars": eval_bars,
+        },
+    )
+    d_ok = router.on_bar("BTCUSDT", (3000, 98.6, 101.2, 98.4, 100.8, 150.0), 14, view, 2.0, [ev_washout], position_open=False, entry_resting=False)
+    assert len(d_ok) == 1 and d_ok[0].kind == "market"
+
+    # 4) 宏观极端波动清算柱(range_atr=3.5 > 3.2) -> 触发 restraint_macro_vol_shock 拦截
+    ev_shock = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=4000, known_index=15,
+        attrs={"zone": z, "ref": 99.0, "invalid": 95.0, "sub_kind": "R3_TRAP", "vol_ratio": 2.0, "range_atr": 3.5},
+    )
+    assert router.on_bar("BTCUSDT", (4000, 99.0, 103.0, 96.0, 101.0, 300.0), 15, view, 2.0, [ev_shock], position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_macro_vol_shock") == 1
+
+    # 5) 价格已走入箱体对侧 25% 防守区(inner=100, opp=110, close=108.0 -> prog=0.80 >= 0.75) -> 拦截作废
+    z_fresh = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=2, rejects=1, origin_known=1, last_change_known=10,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=3,
+    )
+    ev_late = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=5000, known_index=16,
+        attrs={"zone": z_fresh, "ref": 99.0, "invalid": 98.0, "sub_kind": "R1_WICK", "vol_ratio": 1.5, "range_atr": 1.5},
+    )
+    r_no_imp = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            max_box_progress_frac=0.75,
+        )
+    )
+    assert r_no_imp.on_bar("BTCUSDT", (5000, 100.0, 108.5, 99.5, 108.0, 100.0), 16, view, 2.0, [ev_late], position_open=False, entry_resting=False) == []
+    assert r_no_imp.counters.get("box_opposite_third_entered") == 1
+
+
+def test_htf_wall_guard_blocks_headwind_and_caps_target():
+    """跨周期上下级结构感知(HTF Wall Guard):
+    1) 小周期多单迎头撞进未突破的大周期活跃平衡箱阻力带 [VAH_htf, hi_ext_htf] -> restraint_htf_wall_reject 拦截;
+    2) 小周期多单距大周期阻力内沿空间 < 1.0R -> restraint_htf_room_reject 拦截;
+    3) 小周期多单距大周期阻力内沿空间 >= 1.0R 且大周期阻力内沿近于原 target_1 -> 自动收缩 target_1 至大周期阻力内沿;
+    4) 在大周期阻力带顺应大墙做空(Confluence) -> 100% 放行。
+    """
+    z_2h_sup = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=2, rejects=1, origin_known=1, last_change_known=5,
+        box_opposite=112.0, box_quality=0.65, box_width_atr=6.0, box_rotations=3,
+    )
+    z_2h_res = Zone(
+        lo=109.0, hi=110.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+        touches=2, rejects=1, origin_known=1, last_change_known=5,
+        box_opposite=99.0, box_quality=0.65, box_width_atr=6.0, box_rotations=3,
+    )
+    view_2h = StructureView(regime=Regime.RANGE, zones=(z_2h_sup, z_2h_res), atr=2.0)
+
+    # 12h/1d 活跃平衡箱上沿阻力带: [108.0, 111.0]
+    z_htf_res = Zone(
+        lo=108.0, hi=111.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+        touches=4, rejects=2, origin_known=1, last_change_known=4,
+        box_opposite=92.0, box_quality=0.75, box_width_atr=5.0, box_rotations=4,
+        source_kind="BOX_EDGE",
+    )
+    htf_view = StructureView(regime=Regime.RANGE, zones=(z_htf_res,), atr=4.0)
+
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            htf_wall_filter=True,
+            htf_min_room_r=1.0,
+        )
+    )
+
+    # 1) 2h 向上突破信号(close=109.5)正处于未突破的 12h 阻力带 [108.0, 111.0] 内部 -> 拦截!
+    ev_brk_into_wall = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=1000, known_index=10,
+        attrs={"zone": z_2h_res, "ref": 110.0, "invalid": 105.5},
+    )
+    d1 = router.on_bar(
+        "BTCUSDT", (1000, 108.5, 109.8, 108.2, 109.5, 100.0),
+        10, view_2h, 2.0, [ev_brk_into_wall],
+        position_open=False, entry_resting=False, htf_views=(htf_view,),
+    )
+    assert d1 == []
+    assert router.counters.get("restraint_htf_wall_reject") == 1
+
+    # 2) 2h 多单(close=106.5, invalid=103.5 -> risk=3.0), 距 12h 阻力 108.0 仅 1.5 < 1.0R(3.0) -> 拦截!
+    ev_tight_room = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=2000, known_index=11,
+        attrs={"zone": z_2h_res, "ref": 106.0, "invalid": 103.5},
+    )
+    d2 = router.on_bar(
+        "BTCUSDT", (2000, 105.5, 106.8, 105.2, 106.5, 100.0),
+        11, view_2h, 2.0, [ev_tight_room],
+        position_open=False, entry_resting=False, htf_views=(htf_view,),
+    )
+    assert d2 == []
+    assert router.counters.get("restraint_htf_room_reject") == 1
+
+    # 3) 2h 下沿拒绝多单(close=101.0, invalid=98.8 -> risk=2.2, 原 target_1=112.0),
+    #    距 12h 阻力内沿 108.0 空间为 7.0 >= 1.0R -> 放行且自动将 target_1 从 112.0 收缩至 108.0!
+    ev_cap = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=3000, known_index=12,
+        attrs={"zone": z_2h_sup, "ref": 99.0, "invalid": 98.8, "sub_kind": "R1_WICK"},
+    )
+    d3 = router.on_bar(
+        "BTCUSDT", (3000, 99.5, 101.4, 98.9, 101.0, 100.0),
+        12, view_2h, 2.0, [ev_cap],
+        position_open=False, entry_resting=False, htf_views=(htf_view,),
+    )
+    assert len(d3) == 1
+    assert d3[0].hyp.target_1 == 108.0
+    assert router.counters.get("htf_target_capped") == 1
+
+    # 4) 在 12h 阻力带内顺应大墙做空(direction=-1) -> 大小周期共振, 正常放行!
+    ev_short_confluence = MarketEvent(
+        id=LEVEL_REJECTED, direction=-1, ts=4000, known_index=13,
+        attrs={"zone": z_2h_res, "ref": 110.0, "invalid": 111.2, "sub_kind": "R1_WICK"},
+    )
+    d4 = router.on_bar(
+        "BTCUSDT", (4000, 109.8, 111.0, 108.2, 108.5, 100.0),
+        13, view_2h, 2.0, [ev_short_confluence],
+        position_open=False, entry_resting=False, htf_views=(htf_view,),
+    )
+    assert len(d4) == 1 and d4[0].hyp.direction == -1
+
+
+def test_r1_wick_washout_pinbar_passes_struct_impulse_confirm():
+    """2h/4h 单针刺穿扫损 Pinbar(R1_WICK + vol_ratio >= 1.15 + close_pos >= 0.60 + 顺向实体):
+    即使前 3 根为陡峭下跌导致当根收盘尚未越过 3 根前高点(brk3=False), 仍通过微观冲量确认即刻入场。
+    """
+    z = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=2, rejects=1, origin_known=1, last_change_known=8,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=3,
+    )
+    view = StructureView(regime=Regime.RANGE, zones=(z,), atr=2.0)
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            struct_impulse_confirm=True,
+        )
+    )
+    eval_bars = (
+        (100, 106.0, 106.5, 104.0, 104.5),
+        (200, 104.5, 105.0, 102.5, 103.0),
+        (300, 103.0, 103.5, 101.0, 101.5),
+        (400, 101.5, 101.8, 99.8, 100.1),
+        (500, 100.1, 101.0, 98.5, 100.6),
+    )
+    ev_r1_ok = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=5000, known_index=10,
+        attrs={
+            "zone": z, "ref": 99.0, "invalid": 98.3,
+            "sub_kind": "R1_WICK", "vol_ratio": 1.25, "range_atr": 1.25,
+            "eval_bars": eval_bars,
+        },
+    )
+    d_ok = router.on_bar(
+        "BTCUSDT", (5000, 100.1, 101.0, 98.5, 100.6, 125.0),
+        10, view, 2.0, [ev_r1_ok], position_open=False, entry_resting=False,
+    )
+    assert len(d_ok) == 1 and d_ok[0].kind == "market"

@@ -51,7 +51,7 @@ PositionManager(breakeven_on_reduce=True, time_stop=False);路由策略语义
 
 from __future__ import annotations
 
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 import math
 from dataclasses import dataclass, field
 from typing import Optional
@@ -493,14 +493,16 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 # ⑤ 认知 bar 收盘推进(仅本战役最末执行细 bar)
                 for i in f.close_edge.get(ts, ()):
                     _cognition_step(st, broker, i, counters, cap_skips,
-                                    seg_bounds[key], go_set, n_fill, claim_events)
+                                    seg_bounds[key], go_set, n_fill, claim_events,
+                                    states=states)
             if enable_mic:
                 a = mic_index[key].get(ts)
                 if a is not None:
                     _mic_trigger_step(st, broker, a, ts, counters, cap_skips,
                                       seg_bounds[key], go_set, n_fill,
                                       claim_events,
-                                      execution_only=fine_execution)
+                                      execution_only=fine_execution,
+                                      states=states)
         if ts in exec_set:
             equity_rows.append((ts, broker.equity_mtm(), broker.cash,
                                 broker.unrealized(), broker.funding_accrued(),
@@ -714,10 +716,33 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
             counters["limit_min_size_skips"] += 1
 
 
+def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple:
+    """获取同标的更高宏观周期(htf_hours >= 3 * tf_hours)在 close_moment_ms 前最新已收盘认知视图。"""
+    if not states or not getattr(getattr(st.router, "params", None), "htf_wall_filter", False):
+        return ()
+    sym = st.frame.symbol
+    tf_h = st.frame.tf_hours
+    out = []
+    for other in states.values():
+        hf = other.frame
+        if hf.symbol != sym or hf.tf_hours < 3 * tf_h:
+            continue
+        ms_htf = hf.tf_hours * MS_1H
+        max_open_ts = int(close_moment_ms) - ms_htf
+        bars = hf.cog.bars
+        idx = bisect_right(bars, max_open_ts, key=lambda b: int(b[0])) - 1
+        if idx >= 0:
+            vw = hf.cog.views.get(idx)
+            if vw is not None:
+                out.append(vw)
+    return tuple(out)
+
+
 def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
                       counters: dict, cap_skips: list, bounds: dict,
                       go_set: frozenset, n_fill: int, claim_events: Optional[list] = None,
-                      *, execution_only: bool = False) -> None:
+                      *, execution_only: bool = False,
+                      states: Optional[dict] = None) -> None:
     """v10 §A trigger bar 收盘推进:①' mic 市价撮合 → ②' mic 挂单 → mic 路由。
 
     §8 收割/mark/费用计提不在此处(canonical 粒度不变);决策只在已收盘
@@ -755,12 +780,21 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
         routing_bar = tuple(event.attrs.get("routing_bar", mic.bars[a]))
         routing_index = int(event.attrs.get("routing_index", a))
         groups.setdefault((routing_bar, routing_index), []).append(event)
+    close_moment = int(_ts) + mic.trigger_tf_seconds * 1000
+    htf_views = _htf_views_for(st, states, close_moment)
     decisions = []
     for (routing_bar, routing_index), events in groups.items():
-        decisions.extend(st.router.on_bar(
-            sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
-            position_open=broker.position_of(key) is not None,
-            entry_resting=broker.has_entry_limit(key)))
+        if htf_views:
+            decisions.extend(st.router.on_bar(
+                sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
+                position_open=broker.position_of(key) is not None,
+                entry_resting=broker.has_entry_limit(key),
+                htf_views=htf_views))
+        else:
+            decisions.extend(st.router.on_bar(
+                sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
+                position_open=broker.position_of(key) is not None,
+                entry_resting=broker.has_entry_limit(key)))
     # mic 挂单可成交窗口 = 本 trigger bar 之后任意更细 bar(小时桶口径与
     # broker 窗口机制一致:fill_after = 本小时桶前一小时,即成交流程自次一
     # trigger bar 起可成交);expiry = 决策时刻 + N_fill 墙钟小时(同 canonical)
@@ -871,7 +905,8 @@ def _cancel_structurally_dead_entries(st: "_CampaignState", broker: Broker, key:
 
 def _cognition_step(st: _CampaignState, broker: Broker, i: int,
                     counters: dict, cap_skips: list, bounds: dict,
-                    go_set: frozenset, n_fill: int, claim_events: list) -> None:
+                    go_set: frozenset, n_fill: int, claim_events: list,
+                    *, states: Optional[dict] = None) -> None:
     """认知 bar i 收盘:§8 持仓管理 → v6 路由(段内才启用 OPEN)。"""
     f = st.frame
     key, sym = f.key, f.symbol
@@ -927,10 +962,18 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     if not (lo <= i < hi):
         return
     _count_go(counters, new_events, go_set)
-    decisions = st.router.on_bar(
-        sym, bar, i, cog.views.get(i), atr, new_events,
-        position_open=broker.position_of(key) is not None,
-        entry_resting=broker.has_entry_limit(key))
+    htf_views = _htf_views_for(st, states, t + f.tf_hours * MS_1H)
+    if htf_views:
+        decisions = st.router.on_bar(
+            sym, bar, i, cog.views.get(i), atr, new_events,
+            position_open=broker.position_of(key) is not None,
+            entry_resting=broker.has_entry_limit(key),
+            htf_views=htf_views)
+    else:
+        decisions = st.router.on_bar(
+            sym, bar, i, cog.views.get(i), atr, new_events,
+            position_open=broker.position_of(key) is not None,
+            entry_resting=broker.has_entry_limit(key))
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar
     extra = ({"execution_step_ms": f.ms_exec,
               "execution_not_before": t + f.tf_hours * MS_1H}

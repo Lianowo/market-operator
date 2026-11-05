@@ -77,6 +77,14 @@ def entry_contract_error(direction: int, entry: float, invalid: float,
         return "BAD_INVALID"
     if room <= 0.0:
         return "TARGET_ALREADY_PASSED"
+    max_prog = meta.get("max_box_progress_frac")
+    inner_px = meta.get("inner_edge")
+    if max_prog is not None and inner_px is not None:
+        span = direction * (float(target) - float(inner_px))
+        if span > 0.0:
+            prog = direction * (float(entry) - float(inner_px)) / span
+            if prog >= float(max_prog):
+                return "BOX_OPPOSITE_THIRD_ENTERED"
     if room / risk < float(meta.get("entry_min_rr", 0.0)):
         return "INSUFFICIENT_REMAINING_RR"
     return entry_cost_error(direction, entry, invalid, meta)

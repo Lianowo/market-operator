@@ -60,19 +60,14 @@
     "reject_target_mode": "opposite",
     "accept_use_struct_stop": false,
     "zone_departure_reset": true,
+    "max_accept_ext_atr": 1.5,
+    "max_box_progress_frac": 0.75,
+    "zone_exhaustion_rejects": 3,
+    "macro_shock_range_atr": 3.2,
+    "htf_wall_filter": true,
+    "htf_min_room_r": 1.0,
     "max_cost_frac": null,
-    "cost_per_side": 0.0008,
-    "deadzone_watch_enabled": true,
-    "deadzone_watch_r_lo": 1.0,
-    "deadzone_watch_r_hi": 1.5,
-    "deadzone_watch_near_frac": 0.75,
-    "deadzone_watch_max_prog_frac": 0.65,
-    "deadzone_watch_wait_hours": 4,
-    "accept_watch_enabled": true,
-    "accept_watch_ext_atr": 1.5,
-    "accept_watch_near_frac": 0.75,
-    "accept_watch_max_run_atr": 1.5,
-    "accept_watch_wait_hours": 8
+    "cost_per_side": 0.0008
   },
 
   "router_params_by_tf": {

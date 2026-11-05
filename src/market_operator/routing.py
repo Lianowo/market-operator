@@ -3,8 +3,7 @@
 职责:
 - 接收认知层或触发层产出的结构行为事件(BREAKOUT_ACCEPTED / LEVEL_REJECTED 等);
 - 执行 F1 最小失效距离闸门、结构失衡确认(struct_impulse_confirm)与箱沿离开复位(zone_departure_reset);
-- 对死区拒绝([r_lo, r_hi))与过伸突破(>accept_watch_ext_atr)生成系统价格关注(WatchEntry)计划;
-- 产出标准化的市价/限价/撤单 ``RouteDecision``。
+- 产出标准化的市价/撤单 ``RouteDecision``。
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ from .events import (
     canonical_event_id,
 )
 from .hypothesis import Hypothesis, StructureView, entry_contract_error, entry_cost_error
-from .structure import PivotKind, _bar_parts
+from .structure import PivotKind, ZoneRole, ZoneState, _bar_parts
 
 _REF_REL_TOL = 1e-9
 
@@ -125,17 +124,6 @@ class RouterParams:
     reject_use_struct_stop: bool = False
     accept_use_struct_stop: bool = False
     max_target_r: Optional[float] = None
-    deadzone_watch_enabled: bool = False
-    deadzone_watch_r_lo: float = 1.0
-    deadzone_watch_r_hi: float = 1.5
-    deadzone_watch_near_frac: float = 0.75
-    deadzone_watch_max_prog_frac: float = 0.65
-    deadzone_watch_wait_hours: int = 4
-    accept_watch_enabled: bool = False
-    accept_watch_ext_atr: float = 0.80
-    accept_watch_near_frac: float = 0.75
-    accept_watch_max_run_atr: float = 1.50
-    accept_watch_wait_hours: int = 4
     struct_impulse_confirm: bool = False
     zone_departure_reset: bool = False
     min_box_touches: int = 0         # >0 时要求 zone.touches >= min_box_touches
@@ -143,19 +131,25 @@ class RouterParams:
     min_box_rotations: int = 0       # >0 时要求 zone.box_rotations >= min_box_rotations
     min_box_width_atr: float = 0.0   # >0 时要求 zone.box_width_atr >= min_box_width_atr
     min_box_rr: float = 0.0          # >0 时要求 |box_opposite - close| / stop_dist >= min_box_rr
-    max_confirm_stop_atr: float = 1.2     # v22:紧凑市价确认的最大止损宽度(ATR 倍数;超出转 50%/内沿回抽 Limit)
-    allow_pullback_limit: bool = True     # True 时过伸确认转回抽 Limit;False 时严格要求当根入场满足 min_box_rr 且具备对侧目标
+    max_confirm_stop_atr: float = 1.2
     max_cost_frac: Optional[float] = None
     cost_per_side: float = 0.0008         # 单边成本比例(taker+滑点),仅用于 max_cost_frac
     target_from_pivot: bool = False
     far_confirm_skip: bool = False
-    accept_watch_keep_confirm_stop: bool = False
     accept_target_box_mult: Optional[float] = None
     reentry_use_box_target: bool = False
     reentry_use_struct_stop: bool = False
     reentry_target_management: bool = False  # Opt in to lock/reduce on reentry target.
     bounded_min_rr: float = 0.0     # Explicit candidate threshold; not a full-box-span proxy.
+    max_box_progress_frac: Optional[float] = None
+    max_accept_ext_atr: float = 1.5
+    zone_exhaustion_rejects: int = 0
+    macro_shock_range_atr: float = 0.0
+    htf_wall_filter: bool = False
+    htf_min_room_r: float = 1.0
     _normalized_whitelist: frozenset = field(init=False, repr=False, compare=False)
+
+
 
     def __post_init__(self) -> None:
         norm = frozenset(
@@ -215,6 +209,7 @@ class MarketRouter:
         *,
         position_open: bool,
         entry_resting: bool,
+        htf_views: Sequence[StructureView] = (),
     ) -> list[RouteDecision]:
         """处理当前 bar 的新增事件,返回路由决策序列。"""
         _ts, _o, h, l, c, _v = _bar_parts(bar)
@@ -225,21 +220,26 @@ class MarketRouter:
         wl = self.params._normalized_whitelist
         # 拍卖市场理论多尺度职责边界:
         # 降档细周期(mic=True)仅负责"向既有大周期价值区内部回归"的触发(BOX_EDGE 拒绝回归 + FLIPPED_BOX_EDGE 重返入箱);
-        # 推翻活跃大周期平衡箱向外建立新价值(BOX_EDGE 外向 BREAKOUT_ACCEPTED)必须由大周期自身认知收盘确认。
+        # 向箱外发散建立新价值(BOX_EDGE 外向 BREAKOUT_ACCEPTED 与 FLIPPED_BOX_EDGE 外向回踩拒绝)必须由大周期自身认知收盘确认。
         filtered_events: list[MarketEvent] = []
         for e in new_events:
-            if (
-                e.attrs.get("mic")
-                and canonical_event_id(e.id) == BREAKOUT_ACCEPTED
-                and e.attrs.get("zone") is not None
-                and getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE") == "BOX_EDGE"
-            ):
-                self._bump("restraint_mic_outward_accept_reject")
-                self._notes.append(
-                    f"mic_outward_accept|{symbol} {e.id} BOX_EDGE outward breakout "
-                    "deferred to HTF cognition close"
-                )
-                continue
+            if e.attrs.get("mic") and e.attrs.get("zone") is not None:
+                z_sk = getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE")
+                e_cid = canonical_event_id(e.id)
+                if e_cid == BREAKOUT_ACCEPTED and z_sk == "BOX_EDGE":
+                    self._bump("restraint_mic_outward_accept_reject")
+                    self._notes.append(
+                        f"mic_outward_accept|{symbol} {e.id} BOX_EDGE outward breakout "
+                        "deferred to HTF cognition close"
+                    )
+                    continue
+                if e_cid == LEVEL_REJECTED and z_sk == "FLIPPED_BOX_EDGE":
+                    self._bump("restraint_mic_outward_retest_reject")
+                    self._notes.append(
+                        f"mic_outward_retest|{symbol} {e.id} FLIPPED_BOX_EDGE outward retest "
+                        "deferred to HTF cognition close"
+                    )
+                    continue
             filtered_events.append(e)
         new_events = filtered_events
 
@@ -291,14 +291,16 @@ class MarketRouter:
                 self._bump("dup")
                 continue
             if cid == STRUCTURE_BROKEN:
-                decision = self._route_e6(symbol, ev, view, h, l, c, atr, bar_index)
+                decision = self._route_e6(symbol, ev, view, h, l, c, atr, bar_index, htf_views=htf_views)
             elif cid == BREAKOUT_ACCEPTED:
                 decision = self._route_market(
-                    symbol, ev, view, c, atr, ROUTE_BREAKOUT_ACCEPTED, "突破接受,永远市价次开盘"
+                    symbol, ev, view, c, atr, ROUTE_BREAKOUT_ACCEPTED, "突破接受,永远市价次开盘",
+                    htf_views=htf_views,
                 )
             elif cid == LEVEL_REJECTED:
                 decision = self._route_market(
-                    symbol, ev, view, c, atr, ROUTE_LEVEL_REJECTED, "拒绝确认,市价次开盘"
+                    symbol, ev, view, c, atr, ROUTE_LEVEL_REJECTED, "拒绝确认,市价次开盘",
+                    htf_views=htf_views,
                 )
                 self._bump(SIGNAL_COUNTERS[LEVEL_REJECTED])
             elif cid == FLIP_RETESTED:
@@ -306,7 +308,8 @@ class MarketRouter:
             elif cid in MARKET_ROUTES:
                 route, label, counter = MARKET_ROUTES[cid]
                 decision = self._route_market(
-                    symbol, ev, view, c, atr, route, label + ",市价次开盘"
+                    symbol, ev, view, c, atr, route, label + ",市价次开盘",
+                    htf_views=htf_views,
                 )
                 self._bump(counter)
             else:
@@ -328,7 +331,8 @@ class MarketRouter:
 
     def _route_e6(self, symbol: str, ev: MarketEvent, view: StructureView,
                   h: float, l: float, c: float, atr: float,
-                  bar_index: int) -> Optional[RouteDecision]:
+                  bar_index: int, *,
+                  htf_views: Sequence[StructureView] = ()) -> Optional[RouteDecision]:
         ref = float(ev.attrs["ref"])
         margin = ev.direction * (c - ref) / atr if atr > 0.0 else float("nan")
         impulse = (h - l) / atr if atr > 0.0 else float("nan")
@@ -351,11 +355,72 @@ class MarketRouter:
             f"impulse={impulse:.4g} >= {self.params.k_imp} ⇒ 市价次开盘")
         return self._route_market(
             symbol, ev, view, c, atr, ROUTE_STRUCTURE_BROKEN_STRONG,
-            "STRONG 破位,市价次开盘")
+            "STRONG 破位,市价次开盘", htf_views=htf_views)
+
+    def _apply_htf_wall_guard(
+        self,
+        direction: int,
+        close: float,
+        atr: float,
+        dec: RouteDecision,
+        htf_views: Sequence[StructureView],
+    ) -> Optional[RouteDecision]:
+        """跨周期上下级结构感知(Top-Down HTF Wall Guard):
+        1. 严禁小周期迎头撞进未突破的大周期活跃平衡箱反向墙内沿/带内追单;
+        2. 前方存在大周期反向箱沿且净空间 < htf_min_room_r·R 时直接放弃;
+        3. 前方大周期反向箱沿空间充足(>= htf_min_room_r·R)但挡在原 target_1 之前时,收缩 target_1 至大周期墙前缘。
+        """
+        hyp = dec.hyp
+        if hyp is None:
+            return dec
+        risk = direction * (close - hyp.invalid)
+        capped_target = hyp.target_1
+        for hv in htf_views:
+            if hv is None:
+                continue
+            htf_atr = float(getattr(hv, "atr", 0.0) or 0.0)
+            bm_htf = self.params.k_bm * htf_atr
+            for hz in getattr(hv, "zones", ()):
+                if hz.state is not ZoneState.ACTIVE:
+                    continue
+                if getattr(hz, "source_kind", "BOX_EDGE") != "BOX_EDGE":
+                    continue
+                if direction > 0 and hz.role is ZoneRole.RESISTANCE:
+                    wall_in, wall_out = float(hz.lo), float(hz.hi)
+                    if wall_in - 0.1 * atr <= close <= wall_out + bm_htf:
+                        self._bump("restraint_htf_wall_reject")
+                        return None
+                    if close < wall_in:
+                        room_htf = wall_in - close
+                        if risk > 0.0 and room_htf < self.params.htf_min_room_r * risk:
+                            self._bump("restraint_htf_room_reject")
+                            return None
+                        if capped_target is not None and wall_in < capped_target:
+                            capped_target = wall_in
+                            self._bump("htf_target_capped")
+                elif direction < 0 and hz.role is ZoneRole.SUPPORT:
+                    wall_out, wall_in = float(hz.lo), float(hz.hi)
+                    if wall_out - bm_htf <= close <= wall_in + 0.1 * atr:
+                        self._bump("restraint_htf_wall_reject")
+                        return None
+                    if close > wall_in:
+                        room_htf = close - wall_in
+                        if risk > 0.0 and room_htf < self.params.htf_min_room_r * risk:
+                            self._bump("restraint_htf_room_reject")
+                            return None
+                        if capped_target is not None and wall_in > capped_target:
+                            capped_target = wall_in
+                            self._bump("htf_target_capped")
+        if capped_target != hyp.target_1 and capped_target is not None:
+            new_rm = (direction * (capped_target - close) / risk) if risk > 0.0 else hyp.r_mult
+            new_hyp = replace(hyp, target_1=float(capped_target), r_mult=new_rm)
+            return replace(dec, hyp=new_hyp)
+        return dec
 
     def _route_market(
         self, symbol: str, ev: MarketEvent, view: StructureView,
-        close: float, atr: float, route: str, tag: str,
+        close: float, atr: float, route: str, tag: str, *,
+        htf_views: Sequence[StructureView] = (),
     ) -> Optional[RouteDecision]:
         zone = ev.attrs.get("zone")
         cid = canonical_event_id(ev.id)
@@ -377,19 +442,11 @@ class MarketRouter:
         if dec is None:
             self._zone_lock = prior_locks
             return None
-        if dec.kind == "limit" and not self._cost_ok(
-                symbol, ev, float(dec.limit_price), dec.hyp.invalid, dec.route):
-            self._zone_lock = prior_locks
-            return None
-        # Preserve historical candidate counters, including candidates rejected
-        # by the later structural contract. Cost-rejected plans are not armed.
-        if dec.meta.get("a2_retest_limit"):
-            self._bump("a2_retest_limit_armed")
-        elif dec.meta.get("pullback_limit"):
-            self._bump("pullback_limit_armed")
-        elif dec.meta.get("watch_entry"):
-            self._bump("accept_watch_armed" if cid == BREAKOUT_ACCEPTED
-                       else "deadzone_watch_armed")
+        if self.params.htf_wall_filter and htf_views:
+            dec = self._apply_htf_wall_guard(ev.direction, close, atr, dec, htf_views)
+            if dec is None:
+                self._zone_lock = prior_locks
+                return None
         floor = max(self.params.min_box_rr, self.params.bounded_min_rr) if bounded else 0.0
         meta = {**dec.meta, "bounded_entry": bounded, "entry_min_rr": floor,
                 "structural_target": dec.hyp.target_1,
@@ -404,6 +461,9 @@ class MarketRouter:
                 )}
         if zone is not None and atr > 0.0:
             inner = float(zone.hi if ev.direction > 0 else zone.lo)
+            meta["inner_edge"] = inner
+            if self.params.max_box_progress_frac is not None and bounded:
+                meta["max_box_progress_frac"] = float(self.params.max_box_progress_frac)
             meta["confirm_distance_atr"] = ev.direction * (close - inner) / atr
             meta["remaining_room_atr"] = ev.direction * (float(opp) - close) / atr if opp is not None and bounded else None
         error = entry_contract_error(ev.direction, dec.hyp.entry, dec.hyp.invalid, dec.hyp.target_1, meta)
@@ -427,110 +487,19 @@ class MarketRouter:
         p = self.params
         cid = canonical_event_id(ev.id)
         zone = ev.attrs.get("zone")
-
-        # v22 轨道 C: A2 过伸突破转翻转边界前缘 Limit 挂单(当显式传入 A2_OVEREXTENDED 且开启回抽限价时)
-        if (cid == BREAKOUT_ACCEPTED
-                and getattr(zone, "source_kind", "BOX_EDGE") != "FLIPPED_BOX_EDGE"
-                and not p.accept_watch_enabled
-                and p.allow_pullback_limit
-                and ev.attrs.get("sub_kind") == "A2_OVEREXTENDED"
-                and (p.accept_use_struct_stop or p.min_box_rr > 0.0)
-                and zone is not None):
-            limit_px = float(zone.hi if ev.direction > 0 else zone.lo)
-            ev_inv = ev.attrs.get("invalid")
-            invalid = float(ev_inv) if (p.accept_use_struct_stop and ev_inv is not None) else (
-                limit_px - ev.direction * p.turtle_stop_atr * atr
-            )
-            dist_lim = ev.direction * (limit_px - invalid)
-            if dist_lim >= p.k_is * atr:
-                hyp = Hypothesis(
-                    event_id=ev.id, direction=ev.direction, ts=ev.ts,
-                    known_index=ev.known_index, entry=limit_px,
-                    invalid=invalid, target_1=None, r_mult=None, regime=view.regime,
-                )
-                reason = (f"{ev.id}|{side} {ROUTE_BREAKOUT_ACCEPTED_LIMIT} "
-                          f"A2过伸突破回踩前缘限价 limit_px={limit_px:.8g} invalid={invalid:.8g}")
-                return RouteDecision(
-                    kind="limit", route=ROUTE_BREAKOUT_ACCEPTED_LIMIT,
-                    intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
-                                       reason=reason, ref_price=float(close), ts=ev.ts),
-                    hyp=hyp, limit_price=limit_px,
-                    meta={"a2_retest_limit": True, **_event_provenance(ev)},
-                )
+        if cid == BREAKOUT_ACCEPTED:
+            ext_atr = ev.attrs.get("ext_atr")
+            if ext_atr is not None:
+                overextended = p.max_accept_ext_atr > 0.0 and float(ext_atr) > p.max_accept_ext_atr
+            else:
+                overextended = ev.attrs.get("sub_kind") == "A2_OVEREXTENDED"
+            if overextended:
+                self._bump("restraint_a2_overextended_reject")
+                return None
 
         hyp = self._gates(symbol, ev, view, close, atr, route)
         if hyp is None:
             return None
-
-        if cid == BREAKOUT_ACCEPTED and p.accept_watch_enabled and zone is not None and atr > 0.0:
-            watch_dec = self._build_accept_watch_decision(
-                symbol, ev, view, hyp, zone, close, atr, side
-            )
-            if watch_dec is not None:
-                return watch_dec
-
-
-        # v22 轨道 B:当配置了 min_box_rr > 0 且允许回抽挂单时,确认 K 线过长自动转为 50%/内沿 RestingLimitOrder
-        if (cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
-                and p.allow_pullback_limit
-                and p.reject_use_struct_stop and p.min_box_rr > 0.0
-                and zone is not None and atr > 0.0):
-            stop_dist = abs(float(close) - float(hyp.invalid))
-            opp = getattr(zone, "box_opposite", None)
-            room = ev.direction * (float(opp) - float(close)) if opp is not None else None
-            rr_thresh = p.min_box_rr
-            need_pullback = (
-                (p.max_confirm_stop_atr > 0.0 and stop_dist > p.max_confirm_stop_atr * atr)
-                or (room is not None and stop_dist > 0.0 and (room / stop_dist) < rr_thresh)
-            )
-            if need_pullback:
-                inner_edge = float(zone.lo if ev.direction < 0 else zone.hi)
-                half_pb = 0.5 * (float(close) + inner_edge)
-                limit_px = half_pb
-                dist_lim = ev.direction * (limit_px - float(hyp.invalid))
-                if opp is not None and dist_lim > 0.0:
-                    room_lim = ev.direction * (float(opp) - limit_px)
-                    if (room_lim / dist_lim) < rr_thresh or (
-                        p.max_confirm_stop_atr > 0.0 and dist_lim > p.max_confirm_stop_atr * atr
-                    ):
-                        if ev.direction * (float(close) - inner_edge) > 0.0:
-                            limit_px = inner_edge
-                            dist_lim = ev.direction * (limit_px - float(hyp.invalid))
-                if dist_lim >= p.k_is * atr and ev.direction * (float(close) - limit_px) > 0.0:
-                    target_1 = hyp.target_1
-                    r_mult = (ev.direction * (float(target_1) - limit_px) / dist_lim
-                              if target_1 is not None and dist_lim > 0.0 else hyp.r_mult)
-                    hyp_lim = Hypothesis(
-                        event_id=ev.id, direction=ev.direction, ts=ev.ts,
-                        known_index=ev.known_index, entry=float(limit_px),
-                        invalid=float(hyp.invalid), target_1=target_1,
-                        r_mult=r_mult, regime=view.regime,
-                    )
-                    reason = (f"{ev.id}|{side} {ROUTE_LEVEL_REJECTED_LIMIT} "
-                              f"确认K线过长转50%/内沿回抽限价 entry_ref={close:.8g} "
-                              f"limit_px={limit_px:.8g} invalid={hyp.invalid:.8g} "
-                              f"target_1={target_1} r_mult={r_mult}")
-                    return RouteDecision(
-                        kind="limit", route=ROUTE_LEVEL_REJECTED_LIMIT,
-                        intent=OrderIntent(kind=OrderKind.OPEN, symbol=symbol, qty_frac=None,
-                                           reason=reason, ref_price=float(close), ts=ev.ts),
-                        hyp=hyp_lim, limit_price=float(limit_px),
-                        meta={"pullback_limit": True, **_event_provenance(ev)},
-                    )
-
-        if (
-            cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
-            and p.deadzone_watch_enabled
-            and zone is not None
-            and atr > 0.0
-            and hyp.r_mult is not None
-            and float(p.deadzone_watch_r_lo) <= float(hyp.r_mult) < float(p.deadzone_watch_r_hi)
-        ):
-            watch_dec = self._build_deadzone_watch_decision(
-                symbol, ev, view, hyp, zone, close, atr, side
-            )
-            if watch_dec is not None:
-                return watch_dec
 
         reason = (
             f"{ev.id}|{side} {route} {tag} entry_ref={close:.8g} "
@@ -553,176 +522,8 @@ class MarketRouter:
         )
 
 
-    def _build_accept_watch_decision(
-        self,
-        symbol: str,
-        ev: MarketEvent,
-        view: StructureView,
-        hyp: Hypothesis,
-        zone: object,
-        close: float,
-        atr: float,
-        side: str,
-    ) -> Optional[RouteDecision]:
-        p = self.params
-        direction = int(ev.direction)
-        edge_px = float(
-            ev.attrs["ref"]
-            if ev.attrs.get("ref") is not None
-            else (zone.hi if direction > 0 else zone.lo)
-        )
-        close_px = float(close)
-        ext_dist = direction * (close_px - edge_px)
-        if ext_dist <= float(p.accept_watch_ext_atr) * atr + 1e-9:
-            return None
-
-        min_dist = float(p.k_is) * atr
-        ev_inv = ev.attrs.get("invalid")
-        if (p.accept_use_struct_stop or (p.reentry_use_struct_stop
-                and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE")) and ev_inv is not None:
-            inv_px = float(ev_inv)
-        elif p.accept_watch_keep_confirm_stop:
-            inv_px = float(hyp.invalid)
-        else:
-            inv_px = edge_px - direction * float(p.turtle_stop_atr) * atr
-        f1_floor_px = inv_px + direction * min_dist
-        watch_px = max(edge_px, f1_floor_px) if direction > 0 else min(edge_px, f1_floor_px)
-        dist_w = direction * (watch_px - inv_px)
-        if direction * (close_px - watch_px) <= 1e-9 or dist_w < min_dist - 1e-9:
-            return None
-
-        near_frac = float(p.accept_watch_near_frac or 0.0)
-        near_px = (
-            close_px - near_frac * (close_px - watch_px) if near_frac > 0.0 else None
-        )
-        max_run = float(p.accept_watch_max_run_atr or 0.0)
-        prog_px = (
-            close_px + direction * max_run * atr if max_run > 0.0 else None
-        )
-        target_w = hyp.target_1
-        r_w = (
-            direction * (float(target_w) - watch_px) / dist_w
-            if target_w is not None and dist_w > 0.0
-            else None
-        )
-        hyp_w = Hypothesis(
-            event_id=ev.id,
-            direction=direction,
-            ts=ev.ts,
-            known_index=ev.known_index,
-            entry=float(watch_px),
-            invalid=inv_px,
-            target_1=target_w,
-            r_mult=r_w,
-            regime=view.regime,
-        )
-        reason = (
-            f"{ev.id}|{side} {ROUTE_BREAKOUT_ACCEPTED_LIMIT} "
-            f"WATCH_ENTRY 突破过伸({ext_dist / atr:.2f}ATR>{p.accept_watch_ext_atr:.2g}ATR)"
-            f"系统价格关注 confirm_close={close_px:.8g} "
-            f"watch_px={watch_px:.8g} near_px={near_px} "
-            f"prog_px={prog_px} invalid={inv_px:.8g}"
-        )
-        return RouteDecision(
-            kind="limit",
-            route=ROUTE_BREAKOUT_ACCEPTED_LIMIT,
-            intent=OrderIntent(
-                kind=OrderKind.OPEN,
-                symbol=symbol,
-                qty_frac=None,
-                reason=reason,
-                ref_price=float(watch_px),
-                ts=ev.ts,
-            ),
-            hyp=hyp_w,
-            limit_price=float(watch_px),
-            meta={
-                "watch_entry": True,
-                "watch_price": float(watch_px),
-                "near_price": float(near_px) if near_px is not None else None,
-                "prog_price": float(prog_px) if prog_px is not None else None,
-                "confirm_close": close_px,
-                "max_prog_frac": None,
-                "max_wait_hours": int(p.accept_watch_wait_hours),
-                **_event_provenance(ev),
-            },
-        )
 
 
-    def _build_deadzone_watch_decision(
-        self,
-        symbol: str,
-        ev: MarketEvent,
-        view: StructureView,
-        hyp: Hypothesis,
-        zone: object,
-        close: float,
-        atr: float,
-        side: str,
-    ) -> Optional[RouteDecision]:
-        p = self.params
-        direction = int(ev.direction)
-        inner_edge = float(zone.hi if direction > 0 else zone.lo)
-        close_px = float(close)
-        inv_px = float(hyp.invalid)
-        min_dist = float(p.k_is) * atr
-        f1_floor_px = inv_px + direction * min_dist
-        watch_px = max(inner_edge, f1_floor_px) if direction > 0 else min(inner_edge, f1_floor_px)
-        dist_w = direction * (watch_px - inv_px)
-        if direction * (close_px - watch_px) <= 1e-9 or dist_w < min_dist - 1e-9:
-            return None
-
-        target_1 = hyp.target_1
-        new_r = (
-            direction * (float(target_1) - watch_px) / dist_w
-            if target_1 is not None and dist_w > 0.0
-            else hyp.r_mult
-        )
-        near_frac = float(p.deadzone_watch_near_frac or 0.0)
-        near_px = (
-            close_px - near_frac * (close_px - watch_px) if near_frac > 0.0 else None
-        )
-        hyp_w = Hypothesis(
-            event_id=ev.id,
-            direction=direction,
-            ts=ev.ts,
-            known_index=ev.known_index,
-            entry=float(watch_px),
-            invalid=inv_px,
-            target_1=target_1,
-            r_mult=new_r,
-            regime=view.regime,
-        )
-        reason = (
-            f"{ev.id}|{side} {ROUTE_LEVEL_REJECTED_LIMIT} "
-            f"WATCH_ENTRY 死区[{p.deadzone_watch_r_lo:.2g},{p.deadzone_watch_r_hi:.2g}R)"
-            f"系统价格关注 confirm_close={close_px:.8g} "
-            f"watch_px={watch_px:.8g} near_px={near_px} "
-            f"invalid={inv_px:.8g} target_1={target_1} r_mult={new_r}"
-        )
-        return RouteDecision(
-            kind="limit",
-            route=ROUTE_LEVEL_REJECTED_LIMIT,
-            intent=OrderIntent(
-                kind=OrderKind.OPEN,
-                symbol=symbol,
-                qty_frac=None,
-                reason=reason,
-                ref_price=float(watch_px),
-                ts=ev.ts,
-            ),
-            hyp=hyp_w,
-            limit_price=float(watch_px),
-            meta={
-                "watch_entry": True,
-                "watch_price": float(watch_px),
-                "near_price": float(near_px) if near_px is not None else None,
-                "confirm_close": close_px,
-                "max_prog_frac": float(p.deadzone_watch_max_prog_frac),
-                "max_wait_hours": int(p.deadzone_watch_wait_hours),
-                **_event_provenance(ev),
-            },
-        )
 
 
 
@@ -861,6 +662,28 @@ class MarketRouter:
                 self._bump("restraint_width_reject")
                 return None
 
+        if p.macro_shock_range_atr > 0.0:
+            range_atr = float(ev.attrs.get("range_atr", 0.0) or 0.0)
+            atr_slow_ratio = float(ev.attrs.get("atr_slow_ratio", 1.0) or 1.0)
+            if range_atr > p.macro_shock_range_atr or (
+                atr_slow_ratio > 2.2 and range_atr > 0.7 * p.macro_shock_range_atr
+            ):
+                self._bump("restraint_macro_vol_shock")
+                return None
+
+        if (
+            p.zone_exhaustion_rejects > 0
+            and zone is not None
+            and cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+        ):
+            rejs = int(getattr(zone, "rejects", 0))
+            if rejs >= p.zone_exhaustion_rejects:
+                sub_k = str(ev.attrs.get("sub_kind", ""))
+                vol_r = float(ev.attrs.get("vol_ratio", 1.0) or 1.0)
+                if sub_k == "R2_STALL" or vol_r < 1.0:
+                    self._bump("restraint_zone_exhaustion_reject")
+                    return None
+
         if p.struct_impulse_confirm:
             eval_bars = ev.attrs.get("eval_bars") or ()
             if len(eval_bars) >= 5:
@@ -873,40 +696,38 @@ class MarketRouter:
                 )
                 mid_ok = (bc < 0.5 * (bh + bl)) if d < 0 else (bc > 0.5 * (bh + bl))
                 rmax4 = (bh - bl) > max(b1[2] - b1[3], b2[2] - b2[3], b3[2] - b3[3], b4[2] - b4[3])
-                if not ((brk3 or (rmax4 and out1)) and mid_ok):
+                sub_k = str(ev.attrs.get("sub_kind", ""))
+                vol_r = float(ev.attrs.get("vol_ratio", 1.0) or 1.0)
+                rng_eval = max(bh - bl, 1e-12)
+                cpos_eval = (bh - bc) / rng_eval if d < 0 else (bc - bl) / rng_eval
+                washout_ok = (
+                    cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+                    and (
+                        (sub_k == "R3_TRAP" and vol_r >= 1.25)
+                        or (sub_k == "R1_WICK" and vol_r >= 1.15 and cpos_eval >= 0.60)
+                    )
+                    and ((bc < _bo) if d < 0 else (bc > _bo))
+                )
+                if not ((brk3 or (rmax4 and out1) or washout_ok) and mid_ok):
                     self._bump("restraint_struct_impulse_reject")
                     return None
+        sk_rr = getattr(zone, "source_kind", "BOX_EDGE") if zone is not None else "BOX_EDGE"
         if p.min_box_rr > 0.0 and zone is not None:
             opp = getattr(zone, "box_opposite", None)
-            if opp is None and not p.allow_pullback_limit and cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+            if opp is None and cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and sk_rr != "FLIPPED_BOX_EDGE":
                 self._bump("restraint_rr_reject")
                 return None
             if opp is not None and dist > 0.0:
-                if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                if cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and sk_rr != "FLIPPED_BOX_EDGE":
                     room = ev.direction * (float(opp) - close)
                 elif (cid == BREAKOUT_ACCEPTED and p.reentry_use_box_target
-                      and getattr(zone, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE"):
+                      and sk_rr == "FLIPPED_BOX_EDGE"):
                     room = ev.direction * (float(opp) - close)
-                elif p.allow_pullback_limit:
-                    box_span = abs(float(opp) - (zone.hi if ev.direction > 0 else zone.lo))
-                    room = box_span
                 else:
                     room = None
                 if room is not None and (room / dist) < p.min_box_rr:
-                    can_pullback = False
-                    if p.allow_pullback_limit and cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and p.reject_use_struct_stop:
-                        inner_edge = float(zone.lo if ev.direction < 0 else zone.hi)
-                        for cand_px in (0.5 * (close + inner_edge), inner_edge):
-                            d_cand = ev.direction * (cand_px - invalid)
-                            r_cand = ev.direction * (float(opp) - cand_px)
-                            if (ev.direction * (close - cand_px) > 0.0
-                                    and d_cand >= p.k_is * atr
-                                    and (r_cand / d_cand) >= p.min_box_rr):
-                                can_pullback = True
-                                break
-                    if not can_pullback:
-                        self._bump("restraint_rr_reject")
-                        return None
+                    self._bump("restraint_rr_reject")
+                    return None
 
         if p.zone_departure_reset and zone is not None:
             zkey = (symbol, round(float(zone.lo), 6), round(float(zone.hi), 6), ev.direction)

@@ -26,22 +26,22 @@ def test_reject_cannot_outlive_opposite_target(direction):
 
 
 @pytest.mark.parametrize("direction", [1, -1])
-def test_reentry_watch_preserves_structural_stop_and_target(direction):
+def test_reentry_preserves_structural_stop_and_target(direction):
     z = Zone(lo=99, hi=100, role=ZoneRole.RESISTANCE if direction > 0 else ZoneRole.SUPPORT,
              box_opposite=110 if direction > 0 else 89, source_kind="FLIPPED_BOX_EDGE")
     edge = 100 if direction > 0 else 99
     invalid = 98.8 if direction > 0 else 100.2
-    close = edge + direction * 4
+    close = edge + direction * 2
     ev = MarketEvent(BREAKOUT_ACCEPTED, direction, 0, 1,
                      {"zone": z, "ref": edge, "invalid": invalid, "close_ts": 7200000})
-    p = RouterParams(whitelist=WHITELIST_BALANCE, accept_watch_enabled=True,
+    p = RouterParams(whitelist=WHITELIST_BALANCE,
                      reentry_use_struct_stop=True, reentry_use_box_target=True)
     decisions = MarketRouter(p).on_bar("X", (0, close, close+1, close-1, close, 1), 1,
                   StructureView(Regime.RANGE, (z,), 2), 2, [ev],
                   position_open=False, entry_resting=False)
     assert len(decisions) == 1
     dec = decisions[0]
-    assert dec.meta["watch_entry"] and dec.meta["bounded_entry"]
+    assert dec.kind == "market" and dec.meta["bounded_entry"]
     assert dec.hyp.invalid == invalid
     assert dec.hyp.target_1 == z.box_opposite
     assert dec.meta["structural_target"] == z.box_opposite
@@ -121,11 +121,11 @@ def test_campaign_passes_only_execution_target_to_manager(resting, managed):
     assert pm.positions["X"].armed is managed
 
 
-def test_explicit_rr_floor_is_independent_of_watch_interval():
+def test_explicit_rr_floor_blocks_insufficient_remaining_rr():
     z = Zone(lo=99, hi=100, role=ZoneRole.SUPPORT, box_opposite=110)
     ev = MarketEvent(LEVEL_REJECTED, 1, 0, 1, {"zone": z, "ref": 100, "invalid": 98})
     p = RouterParams(whitelist=WHITELIST_BALANCE, reject_use_struct_stop=True,
-                     reject_target_mode="opposite", deadzone_watch_enabled=True)
+                     reject_target_mode="opposite")
     args = ("X", (0, 104, 106, 103, 105, 1), 1,
             StructureView(Regime.RANGE, (z,), 1), 1, [ev])
     assert len(MarketRouter(p).on_bar(*args, position_open=False, entry_resting=False)) == 1

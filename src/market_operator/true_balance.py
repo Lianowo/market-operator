@@ -55,6 +55,7 @@ class TrueBalanceParams:
     quality_min: float = 0.35
     keep_flipped_bars: int = 96
     reentry_enabled: bool = False
+    reentry_revive_bars: int = 0
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class TrueBalanceBox:
     broken_index: Optional[int] = None
     outside_up_streak: int = 0
     outside_dn_streak: int = 0
+    reentry_streak: int = 0
     components: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -209,6 +211,8 @@ class TrueBalanceDetector:
 
         if self.active_box is not None:
             self._advance_active_box(idx, c, atr, has_new_swing=(new_swing is not None))
+        elif self.p.reentry_enabled and self.p.reentry_revive_bars > 0:
+            self._try_revive_box(idx, c, atr)
 
         if (
             self.active_box is None
@@ -309,12 +313,14 @@ class TrueBalanceDetector:
         if box.outside_up_streak >= self.p.break_confirm_bars or c > box.hi_ext + runaway:
             box.state = "BROKEN_UP"
             box.broken_index = idx
+            box.reentry_streak = 0
             self.history_boxes.append(box)
             self.active_box = None
             return
         if box.outside_dn_streak >= self.p.break_confirm_bars or c < box.lo_ext - runaway:
             box.state = "BROKEN_DOWN"
             box.broken_index = idx
+            box.reentry_streak = 0
             self.history_boxes.append(box)
             self.active_box = None
             return
@@ -326,6 +332,31 @@ class TrueBalanceDetector:
                 rebuilt.outside_up_streak = box.outside_up_streak
                 rebuilt.outside_dn_streak = box.outside_dn_streak
                 self.active_box = rebuilt
+
+    def _try_revive_box(self, idx: int, c: float, atr: float) -> None:
+        """外部重返箱体复活机制(Box Re-entry Revival):
+        当价格在平衡箱刚发生假破位后迅速重返核心价值区 [val, vah],且整段区间 [start_index, idx]
+        依然严格满足真实平衡箱的全部物理防伪约束(_evaluate_span: 驻留率/水平度/质量分数)时,
+        将该平衡箱恢复为 active_box,避免假破位清洗后丢失原箱体且不阻塞新箱体生成。
+        """
+        for hb in reversed(self.history_boxes[-3:]):
+            if hb.broken_index is None or idx - hb.broken_index > 8:
+                hb.reentry_streak = 0
+                continue
+            if hb.val <= c <= hb.vah:
+                hb.reentry_streak += 1
+                if hb.reentry_streak >= self.p.reentry_revive_bars and self.active_box is None:
+                    rebuilt = self._evaluate_span(hb.start_index, idx, atr, box_id=hb.box_id)
+                    if rebuilt is not None:
+                        rebuilt.state = "ACTIVE"
+                        rebuilt.outside_up_streak = 0
+                        rebuilt.outside_dn_streak = 0
+                        rebuilt.reentry_streak = 0
+                        self.history_boxes.remove(hb)
+                        self.active_box = rebuilt
+                        break
+            else:
+                hb.reentry_streak = 0
 
     def _try_spawn_box(self, idx: int, atr: float) -> Optional[TrueBalanceBox]:
         min_start = 0

@@ -550,7 +550,7 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
             k = lo
         while k <= hi:
             tb = t_series[k]
-            tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4])
+            tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4], tb[5] if len(tb) > 5 else 0.0)
             k += 1
         detector.update(bar)
         tracker.sync(i, detector,
@@ -1910,7 +1910,7 @@ class LiveRunner:
                                                    bar[0] + base_ms - trig_ms))
                     k = (int(t_bar[0]) - trigger_origin_ms(cs)) // trig_ms
                     ts, o, h, low, c, _v = t_bar
-                    emitted = cs.tracker.on_trigger_bar(k, ts, o, h, low, c)
+                    emitted = cs.tracker.on_trigger_bar(k, ts, o, h, low, c, _v)
                     if emitted:
                         ctx = cs.tracker._ctx
                         view = StructureView(
@@ -2429,10 +2429,32 @@ class LiveRunner:
             bars, bar = cs.trig_bars, cs.trig_bars[-1]
         else:
             bars, bar = cs.cog_bars, cs.cog_bars[-1]
-        decisions = cs.router.on_bar(
-            sym, bar, len(bars) - 1, view, atr, events,
-            position_open=sym in self.positions,
-            entry_resting=self._entry_resting(sym))
+        htf_views = ()
+        r_params = getattr(cs.router, "params", None)
+        if getattr(r_params, "htf_wall_filter", False):
+            all_cs = [self.campaigns.get(sym)] + [
+                sub for (s2, _), sub in self.extra_campaigns.items() if s2 == sym
+            ]
+            htf_list = []
+            for ocs in all_cs:
+                if ocs is None or ocs.obs_tf_seconds < 3 * cs.obs_tf_seconds or not ocs.cog_bars:
+                    continue
+                os_st = ocs.detector.structure
+                htf_list.append(StructureView(
+                    regime=os_st.regime(), zones=os_st.zones,
+                    atr=os_st.atr(), pivots=()))
+            htf_views = tuple(htf_list)
+        if htf_views:
+            decisions = cs.router.on_bar(
+                sym, bar, len(bars) - 1, view, atr, events,
+                position_open=sym in self.positions,
+                entry_resting=self._entry_resting(sym),
+                htf_views=htf_views)
+        else:
+            decisions = cs.router.on_bar(
+                sym, bar, len(bars) - 1, view, atr, events,
+                position_open=sym in self.positions,
+                entry_resting=self._entry_resting(sym))
         t = int(bar[0])
         for d in decisions:
             if d.kind == "cancel_entry":
@@ -2823,6 +2845,8 @@ class LiveRunner:
                   "box_lo": box_lo, "box_hi": box_hi,
                   "bounded_entry": bool(d.meta.get("bounded_entry")),
                   "entry_min_rr": float(d.meta.get("entry_min_rr", 0.0)),
+                  "inner_edge": d.meta.get("inner_edge"),
+                  "max_box_progress_frac": d.meta.get("max_box_progress_frac"),
                   "watch_entry": is_watch,
                   "watch_price": float(entry_ref) if is_watch else None,
                   "near_price": (float(d.meta["near_price"])

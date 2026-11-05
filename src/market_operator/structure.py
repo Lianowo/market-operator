@@ -55,6 +55,8 @@ class Params:
     fast_accept_atr: Optional[float] = None
     box_reentry_enabled: bool = False
     box_reentry_max_bars: int = 96
+    box_revive_bars: int = 0
+    box_break_retest_enabled: bool = False
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "Params":
@@ -78,7 +80,7 @@ class Params:
         for k in (
             "atr_n", "n_a", "n_f", "n_time", "range_max_pivots",
             "box_min_rotations", "box_keep_broken_bars",
-            "box_keep_active_bars", "box_reentry_max_bars",
+            "box_keep_active_bars", "box_reentry_max_bars", "box_revive_bars",
         ):
             if k in wanted:
                 wanted[k] = int(wanted[k])
@@ -337,6 +339,7 @@ class ZoneBook:
                     quality_min=params.balance_quality_min,
                     keep_flipped_bars=params.box_reentry_max_bars,
                     reentry_enabled=params.box_reentry_enabled,
+                    reentry_revive_bars=int(params.box_revive_bars),
                 )
             )
 
@@ -406,7 +409,7 @@ class ZoneBook:
         if atr_val <= 0.0 or bracket is None:
             return
         tol = max(self.p.tol_atr * atr_val, 0.5 * atr_val)
-        alive_ids: set[int] = set()
+        alive_ids: set[tuple] = set()
         for role, lvl in (
             (ZoneRole.SUPPORT, bracket.support),
             (ZoneRole.RESISTANCE, bracket.resistance),
@@ -463,7 +466,7 @@ class ZoneBook:
                 if w_atr > 0.0:
                     matched.box_width_atr = w_atr
                 matched.box_rotations = max(matched.box_rotations, rot)
-                alive_ids.add(id(matched))
+                alive_ids.add(matched.zone_id)
             else:
                 nz = Zone(
                     lo=zlo, hi=zhi, role=role,
@@ -478,17 +481,28 @@ class ZoneBook:
                     box_id=getattr(lvl, "box_id", None),
                 )
                 self.zones.append(nz)
-                alive_ids.add(id(nz))
+                alive_ids.add(nz.zone_id)
 
+        active_box_id = (
+            getattr(bracket.active_box, "box_id", None)
+            if bracket.mode == "IN_BOX" and bracket.active_box is not None
+            else None
+        )
         active_by_role: dict[ZoneRole, Zone] = {}
         other_zones: list[Zone] = []
         for z in self.zones:
+            if (
+                active_box_id is not None
+                and getattr(z, "source_kind", "BOX_EDGE") == "FLIPPED_BOX_EDGE"
+                and z.box_id == active_box_id
+            ):
+                continue
             if z.state is ZoneState.ACTIVE:
-                if id(z) in alive_ids or (index - z.last_change_known <= self.p.box_keep_active_bars):
+                if z.zone_id in alive_ids or (index - z.last_change_known <= self.p.box_keep_active_bars):
                     prev_z = active_by_role.get(z.role)
                     if (
                         prev_z is None
-                        or (id(z) in alive_ids and id(prev_z) not in alive_ids)
+                        or (z.zone_id in alive_ids and prev_z.zone_id not in alive_ids)
                         or z.last_change_known >= prev_z.last_change_known
                     ):
                         active_by_role[z.role] = z
@@ -633,6 +647,7 @@ class MarketStructure:
     def __init__(self, params: Params) -> None:
         self.params = params
         self._atr = ATR(params.atr_n)
+        self._atr_slow = ATR(max(params.atr_n * 4, 28))
         self._swing = SwingTracker(params.k_rev)
         self._zones = ZoneBook(params)
         self._pivots: list[Pivot] = []
@@ -647,6 +662,7 @@ class MarketStructure:
         index = len(self._bars)
         prev_close = self._bars[-1][4] if self._bars else None
         atr_val = self._atr.update(h, l, c)
+        self._atr_slow.update(h, l, c)
         self._bars.append((ts, o, h, l, c, v))
 
         pivot = self._swing.update(index, o, h, l, c, atr_val)
@@ -690,6 +706,9 @@ class MarketStructure:
 
     def atr(self) -> float:
         return self._atr.value
+
+    def atr_slow(self) -> float:
+        return self._atr_slow.value
 
     def regime(self) -> Regime:
         return self._regime

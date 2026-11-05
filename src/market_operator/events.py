@@ -94,6 +94,7 @@ class _Episode:
     ex_index: int
     puncture_index: Optional[int] = None
     outside_closes: int = 0
+    approach_sep: float = 0.0
 
 
 @dataclass
@@ -184,25 +185,34 @@ class EventDetector:
         self._prev_regime: Regime = Regime.TRANSITION
         self.consumed_episodes: int = 0
         self._recent_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
-        self._accept_refresh_only: set[int] = set()
+        self._recent_vols: deque[float] = deque(maxlen=20)
+        self._last_vol_ratio: float = 1.0
+        self._accept_refresh_only: set[tuple] = set()
 
     def update(self, bar) -> list[MarketEvent]:
         # last_change_known also tracks property refreshes. Compare the prior
         # lifecycle/geometry instead of treating every refreshed stamp as a break.
-        previous_edges = {id(z): (z.lo, z.hi, z.role, z.source_kind, z.state)
+        previous_edges = {z.zone_id: (z.lo, z.hi, z.role, z.source_kind, z.state)
                           for z in self.structure._zones.zones}
         self.structure.update(bar)
         self._accept_refresh_only = {
-            id(z) for z in self.structure._zones.zones
-            if id(z) in previous_edges
-            and previous_edges[id(z)][:4] == (z.lo, z.hi, z.role, z.source_kind)
-            and previous_edges[id(z)][4] in (ZoneState.BROKEN, ZoneState.RETESTED)
+            z.zone_id for z in self.structure._zones.zones
+            if z.zone_id in previous_edges
+            and previous_edges[z.zone_id][:4] == (z.lo, z.hi, z.role, z.source_kind)
+            and previous_edges[z.zone_id][4] in (ZoneState.BROKEN, ZoneState.RETESTED)
             and z.state is ZoneState.BROKEN
         }
         s = self.structure
         t = s.bars_seen - 1
         atr = s.atr()
-        ts_cur, o_cur, h_cur, l_cur, c_cur, _ = s._bars[t]
+        atr_slow = s.atr_slow()
+        ts_cur, o_cur, h_cur, l_cur, c_cur, v_cur = s._bars[t]
+        pos_vols = [x for x in self._recent_vols if x > 0.0]
+        vol_ma = (sum(pos_vols) / len(pos_vols)) if len(pos_vols) >= 5 else 0.0
+        vol_ratio = (float(v_cur) / vol_ma) if (vol_ma > 0.0 and float(v_cur) > 0.0) else 1.0
+        self._last_vol_ratio = vol_ratio
+        if float(v_cur) > 0.0:
+            self._recent_vols.append(float(v_cur))
         step_ms = (int(ts_cur) - self._recent_bars[-1][0]) if self._recent_bars else 0
         self._recent_bars.append(
             (int(ts_cur), float(o_cur), float(h_cur), float(l_cur), float(c_cur))
@@ -222,11 +232,16 @@ class EventDetector:
             reset_tail = tuple(self._recent_bars)
             eval_tail = reset_tail[-6:]
             close_ts = int(ts_cur) + int(step_ms)
+            range_atr = ((float(h_cur) - float(l_cur)) / atr) if atr > 0.0 else 0.0
+            atr_slow_ratio = (atr / atr_slow) if atr_slow > 0.0 else 1.0
             for ev in emitted:
                 ev.attrs["eval_bars"] = eval_tail
                 ev.attrs["reset_bars"] = reset_tail
                 ev.attrs["reset_step_ms"] = int(step_ms)
                 ev.attrs["close_ts"] = close_ts
+                ev.attrs.setdefault("vol_ratio", vol_ratio)
+                ev.attrs.setdefault("range_atr", range_atr)
+                ev.attrs.setdefault("atr_slow_ratio", atr_slow_ratio)
         self._prev_regime = s.regime()
         self.events.extend(emitted)
         return emitted
@@ -245,11 +260,12 @@ class EventDetector:
         # A3 收尸:zone 离开 ACTIVE(破位/翻转/消亡)即 episode 终结;
         # v22 R3 扩展:当 use_balance_detector=True 时,允许 1~2 根收盘假突破
         # (只要未发生 > 1.25*ATR 单边逃逸且在 <= n_f 窗口内)暂保 _Episode 观察吞没收复!
-        live = {id(z): z for z in s._zones.zones}
+        live = {z.zone_id: z for z in s._zones.zones}
         kept_eps: list[_Episode] = []
         for ep in self._episodes:
-            z = live.get(id(ep.zone))
+            z = live.get(ep.zone.zone_id)
             if z is not None:
+                ep.zone = z
                 if z.state is ZoneState.ACTIVE:
                     kept_eps.append(ep)
                 elif (p.use_balance_detector
@@ -276,7 +292,7 @@ class EventDetector:
                 p.use_balance_detector
                 and z.state is ZoneState.BROKEN
                 and z.last_change_known == t
-                and id(z) not in self._accept_refresh_only
+                and z.zone_id not in self._accept_refresh_only
             )
             if z.state is not ZoneState.ACTIVE and not just_broken:
                 continue
@@ -286,7 +302,8 @@ class EventDetector:
             front_out = (prev_close < z.lo) if res else (prev_close > z.hi)
             if front_out and h >= z.lo and l <= z.hi:
                 ex = h if res else l
-                ep = _Episode(zone=z, opened=t, ex=ex, ex_index=t)
+                sep = (z.lo - prev_close) if res else (prev_close - z.hi)
+                ep = _Episode(zone=z, opened=t, ex=ex, ex_index=t, approach_sep=sep)
                 if (h > z.hi + bm) if res else (l < z.lo - bm):
                     ep.puncture_index = t
                 self._episodes.append(ep)
@@ -295,16 +312,16 @@ class EventDetector:
             if z.state is ZoneState.BROKEN and z.last_change_known == t:
                 # Refreshing an already-broken edge is not a new break.
                 # Keep the original acceptance count/start and consumed state.
-                if id(z) in self._accept_refresh_only:
+                if z.zone_id in self._accept_refresh_only:
                     continue
                 if p.use_balance_detector:
                     res = z.role is res_role
                     escape = (h - z.hi) if res else (z.lo - l)
                     if escape > 1.25 * atr:
-                        self._episodes = [ep for ep in self._episodes if ep.zone is not z]
+                        self._episodes = [ep for ep in self._episodes if ep.zone.zone_id != z.zone_id]
                 else:
-                    self._episodes = [ep for ep in self._episodes if ep.zone is not z]
-                self._candidates = [cd for cd in self._candidates if cd.zone is not z]
+                    self._episodes = [ep for ep in self._episodes if ep.zone.zone_id != z.zone_id]
+                self._candidates = [cd for cd in self._candidates if cd.zone.zone_id != z.zone_id]
                 self._candidates.append(
                     _AcceptCandidate(
                         zone=z, lo=z.lo, hi=z.hi, role=z.role,
@@ -397,7 +414,8 @@ class EventDetector:
         survivors: list[_Episode] = []
         for ep in self._episodes:
             z = ep.zone
-            if getattr(z, "source_kind", "BOX_EDGE") != "BOX_EDGE":
+            sk = getattr(z, "source_kind", "BOX_EDGE")
+            if sk != "BOX_EDGE" and not (p.box_break_retest_enabled and sk == "FLIPPED_BOX_EDGE"):
                 continue
             res = z.role is res_role
             fired: Optional[MarketEvent] = None
@@ -422,6 +440,7 @@ class EventDetector:
 
             if (
                 p.use_balance_detector
+                and sk == "BOX_EDGE"
                 and 1 <= ep.outside_closes <= 2
                 and ((c < z.lo and close_pos >= 0.50) if res else (c > z.hi and close_pos >= 0.50))
             ):
@@ -470,7 +489,18 @@ class EventDetector:
                     against_trend = (
                         (cur_regime is Regime.TREND_UP) if res else (cur_regime is Regime.TREND_DOWN)
                     )
-                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.50)
+                    if sk == "FLIPPED_BOX_EDGE":
+                        bar_dir_ok = (
+                            z.rejects == 0
+                            and 0 < (t - z.origin_known) <= 24
+                            and ep.approach_sep >= 0.35 * atr
+                            and not against_trend
+                            and ((c < o) if res else (c > o))
+                            and close_pos >= 0.60
+                            and self._last_vol_ratio >= 1.05
+                        )
+                    else:
+                        bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.50)
                     if real_retreat >= rj and back_inside and close_pos >= 0.50 and bar_dir_ok:
                         direction = -1 if res else +1
                         extra_rej = {
