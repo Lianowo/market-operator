@@ -108,6 +108,11 @@ class ExecutionConfig:
     accept_reenter_box_exit: bool = False
     mfe_protect_r: Optional[float] = None
     mfe_protect_lock_r: float = 0.50
+    time_decay_bars: int = 0
+    time_decay_mfe_r: float = 0.50
+    time_decay_stop_r: float = -0.50
+    poc_halfrisk_r: Optional[float] = None
+    poc_halfrisk_stop_r: float = -0.45
 
 
 
@@ -346,7 +351,17 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                 mfe_protect_r=(arm.mfe_protect_r if arm is not None
                                else None),
                 mfe_protect_lock_r=(arm.mfe_protect_lock_r if arm is not None
-                                    else 0.50)),
+                                    else 0.50),
+                time_decay_bars=(arm.time_decay_bars if arm is not None
+                                 else 0),
+                time_decay_mfe_r=(arm.time_decay_mfe_r if arm is not None
+                                  else 0.50),
+                time_decay_stop_r=(arm.time_decay_stop_r if arm is not None
+                                   else -0.50),
+                poc_halfrisk_r=(arm.poc_halfrisk_r if arm is not None
+                                else None),
+                poc_halfrisk_stop_r=(arm.poc_halfrisk_stop_r if arm is not None
+                                     else -0.45)),
 
             lo=lo, hi=hi)
     # 事件对象使用规范 ID(BREAKOUT_ACCEPTED/LEVEL_REJECTED)，配置允许使用

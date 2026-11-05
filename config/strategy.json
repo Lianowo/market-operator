@@ -88,7 +88,12 @@
     "breakeven_on_reduce": true,
     "reject_opp_lock_frac": -0.25,
     "mfe_protect_r": 1.25,
-    "mfe_protect_lock_r": 0.50
+    "mfe_protect_lock_r": 0.50,
+    "time_decay_bars": 6,
+    "time_decay_mfe_r": 0.50,
+    "time_decay_stop_r": -0.50,
+    "poc_halfrisk_r": 0.85,
+    "poc_halfrisk_stop_r": -0.45
   },
   "small_account_compounding": {
     "equity0": 104.0,

@@ -170,6 +170,12 @@ def new_position_manager(params: Params, raw: dict) -> PositionManager:
         mfe_protect_r=(None if arm_cfg.get("mfe_protect_r") is None
                        else float(arm_cfg["mfe_protect_r"])),
         mfe_protect_lock_r=float(arm_cfg.get("mfe_protect_lock_r", 0.50)),
+        time_decay_bars=int(arm_cfg.get("time_decay_bars", 0) or 0),
+        time_decay_mfe_r=float(arm_cfg.get("time_decay_mfe_r", 0.50)),
+        time_decay_stop_r=float(arm_cfg.get("time_decay_stop_r", -0.50)),
+        poc_halfrisk_r=(None if arm_cfg.get("poc_halfrisk_r") is None
+                        else float(arm_cfg["poc_halfrisk_r"])),
+        poc_halfrisk_stop_r=float(arm_cfg.get("poc_halfrisk_stop_r", -0.45)),
 
         # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
         # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。

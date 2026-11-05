@@ -803,3 +803,50 @@ def test_r1_wick_washout_pinbar_passes_struct_impulse_confirm():
         10, view, 2.0, [ev_r1_ok], position_open=False, entry_resting=False,
     )
     assert len(d_ok) == 1 and d_ok[0].kind == "market"
+
+
+def test_position_life_cycle_defenses():
+    """三项持仓防线验证:
+    1) 滞留衰减(Time Decay): 满 6 根认知 bar 且 MFE < 0.5R → 锁损 -0.5R;
+    2) 箱体中轴半风险收缩(POC Half-Risk): LEVEL_REJECTED 突破 0.85R → 锁损 -0.45R(BREAKOUT_ACCEPTED 不受此限);
+    3) 裸奔兜底(MFE Naked Fallback): 曾达 1.25R 且当根收盘回落至 +0.50R 内侧 → 至少兜底保本(Entry)。
+    """
+    from market_operator.position import PositionManager
+
+    pm = PositionManager(
+        Params(),
+        time_stop=False,
+        reject_opp_lock_frac=-0.25,
+        time_decay_bars=6,
+        time_decay_mfe_r=0.50,
+        time_decay_stop_r=-0.50,
+        poc_halfrisk_r=0.85,
+        poc_halfrisk_stop_r=-0.45,
+        mfe_protect_r=1.25,
+        mfe_protect_lock_r=0.50,
+    )
+
+    # 建仓: entry=100, invalid=90 (R=10), target_1=120
+    pos = pm.open("BTCUSDT", 1, 100.0, 90.0, 120.0, LEVEL_REJECTED, 1000, 0)
+
+    # 1) TD 滞留: 连续 6 根认知 bar 最高仅 104.0 (MFE=0.40R < 0.50R) -> 第 6 根结束后止损收紧至 95.0 (-0.50R)
+    for k in range(6):
+        pm.on_bar("BTCUSDT", (2000 + k * 1000, 100.5, 104.0, 99.0, 101.0, 10.0), 2.0)
+    assert pos.bars_held == 6
+    assert abs(pos.invalid - 95.0) < 1e-9
+
+    # 2) POC Half-Risk: 盘中触及 108.6 (MFE=0.86R >= 0.85R) -> 止损从 95.0 收紧至 95.5 (-0.45R)
+    pm.on_bar("BTCUSDT", (9000, 101.0, 108.6, 100.5, 103.0, 10.0), 2.0)
+    assert abs(pos.invalid - 95.5) < 1e-9
+
+    # 对照: BREAKOUT_ACCEPTED 在 MFE=0.90R 时不触发 POC Half-Risk, 保留趋势回踩空间
+    pos_acc = pm.open("ETHUSDT", 1, 100.0, 90.0, None, BREAKOUT_ACCEPTED, 1000, 0)
+    pm.on_bar("ETHUSDT", (2000, 100.0, 109.0, 99.5, 104.0, 10.0), 2.0)
+    assert abs(pos_acc.invalid - 90.0) < 1e-9
+
+    # 3) MFE Naked Fallback: 盘中冲至 113.0 (MFE=1.30R >= 1.25R), 但当根回落收盘于 103.0 (< lock_px=105.0)
+    #    旧逻辑因 close < 105.0 不推进止损, 新逻辑至少兜底推进至保本位 100.0!
+    pm.on_bar("BTCUSDT", (10000, 103.0, 113.0, 102.0, 103.0, 10.0), 2.0)
+    assert abs(pos.invalid - 100.0) < 1e-9
+
+

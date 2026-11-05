@@ -38,7 +38,13 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
-from .events import BREAKOUT_ACCEPTED, TREND_RESUMED, STRUCTURE_BROKEN, MarketEvent
+from .events import (
+    BREAKOUT_ACCEPTED,
+    LEVEL_REJECTED,
+    STRUCTURE_BROKEN,
+    TREND_RESUMED,
+    MarketEvent,
+)
 from .hypothesis import Hypothesis
 from .broker import OrderIntent, OrderKind
 from .structure import Params, Pivot, PivotKind, _bar_parts
@@ -273,7 +279,12 @@ class PositionManager:
                  giveback_atr_k: Optional[float] = None,
                  accept_reenter_box_exit: bool = False,
                  mfe_protect_r: Optional[float] = None,
-                 mfe_protect_lock_r: float = 0.50) -> None:
+                 mfe_protect_lock_r: float = 0.50,
+                 time_decay_bars: int = 0,
+                 time_decay_mfe_r: float = 0.50,
+                 time_decay_stop_r: float = -0.50,
+                 poc_halfrisk_r: Optional[float] = None,
+                 poc_halfrisk_stop_r: float = -0.45) -> None:
 
         self.p = params or Params()
         self.allow_add = allow_add
@@ -287,6 +298,12 @@ class PositionManager:
         self.mfe_protect_r = (None if mfe_protect_r is None
                               else float(mfe_protect_r))
         self.mfe_protect_lock_r = float(mfe_protect_lock_r)
+        self.time_decay_bars = int(time_decay_bars or 0)
+        self.time_decay_mfe_r = float(time_decay_mfe_r)
+        self.time_decay_stop_r = float(time_decay_stop_r)
+        self.poc_halfrisk_r = (None if poc_halfrisk_r is None
+                               else float(poc_halfrisk_r))
+        self.poc_halfrisk_stop_r = float(poc_halfrisk_stop_r)
 
         # 符号是 arming 口径(不是"两把尺子"):<0 收盘突破(acceptance),
         # >0 盘中触及(touch);|frac| 决定回吐预算 (1−|frac|)·|target−entry|。
@@ -582,10 +599,51 @@ class PositionManager:
         if not skip_trail:
             self._trail(pos, new_pivots, atr)
 
+        # 4.3 边缘滞留时间衰减(Absorption / Time-Decay Stop Tightening):
+        #     真正的边界拒绝或突破接受具有即时主动买/卖盘脱离特征(Initiative Departure)。
+        #     若持仓满 time_decay_bars 根认知 bar 后最大顺向浮盈仍未达到 time_decay_mfe_r(如 0.50R),
+        #     说明入场边界正被对手盘吸收(Absorption),将初始止损单调收紧至 time_decay_stop_r(如 -0.50R),
+        #     削减滞留横盘后破位吃满 -1R 的慢刀子亏损。
+        if (not price_only
+                and self.time_decay_bars > 0
+                and pos.bars_held >= self.time_decay_bars
+                and pos.mfe_r < self.time_decay_mfe_r):
+            td_px = pos.entry + pos.direction * self.time_decay_stop_r * pos.initial_risk
+            if stop_protect_dist(pos.direction, td_px, c) > OPP_LOCK_EPS:
+                old = pos.invalid
+                pos.invalid = (min(pos.invalid, td_px) if pos.direction < 0
+                               else max(pos.invalid, td_px))
+                if abs(pos.invalid - old) > 1e-12:
+                    pos.log.append(
+                        f"time_decay|bars={pos.bars_held} mfe={pos.mfe_r:.2f}R "
+                        f"stop_r={self.time_decay_stop_r:.2f}R "
+                        f"invalid {old:.8g}->{pos.invalid:.8g}")
+
+        # 4.4 箱体中轴(POC)半风险防线(POC Half-Risk Defense):
+        #     当 LEVEL_REJECTED 顺向浮盈已突破 poc_halfrisk_r(如 0.85R,对应平衡箱中轴 POC 区域),
+        #     将最坏风险底线从 -1.0R 单调收紧至 poc_halfrisk_stop_r(如 -0.45R):
+        #     既给足回踩入场边沿(0R)洗盘再启动的呼吸空间,又杜绝已走过箱体中轴后坐过山车吃满 -1R 止损。
+        if (self.poc_halfrisk_r is not None
+                and self.poc_halfrisk_r > 0.0
+                and pos.event_id == LEVEL_REJECTED
+                and pos._best is not None
+                and pos.mfe_r >= self.poc_halfrisk_r):
+            hr_px = pos.entry + pos.direction * self.poc_halfrisk_stop_r * pos.initial_risk
+            if stop_protect_dist(pos.direction, hr_px, c) > OPP_LOCK_EPS:
+                old = pos.invalid
+                pos.invalid = (min(pos.invalid, hr_px) if pos.direction < 0
+                               else max(pos.invalid, hr_px))
+                if abs(pos.invalid - old) > 1e-12:
+                    pos.log.append(
+                        f"poc_halfrisk|mfe={pos.mfe_r:.2f}R "
+                        f"stop_r={self.poc_halfrisk_stop_r:.2f}R "
+                        f"invalid {old:.8g}->{pos.invalid:.8g}")
+
         # 4.5 波段脱离后的腰部利润保护:
         #     在浮盈未脱离 1:1 初始结构风险半径(mfe_protect_r,如 1.25R)前绝不推保本制造蚊子肉;
         #     一旦浮盈突破 >= mfe_protect_r,将保护防线单调推进至 entry ± mfe_protect_lock_r·R(如 +0.50R),
-        #     既锁定扎实的腰部利润、杜绝走出波段后坐过山车倒亏 -1R,又留出充足的回踩呼吸空间。
+        #     若当根冲高回落使收盘价已位于 lock_px 内侧但仍在 entry 盈利侧,则至少兜底收紧至保本位(entry),
+        #     消除冲高回落当根不推进止损的原地裸奔缺口。
         if (self.mfe_protect_r is not None
                 and self.mfe_protect_r > 0.0
                 and pos._best is not None
@@ -599,6 +657,14 @@ class PositionManager:
                     pos.log.append(
                         f"mfe_protect|mfe={pos.mfe_r:.2f}R "
                         f"lock_r={self.mfe_protect_lock_r:.2f}R "
+                        f"invalid {old:.8g}->{pos.invalid:.8g}")
+            elif stop_protect_dist(pos.direction, pos.entry, c) > OPP_LOCK_EPS:
+                old = pos.invalid
+                pos.invalid = (min(pos.invalid, pos.entry) if pos.direction < 0
+                               else max(pos.invalid, pos.entry))
+                if abs(pos.invalid - old) > 1e-12:
+                    pos.log.append(
+                        f"mfe_protect_be_fallback|mfe={pos.mfe_r:.2f}R "
                         f"invalid {old:.8g}->{pos.invalid:.8g}")
 
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
