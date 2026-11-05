@@ -163,6 +163,8 @@ def render_bw_kline_png(
     - `±R` 标尺:以 `entry_price`/`stop_price` 定义 1R,顺方向画出 `+1R/+2R/+3R`;
     - `pivots`:`[(下标, 价格, "high"|"low")]`,三角标记 + 最近两个价位标签,
       下标越界/缺失只画到窗口末根,不猜位置;
+    - **成交量面板**:与 K 线同一黑白语言(收涨=白底黑框、收跌=实心黑),
+      底部独立面板 + 窗口均量虚线(`bars` 第 6 列;5 列旧数据自动退化为无面板);
     - `atr`/`zone_touches` 只进表头摘要,不改变坐标轴。
 
     远端 pivot(超出 K 线窗口 30% 振幅)不纳入纵轴,否则最近几十根会被压成
@@ -178,6 +180,16 @@ def render_bw_kline_png(
     n = len(sub)
     if n == 0:
         return None
+
+    # 成交量:第 6 列为 volume(旧 5 列数据/0 量 ⇒ 不画面板,不伪造 0 柱)
+    vols: list[float] = []
+    for b in sub:
+        try:
+            v = float(b[5]) if len(b) > 5 else 0.0
+        except (TypeError, ValueError, IndexError):
+            v = 0.0
+        vols.append(v if math.isfinite(v) and v > 0 else 0.0)
+    has_vol = any(v > 0 for v in vols)
 
     def _num(value) -> Optional[float]:
         try:
@@ -237,9 +249,16 @@ def render_bw_kline_png(
         pad = span * 0.08
         y_hi, y_lo = p_max + pad, p_min - pad
 
-    W, H = 1000, 560
+    W, H = 1000, 640
     left_m, right_m, top_m, bot_m = 58, 156, 62, 44
     plot_w, plot_h = W - left_m - right_m, H - top_m - bot_m
+    # 价格面板 + (可选)量能面板;量能面板只吃底部固定高度,价格面板保留
+    # 主要纵向空间,避免箱体/±R 标尺被压扁。
+    vol_h = 96 if has_vol else 0
+    vol_gap = 12 if has_vol else 0
+    price_h = plot_h - vol_h - vol_gap
+    vol_top = top_m + price_h + vol_gap
+    vol_bot = top_m + plot_h
 
     img = Image.new("RGB", (W, H), (255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -272,7 +291,7 @@ def render_bw_kline_png(
             frac = (log_hi - math.log(pf)) / (log_hi - log_lo)
         else:
             frac = (y_hi - pf) / (y_hi - y_lo)
-        return int(round(top_m + max(0.0, min(1.0, frac)) * plot_h))
+        return int(round(top_m + max(0.0, min(1.0, frac)) * price_h))
 
     # 右侧标签栏:所有水平线/箱体/区间先登记,统一避让后再画 ——
     # 修前每条线各自把文字压在图上,价位接近时标签互相盖住。
@@ -284,8 +303,9 @@ def render_bw_kline_png(
     def rail_flush() -> None:
         rail.sort(key=lambda r: r[0])
         last = -10 ** 6
+        rail_bottom = (top_m + price_h - 6) if has_vol else (H - bot_m - 6)
         for y, text, fill in rail:
-            yy = min(max(int(y), last + 12), H - bot_m - 6)
+            yy = min(max(int(y), last + 12), rail_bottom)
             draw.text((left_m + plot_w + 8, yy - 6), text, fill=fill, font=font_s)
             last = yy
 
@@ -389,6 +409,40 @@ def render_bw_kline_png(
         else:
             draw.rectangle([x0, top_b, x1, bot_b], fill=(0, 0, 0), outline=(0, 0, 0), width=1)
 
+    # 成交量面板:同一套黑白语言(收涨白底黑框 / 收跌实心黑),虚线 = 窗口均量。
+    # 量能是入场判据的一部分,读图必须能直接看到"这根是不是放量的那一根"。
+    if has_vol:
+        v_max = max(vols)
+        v_top_val = v_max * 1.08
+
+        def vol_to_y(v: float) -> int:
+            frac = max(0.0, min(1.0, float(v) / v_top_val))
+            return int(round(vol_bot - frac * vol_h))
+
+        draw.line([(left_m, vol_top), (left_m + plot_w, vol_top)],
+                  fill=(140, 140, 140), width=1)
+        for idx, b in enumerate(sub):
+            v = vols[idx]
+            if v <= 0.0:
+                continue
+            cx = int(round(left_m + (idx + 0.5) * step_x))
+            yv = vol_to_y(v)
+            x0, x1 = cx - body_w // 2, cx + body_w // 2
+            if float(b[4]) >= float(b[1]):
+                draw.rectangle([x0, yv, x1, vol_bot], fill=(255, 255, 255),
+                               outline=(0, 0, 0), width=1)
+            else:
+                draw.rectangle([x0, yv, x1, vol_bot], fill=(0, 0, 0),
+                               outline=(0, 0, 0), width=1)
+        v_ma = sum(vols) / float(n)
+        yma = vol_to_y(v_ma)
+        hline(yma, 4, 4, (110, 110, 110))
+        draw.rectangle([left_m, vol_top, left_m + plot_w, vol_bot],
+                       outline=(0, 0, 0), width=1)
+        draw.text((4, vol_top + 2), "VOL", fill=(110, 110, 110), font=font_s)
+        draw.text((4, yma - 12), f"MA {_fmt_px(v_ma)}", fill=(110, 110, 110),
+                  font=font_s)
+
     # 结构端点:三角标记 + 最近两个价位标签(不标就读不出哪根是 pivot)
     labeled = 0
     for p_idx, p_price, p_kind in reversed(near_piv):
@@ -403,10 +457,10 @@ def render_bw_kline_png(
                    (pcx + 5, max(top_m + 4, py - 12))]
             ly = max(top_m + 2, py - 26)
         else:
-            tri = [(pcx, min(top_m + plot_h - 12, py + 4)),
-                   (pcx - 5, min(top_m + plot_h - 4, py + 12)),
-                   (pcx + 5, min(top_m + plot_h - 4, py + 12))]
-            ly = min(top_m + plot_h - 18, py + 14)
+            tri = [(pcx, min(top_m + price_h - 12, py + 4)),
+                   (pcx - 5, min(top_m + price_h - 4, py + 12)),
+                   (pcx + 5, min(top_m + price_h - 4, py + 12))]
+            ly = min(top_m + price_h - 18, py + 14)
         draw.polygon(tri, fill=(60, 60, 60))
         if labeled < 2:
             label = f"P{'H' if is_high else 'L'} {_fmt_px(p_price)}"
@@ -428,11 +482,11 @@ def render_bw_kline_png(
         my = max(top_m + 6, price_to_y(float(mb[2])) - 14)
         draw.polygon([(mcx, my + 8), (mcx - 5, my), (mcx + 5, my)], fill=(0, 0, 0))
     else:
-        my = min(top_m + plot_h - 6, price_to_y(float(mb[3])) + 14)
+        my = min(top_m + price_h - 6, price_to_y(float(mb[3])) + 14)
         draw.polygon([(mcx, my - 8), (mcx - 5, my), (mcx + 5, my)], fill=(0, 0, 0))
 
     rail_flush()
-    draw.rectangle([left_m, top_m, left_m + plot_w, top_m + plot_h],
+    draw.rectangle([left_m, top_m, left_m + plot_w, top_m + price_h],
                    outline=(0, 0, 0), width=2)
 
     ts_first = datetime.fromtimestamp(int(sub[0][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
@@ -450,6 +504,11 @@ def render_bw_kline_png(
         bits.append(f"R:R {rr:.2f}")
     if atr is not None and entry_price:
         bits.append(f"ATR {atr / entry_price:.2%}")
+    if has_vol:
+        v_ma_all = sum(vols) / float(n)
+        if v_ma_all > 0:
+            bits.append((f"量比 {vols[-1] / v_ma_all:.2f}x" if cjk_ok
+                         else f"VOL {vols[-1] / v_ma_all:.2f}x"))
     if box_lo is not None and box_hi is not None and entry_price:
         bits.append((f"箱体跨度 {(box_hi - box_lo) / entry_price:.2%}" if cjk_ok
                      else f"BOX span {(box_hi - box_lo) / entry_price:.2%}"))

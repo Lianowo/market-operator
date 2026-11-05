@@ -62,7 +62,30 @@ def test_async_transport_and_render_never_run_on_caller_thread():
     n._q.put_nowait(None)
 
 
-def test_guard_catches_template_failures_and_preserves_metadata():
+def test_bw_chart_draws_volume_panel_and_stays_backward_compatible():
+    """成交量必须进入黑白结构图;旧 5 列 bars 仍可渲染(不伪造 0 柱)。"""
+    import io
+
+    from PIL import Image
+
+    from market_operator.tg import render_bw_kline_png
+
+    base = [(1700000000000 + i * 7200000, 100.0 + i * 0.5, 101.5 + i * 0.5,
+             99.0 + i * 0.5, 101.0 + i * 0.5, 100.0) for i in range(30)]
+    flat = render_bw_kline_png(base, symbol="BTCUSDT", tf_label="2h",
+                               title_tag="SIGNAL")
+    spiky = render_bw_kline_png(
+        base[:-1] + [(base[-1][0], base[-1][1], base[-1][2], base[-1][3],
+                      base[-1][4], 1200.0)],
+        symbol="BTCUSDT", tf_label="2h", title_tag="SIGNAL")
+    assert flat and spiky
+    assert flat != spiky                      # 量能真的画进了图里
+
+    legacy = render_bw_kline_png([b[:5] for b in base], symbol="BTCUSDT",
+                                 tf_label="2h", title_tag="SIGNAL")
+    assert legacy is not None
+    assert Image.open(io.BytesIO(legacy)).size == (1000, 640)
+
     class Boom:
         async_mode = True
         def send_alert(self, text):
