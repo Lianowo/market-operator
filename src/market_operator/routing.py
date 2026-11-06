@@ -386,6 +386,8 @@ class MarketRouter:
                 if tf_h >= 24 or (self.params.struct_impulse_confirm and is_rej):
                     self._bump("restraint_htf_imbalance_reject")
                     return None
+        if self.params.balance_auction_alignment:
+            return dec
         risk = direction * (close - hyp.invalid)
         capped_target = hyp.target_1
         for hv in htf_views:
@@ -509,6 +511,7 @@ class MarketRouter:
                 return None
             sub_k_align = str(ev.attrs.get("sub_kind", ""))
             sk_align = getattr(zone, "source_kind", "BOX_EDGE")
+            is_mic_align = bool(ev.attrs.get("mic", False))
             if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
                 if view.regime in (Regime.TREND_UP, Regime.TREND_DOWN):
                     self._bump("restraint_trend_mean_reversion_reject")
@@ -516,35 +519,16 @@ class MarketRouter:
                 if sub_k_align != "R3_TRAP":
                     self._bump("restraint_unbacked_stall_reject")
                     return None
-                if view.regime is Regime.TRANSITION:
-                    opp_tr = getattr(zone, "box_opposite", None)
-                    inv_tr = float(ev.attrs.get("invalid") or close)
-                    dist_tr = ev.direction * (close - inv_tr)
-                    rr_tr = (
-                        (ev.direction * (float(opp_tr) - close) / dist_tr)
-                        if (opp_tr is not None and dist_tr > 0.0)
-                        else 0.0
-                    )
-                    if float(getattr(zone, "box_width_atr", 99.0)) > 4.5 or rr_tr < 1.5:
-                        self._bump("restraint_transition_regime_reject")
-                        return None
             elif cid == BREAKOUT_ACCEPTED:
-                if view.regime is Regime.TRANSITION and bool(ev.attrs.get("mic", False)):
+                if view.regime is Regime.TRANSITION and is_mic_align:
                     self._bump("restraint_transition_regime_reject")
                     return None
-                if sk_align == "BOX_EDGE":
-                    inner_b = float(zone.hi if ev.direction > 0 else zone.lo)
-                    disp_atr = (ev.direction * (close - inner_b) / atr) if atr > 0.0 else 0.0
-                    if view.regime is Regime.RANGE or sub_k_align == "A1_TIGHT" or disp_atr < 1.1:
-                        self._bump("restraint_range_outward_breakout_reject")
-                        return None
-                elif sk_align == "FLIPPED_BOX_EDGE":
-                    opp_re = getattr(zone, "box_opposite", None)
-                    if opp_re is not None and atr > 0.0:
-                        inner_re = float(zone.hi if ev.direction > 0 else zone.lo)
-                        if abs(float(opp_re) - inner_re) / atr > 4.0:
-                            self._bump("restraint_wide_reentry_box_reject")
-                            return None
+                if sk_align == "BOX_EDGE" and view.regime is Regime.RANGE:
+                    self._bump("restraint_range_outward_breakout_reject")
+                    return None
+                if not is_mic_align and sub_k_align == "A1_TIGHT":
+                    self._bump("restraint_range_outward_breakout_reject")
+                    return None
         if cid == BREAKOUT_ACCEPTED:
             ext_atr = ev.attrs.get("ext_atr")
             if ext_atr is not None:

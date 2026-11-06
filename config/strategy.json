@@ -47,7 +47,7 @@
   "router_params": {
     "reject_use_struct_stop": true,
     "reject_target_mode": "opposite",
-    "accept_use_struct_stop": false,
+    "accept_use_struct_stop": true,
     "reentry_use_struct_stop": true,
     "balance_auction_alignment": true,
     "accept_target_box_mult": 2.0,

@@ -795,11 +795,11 @@ def test_balance_auction_alignment_first_principles():
         id=LEVEL_REJECTED, direction=1, ts=1000, known_index=10,
         attrs={"zone": z_box, "ref": 99.0, "invalid": 98.3, "sub_kind": "R3_TRAP", "ex_index": 10},
     )
-    # 1) TRANSITION 宽箱(width=5.0 > 4.5)拦截
-    view_trans = StructureView(regime=Regime.TRANSITION, zones=(z_box,), atr=2.0)
-    assert router.on_bar("BTCUSDT", (1000, 99.5, 101.0, 98.5, 100.6, 1.0), 10, view_trans, 2.0, [ev_rej_trap],
+    # 1) TREND_UP 下同向 LEVEL_REJECTED(单边趋势不做箱内均值回归)拦截, TRANSITION 下 R3_TRAP 放行
+    view_up_rej = StructureView(regime=Regime.TREND_UP, zones=(z_box,), atr=2.0)
+    assert router.on_bar("BTCUSDT", (1000, 99.5, 101.0, 98.5, 100.6, 1.0), 10, view_up_rej, 2.0, [ev_rej_trap],
                          position_open=False, entry_resting=False) == []
-    assert router.counters.get("restraint_transition_regime_reject") == 1
+    assert router.counters.get("restraint_trend_mean_reversion_reject") == 1
 
     # 2) TREND_DOWN 逆势做多拦截
     view_down = StructureView(regime=Regime.TREND_DOWN, zones=(z_box,), atr=2.0)

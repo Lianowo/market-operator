@@ -441,14 +441,20 @@ class ZoneBook:
                     break
             if matched is not None:
                 new_box = getattr(lvl, "box_id", None)
-                if new_box is not None and matched.box_id is not None \
-                        and new_box != matched.box_id:
-                    # 同一个角色位置换成了另一只箱:身份变了,几何版本必须+1,
-                    # 否则旧候选/旧证据会偷渡到新边界上。
+                new_origin = int(getattr(lvl, "origin_index", index))
+                if (
+                    (new_box is not None and matched.box_id is not None and new_box != matched.box_id)
+                    or matched.source_kind != sk
+                ):
+                    # 同一个角色位置换成了另一只箱或由 BOX_EDGE 转为 FLIPPED_BOX_EDGE:
+                    # 身份与起源变了,几何版本+1并刷新 origin_known 与 rejects。
                     matched.box_id = new_box
                     matched.geometry_version += 1
+                    matched.origin_known = new_origin
+                    matched.rejects = 0
                 elif matched.box_id is None:
                     matched.box_id = new_box
+                    matched.origin_known = new_origin
                 matched.lo = zlo
                 matched.hi = zhi
                 bm_now = self.p.k_bm * atr_val
@@ -685,6 +691,12 @@ class MarketStructure:
             self._zones.on_pivot(pivot, pivot.known_index, atr_val)
         self._zones.on_bar(index, o, h, l, c, prev_close, atr_val, ts=ts, v=v)
         self._regime = _regime_from(self._pivots, atr_val, self.params, c)
+        if (
+            self._regime is Regime.TRANSITION
+            and self._zones._bal_det is not None
+            and self._zones._bal_det.active_box is not None
+        ):
+            self._regime = Regime.RANGE
 
     @property
     def pivots(self) -> tuple[Pivot, ...]:
@@ -714,22 +726,27 @@ class MarketStructure:
 
     def macro_imbalance(self, k_room: Optional[float] = None) -> int:
         """纯道氏/AMT 宏观主结构失衡状态(+1 宏观多头失衡 / -1 宏观空头失衡 / 0 平衡震荡)。
-        以当前确认的 8 个波段拐点(range_max_pivots)为结构观察窗口,
-        衡量当前收盘相对窗口起始锚点的位移与波段高低点迁移方向(0 日历天数先验)。
+        若当前存在已确认的活跃水平平衡箱,则处于宏观价值平衡(0);
+        否则以当前确认波段拐点窗口的起始高低点中轴为基准,衡量现价位移与高低点同步同向迁移。
         """
         if self._atr.value <= 0.0 or len(self._pivots) < 4 or not self._bars:
             return 0
+        if self._zones._bal_det is not None and self._zones._bal_det.active_box is not None:
+            return 0
         kr = float(self.params.k_room if k_room is None else k_room)
         pivs = self._pivots[-self.params.range_max_pivots:]
-        c = float(self._bars[-1][4])
-        disp = (c - pivs[0].price) / self._atr.value
         highs = [p.price for p in pivs if p.kind is PivotKind.HIGH]
         lows = [p.price for p in pivs if p.kind is PivotKind.LOW]
-        hi_mig = (highs[-1] - highs[0]) if len(highs) >= 2 else 0.0
-        lo_mig = (lows[-1] - lows[0]) if len(lows) >= 2 else 0.0
-        if disp >= kr and (hi_mig > 0.0 or lo_mig > 0.0):
+        if len(highs) < 2 or len(lows) < 2:
+            return 0
+        c = float(self._bars[-1][4])
+        mid_start = 0.5 * (highs[0] + lows[0])
+        disp = (c - mid_start) / self._atr.value
+        hi_mig = highs[-1] - highs[0]
+        lo_mig = lows[-1] - lows[0]
+        if disp >= kr and hi_mig > 0.0 and lo_mig > 0.0 and c >= lows[-1]:
             return +1
-        if disp <= -kr and (hi_mig < 0.0 or lo_mig < 0.0):
+        if disp <= -kr and hi_mig < 0.0 and lo_mig < 0.0 and c <= highs[-1]:
             return -1
         return 0
 
