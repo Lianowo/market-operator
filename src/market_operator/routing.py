@@ -509,6 +509,9 @@ class MarketRouter:
             sub_k_align = str(ev.attrs.get("sub_kind", ""))
             sk_align = getattr(zone, "source_kind", "BOX_EDGE")
             if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                if view.regime in (Regime.TREND_UP, Regime.TREND_DOWN):
+                    self._bump("restraint_trend_mean_reversion_reject")
+                    return None
                 if sub_k_align != "R3_TRAP":
                     self._bump("restraint_unbacked_stall_reject")
                     return None
@@ -534,6 +537,13 @@ class MarketRouter:
                     if view.regime is Regime.RANGE or sub_k_align == "A1_TIGHT" or disp_atr < 1.1:
                         self._bump("restraint_range_outward_breakout_reject")
                         return None
+                elif sk_align == "FLIPPED_BOX_EDGE":
+                    opp_re = getattr(zone, "box_opposite", None)
+                    if opp_re is not None and atr > 0.0:
+                        inner_re = float(zone.hi if ev.direction > 0 else zone.lo)
+                        if abs(float(opp_re) - inner_re) / atr > 4.0:
+                            self._bump("restraint_wide_reentry_box_reject")
+                            return None
         if cid == BREAKOUT_ACCEPTED:
             ext_atr = ev.attrs.get("ext_atr")
             if ext_atr is not None:
