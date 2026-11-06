@@ -509,9 +509,22 @@ class MarketRouter:
             sub_k_align = str(ev.attrs.get("sub_kind", ""))
             sk_align = getattr(zone, "source_kind", "BOX_EDGE")
             if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
-                if view.regime is Regime.TRANSITION and float(getattr(zone, "box_width_atr", 99.0)) > 4.5:
-                    self._bump("restraint_transition_regime_reject")
-                    return None
+                if view.regime is Regime.TRANSITION:
+                    opp_tr = getattr(zone, "box_opposite", None)
+                    inv_tr = float(ev.attrs.get("invalid") or close)
+                    dist_tr = ev.direction * (close - inv_tr)
+                    rr_tr = (
+                        (ev.direction * (float(opp_tr) - close) / dist_tr)
+                        if (opp_tr is not None and dist_tr > 0.0)
+                        else 0.0
+                    )
+                    if (
+                        sub_k_align != "R3_TRAP"
+                        or float(getattr(zone, "box_width_atr", 99.0)) > 4.5
+                        or rr_tr < 2.0
+                    ):
+                        self._bump("restraint_transition_regime_reject")
+                        return None
                 if sub_k_align == "R2_STALL":
                     self._bump("restraint_unbacked_stall_reject")
                     return None
