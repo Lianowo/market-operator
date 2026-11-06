@@ -509,6 +509,9 @@ class MarketRouter:
             sub_k_align = str(ev.attrs.get("sub_kind", ""))
             sk_align = getattr(zone, "source_kind", "BOX_EDGE")
             if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                if sub_k_align != "R3_TRAP":
+                    self._bump("restraint_unbacked_stall_reject")
+                    return None
                 if view.regime is Regime.TRANSITION:
                     opp_tr = getattr(zone, "box_opposite", None)
                     inv_tr = float(ev.attrs.get("invalid") or close)
@@ -518,28 +521,19 @@ class MarketRouter:
                         if (opp_tr is not None and dist_tr > 0.0)
                         else 0.0
                     )
-                    if (
-                        sub_k_align != "R3_TRAP"
-                        or float(getattr(zone, "box_width_atr", 99.0)) > 4.5
-                        or rr_tr < 2.0
-                    ):
+                    if float(getattr(zone, "box_width_atr", 99.0)) > 4.5 or rr_tr < 2.0:
                         self._bump("restraint_transition_regime_reject")
-                        return None
-                if sub_k_align == "R2_STALL":
-                    self._bump("restraint_unbacked_stall_reject")
-                    return None
-                if sub_k_align == "R1_WICK":
-                    ex_i = ev.attrs.get("ex_index")
-                    if ex_i is not None and (int(ev.known_index) - int(ex_i)) > 1:
-                        self._bump("restraint_stale_wick_reject")
                         return None
             elif cid == BREAKOUT_ACCEPTED:
                 if view.regime is Regime.TRANSITION:
                     self._bump("restraint_transition_regime_reject")
                     return None
-                if sk_align == "BOX_EDGE" and (view.regime is Regime.RANGE or sub_k_align == "A1_TIGHT"):
-                    self._bump("restraint_range_outward_breakout_reject")
-                    return None
+                if sk_align == "BOX_EDGE":
+                    inner_b = float(zone.hi if ev.direction > 0 else zone.lo)
+                    disp_atr = (ev.direction * (close - inner_b) / atr) if atr > 0.0 else 0.0
+                    if view.regime is Regime.RANGE or sub_k_align == "A1_TIGHT" or disp_atr < 1.1:
+                        self._bump("restraint_range_outward_breakout_reject")
+                        return None
         if cid == BREAKOUT_ACCEPTED:
             ext_atr = ev.attrs.get("ext_atr")
             if ext_atr is not None:
