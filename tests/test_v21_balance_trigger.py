@@ -309,10 +309,10 @@ def test_live_runner_v21_multi_tf_campaigns(tmp_path):
     assert ("BTCUSDT", "4h") in runner.extra_campaigns
     assert runner.current_risk_frac(104.0) == 0.05
     assert runner.current_risk_frac(300.0) == 0.05
-    assert runner.current_risk_frac(1000.01) == 0.04
-    assert runner.current_risk_frac(5000.01) == 0.03
-    assert runner.current_risk_frac(10000.01) == 0.02
-    assert runner.current_risk_frac(100000.01) == 0.01
+    assert runner.current_risk_frac(10000.0) == 0.05
+    assert runner.current_risk_frac(10000.01) == 0.04
+    assert runner.current_risk_frac(50000.01) == 0.03
+    assert runner.current_risk_frac(200000.01) == 0.02
 
 
 def test_live_runner_v21_adaptive_warmup_for_new_listings(tmp_path):
