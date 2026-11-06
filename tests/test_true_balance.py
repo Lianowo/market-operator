@@ -101,3 +101,34 @@ def test_breakout_transitions_to_migration_with_flipped_support():
     assert br.support is not None
     assert br.support.source_kind == "FLIPPED_BOX_EDGE"
     assert 122.0 <= br.support.outer <= br.support.inner <= 138.0
+
+
+def test_flipped_box_retires_on_opposite_traversal_or_cause_effect_expiry():
+    """破位箱一旦被反向收盘击穿对侧外沿,或箱外游荡超过自身构建因果寿命(2.5x box_duration),不再充当 FLIPPED_BOX_EDGE。"""
+    base_bars = list(_make_horizontal_box_bars(cycles=2))
+    last_ts = base_bars[-1][0]
+    for k, close_px in enumerate((136.0, 139.0), start=1):
+        o = 132.0 if k == 1 else close_px - 2.0
+        base_bars.append((last_ts + k * 3_600_000, o, close_px + 1.5, o - 1.0, close_px, 150.0))
+
+    # Case 1: 反向贯穿击穿下沿 lo_ext - bm (例如跌至 90.0),即使之后再反弹回 132.0,该死箱也绝不再诈尸
+    bars_traversed = list(base_bars)
+    t0 = bars_traversed[-1][0]
+    bars_traversed.append((t0 + 3_600_000, 138.0, 138.0, 88.0, 90.0, 200.0))
+    bars_traversed.append((t0 + 2 * 3_600_000, 90.0, 134.0, 90.0, 132.0, 200.0))
+    det1, br1 = _feed_bars(bars_traversed, atr=10.0)
+    assert len(det1.history_boxes) == 1
+    assert br1 is not None and (br1.support is None or br1.support.source_kind != "FLIPPED_BOX_EDGE")
+
+    # Case 2: 箱外单边游荡超过 2.5 倍箱体自身构建寿命 (box_duration),老箱体自然过期退役
+    bars_expired = list(base_bars)
+    det_tmp, _ = _feed_bars(bars_expired, atr=10.0)
+    hb = det_tmp.history_boxes[0]
+    box_duration = hb.broken_index - hb.start_index + 1
+    t0 = bars_expired[-1][0]
+    for j in range(1, int(2.5 * box_duration) + 3):
+        px = 145.0 + j * 1.5
+        bars_expired.append((t0 + j * 3_600_000, px - 1.0, px + 1.0, px - 1.5, px, 100.0))
+    _, br2 = _feed_bars(bars_expired, atr=10.0)
+    assert br2 is not None and (br2.support is None or br2.support.source_kind != "FLIPPED_BOX_EDGE")
+

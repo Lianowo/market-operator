@@ -54,6 +54,7 @@ class TrueBalanceParams:
     poc_zone_hi: float = 0.75
     quality_min: float = 0.35
     keep_flipped_bars: int = 96
+    flipped_life_mult: float = 2.5
     reentry_enabled: bool = False
     reentry_revive_bars: int = 0
 
@@ -640,8 +641,19 @@ class TrueBalanceDetector:
         best_res_args: Optional[tuple] = None
 
         for hb in reversed(self.history_boxes[-6:]):
-            if hb.broken_index is not None and idx - hb.broken_index > self.p.keep_flipped_bars:
-                continue
+            if hb.broken_index is not None:
+                b_idx = hb.broken_index
+                if idx - b_idx > self.p.keep_flipped_bars:
+                    continue
+                if self.p.flipped_life_mult > 0.0:
+                    box_duration = max(1, b_idx - hb.start_index + 1)
+                    if (idx - b_idx) > self.p.flipped_life_mult * box_duration:
+                        continue
+                bm = self.p.break_margin_atr * atr
+                if hb.state == "BROKEN_UP" and min(self._closes[b_idx : idx + 1]) < hb.lo_ext - bm:
+                    continue
+                if hb.state == "BROKEN_DOWN" and max(self._closes[b_idx : idx + 1]) > hb.hi_ext + bm:
+                    continue
             if hb.state == "BROKEN_UP" and c >= hb.val and hb.vah <= sup_limit:
                 key = (1, hb.hi_ext)
                 if best_sup_key is None or key > best_sup_key:
