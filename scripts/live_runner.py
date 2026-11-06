@@ -1165,10 +1165,18 @@ class LiveRunner:
         except Exception:
             pass
 
+    def _base_step_seconds(self, bars: Optional[list] = None) -> int:
+        if bars and len(bars) >= 2 and int(bars[1][0]) > int(bars[0][0]):
+            return int(bars[1][0] - bars[0][0]) // 1000
+        gran = str(self.cog_cfg.get("granularity") or "2H").strip().lower()
+        if gran.endswith("utc"):
+            gran = gran[:-3]
+        return int(TF_SECONDS_MAP.get(gran, 7200))
+
     def _fetch_trigger_bars(self, symbol: str, want: int,
                             seed_bars: Optional[list] = None) -> list:
-        """2H 帧回补:优先复用本地缓存 + 增量补齐;不足时倒序分页补齐并落盘缓存。"""
-        base_ms = 7200 * 1000
+        """基础触发帧回补:优先复用本地缓存 + 增量补齐;不足时倒序分页补齐并落盘缓存。"""
+        base_ms = self._base_step_seconds() * 1000
         have: dict = {}
         for src in (self._load_cached_bars(symbol), seed_bars or []):
             for b in src:
@@ -1259,7 +1267,8 @@ class LiveRunner:
         if bars2h is None:
             bars2h = self._fetch_trigger_bars(symbol, want)
         min_cog_bars = self._min_cog_bars_for_tf()
-        scale_2h = max(1, obs_s // 7200)
+        base_s = self._base_step_seconds(bars2h)
+        scale_2h = max(1, obs_s // base_s)
         min_2h_needed = min_cog_bars * scale_2h
         if len(bars2h) < min_2h_needed:
             if not quiet_if_short and symbol not in self._short_history_alerted:
@@ -1268,7 +1277,7 @@ class LiveRunner:
                                    f" 根),暂不开启该周期")
             return None
         for a, b in zip(bars2h, bars2h[1:]):       # 网格完整性(不可静默)
-            if b[0] - a[0] != 7200 * 1000:
+            if b[0] - a[0] != base_s * 1000:
                 self.tg.send_alert(f"{symbol} 2H 序列缺口 {a[0]}→{b[0]},"
                                    f"暂不交易")
                 return None
@@ -1346,7 +1355,8 @@ class LiveRunner:
             if tf in active_tfs:
                 continue
             obs_s = TF_SECONDS_MAP.get(tf, int(self.cog_cfg["obs_tf_seconds"]))
-            scale_2h = max(1, obs_s // 7200)
+            base_s = self._base_step_seconds(bars2h)
+            scale_2h = max(1, obs_s // base_s)
             if len(bars2h) >= (min_cog + 1) * scale_2h:
                 cs_new = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
                 if cs_new is not None:
@@ -1643,7 +1653,7 @@ class LiveRunner:
             self._sync_live_fills(now_ms)
             self._advance_price_clock(now_ms)
             self._poll_position_prices(now_ms)
-        base_ms = 7200 * 1000
+        base_ms = self._base_step_seconds() * 1000
         for sym, cs in sorted(self.campaigns.items()):
             try:
                 last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
@@ -1879,7 +1889,7 @@ class LiveRunner:
             new_bars = self.client.history_candles(
                 cs.symbol, self.cog_cfg["granularity"], start_ms=last + 1,
                 limit=100)
-        base_ms = 7200 * 1000
+        base_ms = self._base_step_seconds(cs.trig_bars or new_bars) * 1000
         trig_ms = max(base_ms, int(cs.trigger_tf_seconds) * 1000)
         obs_ms = max(base_ms, int(cs.obs_tf_seconds) * 1000)
         trig_scale = max(1, trig_ms // base_ms)
@@ -2420,7 +2430,7 @@ class LiveRunner:
         if pos_pm is not None:
             old_inv = float(pos_pm.invalid)
             if pos_pm.opened_ts > cog_bar[0]:
-                scale_n = max(1, obs_s // 7200)
+                scale_n = max(1, obs_s // base_s)
                 sub_bars = [
                     b for b in cs.trig_bars[-scale_n:]
                     if int(b[0]) >= int(pos_pm.opened_ts)
@@ -4419,13 +4429,22 @@ def main(argv=None) -> None:
                         symbols=tuple(cfg.get("symbols_core") or ()))
     poll = int(cfg["loop"]["poll_seconds"])
     r = cfg["risk"]
-    print(f"[live_runner] mode={args.mode} 主循环起动(每 {poll}s;risk_frac="
+    tf_list = list((cfg.get("cognition") or {}).get("tf_list") or ["2h", "4h", "1d"])
+    trig_map = (cfg.get("cognition") or {}).get("trigger_tf_by_htf") or {}
+    cascade_txt = ", ".join(
+        f"{tf}->{int(trig_map[tf]) // 60}m" if int(trig_map.get(tf) or 0) < 3600
+        else (f"{tf}->{int(trig_map[tf]) // 3600}h" if trig_map.get(tf) else tf)
+        for tf in tf_list
+    )
+    print(f"[live_runner] mode={args.mode} 主循环起动(每 {poll}s;cascade=[{cascade_txt}];risk_frac="
           f"{r['risk_frac']} 杠杆≤{r['leverage_cap']} 组合≤"
           f"{r['portfolio_cap_frac']} 日损熔断 {r['max_daily_loss_frac']} "
           f"每时单限 {r['orders_per_hour']};宇宙 >= "
           f"{cfg['universe']['min_usdt_volume_24h']:.0f} USDT)", flush=True)
-    tg.send_alert(f"live_runner 起动(mode={args.mode});信号=公开广播"
-                  f"(仅结构+执行口径),成交/日结/告警={chan_txt}")
+    tg.send_alert(f"live_runner 起动(mode={args.mode} | 策略={cfg.get('version', 'v22-pure-pa-amt')})\n"
+                  f"⏱️ 周期级联: {cascade_txt}\n"
+                  f"🛡️ 风控配置: 单笔风险 {r['risk_frac']:.1%} (动态阶梯复利) | 单周期上限 {list((r.get('tf_cap_by_tf') or {}).values())[0] if r.get('tf_cap_by_tf') else 0.15:.0%} | 组合上限 {r['portfolio_cap_frac']:.0%}\n"
+                  f"📡 通知通道: 信号=公开广播(结构+执行口径), 成交/日结/告警={chan_txt}")
     print(f"[live_runner] gap_started={runner._gap_started_ms} "
           f"gap_symbols={sorted(runner._gap_bars)} "
           f"gap_bars={sum(len(v) for v in runner._gap_bars.values())}",

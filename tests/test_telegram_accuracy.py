@@ -102,3 +102,21 @@ def test_queue_full_drops_without_network_or_blocking():
     n._q.put_nowait((None, (), {}))
     assert n.send_alert("full") is False
     assert n.dropped == 1 and calls == []
+
+
+def test_signal_broadcasts_amt_structural_pattern_and_source_kind():
+    n, calls = notifier()
+    n.send_signal(
+        "ETHUSDT", "LEVEL_REJECTED", "buy", "level_rejected_market", 2500.0, 2450.0,
+        tf_label="4h", regime="TRANSITION", target_1=2650.0,
+        price_context={
+            "trade_context": "箱沿拒绝",
+            "sub_kind": "R3_TRAP",
+            "source_kind": "BOX_EDGE",
+            "execution_target": 2650.0,
+        },
+    )
+    assert calls[0][0:2] == ("SIG", "PUBLIC")
+    body = calls[0][3]
+    assert "🧩 交易场景: 箱沿拒绝" in body
+    assert "🔬 结构形态: R3_TRAP (假突破吞没陷阱) · 现役平衡箱沿" in body

@@ -52,6 +52,7 @@
     "balance_auction_alignment": true,
     "accept_target_box_mult": 2.0,
     "reentry_target_management": true,
+    "struct_impulse_confirm": true,
     "zone_departure_reset": true,
     "max_accept_ext_atr": 1.5,
     "max_box_progress_frac": 0.75,
@@ -69,7 +70,7 @@
       "struct_impulse_confirm": true
     },
     "1d": {
-      "struct_impulse_confirm": false
+      "struct_impulse_confirm": true
     }
   },
   "arm_config": {

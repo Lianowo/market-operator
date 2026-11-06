@@ -47,6 +47,7 @@ def _event_provenance(ev: MarketEvent) -> dict:
             if ev.attrs.get("invalid") is not None
             else None
         ),
+        "sub_kind": ev.attrs.get("sub_kind"),
     }
     zone = ev.attrs.get("zone")
     if zone is not None:

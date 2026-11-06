@@ -772,6 +772,23 @@ class TelegramNotifier:
         if price_context is not None:
             ctx = price_context
             lines.append(f"🧩 交易场景: {ctx.get('trade_context', '未标注')}")
+            sub_k = ctx.get("sub_kind")
+            sk_k = ctx.get("source_kind")
+            if sub_k or sk_k:
+                sub_map = {
+                    "R3_TRAP": "R3_TRAP (假突破吞没陷阱)",
+                    "R1_WICK": "R1_WICK (扫损长影线)",
+                    "R2_STALL": "R2_STALL (边界停滞)",
+                    "A1_TIGHT": "A1_TIGHT (紧凑突破接受)",
+                    "A2_OVEREXTENDED": "A2_STRONG (位移突破接受)",
+                }
+                sk_map = {
+                    "BOX_EDGE": "现役平衡箱沿",
+                    "FLIPPED_BOX_EDGE": "破位箱重返边界",
+                }
+                parts = [p for p in (sub_map.get(str(sub_k), str(sub_k or "")), sk_map.get(str(sk_k), str(sk_k or ""))) if p]
+                if parts:
+                    lines.append(f"🔬 结构形态: {' · '.join(parts)}")
             if "execution_target" in ctx:
                 managed = ctx["execution_target"]
                 lines.append("⚙️ 目标管理: 结构目标仅观察/评估，不触发锁利或减仓"
