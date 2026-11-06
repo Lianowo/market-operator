@@ -62,8 +62,8 @@ def test_async_transport_and_render_never_run_on_caller_thread():
     n._q.put_nowait(None)
 
 
-def test_bw_chart_draws_volume_panel_and_stays_backward_compatible():
-    """成交量必须进入黑白结构图;旧 5 列 bars 仍可渲染(不伪造 0 柱)。"""
+def test_bw_chart_pure_price_action_ignores_volume_and_renders_cleanly():
+    """纯价格行为黑白结构图不依赖也不渲染成交量;5 列或 6 列 K 线渲染完全一致。"""
     import io
 
     from PIL import Image
@@ -79,12 +79,12 @@ def test_bw_chart_draws_volume_panel_and_stays_backward_compatible():
                       base[-1][4], 1200.0)],
         symbol="BTCUSDT", tf_label="2h", title_tag="SIGNAL")
     assert flat and spiky
-    assert flat != spiky                      # 量能真的画进了图里
+    assert flat == spiky                      # 纯K线图表不受成交量干扰
 
     legacy = render_bw_kline_png([b[:5] for b in base], symbol="BTCUSDT",
                                  tf_label="2h", title_tag="SIGNAL")
-    assert legacy is not None
-    assert Image.open(io.BytesIO(legacy)).size == (1000, 640)
+    assert legacy == flat
+    assert Image.open(io.BytesIO(legacy)).size == (1000, 560)
 
     class Boom:
         async_mode = True

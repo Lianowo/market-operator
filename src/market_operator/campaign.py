@@ -718,7 +718,7 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
 
 
 def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple:
-    """获取同标的更高宏观周期(htf_hours >= 3 * tf_hours 或 1D 主锚点)在 close_moment_ms 前最新已收盘认知视图。"""
+    """获取同标的更高周期(htf_hours >= 2 * tf_hours,如 2h->4h/12h/1d, 4h->12h/1d)在 close_moment_ms 前最新已收盘认知视图。"""
     if not states or not getattr(getattr(st.router, "params", None), "htf_wall_filter", False):
         return ()
     sym = st.frame.symbol
@@ -726,41 +726,34 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
     out = []
     for other in states.values():
         hf = other.frame
-        if hf.symbol != sym or hf.tf_hours <= tf_h or (hf.tf_hours < 3 * tf_h and hf.tf_hours < 24):
+        if hf.symbol != sym or hf.tf_hours < 2 * tf_h:
             continue
         ms_htf = hf.tf_hours * MS_1H
         max_open_ts = int(close_moment_ms) - ms_htf
         bars = hf.cog.bars
         idx = bisect_right(bars, max_open_ts, key=lambda b: int(b[0])) - 1
         if idx >= 0:
-            vw = hf.cog.views.get(idx) if hf.tf_hours >= 3 * tf_h else None
+            vw = hf.cog.views.get(idx)
+            act_zones = (
+                hf.cog.active_zones[idx]
+                if idx < len(getattr(hf.cog, "active_zones", ()))
+                else (vw.zones if vw is not None else ())
+            )
             m_imb = (
                 int(hf.cog.macro_imbalances[idx])
                 if idx < len(getattr(hf.cog, "macro_imbalances", ()))
                 else 0
             )
-            if vw is not None:
-                out.append(
-                    StructureView(
-                        regime=vw.regime,
-                        zones=vw.zones,
-                        atr=vw.atr,
-                        pivots=vw.pivots,
-                        macro_imbalance=m_imb,
-                        tf_hours=hf.tf_hours,
-                    )
+            out.append(
+                StructureView(
+                    regime=(vw.regime if vw is not None else hf.cog.regimes[idx]),
+                    zones=(vw.zones if vw is not None and vw.zones else act_zones),
+                    atr=(vw.atr if vw is not None else hf.cog.atrs[idx]),
+                    pivots=(vw.pivots if vw is not None else ()),
+                    macro_imbalance=m_imb,
+                    tf_hours=hf.tf_hours,
                 )
-            elif m_imb != 0:
-                out.append(
-                    StructureView(
-                        regime=hf.cog.regimes[idx],
-                        zones=(),
-                        atr=hf.cog.atrs[idx],
-                        pivots=(),
-                        macro_imbalance=m_imb,
-                        tf_hours=hf.tf_hours,
-                    )
-                )
+            )
     return tuple(out)
 
 
@@ -987,17 +980,26 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     lo, hi = bounds["lo"], bounds["hi"]
     if not (lo <= i < hi):
         return
-    _count_go(counters, new_events, go_set)
+    # 多周期级联职责边界:当本战役已挂载细周期触发器(f.mic is not None)时,
+    # 边界拒绝(LEVEL_REJECTED)已由细周期实时捕捉与确认,粗周期收盘不再迟钝重发 LEVEL_REJECTED
+    route_events = (
+        [e for e in new_events if e.id != "LEVEL_REJECTED"]
+        if f.mic is not None
+        else new_events
+    )
+    if not route_events:
+        return
+    _count_go(counters, route_events, go_set)
     htf_views = _htf_views_for(st, states, t + f.tf_hours * MS_1H)
     if htf_views:
         decisions = st.router.on_bar(
-            sym, bar, i, cog.views.get(i), atr, new_events,
+            sym, bar, i, cog.views.get(i), atr, route_events,
             position_open=broker.position_of(key) is not None,
             entry_resting=broker.has_entry_limit(key),
             htf_views=htf_views)
     else:
         decisions = st.router.on_bar(
-            sym, bar, i, cog.views.get(i), atr, new_events,
+            sym, bar, i, cog.views.get(i), atr, route_events,
             position_open=broker.position_of(key) is not None,
             entry_resting=broker.has_entry_limit(key))
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar

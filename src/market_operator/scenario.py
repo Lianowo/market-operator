@@ -37,11 +37,11 @@ PRODUCTION_CONFIG = REPO_ROOT / "config" / "strategy.json"
 CONTRACTS_PATH = REPO_ROOT / "data" / "contracts.json"
 
 #: 认知周期(策略在哪些周期的收盘上做决策)。顺序即报表顺序。
-COGNITION_TIMEFRAMES: tuple[str, ...] = ("2h", "4h", "12h", "1d")
+COGNITION_TIMEFRAMES: tuple[str, ...] = ("2h", "4h", "1d")
 
 #: 认知周期 → 触发周期(秒;None = 该周期不做降档触发,直接用自身收盘)。
 DEFAULT_TRIGGER_SECONDS: dict[str, Optional[int]] = {
-    "2h": None, "4h": 7200, "12h": 7200, "1d": 14400,
+    "2h": 1800, "4h": 3600, "12h": 7200, "1d": 14400,
 }
 
 #: 触发粒度(秒) → 行情粒度标签。行情层提供这五种原始/聚合粒度。
@@ -200,11 +200,11 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
     whitelist = frozenset(
         (str(event), int(direction)) for event, direction in raw["whitelist"])
     router = RouterParams(
-        k_dq=float(raw["k_dq"]),
-        k_imp=float(raw["k_imp"]),
-        k_is=float(raw["k_is"]),
-        turtle_stop_atr=float(raw["turtle_stop_atr"]),
-        k_bm=float(raw["k_bm"]),
+        k_dq=float(raw.get("k_dq", 0.5)),
+        k_imp=float(raw.get("k_imp", 1.5)),
+        k_is=float(raw.get("k_is", 0.8)),
+        turtle_stop_atr=float(raw.get("turtle_stop_atr", 2.0)),
+        k_bm=float(raw.get("k_bm", 0.1)),
         whitelist=whitelist,
         **raw.get("router_params", {}),
     )
@@ -221,7 +221,10 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
     if funding_source == "const":
         funding_rates = None
     elif funding_source == "history":
-        funding_rates = load_funding_rates(tuple(raw["symbols"]))
+        cfg_syms = tuple(raw.get("symbols") or ())
+        avail_syms = tuple(sorted(p.stem for p in FUNDING_DIR.glob("*.csv"))) if FUNDING_DIR.exists() else ()
+        target_syms = tuple(dict.fromkeys((*cfg_syms, *avail_syms)))
+        funding_rates = load_funding_rates(target_syms)
     else:
         raise ValueError(f"funding_source 必须是 const|history,收到 "
                          f"{funding_source!r}")
@@ -249,10 +252,10 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
         capacity_mode=str(raw.get("capacity_mode",
                                   capacity.ADMISSION_FULL_COST)),
 
-        risk_frac=float(raw["risk_frac"]),
-        leverage_cap=float(raw["leverage_cap"]),
-        dev_frac=float(raw["dev_frac"]),
-        n_fill=int(raw["n_fill"]),
+        risk_frac=float(raw.get("risk_frac", 0.0075)),
+        leverage_cap=float(raw.get("leverage_cap", 20.0)),
+        dev_frac=float(raw.get("dev_frac", 0.7)),
+        n_fill=int(raw.get("n_fill", 12)),
     )
 
 
@@ -283,6 +286,17 @@ def _trigger_frame_for(symbol: str, seconds: int):
     return aggregate.load_tf(symbol, TRIGGER_GRANULARITY_BY_SECONDS[seconds])
 
 
+def _available_trigger_frames(symbol: str) -> dict:
+    """加载该标的在本地存在的所有触发粒度行情(3600=1h 必须存在;15m/30m 按需加载)。"""
+    out: dict = {}
+    for seconds in TRIGGER_GRANULARITY_BY_SECONDS:
+        try:
+            out[seconds] = _trigger_frame_for(symbol, seconds)
+        except FileNotFoundError:
+            if seconds >= 3600:
+                raise
+    return out
+
 
 def load_market_data(symbols: Sequence[str], params: Params,
                      timeframes: Sequence[str] = COGNITION_TIMEFRAMES, *,
@@ -296,10 +310,7 @@ def load_market_data(symbols: Sequence[str], params: Params,
     symbols = tuple(symbols)
     market = MarketData(symbols=symbols)
     for symbol in symbols:
-        market.trigger_frame[symbol] = {
-            seconds: _trigger_frame_for(symbol, seconds)
-            for seconds in TRIGGER_GRANULARITY_BY_SECONDS
-        }
+        market.trigger_frame[symbol] = _available_trigger_frames(symbol)
         execution = market.trigger_frame[symbol][3600]
         for tf in timeframes:
             seconds = aggregate.TF_HOURS[tf] * 3600
@@ -319,24 +330,34 @@ def build_frames(market: MarketData, settings: ScenarioSettings,
                   timeframes: Sequence[str] = COGNITION_TIMEFRAMES, *,
                   execution_seconds: Optional[int] = None) -> dict:
     """把 (品种 × 认知周期) 装配成战役帧;触发帧按配置降档挂载。"""
+    from .trigger import resolve_trigger_tf
     frames: dict = {}
     for symbol in market.symbols:
+        avail_trig = market.trigger_frame[symbol]
         for tf in timeframes:
+            obs_seconds = aggregate.TF_HOURS[tf] * 3600
             trigger_seconds = settings.trigger_seconds_by_timeframe.get(tf)
             trigger_cognition = None
             if trigger_seconds is not None:
+                eff_trig = trigger_seconds
+                if eff_trig not in avail_trig:
+                    eff_trig, _ = resolve_trigger_tf(
+                        obs_seconds,
+                        tf_map={obs_seconds: trigger_seconds},
+                        available=tuple(avail_trig.keys()),
+                    )
                 trigger_cognition = prepare_mic_cognition(
                     market.cognition_frame[(symbol, tf)],
-                    market.trigger_frame[symbol][trigger_seconds],
+                    avail_trig[eff_trig],
                     settings.structure, symbol,
-                    obs_tf_seconds=aggregate.TF_HOURS[tf] * 3600,
-                    trigger_tf_seconds=trigger_seconds,
+                    obs_tf_seconds=obs_seconds,
+                    trigger_tf_seconds=eff_trig,
                     enable_e7=True,
                 )
             frame = build_campaign_frame(
                 market.cognition[(symbol, tf)],
                 (market.execution_frame[(symbol, tf)] if execution_seconds is None
-                 else market.trigger_frame[symbol][execution_seconds]),
+                 else avail_trig[execution_seconds]),
                 tf, mic_cog=trigger_cognition, execution_seconds=execution_seconds)
             frames[frame.key] = frame
     return frames
@@ -386,10 +407,13 @@ class ScenarioRunner:
 
     def __init__(self, symbols: Sequence[str],
                  config_path: Path = PRODUCTION_CONFIG, *,
-                 timeframes: Sequence[str] = COGNITION_TIMEFRAMES,
+                 timeframes: Optional[Sequence[str]] = None,
                  progress: bool = True) -> None:
         self.config_path = Path(config_path)
         self.settings = load_settings(self.config_path)
+        if timeframes is None:
+            cfg_tfs = self.settings.raw.get("tf_list")
+            timeframes = tuple(cfg_tfs) if cfg_tfs else COGNITION_TIMEFRAMES
         self.timeframes = tuple(timeframes)
         self.market = load_market_data(symbols, self.settings.structure,
                                        self.timeframes, progress=progress)

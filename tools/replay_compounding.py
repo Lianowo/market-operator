@@ -116,7 +116,12 @@ def main() -> int:
     live_path = ROOT / "config/live.json"
     live = json.loads(live_path.read_text(encoding="utf-8"))
     risk = live["risk"]
-    allowed = tuple(live["symbols_core"])
+    if live.get("symbols_core"):
+        allowed = tuple(live["symbols_core"])
+    else:
+        contracts_doc = json.loads((ROOT / "data/contracts.json").read_text(encoding="utf-8"))
+        avail_1h = {p.name[:-7] for p in (ROOT / "data/raw").glob("*_1h.csv")}
+        allowed = tuple(sorted(s for s in contracts_doc.get("entries", {}) if s in avail_1h))
     try:
         chosen, filtered = select_symbols(args.symbols, allowed)
     except ValueError as exc:

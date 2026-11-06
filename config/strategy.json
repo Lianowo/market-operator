@@ -1,13 +1,12 @@
 {
-  "version": "v21-2026-10-21",
-  "note": "v21 极简平衡箱(BalanceDetector) + 雙原语(ACCEPT/REJECT) + 高阶降档混合触发(M3c: 2h/4h同周期, 12h->2h, 1d->4h) + 各周期独立风险池(tf_cap_by_tf) + REJECT对侧突破锁利(峰值锚定回吐预算:stop = peak ∓ (1−|frac|)·span, frac 见 arm_config.reject_opp_lock_frac) & Turtle唯一移动防线收割 + 104USDT/20x阶梯动态复利。",
+  "version": "v22-pure-pa-amt",
+  "note": "纯传统图表+价格行为+价格拍卖(AMT)三级正交尺度架构: 2h->30m(日内短线), 4h->1h(日内/隔日波段), 1d->4h(长线波段)。平衡箱确认边界防滑坡锁定 + 四大拍卖对齐铁律(balance_auction_alignment) + 同尺度结构止损与箱体等幅扩展目标兑现(accept_target_box_mult=2.0, reentry_target_management=true, reject_opp_lock_frac=0.25, partial_exit_enabled=true, exit_exec=true)。",
   "meta": {
     "parent": "config/canonical.json",
-    "model": "BalanceDetector(quality>=0.35) + ACCEPT(E1)/REJECT(E3) + Per-TF Cap + REJECT Peak-Anchored Giveback-Budget Lock(frac in arm_config) + Turtle(§8.3 trail)"
+    "model": "TrueBalanceDetector + Pure PA/AMT Alignment + 3-TF Cascade (2h->30m, 4h->1h, 1d->4h) + Same-TF Box Target & Partial Lock"
   },
   "atr_n": 14,
   "k_rev": 1.0,
-  "k_zw": 0.5,
   "k_bm": 0.1,
   "k_rj": 0.3,
   "k_span": 3.0,
@@ -16,10 +15,7 @@
   "n_a": 3,
   "n_f": 3,
   "n_time": 24,
-  "e4_depth_atr": [0.5, 2.5],
-  "e4_recovery": 0.5,
   "range_max_pivots": 8,
-  "e5_edge_atr": 0.75,
   "use_balance_detector": true,
   "balance_quality_min": 0.35,
   "accept_max_ext_atr": null,
@@ -34,31 +30,28 @@
   "funding_source": "history",
   "slippage_by_symbol": {},
   "dev_frac": 0.7,
-  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT"],
-  "obs_tf_seconds": 3600,
-  "tf_list": ["2h", "4h", "12h", "1d"],
+  "tf_list": ["2h", "4h", "1d"],
   "trigger_tf_by_htf": {
-    "2h": null,
-    "4h": 7200,
-    "12h": 7200,
+    "2h": 1800,
+    "4h": 3600,
     "1d": 14400
   },
   "k_is": 0.8,
-  "k_dq": 0.5,
-  "k_imp": 1.5,
-  "turtle_stop_atr": 2.0,
   "portfolio_cap_frac": 0.12,
   "capacity_mode": "admission_full_cost",
   "tf_cap_by_tf": {
     "2h": 0.0225,
     "4h": 0.0225,
-    "12h": 0.0225,
     "1d": 0.0225
   },
   "router_params": {
     "reject_use_struct_stop": true,
     "reject_target_mode": "opposite",
     "accept_use_struct_stop": false,
+    "reentry_use_struct_stop": true,
+    "balance_auction_alignment": true,
+    "accept_target_box_mult": 2.0,
+    "reentry_target_management": true,
     "zone_departure_reset": true,
     "max_accept_ext_atr": 1.5,
     "max_box_progress_frac": 0.75,
@@ -68,7 +61,6 @@
     "max_cost_frac": null,
     "cost_per_side": 0.0008
   },
-
   "router_params_by_tf": {
     "2h": {
       "struct_impulse_confirm": true
@@ -76,22 +68,15 @@
     "4h": {
       "struct_impulse_confirm": true
     },
-    "12h": {
-      "struct_impulse_confirm": false
-    },
     "1d": {
       "struct_impulse_confirm": false
     }
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": -0.25,
+    "reject_opp_lock_frac": 0.25,
     "partial_exit_enabled": true,
-    "vol_based_frac_map": {
-      "HIGH_VOL_THRESHOLD": 0.02,
-      "HIGH_VOL_FRAC": -0.35,
-      "DEFAULT_FRAC": -0.25
-    }
+    "exit_exec": true
   },
   "small_account_compounding": {
     "equity0": 104.0,
@@ -100,7 +85,6 @@
     "tf_cap_by_tf": {
       "2h": 0.12,
       "4h": 0.12,
-      "12h": 0.12,
       "1d": 0.12
     },
     "dynamic_risk_tiers": [
@@ -117,8 +101,7 @@
     ["REJECT", -1],
     ["REJECT", 1]
   ],
-  "n_fill": 12,
-  "exec_tf_seconds": 900,
-  "merge_max_atr": 2.0
+  "n_fill": 12
 }
+
 

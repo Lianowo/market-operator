@@ -33,7 +33,6 @@
     "tf_cap_by_tf": {
       "2h": 0.12,
       "4h": 0.12,
-      "12h": 0.12,
       "1d": 0.12
     },
     "max_daily_loss_frac": 0.1,
@@ -96,16 +95,15 @@
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
-    "tf_list": ["2h", "4h", "12h", "1d"],
+    "tf_list": ["2h", "4h", "1d"],
     "trigger_tf_by_htf": {
-      "2h": null,
-      "4h": 7200,
-      "12h": 7200,
+      "2h": 1800,
+      "4h": 3600,
       "1d": 14400
     },
-    "main_tf_label": "12h",
-    "obs_tf_seconds": 43200,
-    "trigger_tf_seconds": 7200,
+    "main_tf_label": "1d",
+    "obs_tf_seconds": 86400,
+    "trigger_tf_seconds": 14400,
     "granularity": "2H",
     "warmup_cog_bars": 160,
     "min_warmup_cog_bars": 60,
@@ -117,11 +115,5 @@
   "adopt_external_positions": {
     "enabled": true,
     "note": "接管交易所既有仓位(含非本系统所开),按与其他仓位完全相同的结构语义挂保护与出场。扩展层:只改执行/对账面(scripts/live_runner.py + market_operator/adopt.py),不动策略链路(events/routing/position/structure/trigger/campaign)。失效价 = 最近支撑/阻力外沿 ∓ k_bm·ATR;无结构或距离 < k_is·ATR 时退回 turtle_stop_atr·ATR;目标 = 对侧内沿。接管不计入 fills、不伪装成开仓成交,只发告警并在 journal 落 origin=adopted。置 enabled=false 即回到旧行为(仅告警、绝不动作)。"
-  },
-  "symbols_core": [
-    "BTCUSDT",
-    "ETHUSDT",
-    "SOLUSDT",
-    "DOGEUSDT"
-  ]
+  }
 }

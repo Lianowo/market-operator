@@ -1166,8 +1166,14 @@ def warmup(cfg: dict, *, symbols: Iterable[str] | None = None,
     result: dict = {"ok": True, "symbols": {}, "timeframes": tfs,
                     "errors": [], "warnings": [], "at_utc": utc_now_iso()}
     if not core:
+        try:
+            min_v = float((cfg.get("universe") or {}).get("min_usdt_volume_24h") or 0.0)
+            core = list(client.universe(min_v))[:20]
+        except Exception:
+            core = []
+    if not core:
         result["ok"] = False
-        result["errors"].append("symbols_core 为空")
+        result["errors"].append("未指定暖机标的且动态宇宙为空")
         return result
 
     try:

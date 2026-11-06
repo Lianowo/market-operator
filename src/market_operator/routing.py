@@ -24,7 +24,7 @@ from .events import (
     canonical_event_id,
 )
 from .hypothesis import Hypothesis, StructureView, entry_contract_error, entry_cost_error
-from .structure import PivotKind, ZoneRole, ZoneState, _bar_parts
+from .structure import PivotKind, Regime, ZoneRole, ZoneState, _bar_parts
 
 _REF_REL_TOL = 1e-9
 
@@ -145,6 +145,7 @@ class RouterParams:
     max_accept_ext_atr: float = 1.5
     htf_wall_filter: bool = False
     htf_min_room_r: float = 1.0
+    balance_auction_alignment: bool = False
     _normalized_whitelist: frozenset = field(init=False, repr=False, compare=False)
 
 
@@ -498,6 +499,34 @@ class MarketRouter:
         p = self.params
         cid = canonical_event_id(ev.id)
         zone = ev.attrs.get("zone")
+        if p.balance_auction_alignment and zone is not None:
+            if (
+                (view.regime is Regime.TREND_DOWN and ev.direction > 0)
+                or (view.regime is Regime.TREND_UP and ev.direction < 0)
+            ):
+                self._bump("restraint_counter_trend_reject")
+                return None
+            sub_k_align = str(ev.attrs.get("sub_kind", ""))
+            sk_align = getattr(zone, "source_kind", "BOX_EDGE")
+            if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                if view.regime is Regime.TRANSITION and float(getattr(zone, "box_width_atr", 99.0)) > 4.5:
+                    self._bump("restraint_transition_regime_reject")
+                    return None
+                if sub_k_align == "R2_STALL":
+                    self._bump("restraint_unbacked_stall_reject")
+                    return None
+                if sub_k_align == "R1_WICK":
+                    ex_i = ev.attrs.get("ex_index")
+                    if ex_i is not None and (int(ev.known_index) - int(ex_i)) > 1:
+                        self._bump("restraint_stale_wick_reject")
+                        return None
+            elif cid == BREAKOUT_ACCEPTED:
+                if view.regime is Regime.TRANSITION:
+                    self._bump("restraint_transition_regime_reject")
+                    return None
+                if sk_align == "BOX_EDGE" and (view.regime is Regime.RANGE or sub_k_align == "A1_TIGHT"):
+                    self._bump("restraint_range_outward_breakout_reject")
+                    return None
         if cid == BREAKOUT_ACCEPTED:
             ext_atr = ev.attrs.get("ext_atr")
             if ext_atr is not None:
@@ -673,12 +702,14 @@ class MarketRouter:
                 self._bump("restraint_width_reject")
                 return None
 
-        # 无细周期触发背书(mic=False)时,全周期统一执行"无扫损无拒绝(No Sweep, No Rejection)"公理:
-        # 未刺穿外沿的 R2_STALL 停滞不构成有效流动性清扫,仅允许真实刺穿外沿的弹簧/假破位清扫(R1_WICK / R3_TRAP)。
+        # "无扫损无拒绝(No Sweep, No Rejection)"公理:
+        # 1) 无细周期触发背书(mic=False)时全周期统一执行;
+        # 2) 中短波段周期(struct_impulse_confirm=True,如 2h->30m, 4h->2h)上,边界外侧止损流动性紧贴箱沿,
+        #    未刺穿外沿的 R2_STALL 停滞未完成流动性清扫,抢跑入场会成为随后真扫损的燃料,故严格要求 R1_WICK/R3_TRAP 扫损确认。
         is_mic = bool(ev.attrs.get("mic", False))
         sub_k = str(ev.attrs.get("sub_kind", ""))
         if (
-            not is_mic
+            (not is_mic or p.struct_impulse_confirm)
             and cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
             and sub_k == "R2_STALL"
         ):
@@ -691,6 +722,8 @@ class MarketRouter:
                 _, bo, bh, bl, bc = eval_bars[-1]
                 b1, b2, b3, b4 = eval_bars[-2], eval_bars[-3], eval_bars[-4], eval_bars[-5]
                 d = int(ev.direction)
+                rng_cur = max(bh - bl, 1e-12)
+                close_pos = ((bh - bc) / rng_cur) if d < 0 else ((bc - bl) / rng_cur)
                 mid_ok = (bc < 0.5 * (bh + bl)) if d < 0 else (bc > 0.5 * (bh + bl))
                 dir_bar = (bc < bo) if d < 0 else (bc > bo)
                 eng_body = (bc < min(b1[1], b1[4])) if d < 0 else (bc > max(b1[1], b1[4]))
@@ -698,13 +731,29 @@ class MarketRouter:
                 brk3 = (bc < min(b1[3], b2[3], b3[3])) if d < 0 else (bc > max(b1[2], b2[2], b3[2]))
                 out1 = ((bh - bl) > (b1[2] - b1[3])) and eng_body
                 rmax4 = (bh - bl) > max(b1[2] - b1[3], b2[2] - b2[3], b3[2] - b3[3], b4[2] - b4[3])
-                # 价格行为角色分离确认(0 成交量阈值魔数):
-                # - 多尺度上下级边界拒绝(mic=True & LEVEL_REJECTED):测试已确立上级箱沿,要求标准实体扩张吞没(True Engulfing)或 3-bar 微观结构突破;
-                # - 突破追势(BREAKOUT_ACCEPTED)或单尺度独立帧:要求 3-bar 微观结构突破或 4-bar 最大振幅外包扩张。
+                # 拦截瀑布/暴拉加速腿首根微弱喘息接刀:
+                # 若前一根 b1 是反向强趋势大实体(> 1.25 * b2..b4 均幅),本根必须至少收复 b1 实体中点
+                prev_avg_rng = max((b2[2] - b2[3] + b3[2] - b3[3] + b4[2] - b4[3]) / 3.0, 1e-12)
+                b1_adv_body = (b1[4] - b1[1]) if d < 0 else (b1[1] - b1[4])
+                b1_mid = 0.5 * (b1[1] + b1[4])
+                climax_blocked = (
+                    b1_adv_body > 1.25 * prev_avg_rng
+                    and ((bc > b1_mid) if d < 0 else (bc < b1_mid))
+                )
                 if is_mic and cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
-                    confirmed = (brk3 or (dir_bar and eng_body and body_exp)) and mid_ok
+                    sweep_rev = (
+                        sub_k in ("R1_WICK", "R3_TRAP")
+                        and dir_bar
+                        and close_pos >= 0.60
+                        and eng_body
+                    )
+                    confirmed = (
+                        not climax_blocked
+                        and (brk3 or (dir_bar and eng_body and body_exp) or sweep_rev)
+                        and mid_ok
+                    )
                 else:
-                    confirmed = (brk3 or (rmax4 and out1)) and mid_ok
+                    confirmed = (not climax_blocked) and (brk3 or (rmax4 and out1)) and mid_ok
                 if not confirmed:
                     self._bump("restraint_struct_impulse_reject")
                     return None

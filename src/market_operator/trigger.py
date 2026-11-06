@@ -215,8 +215,6 @@ class MicTracker:
         self._e6_fired: Optional[tuple] = None
         self._prev_trig_close: Optional[float] = None
         self._recent_trig_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
-        self._recent_trig_vols: deque[float] = deque(maxlen=20)
-        self._last_trig_vol_ratio: float = 1.0
         self._last_trig_range_atr: float = 0.0
 
     def sync(self, i: int, det: EventDetector, span_start_of, span_end_of) -> None:
@@ -332,11 +330,6 @@ class MicTracker:
         prev_c = self._prev_trig_close
         self._prev_trig_close = c
         self._recent_trig_bars.append((int(ts), float(o), float(h), float(l), float(c)))
-        pos_vols = [x for x in self._recent_trig_vols if x > 0.0]
-        vol_ma = (sum(pos_vols) / len(pos_vols)) if len(pos_vols) >= 5 else 0.0
-        self._last_trig_vol_ratio = (float(v) / vol_ma) if (vol_ma > 0.0 and float(v) > 0.0) else 1.0
-        if float(v) > 0.0:
-            self._recent_trig_vols.append(float(v))
         if ctx is None or ctx.atr <= 0.0:
             return []
         self._last_trig_range_atr = (float(h) - float(l)) / ctx.atr
@@ -537,7 +530,12 @@ class MicTracker:
                     against_trend = (
                         (ctx.regime is Regime.TREND_UP) if res else (ctx.regime is Regime.TREND_DOWN)
                     )
-                    bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.50)
+                    if ep.puncture_index is not None:
+                        bar_dir_ok = (((c < o) if res else (c > o)) and close_pos >= 0.50) or (
+                            not against_trend and close_pos >= 0.65
+                        )
+                    else:
+                        bar_dir_ok = ((c < o) if res else (c > o)) and close_pos >= 0.55
                     if real_retreat >= rj_trig and back_inside and close_pos >= 0.50 and bar_dir_ok:
                         direction = -1 if res else +1
                         fired = self._mk(
@@ -682,7 +680,6 @@ class MicTracker:
         attrs["reset_bars"] = reset_tail
         attrs["reset_step_ms"] = step_ms
         attrs["close_ts"] = int(ts) + step_ms
-        attrs.setdefault("vol_ratio", self._last_trig_vol_ratio)
         attrs.setdefault("range_atr", self._last_trig_range_atr)
         if self._ctx is not None and self._ctx.atr_slow > 0.0:
             attrs.setdefault("atr_slow_ratio", self._ctx.atr / self._ctx.atr_slow)

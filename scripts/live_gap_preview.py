@@ -105,7 +105,7 @@ def main(argv=None) -> int:
     tg = _TG()
     r = lr.LiveRunner("live", cfg, client, tg, state_path=work,
                       journal_dir=tmp / "logs", contracts=contracts,
-                      contract_raw=raw, symbols=tuple(cfg["symbols_core"]))
+                      contract_raw=raw, symbols=tuple(cfg.get("symbols_core") or ()))
     now_ms = int(time.time() * 1000)
     gap_s = 0.0 if r._gap_started_ms is None else \
         max(0.0, (now_ms - r._gap_started_ms) / 1000.0)

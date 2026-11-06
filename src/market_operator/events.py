@@ -185,8 +185,6 @@ class EventDetector:
         self._prev_regime: Regime = Regime.TRANSITION
         self.consumed_episodes: int = 0
         self._recent_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
-        self._recent_vols: deque[float] = deque(maxlen=20)
-        self._last_vol_ratio: float = 1.0
         self._accept_refresh_only: set[tuple] = set()
 
     def update(self, bar) -> list[MarketEvent]:
@@ -206,13 +204,7 @@ class EventDetector:
         t = s.bars_seen - 1
         atr = s.atr()
         atr_slow = s.atr_slow()
-        ts_cur, o_cur, h_cur, l_cur, c_cur, v_cur = s._bars[t]
-        pos_vols = [x for x in self._recent_vols if x > 0.0]
-        vol_ma = (sum(pos_vols) / len(pos_vols)) if len(pos_vols) >= 5 else 0.0
-        vol_ratio = (float(v_cur) / vol_ma) if (vol_ma > 0.0 and float(v_cur) > 0.0) else 1.0
-        self._last_vol_ratio = vol_ratio
-        if float(v_cur) > 0.0:
-            self._recent_vols.append(float(v_cur))
+        ts_cur, o_cur, h_cur, l_cur, c_cur, _v_cur = s._bars[t]
         step_ms = (int(ts_cur) - self._recent_bars[-1][0]) if self._recent_bars else 0
         self._recent_bars.append(
             (int(ts_cur), float(o_cur), float(h_cur), float(l_cur), float(c_cur))
@@ -239,7 +231,6 @@ class EventDetector:
                 ev.attrs["reset_bars"] = reset_tail
                 ev.attrs["reset_step_ms"] = int(step_ms)
                 ev.attrs["close_ts"] = close_ts
-                ev.attrs.setdefault("vol_ratio", vol_ratio)
                 ev.attrs.setdefault("range_atr", range_atr)
                 ev.attrs.setdefault("atr_slow_ratio", atr_slow_ratio)
         self._prev_regime = s.regime()
@@ -497,10 +488,13 @@ class EventDetector:
                             and not against_trend
                             and ((c < o) if res else (c > o))
                             and close_pos >= 0.60
-                            and self._last_vol_ratio >= 1.05
+                        )
+                    elif ep.puncture_index is not None:
+                        bar_dir_ok = (((c < o) if res else (c > o)) and close_pos >= 0.50) or (
+                            not against_trend and close_pos >= 0.65
                         )
                     else:
-                        bar_dir_ok = ((c < o) if res else (c > o)) if against_trend else (close_pos >= 0.50)
+                        bar_dir_ok = ((c < o) if res else (c > o)) and close_pos >= 0.55
                     if real_retreat >= rj and back_inside and close_pos >= 0.50 and bar_dir_ok:
                         direction = -1 if res else +1
                         extra_rej = {

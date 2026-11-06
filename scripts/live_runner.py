@@ -85,7 +85,7 @@ STRATEGY_CONFIG = ROOT / "config" / "strategy.json"   # 生产策略配置(唯�
 
 MS_1H = 3_600_000
 N_FILL_H = 12                                    # canonical N_fill(墙钟小时)
-TF_SECONDS_MAP = {"1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400}
+TF_SECONDS_MAP = {"15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "12h": 43200, "1d": 86400}
 #: Longest 15m catch-up window the price clock will replay. A longer gap means
 #: the process was stalled/restarted; re-anchor to the last closed bar instead
 #: of crawling days of history and acting on stale closes.
@@ -124,11 +124,11 @@ def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
     params = Params.from_json(cfg_path)
     whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
     base_kw = dict(
-        k_dq=float(raw["k_dq"]),
-        k_imp=float(raw["k_imp"]),
-        k_is=float(raw["k_is"]),
-        turtle_stop_atr=float(raw["turtle_stop_atr"]),
-        k_bm=float(raw["k_bm"]),
+        k_dq=float(raw.get("k_dq", 0.5)),
+        k_imp=float(raw.get("k_imp", 1.5)),
+        k_is=float(raw.get("k_is", 0.8)),
+        turtle_stop_atr=float(raw.get("turtle_stop_atr", 2.0)),
+        k_bm=float(raw.get("k_bm", 0.1)),
         whitelist=whitelist,
     )
     rp_extra = raw.get("router_params") or {}
@@ -481,9 +481,13 @@ def aggregate_bucket(bars, label: int) -> tuple:
 
 
 def aggregate_tf(bars2h: list, step_seconds: int = 43200) -> list:
-    """2H 序列 → 任意整数倍周期(2h/4h/12h/1d)帧:网格对齐;末桶不齐(未完整)丢弃,
+    """子序列 → 任意整数倍周期(30m/1h/2h/4h/12h/1d)帧:网格对齐;末桶不齐(未完整)丢弃,
     内部缺口 raise(不可静默);首桶不齐如实保留(canonical 首/末不完整桶口径)。"""
-    MS = 7_200_000
+    MS = (
+        int(bars2h[1][0] - bars2h[0][0])
+        if len(bars2h) >= 2 and int(bars2h[1][0]) > int(bars2h[0][0])
+        else 7_200_000
+    )
     STEP = int(step_seconds) * 1000
     if STEP <= MS:
         return list(bars2h)
@@ -519,16 +523,22 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
     优化:同周期触发(trigger_tf_seconds >= obs_tf_seconds)无需构建/步进 MicTracker。
     """
     detector = EventDetector(params, enable_e7=True)
-    if trigger_tf_seconds >= obs_tf_seconds:
+    actual_trig_s = (
+        int(trig_bars[1][0] - trig_bars[0][0]) // 1000
+        if len(trig_bars) >= 2 and trig_bars[1][0] > trig_bars[0][0]
+        else trigger_tf_seconds
+    )
+    eff_trig_s = max(int(trigger_tf_seconds), actual_trig_s)
+    if eff_trig_s >= obs_tf_seconds:
         for bar in cog_bars:
             detector.update(bar)
         return detector, None
     obs_ms = obs_tf_seconds * 1000
-    trig_ms = trigger_tf_seconds * 1000
-    t_series = aggregate_tf(trig_bars, trigger_tf_seconds) if trigger_tf_seconds > 7200 else trig_bars
+    trig_ms = eff_trig_s * 1000
+    t_series = aggregate_tf(trig_bars, eff_trig_s) if eff_trig_s > actual_trig_s else trig_bars
     scale = max(1, obs_ms // trig_ms)
     tracker = MicTracker(params, scale=scale,
-                         trigger_tf_seconds=trigger_tf_seconds,
+                         trigger_tf_seconds=eff_trig_s,
                          obs_tf_seconds=obs_tf_seconds, enable_e7=True)
     labels = {b[0]: i for i, b in enumerate(cog_bars)}
     spans: dict = {}
@@ -2376,8 +2386,13 @@ class LiveRunner:
         emitted = cs.detector.update(cog_bar)
         new_pivots = list(s.pivots[n_pivots_before:])
         i = len(cs.cog_bars)
-        trig_s = max(7200, int(cs.trigger_tf_seconds))
-        obs_s = max(7200, int(cs.obs_tf_seconds))
+        base_s = (
+            int(cs.trig_bars[1][0] - cs.trig_bars[0][0]) // 1000
+            if len(cs.trig_bars) >= 2 and int(cs.trig_bars[1][0]) > int(cs.trig_bars[0][0])
+            else 7200
+        )
+        trig_s = max(base_s, int(cs.trigger_tf_seconds))
+        obs_s = max(base_s, int(cs.obs_tf_seconds))
         if cs.tracker is not None:
             # Historical episode anchors must map to their own trigger spans,
             # not to the current cognition bucket. Match warmup's timestamp grid.
@@ -4376,7 +4391,8 @@ def main(argv=None) -> None:
         # 持仓模式执行口径校验(fail-closed):配置与交易所不一致即拒绝启动,
         # 否则 side/tradeSide 语义错位会把平仓下成反向开仓。
         want_mode = str((cfg.get("account") or {}).get("position_mode") or "")
-        got_mode = client.position_mode(str(cfg["symbols_core"][0]))
+        probe_sym = str((cfg.get("symbols_core") or ["BTCUSDT"])[0])
+        got_mode = client.position_mode(probe_sym)
         if want_mode and got_mode != want_mode:
             raise RuntimeError("持仓模式不一致(fail-closed):"
                                f"config={want_mode} exchange={got_mode};"
@@ -4400,7 +4416,7 @@ def main(argv=None) -> None:
                         contracts=contracts, contract_raw=contract_raw,
                         heartbeat_path=(Path(args.heartbeat_path)
                                         if args.heartbeat_path else None),
-                        symbols=tuple(cfg["symbols_core"]))
+                        symbols=tuple(cfg.get("symbols_core") or ()))
     poll = int(cfg["loop"]["poll_seconds"])
     r = cfg["risk"]
     print(f"[live_runner] mode={args.mode} 主循环起动(每 {poll}s;risk_frac="

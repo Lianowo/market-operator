@@ -139,10 +139,9 @@ def test_v21_config_valid_and_loads_balance_detector():
     p = Params.from_json(cfg_path)
     assert p.use_balance_detector is True
     assert p.balance_quality_min == 0.35
-    assert raw["tf_list"] == ["2h", "4h", "12h", "1d"]
-    # 4h 认知已下沉为 2h 触发(结构与 ATR 仍绑定 4h 认知帧),与 12h 同为 2h 触发
-    assert raw["trigger_tf_by_htf"] == {"2h": None, "4h": 7200,
-                                        "12h": 7200, "1d": 14400}
+    assert raw["tf_list"] == ["2h", "4h", "1d"]
+    # 2h->30m(1800s), 4h->1h(3600s), 1d->4h(14400s) 三级正交倍数级联
+    assert raw["trigger_tf_by_htf"] == {"2h": 1800, "4h": 3600, "1d": 14400}
     ed = EventDetector(p)
     assert ed.structure._zones._bal_det is not None
 
@@ -305,10 +304,9 @@ def test_live_runner_v21_multi_tf_campaigns(tmp_path):
                            universe_enabled=False)
     runner.step(bars[-1][0] + 1)
     assert "BTCUSDT" in runner.campaigns
-    assert runner.campaigns["BTCUSDT"].tf_label == "12h"
+    assert runner.campaigns["BTCUSDT"].tf_label == "1d"
     assert ("BTCUSDT", "2h") in runner.extra_campaigns
     assert ("BTCUSDT", "4h") in runner.extra_campaigns
-    assert ("BTCUSDT", "1d") in runner.extra_campaigns
     assert runner.current_risk_frac(104.0) == 0.05
     assert runner.current_risk_frac(300.0) == 0.05
     assert runner.current_risk_frac(1000.01) == 0.04
@@ -592,7 +590,7 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
     cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
-    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(720)]
 
     class DummyClient:
         def history_candles(self, symbol, granularity="2H", *, start_ms=None,
@@ -627,7 +625,7 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
     assert cs.pm.reject_opp_lock_frac == _prod_lock_frac()
     assert not hasattr(cs.pm, "opp_lock_max_giveback_r")
 
-    it = {"oid": "mo21anch1", "symbol": "BTCUSDT", "tf_label": "12h",
+    it = {"oid": "mo21anch1", "symbol": "BTCUSDT", "tf_label": cs.tf_label,
           "direction": 1, "qty": 1.0, "invalid": 95.0, "target_1": 110.0,
           "event_id": "E3", "route": "reject_market",
           "box_lo": 96.0, "box_hi": 110.0}
@@ -635,7 +633,7 @@ def test_live_runner_sub_bar_lock_market_anchor(tmp_path):
 
     # 子周期收盘 111.0 突破 target_1 ⇒ 峰值取本根 high 112,预算 (1−|frac|)·10
     # ⇒ 防线 112 − 预算(而不是把防线钉在 entry→target 的中点 105 上)
-    t_sub1 = t0 + 396 * step2
+    t_sub1 = t0 + 720 * step2
     runner._advance(cs, t_sub1 + step2,
                     new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
                     run_paper_fills=True)
@@ -688,8 +686,8 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
-    # 396 根 2H (刚好 66 根完整 12h 结束:396 % 6 == 0)
-    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+    # 720 根 2H (刚好 60 根完整 1d 结束:720 % 12 == 0)
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(720)]
 
     class DummyClient:
         def history_candles(self, symbol, granularity="2H", *, start_ms=None, end_ms=None, limit=200):
@@ -719,14 +717,14 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
                            universe_enabled=False)
     runner.step(bars[-1][0] + 1)
     cs_12h = runner.campaigns["BTCUSDT"]
-    assert cs_12h.tf_label == "12h"
+    assert cs_12h.tf_label in ("12h", "1d")
 
-    # 注册一笔 12h 多头 REJECT 持仓:entry=100, invalid=95, target_1=110
+    # 注册一笔主周期多头 REJECT 持仓:entry=100, invalid=95, target_1=110
     open_ts = bars[-1][0]
     it = {
         "oid": "mo21testopen1",
         "symbol": "BTCUSDT",
-        "tf_label": "12h",
+        "tf_label": cs_12h.tf_label,
         "direction": 1,
         "qty": 1.0,
         "invalid": 95.0,
@@ -739,10 +737,10 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     runner._register_position("BTCUSDT", it, 100.0, open_ts)
     assert runner.positions["BTCUSDT"]["invalid"] == 95.0
 
-    # 下一根 2H bar(k=396,非 12h 收盘时刻):收盘 111.0 突破 target_1(110.0)
+    # 下一根 2H bar(k=720,非大周期收盘时刻):收盘 111.0 突破 target_1(110.0)
     # 应由 _on_sub_bar 立即把 invalid 推进到 峰值 − 预算(预算 = (1−|frac|)·span)
-    t_sub1 = t0 + 396 * step2
-    assert (t_sub1 + step2) % (43200 * 1000) != 0  # 确认非 12h 收盘点
+    t_sub1 = t0 + 720 * step2
+    assert (t_sub1 + step2) % (43200 * 1000) != 0  # 确认非 12h/1d 收盘点
     runner._advance(cs_12h, t_sub1 + step2,
                     new_bars=[(t_sub1, 101.0, 112.0, 100.5, 111.0, 15.0)],
                     run_paper_fills=True)
@@ -754,9 +752,9 @@ def test_live_runner_on_sub_bar_stop_and_tp1_lock(tmp_path):
     # 通知的**语义标题**必须是"锁利推进"(防线已进盈利侧),不是"止损推进"
     assert any("锁利推进" in f[1] for f in fills)
 
-    # 再下一根 2H bar(k=397,仍非 12h 收盘时刻):低点 104.0 跌破新止损
-    # 应由 _on_sub_bar 立即按止损价触发 STOP 平仓,无需等待 12h 收盘
-    t_sub2 = t0 + 397 * step2
+    # 再下一根 2H bar(k=721,仍非 12h/1d 收盘时刻):低点 104.0 跌破新止损
+    # 应由 _on_sub_bar 立即按止损价触发 STOP 平仓,无需等待大周期收盘
+    t_sub2 = t0 + 721 * step2
     assert (t_sub2 + step2) % (43200 * 1000) != 0
     runner._advance(cs_12h, t_sub2 + step2,
                     new_bars=[(t_sub2, 108.0, 108.5, 104.0, 104.5, 20.0)],
@@ -908,7 +906,7 @@ def test_live_sub_bar_lock_peak_anchor_and_ratchet(tmp_path):
     cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
-    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(720)]
 
     class DummyClient:
         def history_candles(self, symbol, granularity="2H", *, start_ms=None,
@@ -937,14 +935,14 @@ def test_live_sub_bar_lock_peak_anchor_and_ratchet(tmp_path):
     runner.step(bars[-1][0] + 1)
     cs = runner.campaigns["BTCUSDT"]
     it = {
-        "oid": "mo21googlshort2", "symbol": "BTCUSDT", "tf_label": "12h",
+        "oid": "mo21googlshort2", "symbol": "BTCUSDT", "tf_label": cs.tf_label,
         "direction": -1, "qty": 1.0, "invalid": 326.88, "target_1": 322.66,
         "event_id": "LEVEL_REJECTED", "route": "e3_market",
         "box_lo": 322.66, "box_hi": 326.67,
     }
     runner._register_position("BTCUSDT", it, 324.02, bars[-1][0])
 
-    t1 = t0 + 396 * step2
+    t1 = t0 + 720 * step2
     runner._advance(cs, t1 + step2,
                     new_bars=[(t1, 323.98, 324.22, 320.93, 321.33, 15.0)],
                     run_paper_fills=True)
@@ -976,7 +974,7 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
     cfg.setdefault("protection", {})["price_clock"] = "bar"
     step2 = 7_200_000
     t0 = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000)
-    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(396)]
+    bars = [(t0 + k * step2, 100.0, 102.0, 99.0, 101.0, 10.0) for k in range(720)]
 
     class DummyClient:
         def history_candles(self, symbol, granularity="2H", *, start_ms=None,
@@ -1007,11 +1005,11 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
                            universe_enabled=False)
     runner.step(bars[-1][0] + 1)
     cs = runner.campaigns["BTCUSDT"]
-    assert cs.tf_label == "12h"
+    assert cs.tf_label in ("12h", "1d")
 
     # 空头 REJECT:entry 324.02 / invalid 326.88 / target_1 322.66(箱体对侧缘)
     it = {
-        "oid": "mo21googlshort", "symbol": "BTCUSDT", "tf_label": "12h",
+        "oid": "mo21googlshort", "symbol": "BTCUSDT", "tf_label": cs.tf_label,
         "direction": -1, "qty": 1.0, "invalid": 326.88, "target_1": 322.66,
         "event_id": "LEVEL_REJECTED", "route": "e3_market",
         "box_lo": 322.66, "box_hi": 326.67,
@@ -1020,7 +1018,7 @@ def test_live_sub_bar_lock_chart_entry_and_repeat_ratchet(tmp_path):
     assert runner.positions["BTCUSDT"]["invalid"] == 326.88
 
     # 子周期收盘 321.33 突破对侧缘 ⇒ 峰值 320.93 + 预算(高于现价)
-    t1 = t0 + 396 * step2
+    t1 = t0 + 720 * step2
     assert (t1 + step2) % (43200 * 1000) != 0        # 确认非 12h 收盘点
     runner._advance(cs, t1 + step2,
                     new_bars=[(t1, 323.98, 324.22, 320.93, 321.33, 15.0)],

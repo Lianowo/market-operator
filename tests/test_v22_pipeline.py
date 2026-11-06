@@ -768,6 +768,81 @@ def test_multitf_reject_true_engulfing_and_htf_macro_imbalance_semantics():
     assert router.counters.get("restraint_htf_imbalance_reject") == 1
 
 
+def test_balance_auction_alignment_first_principles():
+    """验证纯图表+价格行为+价格拍卖对齐准则(balance_auction_alignment):
+    1) TRANSITION 宽幅失衡巨震区不执行伪平衡交易;
+    2) 单边确认趋势(TREND_DOWN/TREND_UP)不逆势接刀/摸顶;
+    3) R1_WICK 针尖拒绝必须发生在刺穿当根或次根(known_index - ex_index <= 1);
+    4) RANGE 震荡区间内只做回归(REJECT & FLIPPED_BOX_EDGE 重返入箱),不追 BOX_EDGE 箱外突破。
+    """
+    z_box = Zone(
+        lo=99.0, hi=100.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=3, rejects=1, origin_known=1, last_change_known=8,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=5.0, box_rotations=4,
+        source_kind="BOX_EDGE", box_id=1,
+    )
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            reentry_use_struct_stop=True,
+            balance_auction_alignment=True,
+            min_box_rr=1.5,
+        )
+    )
+    ev_rej = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=1000, known_index=10,
+        attrs={"zone": z_box, "ref": 99.0, "invalid": 98.3, "sub_kind": "R1_WICK", "ex_index": 10},
+    )
+    # 1) TRANSITION 拦截
+    view_trans = StructureView(regime=Regime.TRANSITION, zones=(z_box,), atr=2.0)
+    assert router.on_bar("BTCUSDT", (1000, 99.5, 101.0, 98.5, 100.6, 1.0), 10, view_trans, 2.0, [ev_rej],
+                         position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_transition_regime_reject") == 1
+
+    # 2) TREND_DOWN 逆势做多拦截
+    view_down = StructureView(regime=Regime.TREND_DOWN, zones=(z_box,), atr=2.0)
+    assert router.on_bar("BTCUSDT", (2000, 99.5, 101.0, 98.5, 100.6, 1.0), 10, view_down, 2.0, [ev_rej],
+                         position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_counter_trend_reject") == 1
+
+    # 3) R1_WICK 滞后针尖(known_index - ex_index > 1)拦截, 即刻针尖(<=1)放行
+    view_range = StructureView(regime=Regime.RANGE, zones=(z_box,), atr=2.0)
+    ev_stale_wick = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=3000, known_index=13,
+        attrs={"zone": z_box, "ref": 99.0, "invalid": 98.3, "sub_kind": "R1_WICK", "ex_index": 10},
+    )
+    assert router.on_bar("BTCUSDT", (3000, 99.5, 101.0, 98.5, 100.6, 1.0), 13, view_range, 2.0, [ev_stale_wick],
+                         position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_stale_wick_reject") == 1
+
+    d_fresh = router.on_bar("BTCUSDT", (4000, 99.5, 101.0, 98.5, 100.6, 1.0), 10, view_range, 2.0, [ev_rej],
+                            position_open=False, entry_resting=False)
+    assert len(d_fresh) == 1 and d_fresh[0].kind == "market"
+
+    # 4) RANGE 下 BOX_EDGE 向外突破拦截, 但 TREND_UP 下顺势突破放行
+    z_res = Zone(
+        lo=109.0, hi=110.0, role=ZoneRole.RESISTANCE, state=ZoneState.BROKEN,
+        touches=3, rejects=1, origin_known=1, last_change_known=10,
+        box_opposite=100.0, box_quality=0.65, box_width_atr=5.0, box_rotations=4,
+        source_kind="BOX_EDGE", box_id=2,
+    )
+    ev_out = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=5000, known_index=14,
+        attrs={"zone": z_res, "ref": 110.0, "invalid": 108.8, "sub_kind": "A2_OVEREXTENDED", "ext_atr": 1.0},
+    )
+    assert router.on_bar("BTCUSDT", (5000, 110.2, 111.2, 110.0, 111.0, 1.0), 14, view_range, 2.0, [ev_out],
+                         position_open=False, entry_resting=False) == []
+    assert router.counters.get("restraint_range_outward_breakout_reject") == 1
+
+    view_up = StructureView(regime=Regime.TREND_UP, zones=(z_res,), atr=2.0)
+    d_trend_out = router.on_bar("BTCUSDT", (6000, 110.2, 112.2, 110.0, 112.0, 1.0), 15, view_up, 2.0, [ev_out],
+                                position_open=False, entry_resting=False)
+    assert len(d_trend_out) == 1 and d_trend_out[0].kind == "market"
+
+
+
 
 
 

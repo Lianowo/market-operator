@@ -17,7 +17,7 @@ import pandas as pd
 from .events import EventDetector
 from .hypothesis import StructureView
 from .split import split_boundary
-from .structure import Params
+from .structure import Params, ZoneState
 
 MS_PER_HOUR = 3_600_000
 MS_PER_DAY = 86_400_000
@@ -39,6 +39,7 @@ class SymbolCognition:
     views: dict
     regimes: list
     macro_imbalances: list = field(default_factory=list)
+    active_zones: list = field(default_factory=list)
 
 
 def prepare_cognition(
@@ -56,6 +57,7 @@ def prepare_cognition(
     views: dict = {}
     regimes: list = []
     macro_imbalances: list = []
+    active_zones: list = []
     n_pivots_before = 0
     for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
         bar = (
@@ -69,6 +71,12 @@ def prepare_cognition(
         atrs.append(s.atr())
         regimes.append(s.regime())
         macro_imbalances.append(s.macro_imbalance(params.k_room))
+        if params.use_balance_detector:
+            active_zones.append(
+                tuple(z.clone() for z in s._zones.zones if z.state is ZoneState.ACTIVE)
+            )
+        else:
+            active_zones.append(())
         n_pivots = s.pivot_count
         if n_pivots > n_pivots_before:
             pivots_by[t] = list(s.pivot_slice(n_pivots_before))
@@ -90,6 +98,7 @@ def prepare_cognition(
         views=views,
         regimes=regimes,
         macro_imbalances=macro_imbalances,
+        active_zones=active_zones,
     )
 
 

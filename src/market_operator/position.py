@@ -362,28 +362,9 @@ class PositionManager:
         return True
 
     def _resolve_lock_frac(self, pos: Position, atr: float = 0.0) -> float:
-        """根据 vol_based_frac_map 解析当前持仓的锁利 frac。
-
-        优先级:
-        1. ATR/entry 波动率阈值映射(HIGH_VOL_THRESHOLD -> HIGH_VOL_FRAC, LOW_VOL_THRESHOLD -> LOW_VOL_FRAC);
-        2. DEFAULT_FRAC 或 self.reject_opp_lock_frac。
-        """
-        vmap = self.vol_based_frac_map
-        if not vmap:
-            return float(self.reject_opp_lock_frac)
+        """统一返回结构对侧锁利比例 reject_opp_lock_frac(去除魔法波动率分档阈值)。"""
         if atr > 0.0 and pos.giveback_unit is None:
             pos.giveback_unit = float(atr)
-        atr_ref = pos.giveback_unit if pos.giveback_unit is not None else float(atr)
-        if atr_ref > 0.0 and pos.entry > 0.0:
-            vol_ratio = atr_ref / float(pos.entry)
-            hi_th = vmap.get("HIGH_VOL_THRESHOLD")
-            if hi_th is not None and vol_ratio >= float(hi_th) and "HIGH_VOL_FRAC" in vmap:
-                return float(vmap["HIGH_VOL_FRAC"])
-            lo_th = vmap.get("LOW_VOL_THRESHOLD")
-            if lo_th is not None and vol_ratio <= float(lo_th) and "LOW_VOL_FRAC" in vmap:
-                return float(vmap["LOW_VOL_FRAC"])
-        if "DEFAULT_FRAC" in vmap:
-            return float(vmap["DEFAULT_FRAC"])
         return float(self.reject_opp_lock_frac)
 
     # -- 实时价格裁决 -----------------------------------------------------------

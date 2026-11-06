@@ -371,10 +371,12 @@ def _symbols_text(cfg: dict, secrets: dict, *, ops_role: bool) -> str:
     core = list(cfg.get("symbols_core") or [])
     uni = cfg.get("universe") or {}
     lines = ["📊 观察池"]
-    lines.append(f"⭐ 核心 {len(core)} 个")
     if core:
+        lines.append(f"⭐ 核心 {len(core)} 个")
         for i in range(0, len(core), 6):
             lines.append("  " + " · ".join(str(s) for s in core[i:i + 6]))
+    else:
+        lines.append("⭐ 全市场无差别动态扫描(无固定核心标的绑定)")
     if ops_role:
         lines.append(f"🌐 选币上限 {uni.get('max_symbols', '?')} 个")
         lines.append(f"📈 24h 成交额门槛 "

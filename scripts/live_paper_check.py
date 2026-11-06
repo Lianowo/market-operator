@@ -139,7 +139,7 @@ def main(argv=None) -> None:
     warmup_bars, future = all_bars[:-REPLAY_BAR_N], all_bars[-REPLAY_BAR_N:]
     warmup_end = warmup_bars[-1][0]
     client = ReplayClient(real, {sym: all_bars}, warmup_end=warmup_end)
-    contracts = lr.load_contracts_live(real, cfg["symbols_core"])
+    contracts = lr.load_contracts_live(real, cfg.get("symbols_core") or [sym])
     tg2 = CollectTg()
     runner = build_runner(tmp, client, tg2, cfg, contracts)
     cs = runner._build_all_tf_campaigns(sym)       # 装配(不推进;决不动 future)

@@ -41,7 +41,7 @@ def quantile(values: Sequence[float], q: float) -> float:
 class TrueBalanceParams:
     pivot_rev_atr: float = 0.90
     width_min_atr: float = 1.80
-    width_max_atr: float = 12.0
+    width_max_atr: float = 8.50
     min_bars: int = 10
     min_swings: int = 4
     edge_cluster_atr: float = 0.65
@@ -167,7 +167,6 @@ class TrueBalanceDetector:
         self._closes: list[float] = []
         self._body_highs: list[float] = []
         self._body_lows: list[float] = []
-        self._vols: list[float] = []
         self.units: list[float] = []
         self.path_prefix: list[float] = [0.0]
         self.swings: list[SwingPoint] = []
@@ -186,10 +185,11 @@ class TrueBalanceDetector:
         self._sw_ext_atr: float = 0.0
 
     def push(self, bar: tuple, unit: float) -> Optional[ActiveBracket]:
-        ts, o, h, l, c, v = (
+        ts, o, h, l, c = (
             int(bar[0]), float(bar[1]), float(bar[2]),
-            float(bar[3]), float(bar[4]), float(bar[5]),
+            float(bar[3]), float(bar[4]),
         )
+        v = float(bar[5]) if len(bar) > 5 else 0.0
         idx = len(self.bars)
         self.bars.append((ts, o, h, l, c, v))
         self._highs.append(h)
@@ -197,7 +197,6 @@ class TrueBalanceDetector:
         self._closes.append(c)
         self._body_highs.append(o if o >= c else c)
         self._body_lows.append(o if o <= c else c)
-        self._vols.append(v if v >= 1.0 else 1.0)
         atr = float(unit) if unit and unit > 0.0 else max(h - l, 1e-8)
         self.units.append(atr)
         prev_c = self._closes[-2] if idx > 0 else o
@@ -329,9 +328,10 @@ class TrueBalanceDetector:
         if has_new_swing and idx - box.start_index + 1 <= 180:
             rebuilt = self._evaluate_span(box.start_index, idx, atr, box_id=box.box_id)
             if rebuilt is not None:
-                rebuilt.outside_up_streak = box.outside_up_streak
-                rebuilt.outside_dn_streak = box.outside_dn_streak
-                self.active_box = rebuilt
+                box.rotations = max(box.rotations, rebuilt.rotations)
+                box.top_touches = max(box.top_touches, rebuilt.top_touches)
+                box.bot_touches = max(box.bot_touches, rebuilt.bot_touches)
+                box.quality = max(box.quality, rebuilt.quality)
 
     def _try_revive_box(self, idx: int, c: float, atr: float) -> None:
         """外部重返箱体复活机制(Box Re-entry Revival):
@@ -451,6 +451,33 @@ class TrueBalanceDetector:
         if total_width_atr < self.p.width_min_atr or total_width_atr > self.p.width_max_atr:
             return None
 
+        # 1. 边界包容性防伪(Anti-Outlier Swing Quarantine):
+        # 若窗口内部存在拐点实体已大幅突破候选外沿(超过 0.55*ATR),说明区间中途早已破位或跨过了不同趋势台阶,
+        # 绝不能把两个不在同一价值台阶的波段硬捏成一个平衡箱。
+        outlier_tol = 0.55 * atr
+        for s in high_swings:
+            if s.body_edge > hi_ext + outlier_tol:
+                return None
+        for s in low_swings:
+            if s.body_edge < lo_ext - outlier_tol:
+                return None
+
+        # 2. 极端单边脉冲/V型过山车防伪(Anti-Climax / Anti-V-Reversal):
+        # 真平衡区必须以重叠交错K线(Overlapping Bars)为主,不能是由一根巨型失衡K线或
+        # V型暴跌暴涨直接撑开的高低点。
+        body_highs = self._body_highs[start_idx:end_excl]
+        body_lows = self._body_lows[start_idx:end_excl]
+        max_single_body = max((bh - bl) for bh, bl in zip(body_highs, body_lows))
+        if max_single_body > max(3.0 * atr, 0.62 * max(hi_ext - lo_ext, 1e-8)):
+            return None
+        overlap_bars = 0
+        for k in range(start_idx + 1, end_excl):
+            ov = min(self._highs[k], self._highs[k - 1]) - max(self._lows[k], self._lows[k - 1])
+            if ov >= -0.05 * atr:
+                overlap_bars += 1
+        if (overlap_bars / max(length - 1, 1)) < 0.72:
+            return None
+
         top_zone_lo = vah - 0.35 * inner_width
         bot_zone_hi = val + 0.35 * inner_width
         last_side = ""
@@ -537,6 +564,7 @@ class TrueBalanceDetector:
     def _compute_poc_slice(
         self, start_idx: int, end_excl: int, val: float, vah: float, bins: int = 12
     ) -> float:
+        """纯价格行为 TPO(Time-Price Opportunity)价值中枢计算:不依赖成交量,仅度量K线实体与影线驻留密度。"""
         span = vah - val
         if span <= 1e-12 or start_idx >= end_excl:
             return 0.5 * (val + vah)
@@ -548,7 +576,6 @@ class TrueBalanceDetector:
         closes = self._closes
         body_highs = self._body_highs
         body_lows = self._body_lows
-        vols = self._vols
 
         for k in range(start_idx, end_excl):
             h = highs[k]
@@ -556,7 +583,6 @@ class TrueBalanceDetector:
             if h < val or l > vah:
                 continue
             c = closes[k]
-            v = vols[k]
             b_lo = body_lows[k]
             b_hi = body_highs[k]
             body_den = max(b_hi - b_lo, min_body_den)
@@ -568,13 +594,16 @@ class TrueBalanceDetector:
                 bin_hi = bin_lo + step
                 body_ov = max(0.0, min(b_hi, bin_hi) - max(b_lo, bin_lo))
                 if body_ov > 0.0 or (b_hi == b_lo and bin_lo <= c <= bin_hi):
-                    weights[i] += v * (0.75 * (body_ov / body_den) + 0.25)
+                    weights[i] += 0.75 * (body_ov / body_den) + 0.25
                 else:
                     wick_ov = max(0.0, min(h, bin_hi) - max(l, bin_lo))
                     if wick_ov > 0.0:
-                        weights[i] += v * 0.20 * (wick_ov / wick_den)
-        best_i = max(range(bins), key=weights.__getitem__)
-        return val + (best_i + 0.5) * step
+                        weights[i] += 0.20 * (wick_ov / wick_den)
+        total_w = sum(weights)
+        if total_w <= 1e-12:
+            return 0.5 * (val + vah)
+        weighted_sum = sum(weights[i] * (val + (i + 0.5) * step) for i in range(bins))
+        return weighted_sum / total_w
 
 
     def bracket(self) -> Optional[ActiveBracket]:

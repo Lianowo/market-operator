@@ -1687,8 +1687,8 @@ def test_defense_title_labels_partial_exit_as_breakeven():
         "减仓50% · 余仓保本防线"
 
 
-def test_sub_bar_lock_uses_vol_scaled_frac(tmp_path):
-    """高波动(ATR/entry=3% ≥ 2%)必须锁 35%,而不是静态 25%。"""
+def test_sub_bar_lock_uses_configured_frac(tmp_path):
+    """子周期锁利统一采用配置的 reject_opp_lock_frac(-0.25),无波动率魔法分档。"""
     cfg = _cfg_min()
     cfg["protection"]["price_clock"] = "bar"      # 子周期 TP1 分支
     client, tg = _FillClient(), _FakeTG()
@@ -1702,9 +1702,9 @@ def test_sub_bar_lock_uses_vol_scaled_frac(tmp_path):
 
     r._on_sub_bar(cs, (NOW, 104.0, 110.0, 100.0, 104.0, 1.0))
 
-    # frac=-0.35 ⇒ 预算 6.5;峰值 110 ⇒ 防线 103.5(静态 -0.25 只会到 102.5)
-    assert pos_pm.invalid == pytest.approx(103.5)
-    assert "已锁 35% TP1 行程" in tg.fills[-1]["title"]
+    # frac=-0.25 ⇒ 预算 7.5;峰值 110 ⇒ 防线 102.5
+    assert pos_pm.invalid == pytest.approx(102.5)
+    assert "已锁 25% TP1 行程" in tg.fills[-1]["title"]
 
 
 def test_sub_bar_giveback_exhaustion_takes_half_and_breakeven(tmp_path):
