@@ -565,6 +565,8 @@ class ZoneBook:
 
     def _retest(self, z: Zone, index: int, h: float, l: float, c: float,
                 atr_val: float) -> None:
+        if self.p.use_balance_detector and getattr(z, "source_kind", "BOX_EDGE") == "BOX_EDGE":
+            return
         up = z.role is ZoneRole.RESISTANCE
         bm = self.p.k_bm * atr_val
         rj = self.p.k_rj * atr_val

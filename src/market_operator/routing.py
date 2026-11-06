@@ -525,11 +525,11 @@ class MarketRouter:
                         if (opp_tr is not None and dist_tr > 0.0)
                         else 0.0
                     )
-                    if float(getattr(zone, "box_width_atr", 99.0)) > 4.5 or rr_tr < 2.0:
+                    if float(getattr(zone, "box_width_atr", 99.0)) > 4.5 or rr_tr < 1.5:
                         self._bump("restraint_transition_regime_reject")
                         return None
             elif cid == BREAKOUT_ACCEPTED:
-                if view.regime is Regime.TRANSITION:
+                if view.regime is Regime.TRANSITION and bool(ev.attrs.get("mic", False)):
                     self._bump("restraint_transition_regime_reject")
                     return None
                 if sk_align == "BOX_EDGE":
@@ -771,13 +771,7 @@ class MarketRouter:
                         and mid_ok
                     )
                 else:
-                    leg5_span = (
-                        (bc - min(float(b[3]) for b in eval_bars[-5:]))
-                        if d > 0
-                        else (max(float(b[2]) for b in eval_bars[-5:]) - bc)
-                    )
-                    not_exhausted = (cid != BREAKOUT_ACCEPTED) or (atr <= 0.0) or ((leg5_span / atr) <= 3.5)
-                    confirmed = (not climax_blocked) and not_exhausted and (brk3 or (rmax4 and out1)) and mid_ok
+                    confirmed = (not climax_blocked) and (brk3 or (rmax4 and out1)) and mid_ok
                 if not confirmed:
                     self._bump("restraint_struct_impulse_reject")
                     return None
