@@ -771,7 +771,13 @@ class MarketRouter:
                         and mid_ok
                     )
                 else:
-                    confirmed = (not climax_blocked) and (brk3 or (rmax4 and out1)) and mid_ok
+                    leg5_span = (
+                        (bc - min(float(b[3]) for b in eval_bars[-5:]))
+                        if d > 0
+                        else (max(float(b[2]) for b in eval_bars[-5:]) - bc)
+                    )
+                    not_exhausted = (cid != BREAKOUT_ACCEPTED) or (atr <= 0.0) or ((leg5_span / atr) <= 3.5)
+                    confirmed = (not climax_blocked) and not_exhausted and (brk3 or (rmax4 and out1)) and mid_ok
                 if not confirmed:
                     self._bump("restraint_struct_impulse_reject")
                     return None
