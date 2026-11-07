@@ -21,6 +21,7 @@
   "accept_max_ext_atr": null,
   "fast_accept_atr": null,
   "box_reentry_enabled": true,
+  "box_break_retest_enabled": true,
   "risk_frac": 0.0075,
   "leverage_cap": 20.0,
   "taker_fee": 0.0006,

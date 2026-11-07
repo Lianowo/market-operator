@@ -981,9 +981,16 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     if not (lo <= i < hi):
         return
     # 多周期级联职责边界:当本战役已挂载细周期触发器(f.mic is not None)时,
-    # 边界拒绝(LEVEL_REJECTED)已由细周期实时捕捉与确认,粗周期收盘不再迟钝重发 LEVEL_REJECTED
+    # 活跃箱体边界拒绝(BOX_EDGE LEVEL_REJECTED)已由细周期实时捕捉与确认,粗周期收盘不再迟钝重发;
+    # 但翻转箱沿外侧回踩拒绝(FLIPPED_BOX_EDGE LEVEL_REJECTED)依拍卖职责必须在大周期认知收盘确认,故保留。
     route_events = (
-        [e for e in new_events if e.id != "LEVEL_REJECTED"]
+        [
+            e for e in new_events
+            if not (
+                e.id == "LEVEL_REJECTED"
+                and getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE") == "BOX_EDGE"
+            )
+        ]
         if f.mic is not None
         else new_events
     )

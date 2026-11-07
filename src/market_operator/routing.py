@@ -243,12 +243,35 @@ class MarketRouter:
             filtered_events.append(e)
         new_events = filtered_events
 
+        # 趋势破位防御护栏(STRUCTURE_BROKEN):
+        # 1) 当根出现任意方向 STRUCTURE_BROKEN 时,若存在未成交入场挂单则立即撤单;
+        # 2) 当根出现某方向 STRUCTURE_BROKEN(如 -1 多头结构破位)时,严禁在同根反向(-ev.direction, 如 +1)开仓接刀。
+        e6_dirs = {
+            int(e.direction)
+            for e in new_events
+            if canonical_event_id(e.id) == STRUCTURE_BROKEN
+        }
         e1_fires = any(
             canonical_event_id(e.id) == BREAKOUT_ACCEPTED
             and (BREAKOUT_ACCEPTED, e.direction) in wl
             for e in new_events
         )
         slot_freed = False
+        if e6_dirs and entry_resting and not position_open:
+            decisions.append(
+                RouteDecision(
+                    kind="cancel_entry",
+                    route=ROUTE_BREAKOUT_ACCEPTED,
+                    meta={
+                        "reason": (
+                            "STRUCTURE_BROKEN signal cancels unfilled entry limit "
+                            "(trend-break defense)"
+                        )
+                    },
+                )
+            )
+            slot_freed = True
+            self._bump("e6_cancel_orders")
         if e1_fires:
             if symbol in self._pending:
                 ep = self._pending.pop(symbol)
@@ -257,7 +280,7 @@ class MarketRouter:
                     f"(dir={ep.direction}) dropped on BREAKOUT_ACCEPTED signal"
                 )
                 self._bump("e1_drops_pending")
-            if entry_resting and not position_open:
+            if entry_resting and not position_open and not slot_freed:
                 decisions.append(
                     RouteDecision(
                         kind="cancel_entry",
@@ -278,6 +301,12 @@ class MarketRouter:
         for ev in new_events:
             side = "long" if ev.direction > 0 else "short"
             cid = canonical_event_id(ev.id)
+            if cid != STRUCTURE_BROKEN and (-int(ev.direction)) in e6_dirs:
+                self._bump("restraint_e6_reverse_defense_reject")
+                self._notes.append(
+                    f"e6_defense|{symbol} {ev.id}|{side} blocked by same-bar reverse STRUCTURE_BROKEN"
+                )
+                continue
             if (cid, ev.direction) not in wl:
                 self._notes.append(f"nogo|{symbol} {ev.id}|{side} not in whitelist")
                 continue
@@ -513,12 +542,24 @@ class MarketRouter:
             sk_align = getattr(zone, "source_kind", "BOX_EDGE")
             is_mic_align = bool(ev.attrs.get("mic", False))
             if cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
-                if view.regime in (Regime.TREND_UP, Regime.TREND_DOWN):
-                    self._bump("restraint_trend_mean_reversion_reject")
-                    return None
-                if sub_k_align != "R3_TRAP":
-                    self._bump("restraint_unbacked_stall_reject")
-                    return None
+                if sk_align == "FLIPPED_BOX_EDGE":
+                    # 角色互换回踩拒绝(Break-and-Retest /二次起爆):
+                    # 1) 必须发生在大周期(>=4h)认知收盘且具备 R1_WICK 扫损引线确认;
+                    # 2) 严禁逆当前趋势(已在上方拦截)。
+                    step_ms_align = int(ev.attrs.get("reset_step_ms", 0) or 0)
+                    if is_mic_align or step_ms_align < 4 * 3600 * 1000:
+                        self._bump("restraint_mic_outward_retest_reject")
+                        return None
+                    if sub_k_align != "R1_WICK":
+                        self._bump("restraint_unbacked_stall_reject")
+                        return None
+                else:
+                    if view.regime in (Regime.TREND_UP, Regime.TREND_DOWN):
+                        self._bump("restraint_trend_mean_reversion_reject")
+                        return None
+                    if sub_k_align != "R3_TRAP":
+                        self._bump("restraint_unbacked_stall_reject")
+                        return None
             elif cid == BREAKOUT_ACCEPTED:
                 if view.regime is Regime.TRANSITION and is_mic_align:
                     self._bump("restraint_transition_regime_reject")
@@ -864,10 +905,13 @@ class MarketRouter:
             if opp is not None and ev.direction * (float(opp) - close) > 0.0:
                 target_1 = float(opp)
                 r_mult = ev.direction * (target_1 - close) / dist if dist > 0 else None
-        elif (cid == BREAKOUT_ACCEPTED
-              and p.accept_target_box_mult is not None
-              and float(p.accept_target_box_mult) > 0.0
-              and zone is not None):
+        elif (
+            (cid == BREAKOUT_ACCEPTED
+             or (cid in (BREAKOUT_FAILED, LEVEL_REJECTED) and sk_gate == "FLIPPED_BOX_EDGE"))
+            and p.accept_target_box_mult is not None
+            and float(p.accept_target_box_mult) > 0.0
+            and zone is not None
+        ):
             opp = getattr(zone, "box_opposite", None)
             if opp is not None:
                 ref_edge = float(ev.attrs.get("ref")

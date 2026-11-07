@@ -842,6 +842,64 @@ def test_balance_auction_alignment_first_principles():
     assert len(d_trend_out) == 1 and d_trend_out[0].kind == "market"
 
 
+def test_structure_broken_defense_and_flipped_box_edge_retest_continuation():
+    """验证趋势破位防御护栏与大周期角色互换回踩二次起爆(FLIPPED_BOX_EDGE LEVEL_REJECTED):
+    1) 当根出现反向 STRUCTURE_BROKEN 时,MarketRouter 立即撤除未成交挂单并拦截同根逆向开仓;
+    2) FLIPPED_BOX_EDGE 的回踩拒绝(二次起爆)在大周期(>=4h)认知收盘且具备 R1_WICK 扫损确认时放行,
+       自动按 accept_target_box_mult 计算箱体等幅扩展目标并标记 trade_context='回踩确认'。
+    """
+    from market_operator.events import STRUCTURE_BROKEN
+
+    z_flip_sup = Zone(
+        lo=108.0, hi=110.0, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        touches=3, rejects=0, origin_known=5, last_change_known=12,
+        box_opposite=98.0, box_quality=0.65, box_width_atr=6.0, box_rotations=4,
+        source_kind="FLIPPED_BOX_EDGE", box_id=7,
+    )
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            accept_target_box_mult=2.0,
+            balance_auction_alignment=True,
+        )
+    )
+    view_up = StructureView(regime=Regime.TREND_UP, zones=(z_flip_sup,), atr=2.0)
+
+    # 1) 同根出现空头 STRUCTURE_BROKEN(-1) 与多头入场信号(+1): 撤除挂单并拦截逆向多单!
+    ev_e6_down = MarketEvent(
+        id=STRUCTURE_BROKEN, direction=-1, ts=1000, known_index=12,
+        attrs={"ref": 107.0, "invalid": 107.2},
+    )
+    ev_retest_long = MarketEvent(
+        id=LEVEL_REJECTED, direction=1, ts=1000, known_index=12,
+        attrs={
+            "zone": z_flip_sup, "ref": 108.0, "invalid": 107.3,
+            "sub_kind": "R1_WICK", "reset_step_ms": 4 * 3600 * 1000,
+        },
+    )
+    decs_blocked = router.on_bar(
+        "BTCUSDT", (1000, 109.0, 111.5, 107.5, 111.0, 100.0),
+        12, view_up, 2.0, [ev_e6_down, ev_retest_long],
+        position_open=False, entry_resting=True,
+    )
+    assert len(decs_blocked) == 1 and decs_blocked[0].kind == "cancel_entry"
+    assert router.counters.get("e6_cancel_orders") == 1
+    assert router.counters.get("restraint_e6_reverse_defense_reject") == 1
+
+    # 2) 无反向破位时, 4h 认知收盘的 FLIPPED_BOX_EDGE R1_WICK 回踩确认放行, 目标为等幅箱体扩展(108.0 + 2.0 * (108.0 - 98.0) = 128.0)
+    decs_ok = router.on_bar(
+        "BTCUSDT", (2000, 109.0, 111.5, 107.5, 111.0, 100.0),
+        13, view_up, 2.0, [ev_retest_long],
+        position_open=False, entry_resting=False,
+    )
+    assert len(decs_ok) == 1 and decs_ok[0].kind == "market"
+    assert decs_ok[0].meta.get("trade_context") == "回踩确认"
+    assert decs_ok[0].hyp.target_1 == pytest.approx(128.0)
+
+
+
 
 
 

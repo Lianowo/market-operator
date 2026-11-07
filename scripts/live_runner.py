@@ -2604,10 +2604,22 @@ class LiveRunner:
             for intent in mgmt:
                 self._exec_mgmt(cs, intent, cog_bar)
         if emitted:
-            view = StructureView(
-                regime=s.regime(), zones=s.zones, atr=atr,
-                pivots=s.pivots[-self.params.range_max_pivots:])
-            self._route_step(cs, atr, list(emitted), view, mic=False)
+            route_events = (
+                [
+                    e for e in emitted
+                    if not (
+                        e.id == "LEVEL_REJECTED"
+                        and getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE") == "BOX_EDGE"
+                    )
+                ]
+                if cs.tracker is not None
+                else list(emitted)
+            )
+            if route_events:
+                view = StructureView(
+                    regime=s.regime(), zones=s.zones, atr=atr,
+                    pivots=s.pivots[-self.params.range_max_pivots:])
+                self._route_step(cs, atr, route_events, view, mic=False)
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
                     *, mic: bool) -> None:
