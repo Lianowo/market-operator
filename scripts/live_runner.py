@@ -67,7 +67,7 @@ from market_operator.broker import (                            # noqa: E402
     ContractSpec, floor_step)
 from market_operator.events import EventDetector, canonical_event_id  # noqa: E402
 from market_operator.heartbeat import (                          # noqa: E402
-    SCHEMA as HB_SCHEMA, HeartbeatGuard, iso_utc)
+    SCHEMA as HB_SCHEMA, HeartbeatGuard, SingletonLock, iso_utc)
 from market_operator.hypothesis import StructureView, entry_contract_error, entry_cost_error, execution_target  # noqa: E402
 from market_operator.position import (                          # noqa: E402
     Position, PositionManager, opp_lock_step)
@@ -3099,16 +3099,26 @@ class LiveRunner:
                                             side_fallback_price=entry_ref,
                                             now_ms=t)
             except BitgetError as e:
-                # 下单失败:该意图作废且不重发;连续错达阈值由 _api_note 熔断
-                intent["status"] = "error"
-                self.counters["order_errors"] = \
-                    self.counters.get("order_errors", 0) + 1
-                self._journal("order_error", {"oid": oid, "symbol": sym,
-                                              "event": hyp.event_id,
-                                              "why": str(e)[:160]})
-                self.tg.send_alert(f"{sym} 开仓下单失败:{str(e)[:120]}"
-                                   f"(意图作废,不重试)")
-                self._api_note(e)
+                if d.kind != "limit" and "40786" in str(e):
+                    # 40786 = 重复的 clientOid:说明该笔市价单已在交易所落地成交,
+                    # 按已成交建仓入账,绝不能标为 error 后被 _adopt_exchange_only 当异己仓覆盖止损!
+                    self._journal("order_idempotent_recover", {
+                        "oid": oid, "symbol": sym, "event": hyp.event_id,
+                        "why": str(e)[:160]})
+                    self._live_entry_filled(intent,
+                                            side_fallback_price=entry_ref,
+                                            now_ms=t)
+                else:
+                    # 下单失败:该意图作废且不重发;连续错达阈值由 _api_note 熔断
+                    intent["status"] = "error"
+                    self.counters["order_errors"] = \
+                        self.counters.get("order_errors", 0) + 1
+                    self._journal("order_error", {"oid": oid, "symbol": sym,
+                                                  "event": hyp.event_id,
+                                                  "why": str(e)[:160]})
+                    self.tg.send_alert(f"{sym} 开仓下单失败:{str(e)[:120]}"
+                                       f"(意图作废,不重试)")
+                    self._api_note(e)
         self._journal("intent", {k: intent[k] for k in (
             "oid", "symbol", "role", "kind", "direction", "qty",
             "limit_price", "ref_px", "invalid", "tf_label", "event_id",
@@ -3700,6 +3710,23 @@ class LiveRunner:
                 continue
             missing = bool(cur and cur.get("order_id") and live_ids is not None
                            and str(cur["order_id"]) not in live_ids)
+            if not missing and cur and cur.get("order_id") and self._stops_live_rows:
+                ex_row = next(
+                    (r for r in self._stops_live_rows
+                     if str(r.get("orderId")) == str(cur["order_id"])),
+                    None,
+                )
+                if ex_row is not None:
+                    try:
+                        ex_trig = float(
+                            ex_row.get("triggerPrice")
+                            or ex_row.get("stopLossTriggerPrice")
+                            or cur["trigger"]
+                        )
+                        if abs(ex_trig - float(cur["trigger"])) > 1e-9:
+                            cur["trigger"] = ex_trig
+                    except (TypeError, ValueError):
+                        pass
             if missing:
                 self.counters["stop_missing"] = \
                     self.counters.get("stop_missing", 0) + 1
@@ -4219,6 +4246,36 @@ class LiveRunner:
                 continue
             if sym in self.positions:
                 continue
+            entry = float(p.get("entry_price") or 0.0)
+            mark = float(p.get("mark_price") or 0.0) or entry
+            qty = float(p.get("qty") or 0.0)
+            # 优先匹配本系统自身的近期开仓意图(如因超时/40786/重启未入 positions 的策略单):
+            # 必须保留原策略周期(如 4h)、原结构止损 invalid 与原 target_1,绝不用 1d ATR 覆盖!
+            own_cands = [
+                it for it in self.open_intents.values()
+                if it.get("symbol") == sym
+                and it.get("role") == "entry"
+                and int(it.get("direction") or 0) == d
+                and it.get("event_id") not in (None, "ADOPTED")
+                and it.get("invalid") is not None
+                and d * (entry - float(it["invalid"])) > 0.0
+                and d * (mark - float(it["invalid"])) > 0.0
+            ]
+            if own_cands:
+                own_it = max(own_cands, key=lambda x: int(x.get("decision_ts") or 0))
+                own_it["qty"] = qty
+                own_it["status"] = "filled"
+                own_it["fill_price"] = entry
+                own_it["fill_price_source"] = "fills"
+                opened_ts = int(own_it.get("decision_ts") or now_ms)
+                self._register_position(sym, own_it, entry, opened_ts, origin="strategy")
+                self._journal("reconcile_recovered_own_intent", {
+                    "symbol": sym, "oid": own_it.get("oid"),
+                    "tf_label": own_it.get("tf_label"),
+                    "entry": entry, "invalid": own_it.get("invalid"),
+                    "target_1": own_it.get("target_1"),
+                })
+                continue
             cs = (self._get_cs_for(sym, str(self.cog_cfg.get("main_tf_label") or "12h"))
                   or self.campaigns.get(sym))
             if cs is None:
@@ -4532,6 +4589,14 @@ def main(argv=None) -> None:
             pass
     args = parse_args(argv)
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    runner_lock = None
+    if args.mode == "live" and not args.heartbeat_path:
+        lock_path = paths.runtime_dir() / "live" / "runner.lock"
+        runner_lock = SingletonLock(lock_path)
+        if not runner_lock.acquire():
+            print(f"[live_runner] 已有實盤實例持有單實例鎖({lock_path}),本進程退出",
+                  flush=True)
+            return
     cred_src = cfg.get("credentials_source")
     cred_path = paths.resolve_existing(cred_src) if cred_src else None
     if cred_path is not None and not cred_path.exists():

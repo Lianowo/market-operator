@@ -135,6 +135,9 @@ class BitgetLiveClient:
                 # 不消耗重试预算的语义留在这里显式标注,重签由下一轮 _headers 完成。
                 if code in ("40008", "40009", "40012") and attempt + 1 < self.max_retries:
                     continue
+                # 确定性业务拒绝(重复clientOid/无仓位/参数精度错误)无需退避重试6次阻塞主循环
+                if code in ("40786", "22002", "43023", "40808", "45110"):
+                    break
             except (requests.RequestException, ValueError) as e:
                 last_err = e
             if attempt + 1 < self.max_retries:

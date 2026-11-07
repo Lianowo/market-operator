@@ -821,7 +821,7 @@ def test_balance_auction_alignment_first_principles():
                            position_open=False, entry_resting=False)
     assert len(d_trap) == 1 and d_trap[0].kind == "market"
 
-    # 4) RANGE 下 BOX_EDGE 向外突破拦截, 但 TREND_UP 下具备真实脱离位移(>=1.1 ATR)的顺势突破放行
+    # 4) 短周期(<4h) RANGE 下 BOX_EDGE 向外突破拦截, 但大周期(>=4h)认知收盘从 RANGE 发起的真突破及 TREND_UP 下顺势突破放行
     z_res = Zone(
         lo=109.0, hi=110.0, role=ZoneRole.RESISTANCE, state=ZoneState.BROKEN,
         touches=3, rejects=1, origin_known=1, last_change_known=10,
@@ -830,11 +830,19 @@ def test_balance_auction_alignment_first_principles():
     )
     ev_out = MarketEvent(
         id=BREAKOUT_ACCEPTED, direction=1, ts=5000, known_index=14,
-        attrs={"zone": z_res, "ref": 110.0, "invalid": 108.8, "sub_kind": "A2_OVEREXTENDED", "ext_atr": 1.2},
+        attrs={"zone": z_res, "ref": 110.0, "invalid": 108.8, "sub_kind": "A2_OVEREXTENDED", "ext_atr": 1.2, "reset_step_ms": 2 * 3600 * 1000},
     )
     assert router.on_bar("BTCUSDT", (5000, 110.2, 112.6, 110.0, 112.4, 1.0), 14, view_range, 2.0, [ev_out],
                          position_open=False, entry_resting=False) == []
     assert router.counters.get("restraint_range_outward_breakout_reject") == 1
+
+    ev_out_4h = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=5500, known_index=14,
+        attrs={"zone": z_res, "ref": 110.0, "invalid": 108.8, "sub_kind": "A2_OVEREXTENDED", "ext_atr": 1.2, "reset_step_ms": 4 * 3600 * 1000},
+    )
+    d_range_4h_out = router.on_bar("BTCUSDT", (5500, 110.2, 112.6, 110.0, 112.4, 1.0), 14, view_range, 2.0, [ev_out_4h],
+                                   position_open=False, entry_resting=False)
+    assert len(d_range_4h_out) == 1 and d_range_4h_out[0].kind == "market"
 
     view_up = StructureView(regime=Regime.TREND_UP, zones=(z_res,), atr=2.0)
     d_trend_out = router.on_bar("BTCUSDT", (6000, 110.2, 112.6, 110.0, 112.4, 1.0), 15, view_up, 2.0, [ev_out],

@@ -565,8 +565,10 @@ class MarketRouter:
                     self._bump("restraint_transition_regime_reject")
                     return None
                 if sk_align == "BOX_EDGE" and view.regime is Regime.RANGE:
-                    self._bump("restraint_range_outward_breakout_reject")
-                    return None
+                    step_ms_brk = int(ev.attrs.get("reset_step_ms", 0) or 0)
+                    if is_mic_align or step_ms_brk < 4 * 3600 * 1000:
+                        self._bump("restraint_range_outward_breakout_reject")
+                        return None
                 if not is_mic_align and sub_k_align == "A1_TIGHT":
                     self._bump("restraint_range_outward_breakout_reject")
                     return None
