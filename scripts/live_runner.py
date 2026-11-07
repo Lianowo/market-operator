@@ -914,6 +914,9 @@ class LiveRunner:
                 try:
                     bars2h = prefetched.get(sym) or []
                     saved_bars = saved.get("trig_bars") or []
+                    if (len(saved_bars) >= 2 and len(bars2h) >= 2
+                            and int(saved_bars[1][0] - saved_bars[0][0]) != int(bars2h[1][0] - bars2h[0][0])):
+                        saved_bars = []
                     cut = max((int(b[0]) for b in saved_bars), default=None)
                     if cut is not None and bars2h and int(bars2h[-1][0]) > cut:
                         gap = [tuple(b) for b in bars2h if int(b[0]) > cut]
@@ -1122,20 +1125,21 @@ class LiveRunner:
     # 战役装配(本地磁盘 K 线缓存 + 增量回补 + 并发拉取 + 按周期裁剪认知重放)
     # ------------------------------------------------------------------
 
-    def _candle_cache_path(self, symbol: str, *, gz: bool = True) -> Path:
+    def _candle_cache_path(self, symbol: str, *, gz: bool = True,
+                           gran: Optional[str] = None) -> Path:
         """K 线缓存路径:默认 `.json.gz`(密度高 3~4 倍),`gz=False` 为旧格式。
 
         缓存是**可再生产物**(交易所随时可补齐),压缩它不损失任何信息:
         1800 根 × 6 字段的 JSON 纯文本 ~100KB,压后 ~25KB。
         """
-        gran = str(self.cog_cfg.get("granularity") or "2H").upper()
+        g = str(gran or self.cog_cfg.get("granularity") or "2H").upper()
         suffix = ".json.gz" if gz else ".json"
-        return self.candle_cache_dir / f"{symbol}_{gran}{suffix}"
+        return self.candle_cache_dir / f"{symbol}_{g}{suffix}"
 
-    def _load_cached_bars(self, symbol: str) -> list[tuple]:
+    def _load_cached_bars(self, symbol: str, *, gran: Optional[str] = None) -> list[tuple]:
         """读缓存:优先 .json.gz,回落旧 .json(便于无损迁移,不必停机改格式)。"""
         for gz in (True, False):
-            p = self._candle_cache_path(str(symbol), gz=gz)
+            p = self._candle_cache_path(str(symbol), gz=gz, gran=gran)
             if not p.exists():
                 continue
             try:
@@ -1150,35 +1154,42 @@ class LiveRunner:
                 continue
         return []
 
-    def _save_cached_bars(self, symbol: str, bars: list) -> None:
+    def _save_cached_bars(self, symbol: str, bars: list, *,
+                          gran: Optional[str] = None) -> None:
         if not bars:
             return
         try:
             self.candle_cache_dir.mkdir(parents=True, exist_ok=True)
             want = int(self.cog_cfg.get("warmup_trigger_bars", 3600))
-            p = self._candle_cache_path(str(symbol))
+            p = self._candle_cache_path(str(symbol), gran=gran)
             payload = json.dumps(bars[-want:], separators=(",", ":"))
             self._write_json_atomic(p, payload)          # 文本原子写
-            legacy = self._candle_cache_path(str(symbol), gz=False)
+            legacy = self._candle_cache_path(str(symbol), gz=False, gran=gran)
             if legacy.exists():                          # 迁移:旧明文缓存删除
                 legacy.unlink(missing_ok=True)
         except Exception:
             pass
 
-    def _base_step_seconds(self, bars: Optional[list] = None) -> int:
+    def _base_step_seconds(self, bars: Optional[list] = None, *,
+                           gran: Optional[str] = None) -> int:
         if bars and len(bars) >= 2 and int(bars[1][0]) > int(bars[0][0]):
             return int(bars[1][0] - bars[0][0]) // 1000
-        gran = str(self.cog_cfg.get("granularity") or "2H").strip().lower()
-        if gran.endswith("utc"):
-            gran = gran[:-3]
-        return int(TF_SECONDS_MAP.get(gran, 7200))
+        g = str(gran or self.cog_cfg.get("granularity") or "2H").strip().lower()
+        if g.endswith("utc"):
+            g = g[:-3]
+        return int(TF_SECONDS_MAP.get(g, 7200))
 
     def _fetch_trigger_bars(self, symbol: str, want: int,
-                            seed_bars: Optional[list] = None) -> list:
+                            seed_bars: Optional[list] = None, *,
+                            gran: Optional[str] = None) -> list:
         """基础触发帧回补:优先复用本地缓存 + 增量补齐;不足时倒序分页补齐并落盘缓存。"""
-        base_ms = self._base_step_seconds() * 1000
+        use_gran = str(gran or self.cog_cfg["granularity"])
+        base_ms = self._base_step_seconds(gran=use_gran) * 1000
+        valid_seed = seed_bars or []
+        if len(valid_seed) >= 2 and int(valid_seed[1][0] - valid_seed[0][0]) != base_ms:
+            valid_seed = []
         have: dict = {}
-        for src in (self._load_cached_bars(symbol), seed_bars or []):
+        for src in (self._load_cached_bars(symbol, gran=use_gran), valid_seed):
             for b in src:
                 have[int(b[0])] = (int(b[0]), float(b[1]), float(b[2]),
                                    float(b[3]), float(b[4]), float(b[5]))
@@ -1189,7 +1200,7 @@ class LiveRunner:
                 guard_fwd = 0
                 while guard_fwd < 20:
                     fresh = self.client.history_candles(
-                        symbol, self.cog_cfg["granularity"],
+                        symbol, use_gran,
                         start_ms=last_ts + 1, limit=200)
                     new_items = [b for b in fresh if b[0] not in have]
                     if not new_items:
@@ -1208,7 +1219,7 @@ class LiveRunner:
         guard = 0
         while len(have) < want and guard < max(1, (want // 200) + 2):
             page = self.client.history_candles(
-                symbol, self.cog_cfg["granularity"], end_ms=end_ms, limit=200)
+                symbol, use_gran, end_ms=end_ms, limit=200)
             fresh = [b for b in page if b[0] not in have]
             if not fresh:
                 break
@@ -1217,7 +1228,7 @@ class LiveRunner:
             end_ms = fresh[0][0]
             guard += 1
         bars = [have[t] for t in sorted(have)][-want:]
-        self._save_cached_bars(symbol, bars)
+        self._save_cached_bars(symbol, bars, gran=use_gran)
         return bars
 
     def _prefetch_bars_parallel(self, symbols: list[str], want: int,
@@ -1230,12 +1241,26 @@ class LiveRunner:
             sym = symbols[0]
             return {sym: self._fetch_trigger_bars(sym, want, seed_by_sym.get(sym))}
         out: dict[str, list] = {}
-        max_workers = min(8, len(symbols))
+        max_workers = min(16, len(symbols))
+        trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
+        need_30m = (
+            self.mode == "live"
+            and hasattr(self.client, "history_candles")
+            and any(int(trig_map.get(tf) or 7200) < 7200 for tf in (self.cog_cfg.get("tf_list") or ()))
+        )
+        sub_want = max(520, (self._min_cog_bars_for_tf() + 5) * 8)
+
+        def _fetch_one(s: str) -> list:
+            res_2h = self._fetch_trigger_bars(s, want, seed_by_sym.get(s))
+            if need_30m:
+                try:
+                    self._fetch_trigger_bars(s, sub_want, gran="30m")
+                except Exception:
+                    pass
+            return res_2h
+
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {
-                ex.submit(self._fetch_trigger_bars, sym, want, seed_by_sym.get(sym)): sym
-                for sym in symbols
-            }
+            futs = {ex.submit(_fetch_one, sym): sym for sym in symbols}
             for fut in as_completed(futs):
                 sym = futs[fut]
                 try:
@@ -1319,11 +1344,29 @@ class LiveRunner:
         want = int(self.cog_cfg["warmup_trigger_bars"])
         if bars2h is None:
             bars2h = self._fetch_trigger_bars(symbol, want)
+        bars_30m: Optional[list] = None
+        trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
+        if (
+            self.mode == "live"
+            and hasattr(self.client, "history_candles")
+            and any(int(trig_map.get(tf) or 7200) < 7200 for tf in (self.cog_cfg.get("tf_list") or ()))
+        ):
+            sub_want = max(520, (self._min_cog_bars_for_tf() + 5) * 8)
+            cand_30m = self._fetch_trigger_bars(symbol, sub_want, gran="30m")
+            if self._base_step_seconds(cand_30m, gran="30m") == 1800 and len(cand_30m) >= self._min_cog_bars_for_tf() * 4:
+                bars_30m = cand_30m
         main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
         tf_list = list(self.cog_cfg.get("tf_list") or [main_tf])
         built: dict[str, CampaignState] = {}
         for tf in tf_list:
-            cs_tf = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
+            use_bars = (
+                bars_30m
+                if (bars_30m is not None and int(trig_map.get(tf) or 7200) < 7200)
+                else bars2h
+            )
+            cs_tf = self._build_campaign(symbol, tf, bars2h=use_bars, quiet_if_short=True)
+            if cs_tf is None and use_bars is not bars2h:
+                cs_tf = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
             if cs_tf is not None:
                 built[tf] = cs_tf
         if not built:
@@ -1656,9 +1699,23 @@ class LiveRunner:
         base_ms = self._base_step_seconds() * 1000
         for sym, cs in sorted(self.campaigns.items()):
             try:
+                # 1) 推进 30m 细周期触发战役(2h->30m 每 30m 收盘推进, 4h->1h 每 1h 收盘推进,共用同一 30m 序列)
+                sub_30m_list = [
+                    sub_cs for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items())
+                    if s2 == sym and self._base_step_seconds(sub_cs.trig_bars) == 1800
+                ]
+                if sub_30m_list:
+                    sub_ms = 1800 * 1000
+                    sub_last = min(sc.trig_bars[-1][0] for sc in sub_30m_list if sc.trig_bars)
+                    if sub_last > 0 and now_ms >= sub_last + 2 * sub_ms:
+                        sub_new = self.client.history_candles(
+                            sym, "30m", start_ms=sub_last + 1, limit=100)
+                        if sub_new:
+                            for sc in sub_30m_list:
+                                self._advance(sc, now_ms, new_bars=sub_new, run_paper_fills=False)
+                            self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran="30m")
+                # 2) 推进 2H 基础帧与同粒度战役
                 last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
-                # 优化:2H K 线每 7200s 收盘一次;下一根 2H bar 收盘时刻为 last_ts + 2 * base_ms。
-                # 未到新 bar 收盘时刻前跳过冗余 HTTP 请求,避免每 15s 空轮询全宇宙品种。
                 if last_ts > 0 and now_ms < last_ts + 2 * base_ms:
                     continue
                 new_bars = self.client.history_candles(
@@ -1668,7 +1725,7 @@ class LiveRunner:
                     continue
                 self._advance(cs, now_ms, new_bars=new_bars, run_paper_fills=True)
                 for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items()):
-                    if s2 == sym:
+                    if s2 == sym and self._base_step_seconds(sub_cs.trig_bars) == base_ms // 1000:
                         self._advance(sub_cs, now_ms, new_bars=new_bars, run_paper_fills=False)
                 self._try_unlock_higher_tfs(sym, cs.trig_bars)
                 self._save_cached_bars(sym, cs.trig_bars)
