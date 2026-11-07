@@ -550,9 +550,26 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
         sp[1] = k
     k = 0
     n = len(cog_bars)
+    t0_ms = int(t_series[0][0]) if t_series else (int(cog_bars[0][0]) if cog_bars else 0)
+
+    def _span_start(p: int, _sp=spans, _n=n) -> int:
+        idx_p = min(max(p, 0), _n - 1)
+        if idx_p in _sp:
+            return _sp[idx_p][0]
+        return (int(cog_bars[idx_p][0]) - t0_ms) // trig_ms
+
+    def _span_end(p: int, _sp=spans, _n=n) -> int:
+        idx_p = min(max(p, 0), _n - 1)
+        if idx_p in _sp:
+            return _sp[idx_p][1]
+        return (int(cog_bars[idx_p][0]) + obs_ms - trig_ms - t0_ms) // trig_ms
+
     for i, bar in enumerate(cog_bars):
         sp = spans.get(i)
         if sp is None:
+            if t_series and int(bar[0]) + obs_ms <= int(t_series[0][0]):
+                detector.update(bar)
+                continue
             raise RuntimeError(f"{symbol} 认知 bar {i} 无 trigger 覆盖")
         lo, hi = sp
         if k < lo:
@@ -562,9 +579,14 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
             tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4], tb[5] if len(tb) > 5 else 0.0)
             k += 1
         detector.update(bar)
-        tracker.sync(i, detector,
-                     lambda p, _sp=spans: _sp[p][0],
-                     lambda p, _sp=spans, _n=n: _sp[min(p, _n - 1)][1])
+        tracker.sync(i, detector, _span_start, _span_end)
+    if cog_bars:
+        last_cog_end = int(cog_bars[-1][0]) + obs_ms
+        while k < len(t_series):
+            tb = t_series[k]
+            if int(tb[0]) >= last_cog_end:
+                tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4], tb[5] if len(tb) > 5 else 0.0)
+            k += 1
     return detector, tracker
 
 
@@ -1275,7 +1297,8 @@ class LiveRunner:
 
     def _build_campaign(self, symbol: str, tf_label: Optional[str] = None,
                         bars2h: Optional[list] = None,
-                        *, quiet_if_short: bool = False) -> Optional[CampaignState]:
+                        *, trig_bars: Optional[list] = None,
+                        quiet_if_short: bool = False) -> Optional[CampaignState]:
         tf_label = tf_label or str(self.cog_cfg.get("main_tf_label") or "12h")
         obs_s = TF_SECONDS_MAP.get(tf_label, int(self.cog_cfg["obs_tf_seconds"]))
         trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
@@ -1306,6 +1329,13 @@ class LiveRunner:
                 self.tg.send_alert(f"{symbol} 2H 序列缺口 {a[0]}→{b[0]},"
                                    f"暂不交易")
                 return None
+        use_trig = trig_bars if trig_bars is not None else bars2h
+        if trig_bars is not None:
+            trig_base_s = self._base_step_seconds(trig_bars, gran="30m")
+            for a, b in zip(trig_bars, trig_bars[1:]):
+                if b[0] - a[0] != trig_base_s * 1000:
+                    use_trig = bars2h
+                    break
         # 优化:按周期裁剪所需 2H 窗口(每个周期仅需 warmup_cog_bars 根自身认知 bar,
         # BalanceDetector 最大窗口 144 <= 160;新币满 min_cog_bars(60根)即可自适应准入)
         warmup_cog = max(min_cog_bars, int(self.cog_cfg.get("warmup_cog_bars", 160)))
@@ -1321,7 +1351,7 @@ class LiveRunner:
                                    f" 根),暂不开启该周期")
             return None
         first_cog_ts = cog_bars[0][0]
-        replay_trig = [b for b in slice_2h if b[0] >= first_cog_ts]
+        replay_trig = [b for b in use_trig if b[0] >= first_cog_ts]
         detector, tracker = replay_cognition(
             self.params, symbol, cog_bars, replay_trig,
             obs_tf_seconds=obs_s, trigger_tf_seconds=trig_s)
@@ -1331,7 +1361,7 @@ class LiveRunner:
         return CampaignState(symbol=symbol, detector=detector, tracker=tracker,
                              router=router, pm=pm,
                              cog_bars=list(cog_bars),
-                             trig_bars=list(bars2h),
+                             trig_bars=list(use_trig),
                              tf_label=tf_label,
                              obs_tf_seconds=obs_s,
                              trigger_tf_seconds=trig_s)
@@ -1359,13 +1389,13 @@ class LiveRunner:
         tf_list = list(self.cog_cfg.get("tf_list") or [main_tf])
         built: dict[str, CampaignState] = {}
         for tf in tf_list:
-            use_bars = (
+            sub_trig = (
                 bars_30m
                 if (bars_30m is not None and int(trig_map.get(tf) or 7200) < 7200)
-                else bars2h
+                else None
             )
-            cs_tf = self._build_campaign(symbol, tf, bars2h=use_bars, quiet_if_short=True)
-            if cs_tf is None and use_bars is not bars2h:
+            cs_tf = self._build_campaign(symbol, tf, bars2h=bars2h, trig_bars=sub_trig, quiet_if_short=True)
+            if cs_tf is None and sub_trig is not None:
                 cs_tf = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
             if cs_tf is not None:
                 built[tf] = cs_tf
@@ -1697,30 +1727,72 @@ class LiveRunner:
             self._advance_price_clock(now_ms)
             self._poll_position_prices(now_ms)
         base_ms = self._base_step_seconds() * 1000
+        sub_ms = 1800 * 1000
+        sub_30m_by_sym: dict[str, list[CampaignState]] = {}
+        due_30m: dict[str, int] = {}
+        due_base: dict[str, int] = {}
+        for sym, cs in sorted(self.campaigns.items()):
+            s_list = [
+                sub_cs for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items())
+                if s2 == sym and self._base_step_seconds(sub_cs.trig_bars) == 1800
+            ]
+            if s_list:
+                sub_30m_by_sym[sym] = s_list
+                sub_last = min(sc.trig_bars[-1][0] for sc in s_list if sc.trig_bars)
+                if sub_last > 0 and now_ms >= sub_last + 2 * sub_ms:
+                    due_30m[sym] = sub_last + 1
+            last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
+            if last_ts == 0 or now_ms >= last_ts + 2 * base_ms:
+                due_base[sym] = last_ts + 1
+
+        pref_30m: dict[str, list] = {}
+        pref_base: dict[str, list] = {}
+        if self.mode == "live" and (len(due_30m) + len(due_base)) > 2:
+            gran_base = self.cog_cfg["granularity"]
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                f30 = {
+                    ex.submit(self.client.history_candles, s, "30m", start_ms=st, limit=100): s
+                    for s, st in due_30m.items()
+                }
+                fb = {
+                    ex.submit(self.client.history_candles, s, gran_base, start_ms=st, limit=100): s
+                    for s, st in due_base.items()
+                }
+                for fut, s in f30.items():
+                    try:
+                        pref_30m[s] = fut.result()
+                    except Exception:
+                        pass
+                for fut, s in fb.items():
+                    try:
+                        pref_base[s] = fut.result()
+                    except Exception:
+                        pass
+
         for sym, cs in sorted(self.campaigns.items()):
             try:
                 # 1) 推进 30m 细周期触发战役(2h->30m 每 30m 收盘推进, 4h->1h 每 1h 收盘推进,共用同一 30m 序列)
-                sub_30m_list = [
-                    sub_cs for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items())
-                    if s2 == sym and self._base_step_seconds(sub_cs.trig_bars) == 1800
-                ]
-                if sub_30m_list:
-                    sub_ms = 1800 * 1000
-                    sub_last = min(sc.trig_bars[-1][0] for sc in sub_30m_list if sc.trig_bars)
-                    if sub_last > 0 and now_ms >= sub_last + 2 * sub_ms:
-                        sub_new = self.client.history_candles(
-                            sym, "30m", start_ms=sub_last + 1, limit=100)
-                        if sub_new:
-                            for sc in sub_30m_list:
-                                self._advance(sc, now_ms, new_bars=sub_new, run_paper_fills=False)
-                            self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran="30m")
+                sub_30m_list = sub_30m_by_sym.get(sym) or []
+                if sym in due_30m and sub_30m_list:
+                    sub_new = (
+                        pref_30m[sym]
+                        if sym in pref_30m
+                        else self.client.history_candles(sym, "30m", start_ms=due_30m[sym], limit=100)
+                    )
+                    if sub_new:
+                        for sc in sub_30m_list:
+                            self._advance(sc, now_ms, new_bars=sub_new, run_paper_fills=False)
+                        self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran="30m")
                 # 2) 推进 2H 基础帧与同粒度战役
                 last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
                 if last_ts > 0 and now_ms < last_ts + 2 * base_ms:
                     continue
-                new_bars = self.client.history_candles(
-                    sym, self.cog_cfg["granularity"], start_ms=last_ts + 1,
-                    limit=100)
+                new_bars = (
+                    pref_base[sym]
+                    if sym in pref_base
+                    else self.client.history_candles(
+                        sym, self.cog_cfg["granularity"], start_ms=last_ts + 1, limit=100)
+                )
                 if not new_bars:
                     continue
                 self._advance(cs, now_ms, new_bars=new_bars, run_paper_fills=True)

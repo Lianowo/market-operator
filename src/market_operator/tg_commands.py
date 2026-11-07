@@ -55,6 +55,10 @@ class TelegramAPI:
         self._token = token
         self._timeout = timeout
         self.session = requests.Session()
+        if not proxy:
+            import urllib.request
+            sys_p = urllib.request.getproxies()
+            proxy = sys_p.get("https") or sys_p.get("http")
         if proxy:
             self.session.proxies.update({"http": proxy, "https": proxy})
 

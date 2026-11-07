@@ -533,6 +533,10 @@ class TelegramNotifier:
         self.dropped_log = Path(dropped_log) if dropped_log else None
         self.session = session or requests.Session()
         proxy = secrets.get("TELEGRAM_PROXY")
+        if not proxy and session is None:
+            import urllib.request
+            sys_p = urllib.request.getproxies()
+            proxy = sys_p.get("https") or sys_p.get("http")
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
         self.async_mode = bool(async_mode)
