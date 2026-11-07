@@ -1,5 +1,5 @@
 {
-  "fetched_at_utc": "2026-11-06T13:52:50+00:00",
+  "fetched_at_utc": "2026-11-07T11:47:54+00:00",
   "source_url": "https://api.bitget.com/api/v2/mix/market/contracts",
   "product_type": "USDT-FUTURES",
   "entries": {
@@ -43,6 +43,178 @@
         "openTime": "",
         "maxMarketOrderQty": "450",
         "maxOrderQty": "3400",
+        "isRwa": "NO"
+      }
+    },
+    "ADAUSDT": {
+      "sha256": "e35c447c7714a08893231046e3f3357bf0b730edb4123bd887b2f3f1de1aa1b7",
+      "raw": {
+        "symbol": "ADAUSDT",
+        "baseCoin": "ADA",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.07",
+        "sellLimitPriceRatio": "0.07",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "1",
+        "priceEndStep": "1",
+        "volumePlace": "0",
+        "pricePlace": "4",
+        "sizeMultiplier": "1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "290000",
+        "maxOrderQty": "2200000",
+        "isRwa": "NO"
+      }
+    },
+    "APTUSDT": {
+      "sha256": "3ec6315bc53e7a9d62195dad828d10cff07e7b72766d9c1d320c580c84c5f092",
+      "raw": {
+        "symbol": "APTUSDT",
+        "baseCoin": "APT",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.1",
+        "sellLimitPriceRatio": "0.1",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "0.001",
+        "priceEndStep": "1",
+        "volumePlace": "3",
+        "pricePlace": "4",
+        "sizeMultiplier": "0.001",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "58000",
+        "maxOrderQty": "360000",
+        "isRwa": "NO"
+      }
+    },
+    "ARBUSDT": {
+      "sha256": "f48124b3f45bd5792553ec21813125879d1a25d0f32889e1a398c89064d64bef",
+      "raw": {
+        "symbol": "ARBUSDT",
+        "baseCoin": "ARB",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.15",
+        "sellLimitPriceRatio": "0.15",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "0.01",
+        "priceEndStep": "1",
+        "volumePlace": "2",
+        "pricePlace": "5",
+        "sizeMultiplier": "0.01",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "50",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "320000",
+        "maxOrderQty": "2400000",
+        "isRwa": "NO"
+      }
+    },
+    "ATOMUSDT": {
+      "sha256": "777ea7172e35f0d2823c9abd6695fece43ca8d3fca0a31e150b37d2d5f2fb561",
+      "raw": {
+        "symbol": "ATOMUSDT",
+        "baseCoin": "ATOM",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.1",
+        "sellLimitPriceRatio": "0.1",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "1",
+        "priceEndStep": "1",
+        "volumePlace": "0",
+        "pricePlace": "4",
+        "sizeMultiplier": "1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "33000",
+        "maxOrderQty": "150000",
         "isRwa": "NO"
       }
     },
@@ -218,6 +390,49 @@
         "isRwa": "NO"
       }
     },
+    "DOTUSDT": {
+      "sha256": "ee668990ad848c3f4904f43029cbe04ca6b02c2e680e7e1a5af783d6c2fe3cf1",
+      "raw": {
+        "symbol": "DOTUSDT",
+        "baseCoin": "DOT",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.07",
+        "sellLimitPriceRatio": "0.07",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "1",
+        "priceEndStep": "1",
+        "volumePlace": "0",
+        "pricePlace": "3",
+        "sizeMultiplier": "1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "40000",
+        "maxOrderQty": "250000",
+        "isRwa": "NO"
+      }
+    },
     "ETHUSDT": {
       "sha256": "424ad6286aea12a2ece2db23fd73762240d428bde38980ca53c9a3d8419dce79",
       "raw": {
@@ -261,6 +476,49 @@
         "isRwa": "NO"
       }
     },
+    "FILUSDT": {
+      "sha256": "e23509de3fb3c2cb02e220720523e7ed8120d282b74181207fa456102215a702",
+      "raw": {
+        "symbol": "FILUSDT",
+        "baseCoin": "FIL",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.1",
+        "sellLimitPriceRatio": "0.1",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "0.1",
+        "priceEndStep": "1",
+        "volumePlace": "1",
+        "pricePlace": "4",
+        "sizeMultiplier": "0.1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "76000",
+        "maxOrderQty": "570000",
+        "isRwa": "NO"
+      }
+    },
     "HBARUSDT": {
       "sha256": "5259904b43929a19d83a68b46e6ba4ef3e8a1699fc8cdf25754a8f30c1d37f01",
       "raw": {
@@ -301,6 +559,49 @@
         "openTime": "",
         "maxMarketOrderQty": "790000",
         "maxOrderQty": "5900000",
+        "isRwa": "NO"
+      }
+    },
+    "INJUSDT": {
+      "sha256": "74dd87acd63e24901151afd8d011f9d18946922c6c9933ee2fe9cd62260b619e",
+      "raw": {
+        "symbol": "INJUSDT",
+        "baseCoin": "INJ",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.1",
+        "sellLimitPriceRatio": "0.1",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "0.1",
+        "priceEndStep": "1",
+        "volumePlace": "1",
+        "pricePlace": "3",
+        "sizeMultiplier": "0.1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "7900",
+        "maxOrderQty": "70000",
         "isRwa": "NO"
       }
     },
@@ -433,6 +734,49 @@
         "isRwa": "NO"
       }
     },
+    "OPUSDT": {
+      "sha256": "9f7b1823e418e3c3ed7d32f7e58b3abbb74890ed23ce391c398bb370669d5345",
+      "raw": {
+        "symbol": "OPUSDT",
+        "baseCoin": "OP",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.12",
+        "sellLimitPriceRatio": "0.12",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "0.1",
+        "priceEndStep": "1",
+        "volumePlace": "1",
+        "pricePlace": "4",
+        "sizeMultiplier": "0.1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.1",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "430000",
+        "maxOrderQty": "2200000",
+        "isRwa": "NO"
+      }
+    },
     "RUNEUSDT": {
       "sha256": "d8fac7770c35689e6d8781bd409ff0ae562e08e4f3e6716170a5be79e41e15ea",
       "raw": {
@@ -519,6 +863,49 @@
         "isRwa": "NO"
       }
     },
+    "SUIUSDT": {
+      "sha256": "1052f3f7f40e5d7fb65724781a84edd76c34ce1ecd479d2bc816cc4d9e56a6f9",
+      "raw": {
+        "symbol": "SUIUSDT",
+        "baseCoin": "SUI",
+        "quoteCoin": "USDT",
+        "buyLimitPriceRatio": "0.15",
+        "sellLimitPriceRatio": "0.15",
+        "feeRateUpRatio": "0.005",
+        "makerFeeRate": "0.0002",
+        "takerFeeRate": "0.0006",
+        "openCostUpRatio": "0.01",
+        "supportMarginCoins": [
+          "USDT"
+        ],
+        "minTradeNum": "0.1",
+        "priceEndStep": "1",
+        "volumePlace": "1",
+        "pricePlace": "4",
+        "sizeMultiplier": "0.1",
+        "symbolType": "perpetual",
+        "minTradeUSDT": "5",
+        "maxSymbolOrderNum": "200",
+        "maxProductOrderNum": "1000",
+        "maxPositionNum": "200",
+        "symbolStatus": "normal",
+        "offTime": "-1",
+        "limitOpenTime": "-1",
+        "deliveryTime": "",
+        "deliveryStartTime": "",
+        "deliveryPeriod": "",
+        "launchTime": "",
+        "fundInterval": "8",
+        "minLever": "1",
+        "maxLever": "75",
+        "posLimit": "0.15",
+        "maintainTime": "",
+        "openTime": "",
+        "maxMarketOrderQty": "590000",
+        "maxOrderQty": "4700000",
+        "isRwa": "NO"
+      }
+    },
     "TRXUSDT": {
       "sha256": "503d1f246d18dc60c89cb21c43f00b7de9bcd688309477764da321dbef58694a",
       "raw": {
@@ -563,7 +950,7 @@
       }
     },
     "UNIUSDT": {
-      "sha256": "6d2b9c296ab06e304475ed900022d280566467d6d28ed8e27632170bbc1f8781",
+      "sha256": "bfe939d6bae87cd8cab62e6dc07d8222ee60b63c6aac4ddc926c0bbe48e91723",
       "raw": {
         "symbol": "UNIUSDT",
         "baseCoin": "UNI",
@@ -597,11 +984,11 @@
         "fundInterval": "8",
         "minLever": "1",
         "maxLever": "75",
-        "posLimit": "0.1",
+        "posLimit": "0.15",
         "maintainTime": "",
         "openTime": "",
-        "maxMarketOrderQty": "8900",
-        "maxOrderQty": "66000",
+        "maxMarketOrderQty": "72000",
+        "maxOrderQty": "580000",
         "isRwa": "NO"
       }
     },
@@ -691,142 +1078,13 @@
         "isRwa": "NO"
       }
     },
-    "ADAUSDT": {
+    "ETCUSDT": {
       "raw": {
-        "symbol": "ADAUSDT",
-        "baseCoin": "ADA",
-        "quoteCoin": "USDT",
-        "buyLimitPriceRatio": "0.07",
-        "sellLimitPriceRatio": "0.07",
-        "feeRateUpRatio": "0.005",
-        "makerFeeRate": "0.0002",
-        "takerFeeRate": "0.0006",
-        "openCostUpRatio": "0.01",
-        "supportMarginCoins": [
-          "USDT"
-        ],
-        "minTradeNum": "1",
-        "priceEndStep": "1",
-        "volumePlace": "0",
-        "pricePlace": "4",
-        "sizeMultiplier": "1",
-        "symbolType": "perpetual",
-        "minTradeUSDT": "5",
-        "maxSymbolOrderNum": "200",
-        "maxProductOrderNum": "1000",
-        "maxPositionNum": "200",
-        "symbolStatus": "normal",
-        "offTime": "-1",
-        "limitOpenTime": "-1",
-        "deliveryTime": "",
-        "deliveryStartTime": "",
-        "deliveryPeriod": "",
-        "launchTime": "",
-        "fundInterval": "8",
-        "minLever": "1",
-        "maxLever": "75",
-        "posLimit": "0.1",
-        "maintainTime": "",
-        "openTime": "",
-        "maxMarketOrderQty": "290000",
-        "maxOrderQty": "2200000",
-        "isRwa": "NO"
-      },
-      "sha256": "e35c447c7714a08893231046e3f3357bf0b730edb4123bd887b2f3f1de1aa1b7"
-    },
-    "ATOMUSDT": {
-      "raw": {
-        "symbol": "ATOMUSDT",
-        "baseCoin": "ATOM",
+        "symbol": "ETCUSDT",
+        "baseCoin": "ETC",
         "quoteCoin": "USDT",
         "buyLimitPriceRatio": "0.1",
         "sellLimitPriceRatio": "0.1",
-        "feeRateUpRatio": "0.005",
-        "makerFeeRate": "0.0002",
-        "takerFeeRate": "0.0006",
-        "openCostUpRatio": "0.01",
-        "supportMarginCoins": [
-          "USDT"
-        ],
-        "minTradeNum": "1",
-        "priceEndStep": "1",
-        "volumePlace": "0",
-        "pricePlace": "4",
-        "sizeMultiplier": "1",
-        "symbolType": "perpetual",
-        "minTradeUSDT": "5",
-        "maxSymbolOrderNum": "200",
-        "maxProductOrderNum": "1000",
-        "maxPositionNum": "200",
-        "symbolStatus": "normal",
-        "offTime": "-1",
-        "limitOpenTime": "-1",
-        "deliveryTime": "",
-        "deliveryStartTime": "",
-        "deliveryPeriod": "",
-        "launchTime": "",
-        "fundInterval": "8",
-        "minLever": "1",
-        "maxLever": "75",
-        "posLimit": "0.1",
-        "maintainTime": "",
-        "openTime": "",
-        "maxMarketOrderQty": "33000",
-        "maxOrderQty": "150000",
-        "isRwa": "NO"
-      },
-      "sha256": "777ea7172e35f0d2823c9abd6695fece43ca8d3fca0a31e150b37d2d5f2fb561"
-    },
-    "FILUSDT": {
-      "raw": {
-        "symbol": "FILUSDT",
-        "baseCoin": "FIL",
-        "quoteCoin": "USDT",
-        "buyLimitPriceRatio": "0.1",
-        "sellLimitPriceRatio": "0.1",
-        "feeRateUpRatio": "0.005",
-        "makerFeeRate": "0.0002",
-        "takerFeeRate": "0.0006",
-        "openCostUpRatio": "0.01",
-        "supportMarginCoins": [
-          "USDT"
-        ],
-        "minTradeNum": "0.1",
-        "priceEndStep": "1",
-        "volumePlace": "1",
-        "pricePlace": "4",
-        "sizeMultiplier": "0.1",
-        "symbolType": "perpetual",
-        "minTradeUSDT": "5",
-        "maxSymbolOrderNum": "200",
-        "maxProductOrderNum": "1000",
-        "maxPositionNum": "200",
-        "symbolStatus": "normal",
-        "offTime": "-1",
-        "limitOpenTime": "-1",
-        "deliveryTime": "",
-        "deliveryStartTime": "",
-        "deliveryPeriod": "",
-        "launchTime": "",
-        "fundInterval": "8",
-        "minLever": "1",
-        "maxLever": "75",
-        "posLimit": "0.1",
-        "maintainTime": "",
-        "openTime": "",
-        "maxMarketOrderQty": "76000",
-        "maxOrderQty": "570000",
-        "isRwa": "NO"
-      },
-      "sha256": "e23509de3fb3c2cb02e220720523e7ed8120d282b74181207fa456102215a702"
-    },
-    "DOTUSDT": {
-      "raw": {
-        "symbol": "DOTUSDT",
-        "baseCoin": "DOT",
-        "quoteCoin": "USDT",
-        "buyLimitPriceRatio": "0.07",
-        "sellLimitPriceRatio": "0.07",
         "feeRateUpRatio": "0.005",
         "makerFeeRate": "0.0002",
         "takerFeeRate": "0.0006",
@@ -857,19 +1115,19 @@
         "posLimit": "0.1",
         "maintainTime": "",
         "openTime": "",
-        "maxMarketOrderQty": "40000",
-        "maxOrderQty": "250000",
+        "maxMarketOrderQty": "5300",
+        "maxOrderQty": "33000",
         "isRwa": "NO"
       },
-      "sha256": "ee668990ad848c3f4904f43029cbe04ca6b02c2e680e7e1a5af783d6c2fe3cf1"
+      "sha256": "231e36d1e9e079c1347540e7561fd4d20af97528e03fa940a3b9c86cc171355c"
     },
-    "OPUSDT": {
+    "TIAUSDT": {
       "raw": {
-        "symbol": "OPUSDT",
-        "baseCoin": "OP",
+        "symbol": "TIAUSDT",
+        "baseCoin": "TIA",
         "quoteCoin": "USDT",
-        "buyLimitPriceRatio": "0.12",
-        "sellLimitPriceRatio": "0.12",
+        "buyLimitPriceRatio": "0.15",
+        "sellLimitPriceRatio": "0.15",
         "feeRateUpRatio": "0.005",
         "makerFeeRate": "0.0002",
         "takerFeeRate": "0.0006",
@@ -894,22 +1152,22 @@
         "deliveryStartTime": "",
         "deliveryPeriod": "",
         "launchTime": "",
-        "fundInterval": "8",
+        "fundInterval": "4",
         "minLever": "1",
         "maxLever": "75",
         "posLimit": "0.1",
         "maintainTime": "",
-        "openTime": "",
-        "maxMarketOrderQty": "430000",
-        "maxOrderQty": "2200000",
+        "openTime": "1698837600000",
+        "maxMarketOrderQty": "130000",
+        "maxOrderQty": "1000000",
         "isRwa": "NO"
       },
-      "sha256": "9f7b1823e418e3c3ed7d32f7e58b3abbb74890ed23ce391c398bb370669d5345"
+      "sha256": "33c7d25028cbe0e544d6a94702441b89fc7f85ea8ebef57282340ebf67caff25"
     },
-    "ARBUSDT": {
+    "SEIUSDT": {
       "raw": {
-        "symbol": "ARBUSDT",
-        "baseCoin": "ARB",
+        "symbol": "SEIUSDT",
+        "baseCoin": "SEI",
         "quoteCoin": "USDT",
         "buyLimitPriceRatio": "0.15",
         "sellLimitPriceRatio": "0.15",
@@ -920,11 +1178,11 @@
         "supportMarginCoins": [
           "USDT"
         ],
-        "minTradeNum": "0.01",
+        "minTradeNum": "1",
         "priceEndStep": "1",
-        "volumePlace": "2",
+        "volumePlace": "0",
         "pricePlace": "5",
-        "sizeMultiplier": "0.01",
+        "sizeMultiplier": "1",
         "symbolType": "perpetual",
         "minTradeUSDT": "5",
         "maxSymbolOrderNum": "200",
@@ -939,20 +1197,20 @@
         "launchTime": "",
         "fundInterval": "8",
         "minLever": "1",
-        "maxLever": "50",
+        "maxLever": "75",
         "posLimit": "0.1",
         "maintainTime": "",
-        "openTime": "",
-        "maxMarketOrderQty": "320000",
-        "maxOrderQty": "2400000",
+        "openTime": "1692262800000",
+        "maxMarketOrderQty": "1000000",
+        "maxOrderQty": "6600000",
         "isRwa": "NO"
       },
-      "sha256": "f48124b3f45bd5792553ec21813125879d1a25d0f32889e1a398c89064d64bef"
+      "sha256": "d1cf0a88276f115fdf3c7eddcc3a93b8be1463b572455968bccd80cd91caa7e8"
     },
-    "APTUSDT": {
+    "FETUSDT": {
       "raw": {
-        "symbol": "APTUSDT",
-        "baseCoin": "APT",
+        "symbol": "FETUSDT",
+        "baseCoin": "FET",
         "quoteCoin": "USDT",
         "buyLimitPriceRatio": "0.1",
         "sellLimitPriceRatio": "0.1",
@@ -963,11 +1221,11 @@
         "supportMarginCoins": [
           "USDT"
         ],
-        "minTradeNum": "0.001",
+        "minTradeNum": "1",
         "priceEndStep": "1",
-        "volumePlace": "3",
+        "volumePlace": "0",
         "pricePlace": "4",
-        "sizeMultiplier": "0.001",
+        "sizeMultiplier": "1",
         "symbolType": "perpetual",
         "minTradeUSDT": "5",
         "maxSymbolOrderNum": "200",
@@ -986,59 +1244,16 @@
         "posLimit": "0.1",
         "maintainTime": "",
         "openTime": "",
-        "maxMarketOrderQty": "58000",
-        "maxOrderQty": "360000",
+        "maxMarketOrderQty": "220000",
+        "maxOrderQty": "2000000",
         "isRwa": "NO"
       },
-      "sha256": "3ec6315bc53e7a9d62195dad828d10cff07e7b72766d9c1d320c580c84c5f092"
+      "sha256": "7cfa55fec0b797bc02092d32e8e6ae28b3136fcc0b941793de0329a06fa4f866"
     },
-    "INJUSDT": {
+    "WLDUSDT": {
       "raw": {
-        "symbol": "INJUSDT",
-        "baseCoin": "INJ",
-        "quoteCoin": "USDT",
-        "buyLimitPriceRatio": "0.1",
-        "sellLimitPriceRatio": "0.1",
-        "feeRateUpRatio": "0.005",
-        "makerFeeRate": "0.0002",
-        "takerFeeRate": "0.0006",
-        "openCostUpRatio": "0.01",
-        "supportMarginCoins": [
-          "USDT"
-        ],
-        "minTradeNum": "0.1",
-        "priceEndStep": "1",
-        "volumePlace": "1",
-        "pricePlace": "3",
-        "sizeMultiplier": "0.1",
-        "symbolType": "perpetual",
-        "minTradeUSDT": "5",
-        "maxSymbolOrderNum": "200",
-        "maxProductOrderNum": "1000",
-        "maxPositionNum": "200",
-        "symbolStatus": "normal",
-        "offTime": "-1",
-        "limitOpenTime": "-1",
-        "deliveryTime": "",
-        "deliveryStartTime": "",
-        "deliveryPeriod": "",
-        "launchTime": "",
-        "fundInterval": "8",
-        "minLever": "1",
-        "maxLever": "75",
-        "posLimit": "0.1",
-        "maintainTime": "",
-        "openTime": "",
-        "maxMarketOrderQty": "7900",
-        "maxOrderQty": "70000",
-        "isRwa": "NO"
-      },
-      "sha256": "74dd87acd63e24901151afd8d011f9d18946922c6c9933ee2fe9cd62260b619e"
-    },
-    "SUIUSDT": {
-      "raw": {
-        "symbol": "SUIUSDT",
-        "baseCoin": "SUI",
+        "symbol": "WLDUSDT",
+        "baseCoin": "WLD",
         "quoteCoin": "USDT",
         "buyLimitPriceRatio": "0.15",
         "sellLimitPriceRatio": "0.15",
@@ -1049,11 +1264,11 @@
         "supportMarginCoins": [
           "USDT"
         ],
-        "minTradeNum": "0.1",
+        "minTradeNum": "1",
         "priceEndStep": "1",
-        "volumePlace": "1",
+        "volumePlace": "0",
         "pricePlace": "4",
-        "sizeMultiplier": "0.1",
+        "sizeMultiplier": "1",
         "symbolType": "perpetual",
         "minTradeUSDT": "5",
         "maxSymbolOrderNum": "200",
@@ -1069,14 +1284,14 @@
         "fundInterval": "8",
         "minLever": "1",
         "maxLever": "75",
-        "posLimit": "0.15",
+        "posLimit": "0.1",
         "maintainTime": "",
         "openTime": "",
-        "maxMarketOrderQty": "590000",
-        "maxOrderQty": "4700000",
+        "maxMarketOrderQty": "140000",
+        "maxOrderQty": "1000000",
         "isRwa": "NO"
       },
-      "sha256": "1052f3f7f40e5d7fb65724781a84edd76c34ce1ecd479d2bc816cc4d9e56a6f9"
+      "sha256": "d1ba5a43d403001616365eebc5d5cd0b3e2b44e189fc6a96bf7036827be72a1d"
     }
   }
 }
