@@ -11608,6 +11608,276 @@
         "sub-hour gap 28800001ms at 1792512000006",
         "sub-hour gap 28799994ms at 1792540800000"
       ]
+    },
+    "CRVUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "e434e971c2b73824dc809c2bbfaf0f3fa8befe685ac9e532fac5958f1bdeb06c",
+      "size_bytes": 1780264,
+      "symbol": "CRVUSDT"
+    },
+    "CRVUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "5375ea7f5a236c818694a8ce2c46a4980119b1e3c313aa785f96a43096b6127c",
+      "size_bytes": 896314,
+      "symbol": "CRVUSDT"
+    },
+    "CRVUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "81d0de62d49d73ce0d7b6902be1e482ffc38df88b987b85bd3a50e5ab2dafe98",
+      "size_bytes": 452420,
+      "symbol": "CRVUSDT"
+    },
+    "CRVUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "5d36a94ccab17c94d8f0f160ab59dfca5c3cd6fb43a4cd0f5afd6dcbcb0f6a1a",
+      "size_bytes": 227503,
+      "symbol": "CRVUSDT"
+    },
+    "CRVUSDT_12h.csv": {
+      "bars": 1468,
+      "first_ts": 1728993600000,
+      "granularity": "12h",
+      "last_ts": 1792368000000,
+      "sha256": "8a5803cb28866a69c0515ee037771e7c095bc0fe7e5841f963e0c8fbeb880584",
+      "size_bytes": 76556,
+      "symbol": "CRVUSDT"
+    },
+    "CRVUSDT_1d.csv": {
+      "bars": 735,
+      "first_ts": 1728950400000,
+      "granularity": "1d",
+      "last_ts": 1792368000000,
+      "sha256": "8d8b7b64e6ab190f62c613b7094dbb264692b90e2bcbb17fbba4a4b5d4b1437c",
+      "size_bytes": 38589,
+      "symbol": "CRVUSDT"
+    },
+    "ALGOUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "20d87cf8d97149560e5f617ca11a586171ce90e50042ac16ca08a9a83399a4d4",
+      "size_bytes": 1797294,
+      "symbol": "ALGOUSDT"
+    },
+    "ALGOUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "0b7a97c7713195d8c8354996ab6aacf0e382766a91a4fbc6ac4cbe283d1b69bf",
+      "size_bytes": 904941,
+      "symbol": "ALGOUSDT"
+    },
+    "ALGOUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "8cb9dcfbf13626486ebac40a93335c33bc73abc71e373b65f93e8b3df0ae9f98",
+      "size_bytes": 468501,
+      "symbol": "ALGOUSDT"
+    },
+    "ALGOUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "745480a277a9adb9275d5972dc2f5e78c5f4b55b47d01d644432cdc3f395244a",
+      "size_bytes": 234007,
+      "symbol": "ALGOUSDT"
+    },
+    "ALGOUSDT_12h.csv": {
+      "bars": 1468,
+      "first_ts": 1728993600000,
+      "granularity": "12h",
+      "last_ts": 1792368000000,
+      "sha256": "33c24e5cad7164cd0e5ece2ca22edf5ab6773ab6f386a336425e5a4c44b16878",
+      "size_bytes": 78075,
+      "symbol": "ALGOUSDT"
+    },
+    "ALGOUSDT_1d.csv": {
+      "bars": 735,
+      "first_ts": 1728950400000,
+      "granularity": "1d",
+      "last_ts": 1792368000000,
+      "sha256": "51d4db613db5c85468078d52f86ea9ec93d768bd895e1afc4ec0be0ff3947d9c",
+      "size_bytes": 39393,
+      "symbol": "ALGOUSDT"
+    },
+    "SANDUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "5ed5f5df251d360bc1bc33eaed07f6745e550b78adb61e76f5640ed3d73d95e4",
+      "size_bytes": 1895790,
+      "symbol": "SANDUSDT"
+    },
+    "SANDUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "97deb0eca68b63569c887851d6240b087a256c35cab568a2c5383aadc0338832",
+      "size_bytes": 954146,
+      "symbol": "SANDUSDT"
+    },
+    "SANDUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "fc689fa0a2fef9d7b9c724d540b7b4940d57adaf019260d03ab183153baf3607",
+      "size_bytes": 481277,
+      "symbol": "SANDUSDT"
+    },
+    "SANDUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "0faf9ec59ad1515a2d543107995c44415b158dcf8d3bcce454d448d85839a1bf",
+      "size_bytes": 242093,
+      "symbol": "SANDUSDT"
+    },
+    "SANDUSDT_12h.csv": {
+      "bars": 1468,
+      "first_ts": 1728993600000,
+      "granularity": "12h",
+      "last_ts": 1792368000000,
+      "sha256": "f04c2e8b200230f800f27aa826487427f2279d6374851e1857cbb28934a88269",
+      "size_bytes": 81423,
+      "symbol": "SANDUSDT"
+    },
+    "SANDUSDT_1d.csv": {
+      "bars": 735,
+      "first_ts": 1728950400000,
+      "granularity": "1d",
+      "last_ts": 1792368000000,
+      "sha256": "082feec6311365855fbaddec81d1e29fcc02bdb4231502213d2d56422a7c843f",
+      "size_bytes": 41015,
+      "symbol": "SANDUSDT"
+    },
+    "MANAUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "dff78127e1600e1a0ea2f011da49a172036292f9a440acf5af1f0ae9b01bb7e5",
+      "size_bytes": 1789047,
+      "symbol": "MANAUSDT"
+    },
+    "MANAUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "868cd891cbbe54d0499704af064ddb74b89eda702acafe0bbd769c4e8f33232c",
+      "size_bytes": 901369,
+      "symbol": "MANAUSDT"
+    },
+    "MANAUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "44de12e4ea0048dbec7f7579b9dbded5c3b804623e0da653b4abe87fa105a7b9",
+      "size_bytes": 455313,
+      "symbol": "MANAUSDT"
+    },
+    "MANAUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "2ca71d598ac1e876a13ed614bf5058ce6573f9e62f22fb3bc47f4e57e4f5b264",
+      "size_bytes": 228811,
+      "symbol": "MANAUSDT"
+    },
+    "MANAUSDT_12h.csv": {
+      "bars": 1468,
+      "first_ts": 1728993600000,
+      "granularity": "12h",
+      "last_ts": 1792368000000,
+      "sha256": "cc8e4a48ba36b0b2818087ce1e3102891f24c3ad2fc6cccce03471fd10cfe54c",
+      "size_bytes": 77214,
+      "symbol": "MANAUSDT"
+    },
+    "MANAUSDT_1d.csv": {
+      "bars": 735,
+      "first_ts": 1728950400000,
+      "granularity": "1d",
+      "last_ts": 1792368000000,
+      "sha256": "3552b77ba63355898a64cff15377e91b75a45eb7c6f7f7d3f6a4471e4ecb5731",
+      "size_bytes": 38845,
+      "symbol": "MANAUSDT"
+    },
+    "GALAUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "27726bea5803350fe5a277f46ed1f3ece57bc50c78d4b67135b290b9d9fa44d7",
+      "size_bytes": 2030537,
+      "symbol": "GALAUSDT"
+    },
+    "GALAUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "e51548a2dc0a10a0ee457e56d5db3596966937559cb1efab11caec48a6359a9a",
+      "size_bytes": 1021052,
+      "symbol": "GALAUSDT"
+    },
+    "GALAUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "983235ee7cd77bb4e91baa23a6ffad7c364a9926dc98914e0c8cb5e8c20bd469",
+      "size_bytes": 514471,
+      "symbol": "GALAUSDT"
+    },
+    "GALAUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "cd1e8e56329cf4c5ad2883360cf4c94ea82e6c7bdcb5b6490288e53077a60107",
+      "size_bytes": 258673,
+      "symbol": "GALAUSDT"
+    },
+    "GALAUSDT_12h.csv": {
+      "bars": 1468,
+      "first_ts": 1728993600000,
+      "granularity": "12h",
+      "last_ts": 1792368000000,
+      "sha256": "115d2908a4fa46e0c9572acaebc7e49027e77165dbd363e16e03427956b43118",
+      "size_bytes": 86991,
+      "symbol": "GALAUSDT"
+    },
+    "GALAUSDT_1d.csv": {
+      "bars": 735,
+      "first_ts": 1728950400000,
+      "granularity": "1d",
+      "last_ts": 1792368000000,
+      "sha256": "f1901c0d9b3fd0b072b4edee6f9902be4ff679a7a42115f28e7774d6df2a8f69",
+      "size_bytes": 43773,
+      "symbol": "GALAUSDT"
     }
   }
 }

@@ -569,7 +569,7 @@ class MarketRouter:
                     if is_mic_align or step_ms_brk < 4 * 3600 * 1000:
                         self._bump("restraint_range_outward_breakout_reject")
                         return None
-                if not is_mic_align and sub_k_align == "A1_TIGHT":
+                if sk_align == "BOX_EDGE" and not is_mic_align and sub_k_align == "A1_TIGHT":
                     self._bump("restraint_range_outward_breakout_reject")
                     return None
         if cid == BREAKOUT_ACCEPTED:
