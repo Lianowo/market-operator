@@ -907,6 +907,94 @@ def test_structure_broken_defense_and_flipped_box_edge_retest_continuation():
     assert decs_ok[0].hyp.target_1 == pytest.approx(128.0)
 
 
+def test_fast_tf_reentry_sizing_and_soft_headroom_scaling():
+    """验证快时间尺度(<4h) FLIPPED_BOX_EDGE A1_TIGHT 半仓权重(0.5x)与剩余额度动态缩量分配(Soft Headroom >= 0.25x):
+    1) 2h 认知收盘的 FLIPPED_BOX_EDGE A1_TIGHT 重返入箱信号自动标记 size_mult=0.5, 4h 保持默认 1.0;
+    2) 当周期容量池(TF_CAP=15%)已有 2 笔 5% 仓位(含手续费成本占用约 11.2% 预算,剩余 ~3.8% 额度 >= 25% 标准单)时,
+       第 3 笔信号不再因超出 15% 被一刀切硬拒绝,而是按剩余可用额度动态缩量(scale ~ 0.67x)成交。
+    """
+    from types import SimpleNamespace
+    from market_operator.broker import Broker, ContractSpec, OrderIntent, OrderKind
+    from market_operator.campaign import _submit_decisions
+
+    z_flip = Zone(
+        lo=98.0, hi=100.0, role=ZoneRole.RESISTANCE, state=ZoneState.ACTIVE,
+        touches=3, rejects=1, origin_known=2, last_change_known=8,
+        box_opposite=110.0, box_quality=0.65, box_width_atr=6.0, box_rotations=4,
+        source_kind="FLIPPED_BOX_EDGE", box_id=9,
+    )
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            reject_use_struct_stop=True,
+            reject_target_mode="opposite",
+            reentry_use_box_target=True,
+            reentry_use_struct_stop=True,
+            balance_auction_alignment=True,
+        )
+    )
+    view_range = StructureView(regime=Regime.RANGE, zones=(z_flip,), atr=2.0)
+
+    ev_2h = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=1000, known_index=10,
+        attrs={
+            "zone": z_flip, "ref": 100.0, "invalid": 97.8,
+            "sub_kind": "A1_TIGHT", "reset_step_ms": 2 * 3600 * 1000,
+        },
+    )
+    ev_4h = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=1, ts=2000, known_index=11,
+        attrs={
+            "zone": z_flip, "ref": 100.0, "invalid": 97.8,
+            "sub_kind": "A1_TIGHT", "reset_step_ms": 4 * 3600 * 1000,
+        },
+    )
+    d_2h = router.on_bar(
+        "BTCUSDT", (1000, 99.5, 101.4, 99.2, 101.0, 100.0),
+        10, view_range, 2.0, [ev_2h], position_open=False, entry_resting=False,
+    )
+    assert len(d_2h) == 1 and d_2h[0].meta.get("size_mult") == pytest.approx(0.5)
+
+    router2 = MarketRouter(router.params)
+    d_4h = router2.on_bar(
+        "BTCUSDT", (2000, 99.5, 101.4, 99.2, 101.0, 100.0),
+        11, view_range, 2.0, [ev_4h], position_open=False, entry_resting=False,
+    )
+    assert len(d_4h) == 1 and d_4h[0].meta.get("size_mult", 1.0) == pytest.approx(1.0)
+
+    # 验证第 3 槽位剩余额度动态缩量准入
+    specs = {
+        k: ContractSpec(symbol=k, size_min=0.001, size_step=0.001, size_place=3, price_place=2, min_trade_usdt=5.0)
+        for k in ("BTCUSDT@4h", "ETHUSDT@4h", "SOLUSDT@4h")
+    }
+    broker = Broker(
+        equity=1000.0, risk_frac=0.05, leverage_cap=20.0,
+        taker_fee=0.0006, slippage_per_side=0.0002, funding_per_8h=0.0001,
+        contracts=specs, portfolio_stop_risk_frac=0.45,
+        tf_stop_risk_frac_by_tf={"4h": 0.15},
+    )
+    for sym in ("BTCUSDT@4h", "ETHUSDT@4h"):
+        broker.submit(
+            OrderIntent(kind=OrderKind.OPEN, symbol=sym, qty_frac=None, reason="open", ref_price=100.0, ts=1000),
+            1000, direction=1, invalid=95.0, event_id=BREAKOUT_ACCEPTED, target_1=115.0,
+        )
+        broker.on_bar_open(sym, 2000, 100.0)
+
+    st_mock = SimpleNamespace(
+        frame=SimpleNamespace(
+            key="SOLUSDT@4h",
+            cog=SimpleNamespace(bars=[(2000, 99.5, 101.4, 99.2, 101.0, 100.0)] * 15, regimes=[Regime.RANGE] * 15),
+            mic=None,
+        )
+    )
+    counters = {"e1_priority_cancels": 0, "portfolio_cap_skips": 0, "open_intents": 0, "limits_armed": 0}
+    cap_skips = []
+    _submit_decisions(st_mock, broker, d_4h, 2000, 2000, 2000, {}, counters, cap_skips, 24, 6000)
+    assert counters["portfolio_cap_skips"] == 0
+    assert counters["open_intents"] == 1
+    assert 0.25 <= d_4h[0].meta["size_mult"] < 1.0
+
+
 
 
 

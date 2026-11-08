@@ -2942,16 +2942,19 @@ class LiveRunner:
                             or self.risk.get("leverage_cap") or 20)
             qty = min(qty, eff_lev * equity / entry_ref)
             qty = floor_step(qty, spec.size_step, spec.size_place)
-            # 组合容量与周期独立容量(canonical worst-case FIFO:整笔跳过)
+            # 组合容量、周期独立容量与主张容量(剩余额度 >= 25% 时动态缩量分配,否则整笔跳过)
             outstanding = sum(
                 worst_case_of_position(p["direction"], p["qty"],
                                        p.get("mark") or p["entry"], p["invalid"],
                                        self.risk["taker_fee"])
                 for p in self.positions.values())
-            candidate = qty * risk_per_unit + qty * entry_ref * 2.0 * \
-                (self.risk["taker_fee"] + self.risk["slippage_per_side"])
+            unit_exp = risk_per_unit + entry_ref * 2.0 * (
+                self.risk["taker_fee"] + self.risk["slippage_per_side"])
+            candidate = qty * unit_exp
             tf_caps = self.risk.get("tf_cap_by_tf") or {}
             tf_cap = tf_caps.get(cs.tf_label)
+            tf_out = 0.0
+            group = 0.0
             if tf_cap is not None:
                 tf_out = sum(
                     worst_case_of_position(p["direction"], p["qty"],
@@ -2959,27 +2962,48 @@ class LiveRunner:
                                            p["invalid"], self.risk["taker_fee"])
                     for p in self.positions.values()
                     if p.get("tf_label", "12h") == cs.tf_label)
-                if tf_out + candidate > float(tf_cap) * capital:
-                    block = "TF_CAP"
-            if block is None and outstanding + candidate > \
-                    self.risk["portfolio_cap_frac"] * capital:
-                block = "PORTFOLIO_CAP"
-            # 同一标的不能同时持两个相反主张(净敞口为零却双倍成本/双倍风险)
-            if block is None and any(
-                    p["direction"] == -hyp.direction
-                    for key, p in self.positions.items()
-                    if key.split("@")[0] == sym):
-                block = "OPPOSITE_CLAIM"
-            # 主张预算:同标的同方向的全部在仓(跨周期)共用一份,周期不叠加
-            if block is None and tf_cap is not None:
                 group = sum(
                     worst_case_of_position(p["direction"], p["qty"],
                                            p.get("mark") or p["entry"],
                                            p["invalid"], self.risk["taker_fee"])
                     for key, p in self.positions.items()
                     if key.split("@")[0] == sym and p["direction"] == hyp.direction)
-                if group + candidate > float(tf_cap) * capital:
-                    block = "CLAIM_CAP"
+            opposite_open = any(
+                p["direction"] == -hyp.direction
+                for key, p in self.positions.items()
+                if key.split("@")[0] == sym)
+            if not opposite_open and candidate > 0.0:
+                eff_headroom = float(self.risk["portfolio_cap_frac"]) * capital - outstanding
+                if tf_cap is not None:
+                    eff_headroom = min(
+                        eff_headroom,
+                        float(tf_cap) * capital - tf_out,
+                        float(tf_cap) * capital - group,
+                    )
+                if candidate > eff_headroom + 1e-9:
+                    scale = (max(0.0, eff_headroom) * 0.999) / candidate
+                    if scale >= 0.25:
+                        new_mult = size_mult * scale
+                        qty_scaled = eff_rf * new_mult * capital / risk_per_unit
+                        qty_scaled = min(qty_scaled, eff_lev * equity / entry_ref)
+                        qty_scaled = floor_step(qty_scaled, spec.size_step, spec.size_place)
+                        min_notional = max(spec.min_trade_usdt, spec.size_min * entry_ref)
+                        if qty_scaled > 0.0 and qty_scaled * entry_ref >= min_notional:
+                            size_mult = new_mult
+                            d.meta["size_mult"] = size_mult
+                            qty = qty_scaled
+                            candidate = qty * unit_exp
+            if tf_cap is not None and tf_out + candidate > float(tf_cap) * capital + 1e-9:
+                block = "TF_CAP"
+            if block is None and outstanding + candidate > \
+                    self.risk["portfolio_cap_frac"] * capital + 1e-9:
+                block = "PORTFOLIO_CAP"
+            # 同一标的不能同时持两个相反主张(净敞口为零却双倍成本/双倍风险)
+            if block is None and opposite_open:
+                block = "OPPOSITE_CLAIM"
+            # 主张预算:同标的同方向的全部在仓(跨周期)共用一份,周期不叠加
+            if block is None and tf_cap is not None and group + candidate > float(tf_cap) * capital + 1e-9:
+                block = "CLAIM_CAP"
             if block is None and qty * entry_ref < max(
                     spec.min_trade_usdt, spec.size_min * entry_ref):
                 block = "MIN_NOTIONAL"

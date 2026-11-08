@@ -591,6 +591,20 @@ class MarketRouter:
             f"invalid={hyp.invalid:.8g} target_1={hyp.target_1} "
             f"r_mult={hyp.r_mult}"
         )
+        meta_out = _event_provenance(ev)
+        if p.balance_auction_alignment and zone is not None:
+            sk_align = getattr(zone, "source_kind", "BOX_EDGE")
+            sub_k_align = str(ev.attrs.get("sub_kind", ""))
+            is_mic_align = bool(ev.attrs.get("mic", False))
+            step_ms_align = int(ev.attrs.get("reset_step_ms", 0) or 0)
+            if (
+                cid == BREAKOUT_ACCEPTED
+                and sk_align == "FLIPPED_BOX_EDGE"
+                and not is_mic_align
+                and sub_k_align == "A1_TIGHT"
+                and 0 < step_ms_align < 4 * 3600 * 1000
+            ):
+                meta_out["size_mult"] = 0.5
         return RouteDecision(
             kind="market",
             route=route,
@@ -603,7 +617,7 @@ class MarketRouter:
                 ts=ev.ts,
             ),
             hyp=hyp,
-            meta=_event_provenance(ev),
+            meta=meta_out,
         )
 
 

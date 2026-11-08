@@ -1051,17 +1051,19 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
-        # 组合容量(口径唯一,见 capacity):FIFO 决策时刻整笔跳过,不缩量。
+        # 组合容量(口径唯一,见 capacity):优先按可用剩余额度动态缩量(>=25% 标准仓位),不足时跳过。
         # 风险金额与成交裁剪同用「风险资本」;杠杆上限仍用盯市权益(偿付能力)。
         equity = broker.equity_mtm()
         capital = broker.risk_capital()
         risk_per_unit = abs(d.intent.ref_price - d.hyp.invalid)
         direction = int(d.hyp.direction)
+        base_size_mult = float(d.meta.get("size_mult", 1.0) or 1.0)
         # 相反主张:同一标的只能有一个答案,先了结旧的才允许新的。
         opposite = broker.opposite_claim_open(key, direction)
         qty_full = (0.0 if opposite is not None else
                     broker.qty_for_entry(capital, d.intent.ref_price,
                                          d.hyp.invalid, key, use_budget=False,
+                                         size_mult=base_size_mult,
                                          notional_equity=equity,
                                          direction=direction))
         cap_frac, used, _headroom, pool = broker.capacity_usage(
@@ -1070,23 +1072,47 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             qty_full, d.intent.ref_price, risk_per_unit,
             taker_fee=broker.taker_fee, slippage=broker.slippage,
             include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
+        claim, claim_pool, _cf = broker.claim_headroom(
+            key, direction, capital, moment=capacity.DECISION)
         cap_blocked = False
         skip_reason = "PORTFOLIO_CAP"
         if opposite is not None:
             cap_blocked = True
             skip_reason = "OPPOSITE_CLAIM"
-        elif broker.risk_budget.is_active and (
-                qty_full <= 0.0 or used + delta > cap_frac * capital + 1e-9):
+        elif broker.risk_budget.is_active and qty_full <= 0.0:
             cap_blocked = True
             skip_reason = "TF_CAP" if pool == "tf" else "PORTFOLIO_CAP"
-        # 主张预算:同一标的同方向的全部在仓(跨周期)共用一份,周期不叠加
-        if not cap_blocked:
-            claim, claim_pool, _cf = broker.claim_headroom(
-                key, direction, capital, moment=capacity.DECISION)
-            if used + delta > 0 and math.isfinite(claim) and delta > max(claim, 0.0) + 1e-9:
-                cap_blocked = True
-                skip_reason = "CLAIM_CAP"
-                pool = claim_pool
+        elif broker.risk_budget.is_active:
+            eff_headroom = _headroom
+            if math.isfinite(claim):
+                eff_headroom = min(eff_headroom, max(0.0, claim))
+            if delta > eff_headroom + 1e-9:
+                scale = (eff_headroom * 0.999) / delta if delta > 0.0 else 0.0
+                if scale >= 0.25:
+                    new_mult = base_size_mult * scale
+                    qty_scaled = broker.qty_for_entry(
+                        capital, d.intent.ref_price, d.hyp.invalid, key,
+                        use_budget=False, size_mult=new_mult,
+                        notional_equity=equity, direction=direction)
+                    spec = broker.contracts.get(key)
+                    min_notional = spec.min_trade_usdt if spec is not None else 5.0
+                    if qty_scaled > 0.0 and qty_scaled * d.intent.ref_price >= min_notional:
+                        d.meta["size_mult"] = new_mult
+                        qty_full = qty_scaled
+                        delta = capacity.delta_exposure(
+                            qty_full, d.intent.ref_price, risk_per_unit,
+                            taker_fee=broker.taker_fee, slippage=broker.slippage,
+                            include_costs=broker.risk_budget.includes_costs(capacity.DECISION))
+                    else:
+                        cap_blocked = True
+                else:
+                    cap_blocked = True
+                if cap_blocked:
+                    if used + delta > cap_frac * capital + 1e-9:
+                        skip_reason = "TF_CAP" if pool == "tf" else "PORTFOLIO_CAP"
+                    else:
+                        skip_reason = "CLAIM_CAP"
+                        pool = claim_pool
 
         # v22:同向净风险上限 (directional_cap_frac, §6.4)
         dir_cap = broker.risk_budget.directional_cap_frac
