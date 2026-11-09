@@ -150,8 +150,11 @@ def render_bw_kline_png(
     zone_touches: Optional[int] = None,
     pivots: Optional[Sequence[tuple]] = None,
     atr: Optional[float] = None,
-    max_bars: int = 48,
+    max_bars: int = 96,
     log_scale: bool = True,
+    box_start_ts: Optional[int] = None,
+    box_start_index: Optional[int] = None,
+    public_mode: bool = False,
 ) -> Optional[bytes]:
     """用 Pillow 绘制高对比度黑白 K 线图,返回 PNG bytes(无 Pillow / 无 K 线 ⇒ None)。
 
@@ -289,34 +292,78 @@ def render_bw_kline_png(
             draw.text((left_m + plot_w + 8, yy - 6), text, fill=fill, font=font_s)
             last = yy
 
-    def hline(y: int, on: int, off: int, fill, width: int = 1) -> None:
-        x = left_m
+    def hline(y: int, on: int, off: int, fill, width: int = 1,
+              x_start: int = left_m) -> None:
+        x = max(left_m, int(x_start))
         while x < left_m + plot_w:
             draw.line([(x, y), (min(x + on, left_m + plot_w), y)],
                       fill=fill, width=width)
             x += on + off
 
-    # 平衡箱体:浅灰带 + 上下沿粗虚线
+    def vline(x: int, y_top: int, y_bot: int, on: int, off: int,
+              fill, width: int = 1) -> None:
+        y = min(y_top, y_bot)
+        y_end = max(y_top, y_bot)
+        while y < y_end:
+            draw.line([(x, y), (x, min(y + on, y_end))],
+                      fill=fill, width=width)
+            y += on + off
+
+    step_x = plot_w / max(n, 1)
+
+    # 定位平衡区在当前绘图窗口 sub 内的起始 K 线下标
+    b_start_idx = 0
+    if box_start_index is not None:
+        try:
+            b_start_idx = max(0, min(n - 1, int(box_start_index)))
+        except (TypeError, ValueError):
+            b_start_idx = 0
+    elif box_start_ts is not None:
+        try:
+            ts_target = int(box_start_ts)
+            for idx_b, b_item in enumerate(sub):
+                if int(b_item[0]) >= ts_target:
+                    b_start_idx = idx_b
+                    break
+            else:
+                b_start_idx = max(0, n - 1)
+        except (TypeError, ValueError):
+            b_start_idx = 0
+    elif box_lo is not None and box_hi is not None and box_hi > box_lo and n > 12:
+        # 未显式传 box_start_ts 时,回溯最近一段连续驻留箱内的起点
+        for idx_b in range(n - 1, -1, -1):
+            bh, bl = float(sub[idx_b][2]), float(sub[idx_b][3])
+            if bh < box_lo or bl > box_hi:
+                b_start_idx = min(n - 1, idx_b + 1)
+                break
+
+    box_x0 = int(round(left_m + b_start_idx * step_x)) if b_start_idx > 0 else left_m
+
+    # 平衡箱体/关键结构区:从真实计算起点 box_x0 开始绘制浅灰带 + 上下沿粗虚线 + 左边界竖线
     if box_lo is not None and box_hi is not None and box_hi > box_lo:
         y1, y2 = price_to_y(box_hi), price_to_y(box_lo)
         if y2 > y1:
-            draw.rectangle([left_m, y1, left_m + plot_w, y2], fill=(240, 240, 240))
-        hline(y1, 8, 4, (0, 0, 0), 2)
-        hline(y2, 8, 4, (0, 0, 0), 2)
-        rail_add(y1, f"BOX HI {_fmt_px(box_hi)}")
-        rail_add(y2, f"BOX LO {_fmt_px(box_lo)}")
+            draw.rectangle([box_x0, y1, left_m + plot_w, y2], fill=(240, 240, 240))
+            if b_start_idx > 0:
+                vline(box_x0, y1, y2, 5, 3, (90, 90, 90), 2)
+        hline(y1, 8, 4, (0, 0, 0), 2, x_start=box_x0)
+        hline(y2, 8, 4, (0, 0, 0), 2, x_start=box_x0)
+        hi_tag = "UPPER" if public_mode else "BOX HI"
+        lo_tag = "LOWER" if public_mode else "BOX LO"
+        rail_add(y1, f"{hi_tag} {_fmt_px(box_hi)}")
+        rail_add(y2, f"{lo_tag} {_fmt_px(box_lo)}")
 
-    # 事件区间:斜线填充 + 细虚线(与箱体区分:箱体是横带,区间是触发段)
-    if zone_lo is not None and zone_hi is not None and zone_hi >= zone_lo:
+    # 事件区间:公开信号图隐藏内部触发带与触边次数,仅内部运营图绘制
+    if not public_mode and zone_lo is not None and zone_hi is not None and zone_hi >= zone_lo:
         yz1, yz2 = price_to_y(zone_hi), price_to_y(zone_lo)
         if yz2 - yz1 >= 2:
-            x = left_m
+            x = box_x0
             while x < left_m + plot_w:
                 draw.line([(x, yz2), (min(x + 6, left_m + plot_w), yz1)],
                           fill=(198, 198, 198), width=1)
                 x += 9
-        hline(yz1, 3, 3, (70, 70, 70))
-        hline(yz2, 3, 3, (70, 70, 70))
+        hline(yz1, 3, 3, (70, 70, 70), x_start=box_x0)
+        hline(yz2, 3, 3, (70, 70, 70), x_start=box_x0)
         touch_txt = ""
         if zone_touches:
             n_touch = int(zone_touches)
@@ -374,7 +421,7 @@ def render_bw_kline_png(
     _draw_level(target_price, "TARGET", dash=5, width=2, color=(40, 40, 40))
 
     step_x = plot_w / max(n, 1)
-    body_w = max(3, int(step_x * 0.66))
+    body_w = max(2, int(step_x * 0.68))
     for idx, b in enumerate(sub):
         _ts, o, h, l, c = float(b[0]), float(b[1]), float(b[2]), float(b[3]), float(b[4])
         cx = int(round(left_m + (idx + 0.5) * step_x))
@@ -389,36 +436,37 @@ def render_bw_kline_png(
         else:
             draw.rectangle([x0, top_b, x1, bot_b], fill=(0, 0, 0), outline=(0, 0, 0), width=1)
 
-    # 结构端点:三角标记 + 最近两个价位标签(不标就读不出哪根是 pivot)
-    labeled = 0
-    for p_idx, p_price, p_kind in reversed(near_piv):
-        if p_idx is None or not (0 <= p_idx < n):
-            continue
-        pcx = int(round(left_m + (p_idx + 0.5) * step_x))
-        py = price_to_y(p_price)
-        is_high = p_kind.startswith("h")
-        if is_high:
-            tri = [(pcx, max(top_m + 12, py - 4)),
-                   (pcx - 5, max(top_m + 4, py - 12)),
-                   (pcx + 5, max(top_m + 4, py - 12))]
-            ly = max(top_m + 2, py - 26)
-        else:
-            tri = [(pcx, min(top_m + plot_h - 12, py + 4)),
-                   (pcx - 5, min(top_m + plot_h - 4, py + 12)),
-                   (pcx + 5, min(top_m + plot_h - 4, py + 12))]
-            ly = min(top_m + plot_h - 18, py + 14)
-        draw.polygon(tri, fill=(60, 60, 60))
-        if labeled < 2:
-            label = f"P{'H' if is_high else 'L'} {_fmt_px(p_price)}"
-            w_txt = text_w(label, font_s)
-            right_lim = left_m + plot_w - w_txt - 2
-            lx = pcx + 7
-            if lx > right_lim:              # 贴近右沿:改放三角左侧,别压住最后几根 K 线
-                lx = max(left_m + 2, pcx - w_txt - 7)
-            draw.rectangle([lx - 1, ly - 1, lx + w_txt + 1, ly + 13],
-                           fill=(255, 255, 255))     # 底衬:标注压影线时仍可读
-            draw.text((lx, ly), label, fill=(60, 60, 60), font=font_s)
-            labeled += 1
+    # 结构端点:仅内部运营图绘制,公开信号图隐藏内部拐点算法坐标
+    if not public_mode:
+        labeled = 0
+        for p_idx, p_price, p_kind in reversed(near_piv):
+            if p_idx is None or not (0 <= p_idx < n):
+                continue
+            pcx = int(round(left_m + (p_idx + 0.5) * step_x))
+            py = price_to_y(p_price)
+            is_high = p_kind.startswith("h")
+            if is_high:
+                tri = [(pcx, max(top_m + 12, py - 4)),
+                       (pcx - 5, max(top_m + 4, py - 12)),
+                       (pcx + 5, max(top_m + 4, py - 12))]
+                ly = max(top_m + 2, py - 26)
+            else:
+                tri = [(pcx, min(top_m + plot_h - 12, py + 4)),
+                       (pcx - 5, min(top_m + plot_h - 4, py + 12)),
+                       (pcx + 5, min(top_m + plot_h - 4, py + 12))]
+                ly = min(top_m + plot_h - 18, py + 14)
+            draw.polygon(tri, fill=(60, 60, 60))
+            if labeled < 2:
+                label = f"P{'H' if is_high else 'L'} {_fmt_px(p_price)}"
+                w_txt = text_w(label, font_s)
+                right_lim = left_m + plot_w - w_txt - 2
+                lx = pcx + 7
+                if lx > right_lim:              # 贴近右沿:改放三角左侧,别压住最后几根 K 线
+                    lx = max(left_m + 2, pcx - w_txt - 7)
+                draw.rectangle([lx - 1, ly - 1, lx + w_txt + 1, ly + 13],
+                               fill=(255, 255, 255))     # 底衬:标注压影线时仍可读
+                draw.text((lx, ly), label, fill=(60, 60, 60), font=font_s)
+                labeled += 1
 
     # 触发 bar 标记(若在窗口内)
     m_idx = (n - 1) if mark_index is None else max(0, min(n - 1, mark_index))
@@ -442,23 +490,24 @@ def render_bw_kline_png(
     draw.text((left_m, 6), head, fill=(0, 0, 0), font=font_b)
     draw.text((left_m, 36), f"{ts_first} -> {ts_last}", fill=(90, 90, 90), font=font_s)
 
-    # 结构摘要(全部来自同一批入参,不做二次推断)
+    # 结构摘要(公开信号图仅展示 R:R,隐藏内部箱体/触边/ATR 参数)
     bits: list[str] = []
-    pos_txt = box_position_text(entry_price, box_lo, box_hi)
     rr = rr_multiple(d_int, entry_price, stop_price, target_price)
     if rr is not None:
         bits.append(f"R:R {rr:.2f}")
-    if atr is not None and entry_price:
-        bits.append(f"ATR {atr / entry_price:.2%}")
-    if box_lo is not None and box_hi is not None and entry_price:
-        bits.append((f"箱体跨度 {(box_hi - box_lo) / entry_price:.2%}" if cjk_ok
-                     else f"BOX span {(box_hi - box_lo) / entry_price:.2%}"))
-    if zone_touches:
-        bits.append((f"触边 {int(zone_touches)} 次" if cjk_ok
-                     else f"touch {int(zone_touches)}x"))
-    if pos_txt:
-        bits.append((f"入场箱内 {pos_txt}") if cjk_ok
-                    else f"entry in box {box_position_pct(entry_price, box_lo, box_hi):.0%}")
+    if not public_mode:
+        pos_txt = box_position_text(entry_price, box_lo, box_hi)
+        if atr is not None and entry_price:
+            bits.append(f"ATR {atr / entry_price:.2%}")
+        if box_lo is not None and box_hi is not None and entry_price:
+            bits.append((f"箱体跨度 {(box_hi - box_lo) / entry_price:.2%}" if cjk_ok
+                         else f"BOX span {(box_hi - box_lo) / entry_price:.2%}"))
+        if zone_touches:
+            bits.append((f"触边 {int(zone_touches)} 次" if cjk_ok
+                         else f"touch {int(zone_touches)}x"))
+        if pos_txt:
+            bits.append((f"入场箱内 {pos_txt}") if cjk_ok
+                        else f"entry in box {box_position_pct(entry_price, box_lo, box_hi):.0%}")
     if bits:
         summary = " | ".join(bits)
         draw.text((max(left_m, left_m + plot_w - text_w(summary, font_s)), 36),
@@ -734,115 +783,57 @@ class TelegramNotifier:
                     exec_status: str = "",
                     decision_ts: Optional[int] = None,
                     watch_details: Optional[dict] = None,
-                    price_context: Optional[dict] = None) -> bool:
-        """信号广播(公开通道):结构事实 + 系统如何处置,一条消息读完。
+                    price_context: Optional[dict] = None,
+                    box_start_ts: Optional[int] = None) -> bool:
+        """信号广播(公开通道):面向外部使用者的精简交易信号卡。
 
-        纪律:这里**只写结构与决策**,不写账户权益/持仓数量/下单成败 —— 该频道
-        可以公开订阅。`exec_status` 由 runner 按闸门结果填写(如
-        "仅参考 · 组合容量已满"),让订阅者知道"信号是真的,但本系统这拍没上车"。
+        保密纪律(构建技术壁垒):
+        1. 隐藏核心算法思想:不输出原语事件(ACCEPT/REJECT)、市场状态(Regime)、
+           平衡箱体/事件区间数值、触边次数、结构子形态(R3_TRAP/A1_TIGHT/FLIPPED_BOX_EDGE)
+           及内部 ATR 距离过滤指标;
+        2. 隐藏信号与实际开仓关系:不输出 exec_status(容量是否已满/本系统是否开仓)、
+           size_note(降档/仓位权重)与路由执行细节。
         """
         long_side = side in ("long", "buy", "多")
         dir_emoji = "🟢" if long_side else "🔴"
         d_int = 1 if long_side else -1
-        ev_disp = format_event_display(event_id)
-        rt_disp = "系统价格关注 Watch（非交易所限价挂单）" if watch_details else format_route_display(route)
+        dir_label = "做多 (LONG)" if long_side else "做空 (SHORT)"
+        entry_label = "关注参考价" if watch_details else "参考入场"
         lines = [
-            f"📡 信号触发: {symbol}",
-            f"⏱️ 交易周期: {tf_label or 'HTF'}",
-            f"🧭 原语事件: {ev_disp} [{regime or 'BALANCE'}]",
-            f"{dir_emoji} 交易方向: {side}",
-            f"🛣️ 路由方式: {rt_disp}",
-            f"🎯 参考价格: {ref_price:.8g}",
-            f"🛡️ 初始止损: {invalid:.8g}",
+            f"📡 交易信号: {symbol}",
+            f"⏱️ 信号周期: {tf_label or 'HTF'}",
+            f"{dir_emoji} 交易方向: {dir_label}",
+            f"🎯 {entry_label}: {ref_price:.8g}",
+            f"🛡️ 止损防守: {invalid:.8g}",
         ]
         rr = rr_multiple(d_int, ref_price, invalid, target_1)
         if target_1 is not None:
             rr_txt = f" (R:R {rr:.2f})" if rr is not None else ""
-            lines.append(f"🏁 结构目标: {float(target_1):.8g}{rr_txt}")
-        if box_lo is not None and box_hi is not None:
-            span_txt = ""
-            if ref_price:
-                span_txt = (f" · 跨度 {(float(box_hi) - float(box_lo)) / float(ref_price):.2%}")
-            lines.append(f"📦 平衡箱体: [{float(box_lo):.8g}, "
-                         f"{float(box_hi):.8g}]{span_txt}")
-            pos_txt = box_position_text(ref_price, box_lo, box_hi)
-            if pos_txt:
-                label = "关注价位置" if watch_details else "箱内位置"
-                lines.append(f"📍 {label}: {pos_txt}（下沿=0%，上沿=100%；不是方向行程）")
-        if zone_lo is not None and zone_hi is not None:
-            touch_txt = f" · 触边 {int(zone_touches)} 次" if zone_touches else ""
-            lines.append(f"🧱 事件区间: [{float(zone_lo):.8g}, "
-                         f"{float(zone_hi):.8g}]{touch_txt}")
+            lines.append(f"🏁 目标参考: {float(target_1):.8g}{rr_txt}")
         if price_context is not None:
             ctx = price_context
-            lines.append(f"🧩 交易场景: {ctx.get('trade_context', '未标注')}")
-            sub_k = ctx.get("sub_kind")
-            sk_k = ctx.get("source_kind")
-            if sub_k or sk_k:
-                sub_map = {
-                    "R3_TRAP": "R3_TRAP (假突破吞没陷阱)",
-                    "R1_WICK": "R1_WICK (扫损长影线)",
-                    "R2_STALL": "R2_STALL (边界停滞)",
-                    "A1_TIGHT": "A1_TIGHT (紧凑突破接受)",
-                    "A2_OVEREXTENDED": "A2_STRONG (位移突破接受)",
-                }
-                sk_map = {
-                    "BOX_EDGE": "现役平衡箱沿",
-                    "FLIPPED_BOX_EDGE": "破位箱重返边界",
-                }
-                parts = [p for p in (sub_map.get(str(sub_k), str(sub_k or "")), sk_map.get(str(sk_k), str(sk_k or ""))) if p]
-                if parts:
-                    lines.append(f"🔬 结构形态: {' · '.join(parts)}")
-            if "execution_target" in ctx:
-                managed = ctx["execution_target"]
-                lines.append("⚙️ 目标管理: 结构目标仅观察/评估，不触发锁利或减仓"
-                             if managed is None else f"⚙️ 目标管理: 执行锚点 {float(managed):.8g}（按持仓规则锁利/减仓）")
-            for key, label in (("ev_ref", "事件边界（非首次触边价）"),
-                               ("event_extreme", "事件过程极值"),
-                               ("confirm_close", "收盘确认价")):
-                if ctx.get(key) is not None:
-                    lines.append(f"🔎 {label}: {float(ctx[key]):.8g}")
-            lines = [line.replace("🎯 参考价格:", "🎯 关注参考价:" if watch_details else "🎯 决策参考价:")
-                     .replace("📍 箱内位置:", "📍 关注价位置:" if watch_details else "📍 决策参考价位置:") for line in lines]
-            for key, label in (("confirm_close", "确认价位置"), ("snapshot_price", "行情快照位置")):
-                txt = box_position_text(ctx.get(key), box_lo, box_hi)
-                if txt:
-                    lines.append(f"📍 {label}: {txt}")
+            if box_start_ts is None and ctx.get("box_start_ts") is not None:
+                try:
+                    box_start_ts = int(ctx["box_start_ts"])
+                except (TypeError, ValueError):
+                    box_start_ts = None
             px, stamp = ctx.get("snapshot_price"), ctx.get("snapshot_ts")
             if px is not None and stamp is not None:
                 sampled = datetime.fromtimestamp(int(stamp) / 1000, tz=timezone.utc).strftime("%m-%d %H:%M:%S UTC")
-                lines.append(f"💹 行情快照价: {float(px):.8g} ({ctx.get('snapshot_source', 'unknown')} · {sampled}，非成交价)")
-            else:
-                lines.append("💹 行情快照价: 未获取（参考价不是实时价）")
-            for key, label in (("confirm_distance_atr", "确认距事件侧内沿"), ("remaining_room_atr", "确认时剩余空间")):
-                if ctx.get(key) is not None:
-                    lines.append(f"📏 {label}: {float(ctx[key]):.2f} ATR")
-        if atr:
-            atr_txt = (f"{float(atr) / float(ref_price):.2%}" if ref_price
-                       else f"{float(atr):.8g}")
-            lines.append(f"📏 波动基准: ATR {atr_txt}")
-        if size_note:
-            clean_note = size_note.strip().lstrip("|").strip()
-            if clean_note:
-                lines.append(f"📐 仓位参数: {clean_note}")
-        if exec_status:
-            lines.append(f"🤖 系统执行: {exec_status}")
+                lines.append(f"💹 实时快照: {float(px):.8g} ({sampled})")
         if watch_details:
-            if not price_context or price_context.get("confirm_close") is None:
-                lines.append("⚠️ 原始确认价未提供；关注价不是确认价，不能用关注价判断信号是否过晚")
-            for key, label in (("watch_price", "关注触发价"),
-                               ("near_price", "近价区（触及后需企稳确认）"),
-                               ("prog_price", "行情走完作废价")):
+            for key, label in (("watch_price", "候选触发价"),
+                               ("prog_price", "观察失效价")):
                 value = watch_details.get(key)
                 if value is not None:
                     lines.append(f"👁️ {label}: {float(value):.8g}")
-            lines.append(f"⌛ 关注期限: {watch_details['max_wait_hours']} 小时（自决策时刻起）")
-            lines.append("ℹ️ Watch规则（仅在系统实际建立关注后适用）：失效位被破、行情走完或到期会作废。关注不等于成交，触发后仍需执行检查。")
+            if watch_details.get("max_wait_hours") is not None:
+                lines.append(f"⌛ 观察窗口: {watch_details['max_wait_hours']} 小时")
         if decision_ts:
             try:
                 stamp = datetime.fromtimestamp(
                     int(decision_ts) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
-                lines.append(f"🕒 确认收盘时刻: {stamp}")
+                lines.append(f"🕒 信号时间: {stamp}")
             except (TypeError, ValueError, OSError, OverflowError):
                 pass
         return self.send("signal", "\n".join(lines),
@@ -852,7 +843,7 @@ class TelegramNotifier:
                              box_hi=box_hi, ref_price=ref_price, invalid=invalid,
                              target_1=target_1, zone_lo=zone_lo, zone_hi=zone_hi,
                              zone_touches=zone_touches, pivots=pivots, atr=atr,
-                             direction=d_int))
+                             direction=d_int, box_start_ts=box_start_ts))
 
     @staticmethod
     def _signal_png_factory(**kw) -> Optional[Callable[[], Optional[bytes]]]:
@@ -860,22 +851,21 @@ class TelegramNotifier:
         bars = kw.get("bars")
         if not bars:
             return None
-        side = str(kw["side"])
-        event_id = str(kw["event_id"])
-        ev_short = ("ACCEPT" if event_id in ("BREAKOUT_ACCEPTED", "ACCEPT")
-                    else ("REJECT" if event_id in ("LEVEL_REJECTED", "REJECT")
-                          else event_id))
+        d_int = int(kw.get("direction") or 1)
+        dir_tag = "LONG" if d_int > 0 else "SHORT"
 
         def _render() -> Optional[bytes]:
             return render_bw_kline_png(
                 bars, symbol=kw["symbol"], tf_label=kw["tf_label"],
-                title_tag=f"SIGNAL {ev_short} {side.upper()}",
+                title_tag=f"SIGNAL {dir_tag}",
                 box_lo=kw["box_lo"], box_hi=kw["box_hi"],
                 entry_price=kw["ref_price"], stop_price=kw["invalid"],
                 target_price=kw["target_1"], direction=kw["direction"],
                 zone_lo=kw["zone_lo"], zone_hi=kw["zone_hi"],
                 zone_touches=kw["zone_touches"], pivots=kw["pivots"],
-                atr=kw["atr"], max_bars=60)
+                atr=kw["atr"], max_bars=96,
+                box_start_ts=kw.get("box_start_ts"),
+                public_mode=True)
 
         return _render
 
@@ -892,7 +882,8 @@ class TelegramNotifier:
                   zone_lo: Optional[float] = None,
                   zone_hi: Optional[float] = None,
                   pivots: Optional[Sequence[tuple]] = None,
-                  atr: Optional[float] = None) -> bool:
+                  atr: Optional[float] = None,
+                  box_start_ts: Optional[int] = None) -> bool:
         """成交通知(运营通道,附黑白 K 线证据图)。
 
         `price` = **本次事件价**(成交价 / 止损推进时的参考价);
@@ -946,7 +937,7 @@ class TelegramNotifier:
                 stop_price=stop_price,
                 target_price=target_price, direction=direction,
                 zone_lo=zone_lo, zone_hi=zone_hi, pivots=pivots, atr=atr,
-                max_bars=60)
+                max_bars=96, box_start_ts=box_start_ts)
         body = "\n".join(lines)
         if price_label.startswith("参考价"):
             body = "【持仓更新】\n" + body

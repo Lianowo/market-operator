@@ -250,8 +250,9 @@ def test_dual_bot_telegram_and_bw_kline_chart():
     assert "SIG_TOK/sendPhoto" in calls[0][0]
     assert calls[0][1]["chat_id"] == "SIG_CHAT"
     assert "photo" in calls[0][2]
-    assert "REJECT (边界拒绝)" in calls[0][1]["caption"]
-    assert "REJECT 市价" in calls[0][1]["caption"]
+    assert "做空 (SHORT)" in calls[0][1]["caption"]
+    assert "参考入场: 111.5" in calls[0][1]["caption"]
+    assert "REJECT" not in calls[0][1]["caption"]
     # 每行一条关键信息 + Emoji 行首
     cap_lines = [ln for ln in calls[0][1]["caption"].splitlines() if not ln.startswith("【")]
     assert all(len(ln) > 0 for ln in cap_lines)

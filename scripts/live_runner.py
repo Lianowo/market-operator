@@ -2516,7 +2516,8 @@ class LiveRunner:
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo"),
                     box_hi=pos_dict.get("box_hi"),
-                    bars=cs.trig_bars[-45:] if cs.trig_bars else cs.cog_bars[-45:],
+                    box_start_ts=pos_dict.get("box_start_ts"),
+                    bars=cs.trig_bars[-96:] if cs.trig_bars else cs.cog_bars[-96:],
                 )
 
     def _close_cognition(self, cs: CampaignState, cog_bar) -> None:
@@ -2597,9 +2598,10 @@ class LiveRunner:
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo") if pos_dict else None,
                     box_hi=pos_dict.get("box_hi") if pos_dict else None,
+                    box_start_ts=pos_dict.get("box_start_ts") if pos_dict else None,
                     pivots=self._chart_pivots(s.pivots[-6:]),
                     atr=atr,
-                    bars=cs.cog_bars[-45:] if cs.cog_bars else cs.trig_bars[-45:],
+                    bars=cs.cog_bars[-96:] if cs.cog_bars else cs.trig_bars[-96:],
                 )
             for intent in mgmt:
                 self._exec_mgmt(cs, intent, cog_bar)
@@ -2710,6 +2712,23 @@ class LiveRunner:
         return min(pts), max(pts)
 
     @staticmethod
+    def _resolve_box_start_ts(cs: CampaignState, meta: Optional[dict]) -> Optional[int]:
+        """根据认知帧的 zone_origin_known 还原平衡区起始时间戳(毫秒)。"""
+        if not meta:
+            return None
+        origin = meta.get("zone_origin_known")
+        if origin is None:
+            return None
+        try:
+            idx = int(origin)
+        except (TypeError, ValueError):
+            return None
+        cog = getattr(cs, "cog_bars", None) or ()
+        if 0 <= idx < len(cog):
+            return int(cog[idx][0])
+        return None
+
+    @staticmethod
     def _signal_chart_bars(cs: CampaignState, mic: bool):
         """信号图取哪个帧,并说明该帧是否为认知帧。
 
@@ -2717,21 +2736,21 @@ class LiveRunner:
         画触发帧时若硬标就会整体错位(标注错位比不标更有害)。
         """
         if mic and cs.trig_bars:
-            return cs.trig_bars[-45:], False
-        cog = cs.cog_bars[-45:]
+            return cs.trig_bars[-96:], False
+        cog = cs.cog_bars[-96:]
         if cog:
             return cog, True
-        return cs.trig_bars[-45:], False
+        return cs.trig_bars[-96:], False
 
     @staticmethod
     def _chart_pivots(pivots) -> list:
         """图上的结构端点:`[(窗口下标, 价格, "high"|"low")]`。
 
         `pivots` 传 `StructureView.pivots`(认知帧坐标):下标按 `known_index`
-        折算到末 45 根;落在窗口外的丢掉,None 由渲染器自行忽略。
+        折算到末 96 根;落在窗口外的丢掉,None 由渲染器自行忽略。
         """
         out: list = []
-        win = 45
+        win = 96
         for p in list(pivots or ())[-6:]:
             idx = int(getattr(p, "known_index", -1))
             if idx < 0:
@@ -2893,6 +2912,7 @@ class LiveRunner:
         zone_hi = d.meta.get("zone_hi")
         box_lo, box_hi = self._box_bounds(zone_lo, zone_hi,
                                           d.meta.get("box_opposite"))
+        box_start_ts = self._resolve_box_start_ts(cs, d.meta)
         chart_bars, on_cog = self._signal_chart_bars(cs, mic)
         period_s = (getattr(cs, "trigger_tf_seconds", 0) if mic else
                     getattr(cs, "obs_tf_seconds", TF_SECONDS_MAP.get(cs.tf_label, 0)))
@@ -3051,13 +3071,15 @@ class LiveRunner:
             zone_touches=d.meta.get("zone_touches"),
             pivots=chart_pivots, atr=getattr(view, "atr", None),
             decision_ts=confirm_ts, watch_details=watch_details,
-            price_context={**d.meta, "snapshot_price": snapshot_px,
+            price_context={**d.meta, "box_start_ts": box_start_ts,
+                           "snapshot_price": snapshot_px,
                            "snapshot_ts": snapshot_ts, "snapshot_source": "lastPr"})
         self._journal("signal_structure", {
             "symbol": sym, "tf": cs.tf_label, "event": hyp.event_id,
             "confirm_ts": confirm_ts, "entry_ref": entry_ref,
             "invalid": invalid, "target_1": hyp.target_1,
             "box_lo": box_lo, "box_hi": box_hi,
+            "box_start_ts": box_start_ts,
             "snapshot_price": snapshot_px, "snapshot_ts": snapshot_ts,
             "exec_block": block, **d.meta})
         if block is not None:
@@ -3076,6 +3098,7 @@ class LiveRunner:
                   "route": d.route, "size_mult": size_mult,
                   "edge_mult": edge_mult,
                   "box_lo": box_lo, "box_hi": box_hi,
+                  "box_start_ts": box_start_ts,
                   "bounded_entry": bool(d.meta.get("bounded_entry")),
                   "entry_min_rr": float(d.meta.get("entry_min_rr", 0.0)),
                   "inner_edge": d.meta.get("inner_edge"),
@@ -3332,6 +3355,7 @@ class LiveRunner:
             "target_1": execution_target(it, it["target_1"]), "event_id": it["event_id"],
             "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
+            "box_start_ts": it.get("box_start_ts"),
             "opened_ts": ts, "mark": price}
         # New position: drop any clock anchor left by a previous position on
         # this symbol. Otherwise the 15m clock would fetch from that old anchor
@@ -3352,8 +3376,8 @@ class LiveRunner:
             self.counters["adopted"] = self.counters.get("adopted", 0) + 1
         else:
             self.counters["fills"] += 1
-        chart_bars = (cs.trig_bars[-45:] if (cs and it.get("mic") and cs.trig_bars)
-                      else (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None)))
+        chart_bars = (cs.trig_bars[-96:] if (cs and it.get("mic") and cs.trig_bars)
+                      else (cs.cog_bars[-96:] if (cs and cs.cog_bars) else (cs.trig_bars[-96:] if cs else None)))
         if origin == "adopted":
             # 接管不是本系统信号:用告警通道说清"这是交易所既有仓位 + 按什么
             # 结构价挂的保护",绝不伪装成一次"开仓成交"(会污染信号/胜率归因)。
@@ -3377,6 +3401,7 @@ class LiveRunner:
                 price_label=("参考价(待成交回执)" if self.mode == "live" and it.get("fill_price_source") != "fills" else "成交价格"),
                 stop_price=float(it["invalid"]), target_price=it.get("target_1"),
                 box_lo=it.get("box_lo"), box_hi=it.get("box_hi"),
+                box_start_ts=it.get("box_start_ts"),
                 bars=chart_bars)
         # 开仓事实必须**自解释**:口径归因(MFE/ATR、按 TF 分桶、参考价 vs 成交价)
         # 全靠这一行,缺 `tf_label`/`opened_ts` 就只能靠事后猜。
@@ -3561,7 +3586,7 @@ class LiveRunner:
         it["status"] = "filled"
         self.counters["reduce_fills" if it["role"] == "reduce" else "exits"] += 1
         cs = self._get_cs_for(it["symbol"], pos.get("tf_label")) or self.campaigns.get(it["symbol"])
-        chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
+        chart_bars = (cs.cog_bars[-96:] if (cs and cs.cog_bars) else (cs.trig_bars[-96:] if cs else None))
         self.tg.send_fill(
             it["symbol"], title or self._close_action_label(it),
             qty, float(ref_price), pnl=pnl,
@@ -3572,6 +3597,7 @@ class LiveRunner:
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),
             box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
+            box_start_ts=pos.get("box_start_ts"),
             bars=chart_bars, price_label=price_label)
         self._journal("close_fill", {"oid": it["oid"], "symbol": it["symbol"],
                                      "qty": qty, "role": it["role"],
@@ -4551,7 +4577,7 @@ class LiveRunner:
         self.counters["reduce_fills" if it["role"] == "reduce"
                       else "exits"] += 1
         cs = self._get_cs_for(sym, pos.get("tf_label")) or self.campaigns.get(sym)
-        chart_bars = (cs.cog_bars[-45:] if (cs and cs.cog_bars) else (cs.trig_bars[-45:] if cs else None))
+        chart_bars = (cs.cog_bars[-96:] if (cs and cs.cog_bars) else (cs.trig_bars[-96:] if cs else None))
         self.tg.send_fill(
             sym, self._close_action_label(it), qty, price,
             pnl=gross - fee, note=str(it["route"])[:60],
@@ -4561,6 +4587,7 @@ class LiveRunner:
             stop_price=pos.get("invalid"),
             target_price=pos.get("target_1"),
             box_lo=pos.get("box_lo"), box_hi=pos.get("box_hi"),
+            box_start_ts=pos.get("box_start_ts"),
             bars=chart_bars)
         self._journal("close_fill", {"oid": it["oid"], "symbol": sym,
                                      "qty": qty, "price": price,

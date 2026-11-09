@@ -26,8 +26,9 @@ def test_bz_market_numbers_describe_confirmation_position():
     n._post_text_sync = lambda *args: bodies.append(args[-1]) or True
     n.send_signal("BZUSDT", ev.id, "sell", dec.route, dec.intent.ref_price, dec.hyp.invalid,
                   box_lo=109.55352, box_hi=112.23, price_context=dec.meta)
-    assert "确认价位置: 5%" in bodies[0]
-    assert "不是方向行程" in bodies[0]
+    assert "参考入场: 109.7" in bodies[0]
+    assert "止损防守: 110.78582" in bodies[0]
+    assert "平衡箱体" not in bodies[0]
 
 
 def test_doge_fine_target_completion_arms_without_waiting_for_12h_close():

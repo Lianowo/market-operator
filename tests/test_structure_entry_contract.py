@@ -88,10 +88,9 @@ def test_notification_distinguishes_prices_and_missing_snapshot():
                   price_context={"ev_ref": 99, "event_extreme": 98.5,
                                  "confirm_close": 104, "trade_context": "重新入箱"})
     text = bodies[0]
-    assert "收盘确认价: 104" in text and "关注参考价: 100" in text
-    assert "事件过程极值: 98.5" in text
-    assert "行情快照价: 未获取" in text and "确认收盘时刻:" in text
-    assert "确认价位置:" in text and "关注价位置:" in text
+    assert "关注参考价: 100" in text and "候选触发价: 100" in text
+    assert "观察窗口: 4 小时" in text and "信号时间:" in text
+    assert "重新入箱" not in text and "事件过程极值" not in text
 
 
 def test_execution_target_legacy_and_explicit_none():

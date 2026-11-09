@@ -1983,8 +1983,9 @@ def test_signal_broadcast_kwargs_match_notifier_signature(tmp_path):
     assert "/botSIG/" in url                # 信号只走公开频道
     assert data["chat_id"] == "C1"
     body = data.get("caption") or data.get("text") or ""
-    assert "系统执行" in body and "组合容量已满" in body
-    assert "平衡箱体" in body and "事件区间" in body
+    assert "交易信号: BTCUSDT" in body and "参考入场: 100" in body
+    assert "系统执行" not in body and "组合容量已满" not in body
+    assert "平衡箱体" not in body and "事件区间" not in body
 
 
 def test_notifier_routes_by_kind_only():
