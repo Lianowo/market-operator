@@ -562,8 +562,22 @@ class MarketRouter:
                         return None
             elif cid == BREAKOUT_ACCEPTED:
                 if view.regime is Regime.TRANSITION and is_mic_align:
-                    self._bump("restraint_transition_regime_reject")
-                    return None
+                    allow_tr_reentry = False
+                    if sk_align == "FLIPPED_BOX_EDGE":
+                        eb_t = ev.attrs.get("eval_bars") or ()
+                        if len(eb_t) >= 4:
+                            _, bo_t, bh_t, bl_t, bc_t = eb_t[-1]
+                            b1_t, b2_t, b3_t = eb_t[-2], eb_t[-3], eb_t[-4]
+                            dt = int(ev.direction)
+                            dir_t = (bc_t < bo_t) if dt < 0 else (bc_t > bo_t)
+                            eng_t = (bc_t < min(b1_t[1], b1_t[4])) if dt < 0 else (bc_t > max(b1_t[1], b1_t[4]))
+                            out_t = ((bh_t - bl_t) > (b1_t[2] - b1_t[3])) and eng_t
+                            bexp_t = abs(bc_t - bo_t) > abs(b1_t[4] - b1_t[1])
+                            brk_t = (bc_t < min(b1_t[3], b2_t[3], b3_t[3])) if dt < 0 else (bc_t > max(b1_t[2], b2_t[2], b3_t[2]))
+                            allow_tr_reentry = dir_t and out_t and bexp_t and brk_t
+                    if not allow_tr_reentry:
+                        self._bump("restraint_transition_regime_reject")
+                        return None
                 if sk_align == "BOX_EDGE" and view.regime is Regime.RANGE:
                     step_ms_brk = int(ev.attrs.get("reset_step_ms", 0) or 0)
                     if is_mic_align or step_ms_brk < 4 * 3600 * 1000:
