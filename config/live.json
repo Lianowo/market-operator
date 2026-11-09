@@ -90,7 +90,7 @@
   },
   "universe": {
     "enabled": true,
-    "min_usdt_volume_24h": 3000000.0,
+    "min_usdt_volume_24h": 2000000.0,
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
