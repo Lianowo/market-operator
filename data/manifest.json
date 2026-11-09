@@ -11878,6 +11878,316 @@
       "sha256": "f1901c0d9b3fd0b072b4edee6f9902be4ff679a7a42115f28e7774d6df2a8f69",
       "size_bytes": 43773,
       "symbol": "GALAUSDT"
+    },
+    "XLMUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "feab1b84d0b34e6f56ab71fcf76dcaa7748311223a29360d499160cba8ee2cf9",
+      "size_bytes": 1963009,
+      "symbol": "XLMUSDT"
+    },
+    "XLMUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "6180a1348f4396f471fbebd3a23820990dbc569b1e1f2e04120d2f941794483d",
+      "size_bytes": 986986,
+      "symbol": "XLMUSDT"
+    },
+    "XLMUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "2a2d2ef0d4119a9d186851fed402235b745e604bf15f51a19fe103913f4bf929",
+      "size_bytes": 496989,
+      "symbol": "XLMUSDT"
+    },
+    "XLMUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "a081e4aabf390c89adc736add5a3adc5f733df1423318af7c64c5dc674ab4133",
+      "size_bytes": 249484,
+      "symbol": "XLMUSDT"
+    },
+    "XLMUSDT_12h.csv": {
+      "bars": 1466,
+      "first_ts": 1729036800000,
+      "granularity": "12h",
+      "last_ts": 1792324800000,
+      "sha256": "aac02cff9cfb77bd8a01b616ee098fad767ef6bb78f9d0d597024ccce5533214",
+      "size_bytes": 84007,
+      "symbol": "XLMUSDT"
+    },
+    "XLMUSDT_1d.csv": {
+      "bars": 733,
+      "first_ts": 1729036800000,
+      "granularity": "1d",
+      "last_ts": 1792281600000,
+      "sha256": "e6432475ce43c189c7605d56385c2bd9455e9a16cf13ff5e55f2e3ce18ba9cb8",
+      "size_bytes": 42226,
+      "symbol": "XLMUSDT"
+    },
+    "binance_fapi_funding/XLMUSDT.csv": {
+      "path": "data/raw/funding/XLMUSDT.csv",
+      "sha256": "af4b31796ed4929956c71786ebb7964559773ecd713b67130bb66b8e997dffbc",
+      "rows": 2212,
+      "ts_first": 1728864000000,
+      "ts_last": 1792540800000,
+      "source": "binance_fapi/fapi/v1/fundingRate"
+    },
+    "COMPUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "18aba5da09b10f999a1d5d908821b2ab2ea726755cccdc8a81a4dbe92442b0b3",
+      "size_bytes": 1646486,
+      "symbol": "COMPUSDT"
+    },
+    "COMPUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "da5109155432fced4bcb379dd30aaee0f5d221e40b17d95e0f16617e75682310",
+      "size_bytes": 867374,
+      "symbol": "COMPUSDT"
+    },
+    "COMPUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "b42be78d4ca1a1391ec3f924ea2bcda019263c057126aa2bd0279db37f5a5c64",
+      "size_bytes": 431578,
+      "symbol": "COMPUSDT"
+    },
+    "COMPUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "b66f392bb5969a245f4a98d65ab922f1900a717f9fc9b8acd1da36c1f65a923d",
+      "size_bytes": 214935,
+      "symbol": "COMPUSDT"
+    },
+    "COMPUSDT_12h.csv": {
+      "bars": 1466,
+      "first_ts": 1729036800000,
+      "granularity": "12h",
+      "last_ts": 1792324800000,
+      "sha256": "84cda5ab174ee1aeeb70a116295af3aba628c1e49acf3ca36c1222c6f29a2dc8",
+      "size_bytes": 71739,
+      "symbol": "COMPUSDT"
+    },
+    "COMPUSDT_1d.csv": {
+      "bars": 733,
+      "first_ts": 1729036800000,
+      "granularity": "1d",
+      "last_ts": 1792281600000,
+      "sha256": "051429963845c398ca7129b34199e303631b1c8edf805a319de8cc3226e25494",
+      "size_bytes": 35987,
+      "symbol": "COMPUSDT"
+    },
+    "binance_fapi_funding/COMPUSDT.csv": {
+      "path": "data/raw/funding/COMPUSDT.csv",
+      "sha256": "a7479e41549e91557c08ef4f916a468f41de1cbf0dc856af6aaa2f4c3b554e93",
+      "rows": 2212,
+      "ts_first": 1728864000000,
+      "ts_last": 1792540800000,
+      "source": "binance_fapi/fapi/v1/fundingRate"
+    },
+    "SNXUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "2ec6e645731ff90d7bfcdf349c7b85a8191041e8517e622fc15b5a027e937bb5",
+      "size_bytes": 1673374,
+      "symbol": "SNXUSDT"
+    },
+    "SNXUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "3d98e1b84d235765c6335d6ed5a0b6e17976d3f12c8adf58e1a566474dce338c",
+      "size_bytes": 867879,
+      "symbol": "SNXUSDT"
+    },
+    "SNXUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "3c9551d020dca424252268dceda756e0fe64097e74abe4862b81b35f60145ca6",
+      "size_bytes": 431989,
+      "symbol": "SNXUSDT"
+    },
+    "SNXUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "7ab211bc3d5c19e7c078c46ccbe0a963ef0602626a1b1808fa71df252c5a456b",
+      "size_bytes": 216363,
+      "symbol": "SNXUSDT"
+    },
+    "SNXUSDT_12h.csv": {
+      "bars": 1466,
+      "first_ts": 1729036800000,
+      "granularity": "12h",
+      "last_ts": 1792324800000,
+      "sha256": "701d1157f196e6fac4f96fcc5845651f4867061eaa4f9ad3d8269a0aaa38b655",
+      "size_bytes": 72412,
+      "symbol": "SNXUSDT"
+    },
+    "SNXUSDT_1d.csv": {
+      "bars": 733,
+      "first_ts": 1729036800000,
+      "granularity": "1d",
+      "last_ts": 1792281600000,
+      "sha256": "d457f2239d0a3f2e68bdcfbb62e11fbff6477bf7ea608cc239fb9c8c78de2392",
+      "size_bytes": 36402,
+      "symbol": "SNXUSDT"
+    },
+    "binance_fapi_funding/SNXUSDT.csv": {
+      "path": "data/raw/funding/SNXUSDT.csv",
+      "sha256": "563632aad4d980da03c7fc949aca857f778ebbab4a251167e4e7f660bd8137b6",
+      "rows": 2212,
+      "ts_first": 1728864000000,
+      "ts_last": 1792540800000,
+      "source": "binance_fapi/fapi/v1/fundingRate"
+    },
+    "STXUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "f93337475e69df6b141a445a2f17e6e2673b2b5fd20f75a68a76271c3c3c56e4",
+      "size_bytes": 1786571,
+      "symbol": "STXUSDT"
+    },
+    "STXUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "653e5db5a5cc94ec32d44351d9c83a5be69c54af988eebec52d572c8067a80be",
+      "size_bytes": 898888,
+      "symbol": "STXUSDT"
+    },
+    "STXUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "bc317975ba9a8665c4fd3e16d37fce6710f9313fefc078da8eb84e83d84a398f",
+      "size_bytes": 453031,
+      "symbol": "STXUSDT"
+    },
+    "STXUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "52d461bf550af25135becc5a207ac290cdf2f09f4a4fcd09f21138395186adcb",
+      "size_bytes": 227443,
+      "symbol": "STXUSDT"
+    },
+    "STXUSDT_12h.csv": {
+      "bars": 1466,
+      "first_ts": 1729036800000,
+      "granularity": "12h",
+      "last_ts": 1792324800000,
+      "sha256": "ff43b9243e2f7e4c876fb5769d1bdc34b854d20d8eacbe15b2c42909faf26686",
+      "size_bytes": 76676,
+      "symbol": "STXUSDT"
+    },
+    "STXUSDT_1d.csv": {
+      "bars": 733,
+      "first_ts": 1729036800000,
+      "granularity": "1d",
+      "last_ts": 1792281600000,
+      "sha256": "1cf16d04fd695a0687ffb0da56dc9e55619e429de9f8152afc0a2d52a3dfb31c",
+      "size_bytes": 38581,
+      "symbol": "STXUSDT"
+    },
+    "binance_fapi_funding/STXUSDT.csv": {
+      "path": "data/raw/funding/STXUSDT.csv",
+      "sha256": "04dc775c5af7f337efc03fca44a4ea14825596c5413153503a15ae1bbe15c013",
+      "rows": 2212,
+      "ts_first": 1728864000000,
+      "ts_last": 1792540800000,
+      "source": "binance_fapi/fapi/v1/fundingRate"
+    },
+    "DYDXUSDT_30m.csv": {
+      "bars": 35199,
+      "first_ts": 1729022400000,
+      "granularity": "30m",
+      "last_ts": 1792378800000,
+      "sha256": "cef58bbd5cb662a2f0f908b8b16e754afddf0482f482ffaa79ec6e841b8935f3",
+      "size_bytes": 1693144,
+      "symbol": "DYDXUSDT"
+    },
+    "DYDXUSDT_1h.csv": {
+      "bars": 17600,
+      "first_ts": 1729022400000,
+      "granularity": "1h",
+      "last_ts": 1792378800000,
+      "sha256": "cd5f176a42d2ab1def51c003d8e6feaca03e267487f82ed12b8e38218d244f44",
+      "size_bytes": 878214,
+      "symbol": "DYDXUSDT"
+    },
+    "DYDXUSDT_2h.csv": {
+      "bars": 8800,
+      "first_ts": 1729022400000,
+      "granularity": "2h",
+      "last_ts": 1792375200000,
+      "sha256": "db0e793d78572e375c976955a27463560c24f2cd81dcf61bc0dab3733e619d93",
+      "size_bytes": 437132,
+      "symbol": "DYDXUSDT"
+    },
+    "DYDXUSDT_4h.csv": {
+      "bars": 4400,
+      "first_ts": 1729022400000,
+      "granularity": "4h",
+      "last_ts": 1792368000000,
+      "sha256": "fd495203f9b271e4ca63e620c6d5090e2e7d4a4f34add7709dcba7f0c126277d",
+      "size_bytes": 218568,
+      "symbol": "DYDXUSDT"
+    },
+    "DYDXUSDT_12h.csv": {
+      "bars": 1466,
+      "first_ts": 1729036800000,
+      "granularity": "12h",
+      "last_ts": 1792324800000,
+      "sha256": "37769bc6b26169e4d6536ca8782f993d21ae4341600fb364594b002ea0b76bf7",
+      "size_bytes": 73251,
+      "symbol": "DYDXUSDT"
+    },
+    "DYDXUSDT_1d.csv": {
+      "bars": 733,
+      "first_ts": 1729036800000,
+      "granularity": "1d",
+      "last_ts": 1792281600000,
+      "sha256": "e96d98634cd007be57e676527f59dcdc8c854700abd7d28b3636b1927f2861b9",
+      "size_bytes": 36695,
+      "symbol": "DYDXUSDT"
+    },
+    "binance_fapi_funding/DYDXUSDT.csv": {
+      "path": "data/raw/funding/DYDXUSDT.csv",
+      "sha256": "1f12b5822349725a864c75729926be7794c9c566b5700194f1a45380ebcdfda1",
+      "rows": 2212,
+      "ts_first": 1728864000000,
+      "ts_last": 1792540800000,
+      "source": "binance_fapi/fapi/v1/fundingRate"
     }
   }
 }

@@ -995,6 +995,107 @@ def test_fast_tf_reentry_sizing_and_soft_headroom_scaling():
     assert 0.25 <= d_4h[0].meta["size_mult"] < 1.0
 
 
+def test_wide_box_short_geometric_target_and_bankruptcy_rr_guard():
+    """验证宽幅箱体做空目标对数(几何)正数保护(复现 UAIUSDT 案例,零魔法阈值、无人工硬拦截):
+    当 box_hi=0.1887063, box_lo=0.07303 做空突破时,算术减法得出负数目标(-0.15832 <= 0),
+    自动采用对数等幅投影 0.07303*(0.07303/0.1887063)^2 = 0.010938 > 0,确保目标恒正。
+    """
+    z_uai = Zone(
+        lo=0.07303, hi=0.090828, role=ZoneRole.SUPPORT, state=ZoneState.BROKEN,
+        touches=5, rejects=2, origin_known=118, last_change_known=158,
+        box_opposite=0.1887063, box_quality=0.65, box_width_atr=4.5, box_rotations=4,
+        source_kind="BOX_EDGE", box_id=4,
+    )
+    router = MarketRouter(
+        RouterParams(
+            whitelist=WHITELIST_BALANCE,
+            accept_use_struct_stop=True,
+            accept_target_box_mult=2.0,
+            balance_auction_alignment=True,
+        )
+    )
+    view_down = StructureView(regime=Regime.TREND_DOWN, zones=(z_uai,), atr=0.02445)
+
+    ev_timely = MarketEvent(
+        id=BREAKOUT_ACCEPTED, direction=-1, ts=1000, known_index=157,
+        attrs={
+            "zone": z_uai, "ref": 0.07303, "invalid": 0.093276674,
+            "sub_kind": "A2_OVEREXTENDED", "ext_atr": 0.85,
+            "reset_step_ms": 4 * 3600 * 1000,
+        },
+    )
+    d_ok = router.on_bar(
+        "UAIUSDT", (1000, 0.07270, 0.07386, 0.06381, 0.06639, 1000.0),
+        157, view_down, 0.02445, [ev_timely], position_open=False, entry_resting=False,
+    )
+    assert len(d_ok) == 1
+    expected_geo = 0.07303 * ((0.07303 / 0.1887063) ** 2.0)
+    assert d_ok[0].hyp.target_1 > 0.0
+    assert d_ok[0].hyp.target_1 == pytest.approx(expected_geo)
+    assert d_ok[0].hyp.r_mult > 2.0
+
+
+def test_mic_tracker_retains_candidate_across_pause_and_gap_bar():
+    """验证细周期 MicTracker 在 count >= req_count 时不因单根停顿/跳空假阳线误删突破候选:
+    1) 第 3 根箱外 K 线若暂为小幅停顿(close_pos < 0.50 但仍守在箱外 cd.lo - bm 之下),保留候选至第 4 根;
+    2) 第 4 根恢复向下推进(含向下跳空低开 c < prev_c 且 close_pos >= 0.50)时立即确认 BREAKOUT_ACCEPTED。
+    """
+    from types import SimpleNamespace
+    from market_operator.trigger import MicTracker
+
+    p = Params(use_balance_detector=True, n_a=3, n_f=3, k_bm=0.1, k_rj=0.3)
+    z = Zone(
+        lo=0.07303, hi=0.09083, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        box_opposite=0.18871, box_quality=0.65, box_width_atr=4.5, box_rotations=4,
+    )
+    s_mock = SimpleNamespace(
+        atr=lambda: 0.025, regime=lambda: Regime.TREND_DOWN, pivots=(),
+        last_low_pivot=None, last_high_pivot=None,
+        _zones=SimpleNamespace(zones=[z]),
+    )
+    det_mock = SimpleNamespace(structure=s_mock, _episodes=[], _trend_candidates=[])
+    tracker = MicTracker(p, scale=2, trigger_tf_seconds=7200, obs_tf_seconds=14400)
+    tracker.sync(0, det_mock, lambda i: 0, lambda i: 1)
+    tracker._prev_trig_close = 0.07404
+
+    # Bar 1: 跌破 z.lo - bm (0.07303 - 0.0025 = 0.07053), count = 1
+    assert tracker.on_trigger_bar(0, 1000, 0.07270, 0.07386, 0.06381, 0.06672) == []
+    assert len(tracker._candidates) == 1 and tracker._candidates[0].count == 1
+
+    # Bar 2: 继续驻留箱外, count = 2
+    assert tracker.on_trigger_bar(1, 2000, 0.06662, 0.06685, 0.06274, 0.06420) == []
+    assert len(tracker._candidates) == 1 and tracker._candidates[0].count == 2
+
+    # Bar 3: 仍在箱外(0.06350 < 0.07053), 但当根收于上半部停顿(close_pos = 0.30 < 0.50) -> 候选保留(count=3), 不误删!
+    assert tracker.on_trigger_bar(2, 3000, 0.06400, 0.06420, 0.06180, 0.06350) == []
+    assert len(tracker._candidates) == 1 and tracker._candidates[0].count == 3
+
+    # Bar 4: 向下跳空低开(o=0.06123, h=0.06434, l=0.05919, c=0.06150 < prev_c 0.06350, close_pos=0.55 >= 0.50) -> 立即确认!
+    evs = tracker.on_trigger_bar(3, 4000, 0.06123, 0.06434, 0.05919, 0.06150)
+    assert len(evs) == 1
+    assert evs[0].id == BREAKOUT_ACCEPTED and evs[0].direction == -1
+    assert tracker._candidates == []
+
+    # 验证 check_impulse_breakout 强动能即时放行接口
+    p_imp = Params(use_balance_detector=True, n_a=3, n_f=3, k_bm=0.1, k_rj=0.3, fast_accept_atr=0.80)
+    tracker_imp = MicTracker(p_imp, scale=2, trigger_tf_seconds=7200, obs_tf_seconds=14400)
+    z_imp = Zone(
+        lo=0.07303, hi=0.09083, role=ZoneRole.SUPPORT, state=ZoneState.ACTIVE,
+        box_opposite=0.18871, box_quality=0.65, box_width_atr=4.5, box_rotations=4,
+    )
+    s_imp = SimpleNamespace(
+        atr=lambda: 0.025, regime=lambda: Regime.TREND_DOWN, pivots=(),
+        last_low_pivot=None, last_high_pivot=None,
+        _zones=SimpleNamespace(zones=[z_imp]),
+    )
+    tracker_imp.sync(0, SimpleNamespace(structure=s_imp, _episodes=[], _trend_candidates=[]), lambda i: 0, lambda i: 1)
+    tracker_imp._prev_trig_close = 0.07404
+    evs_imp = tracker_imp.on_trigger_bar(0, 1000, 0.07270, 0.07350, 0.04900, 0.05000)
+    assert len(evs_imp) == 1
+    assert evs_imp[0].id == BREAKOUT_ACCEPTED and evs_imp[0].attrs.get("sub_kind") == "A3_FAST"
+
+
+
 
 
 

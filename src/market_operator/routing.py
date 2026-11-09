@@ -812,7 +812,18 @@ class MarketRouter:
                         and mid_ok
                     )
                 else:
-                    confirmed = (not climax_blocked) and (brk3 or (rmax4 and out1)) and mid_ok
+                    htf_rej_imp = (
+                        cid in (BREAKOUT_FAILED, LEVEL_REJECTED)
+                        and sub_k in ("R1_WICK", "R3_TRAP")
+                        and dir_bar
+                        and out1
+                        and body_exp
+                    )
+                    confirmed = (
+                        not climax_blocked
+                        and (brk3 or (rmax4 and out1) or htf_rej_imp)
+                        and mid_ok
+                    )
                 if not confirmed:
                     self._bump("restraint_struct_impulse_reject")
                     return None
@@ -933,9 +944,15 @@ class MarketRouter:
                 ref_edge = float(ev.attrs.get("ref")
                                  if ev.attrs.get("ref") is not None
                                  else (zone.hi if ev.direction > 0 else zone.lo))
-                box_span = abs(ref_edge - float(opp))
+                opp_f = float(opp)
+                mult = float(p.accept_target_box_mult)
+                box_span = abs(ref_edge - opp_f)
                 if box_span > 0.0:
-                    cand_t = ref_edge + ev.direction * float(p.accept_target_box_mult) * box_span
+                    cand_t = ref_edge + ev.direction * mult * box_span
+                    if ev.direction < 0 and cand_t <= 0.0 and ref_edge > 0.0 and opp_f > ref_edge:
+                        # 物理非负下界:当宽幅箱体做空导致算术等幅减法跌穿0(<=0)时,
+                        # 采用对数(几何)等幅投影 ref_edge * (ref_edge / opp_f)^mult,确保目标价恒为正数且零魔法阈值
+                        cand_t = ref_edge * ((ref_edge / opp_f) ** mult)
                     if ev.direction * (cand_t - close) > 0.0:
                         target_1 = cand_t
                         r_mult = ev.direction * (cand_t - close) / dist if dist > 0 else None

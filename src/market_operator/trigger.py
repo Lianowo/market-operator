@@ -322,6 +322,34 @@ class MicTracker:
                     )
                 )
 
+    def check_impulse_breakout(
+        self,
+        c: float,
+        ref: float,
+        atr: float,
+        direction: int,
+        *,
+        cd: Optional[_MicCandidate] = None,
+        o: Optional[float] = None,
+        h: Optional[float] = None,
+        l: Optional[float] = None,
+        regime: Optional[Regime] = None,
+    ) -> tuple[bool, int]:
+        """强动能破位检测(Impulse Trigger):顺势强动能条件下绕过常规 n_a 计数确认实现即时触发。"""
+        if atr <= 0.0 or direction not in (-1, 1):
+            return False, 0
+        if cd is not None and o is not None and h is not None and l is not None:
+            reg = regime if regime is not None else (self._ctx.regime if self._ctx is not None else Regime.TRANSITION)
+            return fast_accept_ok(
+                self.p, cd, direction=direction, o=o, h=h, l=l, c=c,
+                atr=atr, regime=reg,
+            )
+        thresh = float(self.p.fast_accept_atr) if self.p.fast_accept_atr is not None else 0.85
+        ext_atr = (c - ref) * direction / atr
+        if self.p.accept_max_ext_atr is not None and ext_atr > float(self.p.accept_max_ext_atr):
+            return False, 0
+        return (ext_atr >= thresh, 1 if ext_atr >= thresh else 0)
+
     def on_trigger_bar(
         self, a: int, ts: object, o: float, h: float, l: float, c: float,
         v: float = 0.0,
@@ -409,10 +437,15 @@ class MicTracker:
                         else (ctx.regime is not Regime.TREND_UP)
                     )
                     close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
-                    progressing = (
-                        (c >= cd.start_close and c > o and close_pos >= 0.50)
+                    dir_move = (
+                        (c > o or (prev_c is not None and c > prev_c))
                         if direction > 0
-                        else (c <= cd.start_close and c < o and close_pos >= 0.50)
+                        else (c < o or (prev_c is not None and c < prev_c))
+                    )
+                    progressing = (
+                        (c >= cd.start_close and dir_move and close_pos >= 0.50)
+                        if direction > 0
+                        else (c <= cd.start_close and dir_move and close_pos >= 0.50)
                     )
                     ext_ok = (
                         p.accept_max_ext_atr is None
@@ -435,6 +468,12 @@ class MicTracker:
                                 },
                             )
                         )
+                    elif (
+                        ext_ok
+                        and cd.count < req_count + 2
+                        and getattr(cd.zone, "source_kind", "BOX_EDGE") == "BOX_EDGE"
+                    ):
+                        kept_cd.append(cd)
                 else:
                     events.append(
                         self._mk(
@@ -448,9 +487,10 @@ class MicTracker:
                         )
                     )
                 continue
-            fast, fast_bars = fast_accept_ok(
-                p, cd, direction=direction, o=o, h=h, l=l, c=c,
-                atr=ctx.atr, regime=ctx.regime)
+            fast, fast_bars = self.check_impulse_breakout(
+                c, ref, ctx.atr, direction,
+                cd=cd, o=o, h=h, l=l, regime=ctx.regime,
+            )
             if fast:
                 ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
                 events.append(

@@ -1329,6 +1329,16 @@ class LiveRunner:
                 self.tg.send_alert(f"{symbol} 2H 序列缺口 {a[0]}→{b[0]},"
                                    f"暂不交易")
                 return None
+        if (
+            trig_bars is None
+            and trig_s < base_s
+            and self.mode == "live"
+            and hasattr(self.client, "history_candles")
+        ):
+            sub_want = max(520, (min_cog_bars + 5) * 8)
+            cand_30m = self._fetch_trigger_bars(symbol, sub_want, gran="30m")
+            if self._base_step_seconds(cand_30m, gran="30m") == 1800 and len(cand_30m) >= min_cog_bars * 4:
+                trig_bars = cand_30m
         use_trig = trig_bars if trig_bars is not None else bars2h
         if trig_bars is not None:
             trig_base_s = self._base_step_seconds(trig_bars, gran="30m")
@@ -1424,6 +1434,15 @@ class LiveRunner:
             tf for (s2, tf) in self.extra_campaigns if s2 == symbol
         }
         min_cog = self._min_cog_bars_for_tf()
+        trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
+        sub_30m = next(
+            (
+                sc.trig_bars
+                for (s2, _tf), sc in self.extra_campaigns.items()
+                if s2 == symbol and self._base_step_seconds(sc.trig_bars) == 1800
+            ),
+            None,
+        )
         for tf in tf_list:
             if tf in active_tfs:
                 continue
@@ -1431,7 +1450,14 @@ class LiveRunner:
             base_s = self._base_step_seconds(bars2h)
             scale_2h = max(1, obs_s // base_s)
             if len(bars2h) >= (min_cog + 1) * scale_2h:
-                cs_new = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
+                use_sub = (
+                    sub_30m
+                    if (sub_30m is not None and int(trig_map.get(tf) or 7200) < 7200)
+                    else None
+                )
+                cs_new = self._build_campaign(symbol, tf, bars2h=bars2h, trig_bars=use_sub, quiet_if_short=True)
+                if cs_new is None and use_sub is not None:
+                    cs_new = self._build_campaign(symbol, tf, bars2h=bars2h, quiet_if_short=True)
                 if cs_new is not None:
                     self.extra_campaigns[(symbol, tf)] = cs_new
 
@@ -1729,21 +1755,26 @@ class LiveRunner:
         base_ms = self._base_step_seconds() * 1000
         sub_ms = 1800 * 1000
         sub_30m_by_sym: dict[str, list[CampaignState]] = {}
+        base_2h_by_sym: dict[str, list[CampaignState]] = {}
         due_30m: dict[str, int] = {}
         due_base: dict[str, int] = {}
         for sym, cs in sorted(self.campaigns.items()):
-            s_list = [
+            all_cs = [cs] + [
                 sub_cs for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items())
-                if s2 == sym and self._base_step_seconds(sub_cs.trig_bars) == 1800
+                if s2 == sym
             ]
+            s_list = [c for c in all_cs if self._base_step_seconds(c.trig_bars) == 1800]
+            b_list = [c for c in all_cs if self._base_step_seconds(c.trig_bars) == base_ms // 1000]
             if s_list:
                 sub_30m_by_sym[sym] = s_list
                 sub_last = min(sc.trig_bars[-1][0] for sc in s_list if sc.trig_bars)
                 if sub_last > 0 and now_ms >= sub_last + 2 * sub_ms:
                     due_30m[sym] = sub_last + 1
-            last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
-            if last_ts == 0 or now_ms >= last_ts + 2 * base_ms:
-                due_base[sym] = last_ts + 1
+            if b_list:
+                base_2h_by_sym[sym] = b_list
+                last_ts = min(bc.trig_bars[-1][0] for bc in b_list if bc.trig_bars)
+                if last_ts == 0 or now_ms >= last_ts + 2 * base_ms:
+                    due_base[sym] = last_ts + 1
 
         pref_30m: dict[str, list] = {}
         pref_base: dict[str, list] = {}
@@ -1784,23 +1815,21 @@ class LiveRunner:
                             self._advance(sc, now_ms, new_bars=sub_new, run_paper_fills=False)
                         self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran="30m")
                 # 2) 推进 2H 基础帧与同粒度战役
-                last_ts = cs.trig_bars[-1][0] if cs.trig_bars else 0
-                if last_ts > 0 and now_ms < last_ts + 2 * base_ms:
+                b_list = base_2h_by_sym.get(sym) or []
+                if sym not in due_base or not b_list:
                     continue
                 new_bars = (
                     pref_base[sym]
                     if sym in pref_base
                     else self.client.history_candles(
-                        sym, self.cog_cfg["granularity"], start_ms=last_ts + 1, limit=100)
+                        sym, self.cog_cfg["granularity"], start_ms=due_base[sym], limit=100)
                 )
                 if not new_bars:
                     continue
-                self._advance(cs, now_ms, new_bars=new_bars, run_paper_fills=True)
-                for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items()):
-                    if s2 == sym and self._base_step_seconds(sub_cs.trig_bars) == base_ms // 1000:
-                        self._advance(sub_cs, now_ms, new_bars=new_bars, run_paper_fills=False)
-                self._try_unlock_higher_tfs(sym, cs.trig_bars)
-                self._save_cached_bars(sym, cs.trig_bars)
+                for idx_b, bc in enumerate(b_list):
+                    self._advance(bc, now_ms, new_bars=new_bars, run_paper_fills=(idx_b == 0))
+                self._try_unlock_higher_tfs(sym, b_list[0].trig_bars)
+                self._save_cached_bars(sym, b_list[0].trig_bars)
             except BitgetError as e:
                 self._api_note(e)
                 self.tg.send_alert(f"{sym} bar 推进异常:{str(e)[:120]}")
@@ -2029,9 +2058,17 @@ class LiveRunner:
             last = bar[0]
             if cs.trig_bars and bar[0] - cs.trig_bars[-1][0] != base_ms:
                 self.tg.send_alert(
-                    f"{cs.symbol}({cs.tf_label}) 2H 序列缺口 {cs.trig_bars[-1][0]} → "
+                    f"{cs.symbol}({cs.tf_label}) 序列缺口 {cs.trig_bars[-1][0]} → "
                     f"{bar[0]};认知帧重装配(持仓事实保留)")
-                fresh = self._build_campaign(cs.symbol, cs.tf_label)
+                sub_trig = None
+                if base_ms == 1800 * 1000 and self.mode == "live" and hasattr(self.client, "history_candles"):
+                    sub_want = max(520, (self._min_cog_bars_for_tf() + 5) * 8)
+                    cand_30m = self._fetch_trigger_bars(cs.symbol, sub_want, gran="30m")
+                    if self._base_step_seconds(cand_30m, gran="30m") == 1800:
+                        sub_trig = cand_30m
+                fresh = self._build_campaign(cs.symbol, cs.tf_label, trig_bars=sub_trig)
+                if fresh is None and sub_trig is not None:
+                    fresh = self._build_campaign(cs.symbol, cs.tf_label)
                 if fresh is not None:
                     fresh.pm.positions = cs.pm.positions
                     if (cs.symbol, cs.tf_label) in self.extra_campaigns:
