@@ -781,8 +781,6 @@ class MarketRouter:
                 _, bo, bh, bl, bc = eval_bars[-1]
                 b1, b2, b3, b4 = eval_bars[-2], eval_bars[-3], eval_bars[-4], eval_bars[-5]
                 d = int(ev.direction)
-                rng_cur = max(bh - bl, 1e-12)
-                close_pos = ((bh - bc) / rng_cur) if d < 0 else ((bc - bl) / rng_cur)
                 mid_ok = (bc < 0.5 * (bh + bl)) if d < 0 else (bc > 0.5 * (bh + bl))
                 dir_bar = (bc < bo) if d < 0 else (bc > bo)
                 eng_body = (bc < min(b1[1], b1[4])) if d < 0 else (bc > max(b1[1], b1[4]))
@@ -790,21 +788,26 @@ class MarketRouter:
                 brk3 = (bc < min(b1[3], b2[3], b3[3])) if d < 0 else (bc > max(b1[2], b2[2], b3[2]))
                 out1 = ((bh - bl) > (b1[2] - b1[3])) and eng_body
                 rmax4 = (bh - bl) > max(b1[2] - b1[3], b2[2] - b2[3], b3[2] - b3[3], b4[2] - b4[3])
-                # 拦截瀑布/暴拉加速腿首根微弱喘息接刀:
-                # 若前一根 b1 是反向强趋势大实体(> 1.25 * b2..b4 均幅),本根必须至少收复 b1 实体中点
-                prev_avg_rng = max((b2[2] - b2[3] + b3[2] - b3[3] + b4[2] - b4[3]) / 3.0, 1e-12)
+                # 零参数纯几何高潮腿拦截(Climax Guard):
+                # 若前一根 b1 的逆向实体长度严格大于前 3 根(b2..b4)任意一根的总波幅,
+                # 本根必须至少收复 b1 实体中点 b1_mid,严禁在瀑布/暴拉加速腿首根微弱停顿接刀。
                 b1_adv_body = (b1[4] - b1[1]) if d < 0 else (b1[1] - b1[4])
                 b1_mid = 0.5 * (b1[1] + b1[4])
                 climax_blocked = (
-                    b1_adv_body > 1.25 * prev_avg_rng
+                    b1_adv_body > max(b2[2] - b2[3], b3[2] - b3[3], b4[2] - b4[3])
                     and ((bc > b1_mid) if d < 0 else (bc < b1_mid))
                 )
                 if is_mic and cid in (BREAKOUT_FAILED, LEVEL_REJECTED):
+                    # 零参数纯 K 线相对几何扫损反转(Sweep Reversal):
+                    # 当根同向实体且收盘完全吞没前一根实体(dir_bar and eng_body),
+                    # 且收盘越过当根与前根合并区间中点 merged_mid 及前两根 b2 中点 b2_mid。
+                    merged_mid = 0.5 * (max(bh, b1[2]) + min(bl, b1[3]))
+                    b2_mid = 0.5 * (b2[2] + b2[3])
                     sweep_rev = (
                         sub_k in ("R1_WICK", "R3_TRAP")
                         and dir_bar
-                        and close_pos >= 0.60
                         and eng_body
+                        and ((bc < merged_mid and bc < b2_mid) if d < 0 else (bc > merged_mid and bc > b2_mid))
                     )
                     confirmed = (
                         not climax_blocked
