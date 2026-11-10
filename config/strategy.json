@@ -84,11 +84,11 @@
   "small_account_compounding": {
     "equity0": 104.0,
     "leverage_cap": 20.0,
-    "portfolio_cap_frac": 0.50,
+    "portfolio_cap_frac": 0.55,
     "tf_cap_by_tf": {
-      "2h": 0.15,
-      "4h": 0.15,
-      "1d": 0.15
+      "2h": 0.20,
+      "4h": 0.20,
+      "1d": 0.20
     },
     "dynamic_risk_tiers": [
       [10000.0, 0.05],

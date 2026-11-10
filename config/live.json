@@ -28,11 +28,11 @@
       [1000000000.0, 0.02]
     ],
     "leverage_cap": 20,
-    "portfolio_cap_frac": 0.5,
+    "portfolio_cap_frac": 0.55,
     "tf_cap_by_tf": {
-      "2h": 0.15,
-      "4h": 0.15,
-      "1d": 0.15
+      "2h": 0.20,
+      "4h": 0.20,
+      "1d": 0.20
     },
     "max_daily_loss_frac": 0.1,
     "edge_size_by_event_direction": {},
@@ -90,7 +90,7 @@
   },
   "universe": {
     "enabled": true,
-    "min_usdt_volume_24h": 2000000.0,
+    "min_usdt_volume_24h": 5000000.0,
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
