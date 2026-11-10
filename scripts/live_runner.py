@@ -3148,6 +3148,30 @@ class LiveRunner:
             except Exception:
                 watch_details = {"watch_price": entry_ref, "max_wait_hours": wait_h}
         # ---- 信号广播(公开频道):先发事实,再记账 ----
+        sig_size_mult = float(d.meta.get("size_mult", 1.0) or 1.0)
+        sig_rf = eff_rf * sig_size_mult * edge_mult
+        sig_stop_dist = abs(entry_ref - invalid) / entry_ref if entry_ref > 0.0 else 0.0
+        sig_notional = (
+            (qty * entry_ref)
+            if (block is None and qty > 0.0)
+            else ((sig_rf * capital / sig_stop_dist) if sig_stop_dist > 0.0 else 0.0)
+        )
+        sig_cand_risk = (
+            candidate
+            if (block is None and qty > 0.0)
+            else (sig_rf * capital)
+        )
+        planned_lev = self._plan_trade_leverage(
+            sym, sig_notional, equity, capital, sig_cand_risk
+        )
+        # 结合止损幅度限制安全逐仓杠杆(止损距离不超过保证金的 75%)
+        if sig_stop_dist > 0.0:
+            planned_lev = max(1, min(planned_lev, int(max(1, 0.75 / sig_stop_dist))))
+        sig_margin_pct = (
+            (sig_notional / (equity * float(planned_lev))) * 100.0
+            if (equity > 0.0 and planned_lev > 0 and sig_notional > 0.0)
+            else None
+        )
         self._notify_signal(
             (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
             size_note="降档触发" if mic else "本周期触发",
@@ -3163,7 +3187,11 @@ class LiveRunner:
             decision_ts=confirm_ts, watch_details=watch_details,
             price_context={**d.meta, "box_start_ts": box_start_ts,
                            "snapshot_price": snapshot_px,
-                           "snapshot_ts": snapshot_ts, "snapshot_source": "lastPr"})
+                           "snapshot_ts": snapshot_ts, "snapshot_source": "lastPr",
+                           "suggested_leverage": planned_lev,
+                           "suggested_margin_pct": sig_margin_pct,
+                           "suggested_risk_pct": round(sig_rf * 100.0, 2),
+                           "max_allowed_leverage": self._max_allowed_leverage(sym)})
         self._journal("signal_structure", {
             "symbol": sym, "tf": cs.tf_label, "event": hyp.event_id,
             "confirm_ts": confirm_ts, "entry_ref": entry_ref,
@@ -3176,9 +3204,6 @@ class LiveRunner:
             self._note_block(sym, cs, hyp, block, qty=qty, ref=entry_ref)
             return
         self.counters["signals"] += 1
-        planned_lev = self._plan_trade_leverage(
-            sym, qty * entry_ref, equity, capital, candidate
-        )
         intent = {"oid": oid, "symbol": sym, "tf_label": cs.tf_label,
                   "role": "entry", "kind": d.kind, "direction": hyp.direction,
                   "qty": qty, "leverage": planned_lev,

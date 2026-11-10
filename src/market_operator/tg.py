@@ -132,6 +132,49 @@ def rr_multiple(direction: Optional[int], entry: Optional[float],
     return d * (tg - e) / risk
 
 
+def suggest_position_and_leverage(
+    entry: Optional[float],
+    stop: Optional[float],
+    *,
+    risk_pct: float = 5.0,
+    max_leverage: int = 20,
+    planned_leverage: Optional[int] = None,
+    margin_pct: Optional[float] = None,
+) -> Optional[tuple[float, int, float]]:
+    """根据入场价、止损价与单笔风险占比计算阅读者友好的 (建议保证金仓位占比%, 建议杠杆x, 单笔止损风险%)。
+
+    返回 ``(margin_pct, leverage_x, risk_pct)``;若入场/止损价无效则返回 ``None``。
+    """
+    try:
+        e, s = float(entry), float(stop)
+        r_pct = float(risk_pct)
+        max_lev = max(1, int(max_leverage))
+    except (TypeError, ValueError):
+        return None
+    if e <= 0.0 or s <= 0.0 or abs(e - s) <= 0.0 or r_pct <= 0.0:
+        return None
+    stop_dist_frac = abs(e - s) / e
+    notional_frac = (r_pct / 100.0) / stop_dist_frac
+    # 保证金预算:按单笔风险占组合总风险容量(50%)的份额分配 80% 可用保证金(限制在 5%~25% 区间),
+    # 同时确保逐仓强平距离留有充足安全垫(止损幅度不超过保证金的 75%,即 lev <= 0.75 / stop_dist_frac)
+    safe_iso_lev = max(1, int(0.75 / stop_dist_frac))
+    eff_cap_lev = max(1, min(max_lev, safe_iso_lev))
+    if planned_leverage is not None and int(planned_leverage) >= 1:
+        lev = max(1, min(eff_cap_lev, int(planned_leverage)))
+    else:
+        planned_margin_frac = min(0.25, max(0.05, ((r_pct / 100.0) / 0.50) * 0.80))
+        req_lev = int(math.ceil(notional_frac / planned_margin_frac))
+        lev = max(1, min(eff_cap_lev, req_lev))
+    if margin_pct is not None and float(margin_pct) > 0.0:
+        m_pct = min(100.0, float(margin_pct))
+    else:
+        capped_notional_frac = min(notional_frac, float(lev) * 0.25)
+        m_pct = (capped_notional_frac / float(lev)) * 100.0
+        r_pct = capped_notional_frac * stop_dist_frac * 100.0
+    return (round(m_pct, 1), int(lev), round(r_pct, 2))
+
+
+
 def render_bw_kline_png(
     bars: Sequence[tuple],
     *,
@@ -810,8 +853,23 @@ class TelegramNotifier:
         if target_1 is not None:
             rr_txt = f" (R:R {rr:.2f})" if rr is not None else ""
             lines.append(f"🏁 目标参考: {float(target_1):.8g}{rr_txt}")
+        ctx = price_context or {}
+        sz_mult = float(ctx.get("size_mult", 1.0) or 1.0)
+        default_risk_pct = float(ctx.get("suggested_risk_pct") or (2.5 if sz_mult <= 0.5 else 5.0))
+        max_lev_ctx = int(ctx.get("max_allowed_leverage") or 20)
+        sug = suggest_position_and_leverage(
+            ref_price,
+            invalid,
+            risk_pct=default_risk_pct,
+            max_leverage=max_lev_ctx,
+            planned_leverage=ctx.get("suggested_leverage"),
+            margin_pct=ctx.get("suggested_margin_pct"),
+        )
+        if sug is not None:
+            m_pct, lev_x, r_pct = sug
+            lines.append(f"📊 建议仓位: {m_pct:.1f}% (单笔风险 {r_pct:g}%)")
+            lines.append(f"⚖️ 建议杠杆: {lev_x}x")
         if price_context is not None:
-            ctx = price_context
             if box_start_ts is None and ctx.get("box_start_ts") is not None:
                 try:
                     box_start_ts = int(ctx["box_start_ts"])
