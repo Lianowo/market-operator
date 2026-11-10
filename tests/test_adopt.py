@@ -176,7 +176,7 @@ def _campaign_stub(*, atr=2.0):
                                 hi=113.0)
     structure = types.SimpleNamespace(atr=lambda: atr, zones=[sup, res])
     opened: list[tuple] = []
-    pm = types.SimpleNamespace(open=lambda *a, **k: opened.append((a, k)))
+    pm = types.SimpleNamespace(open=lambda *a, **k: opened.append((a, k)), positions={})
     return types.SimpleNamespace(tf_label="12h",
                                  detector=types.SimpleNamespace(
                                      structure=structure),

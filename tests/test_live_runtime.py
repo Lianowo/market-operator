@@ -471,6 +471,15 @@ class _FakeClient:
     def place_take_profit(self, symbol, **kw):
         return self.place_stop_loss(symbol, **kw)
 
+    def modify_stop_loss(self, symbol, **kw):
+        return {"orderId": kw["order_id"]}
+
+    def place_partial_take_profit(self, symbol, **kw):
+        return self.place_stop_loss(symbol, **kw)
+
+    def tpsl_order_history(self, symbol, order_id):
+        return []
+
     def cancel_tpsl_order(self, symbol, order_id):
         self.plan_canceled.append((symbol, str(order_id)))
         return {}
@@ -708,8 +717,12 @@ def test_manage_stops_replace_survives_cancel_failure(tmp_path):
         def cancel_tpsl_order(self, symbol, order_id):
             raise BitgetError("43001 order does not exist")
 
+        def modify_stop_loss(self, symbol, **kw):
+            raise BitgetError("43001 order does not exist")
+
     client = _NoCancel(pending=pending)
     r = _runner(tmp_path, client, _FakeTG())
+    r.price_clock = "bar"  # Legacy cancel/recreate behavior under test.
     r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=101.0)
     r.stops["BTCUSDT"] = {"trigger": 90.0, "qty": 1.0, "order_id": "DEAD"}
 

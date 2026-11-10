@@ -206,5 +206,5 @@ def test_production_protection_clock_configuration():
     path = Path(__file__).resolve().parents[1] / "config" / "live.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["loop"]["poll_seconds"] == 5
-    assert raw["protection"]["price_clock"] == "15m"
+    assert raw["protection"]["price_clock"] == "realtime"
     assert raw["protection"]["max_quote_age_seconds"] == 30

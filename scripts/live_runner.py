@@ -783,12 +783,13 @@ class LiveRunner:
         # Price-protection clock (independent of entry/event clocks):
         #   bar = legacy 2H sub-bar only
         #   15m = closed 15m bars arm the target lock; fresh quotes ratchet
+        #   realtime = native target exit + positive-frac quote-touch arming
         self.price_clock = str((cfg.get("protection") or {})
                                .get("price_clock", "bar")).lower()
-        if self.price_clock not in ("bar", "15m"):
+        if self.price_clock not in ("bar", "15m", "realtime"):
             raise RuntimeError(
                 f"protection.price_clock 非法: {self.price_clock!r}"
-                f"(仅允许 bar|15m)")
+                f"(仅允许 bar|15m|realtime)")
         self._price_seen: dict[str, int] = {}
         self._price_last: dict[str, int] = {}
         self._load_state()
@@ -1767,6 +1768,13 @@ class LiveRunner:
 
     def _step_inner(self, now_ms: int) -> None:
         if self.mode == "live":
+            if self.price_clock == "realtime":
+                # Existing exposure is protected before universe expansion or
+                # historical candle work can block the main loop.
+                self._sync_target_fills(now_ms)
+                self._manage_targets(now_ms)
+                self._poll_position_prices(now_ms)
+                self._manage_stops(now_ms)
             bal = self.client.balance()
             self.equity = float(bal["equity"])
             # 风险资本 = 权益 − 未实现盈亏(即"已落袋"部分);与回放 Broker.risk_capital
@@ -1805,8 +1813,13 @@ class LiveRunner:
             self._settle_exits(now_ms)      # 决策型离场:用权威成交价校正回执
             self._settle_entries(now_ms)    # 开仓:用权威成交均价校正 entry(§6a)
             self._sync_live_fills(now_ms)
+            if self.price_clock == "realtime":
+                self._sync_target_fills(now_ms)
+                self._manage_targets(now_ms)
             self._advance_price_clock(now_ms)
             self._poll_position_prices(now_ms)
+            if self.price_clock == "realtime":
+                self._manage_stops(now_ms)
         base_ms = self._base_step_seconds() * 1000
         sub_ms = 1800 * 1000
         sub_30m_by_sym: dict[str, list[CampaignState]] = {}
@@ -1982,10 +1995,10 @@ class LiveRunner:
     def _poll_position_prices(self, now_ms: int) -> None:
         """Fresh quotes ratchet an existing defense between 15m closes.
 
-        Arming belongs to the 15m bar clock. Quotes only update the peak,
-        tighten an already-armed lock, or exit on a breached defense.
+        Legacy 15m mode arms on closed bars. Realtime mode arms positive-frac
+        touch rules on fresh quotes and leaves the half exit to the exchange.
         """
-        if self.price_clock != "15m" or not self.positions:
+        if self.price_clock not in ("15m", "realtime") or not self.positions:
             return
         if not hasattr(self.client, "tickers"):
             return
@@ -2028,10 +2041,52 @@ class LiveRunner:
                     why="price_protective_stop",
                     route="PRICE_STOP|fresh mark", executor="exchange_stop")
                 continue
-            if pos.get("price_source", "ref") == "ref":
+            if self.price_clock != "realtime" and pos.get("price_source", "ref") == "ref":
                 continue
             old, armed = float(pm_pos.invalid), bool(pm_pos.armed)
             ref = min(last, mark) if d > 0 else max(last, mark)
+            if (self.price_clock == "realtime" and not pm_pos.pending_reduce
+                    and not pm_pos.reduced and pm_pos.target_1 is not None
+                    and cs.pm._resolve_lock_frac(pm_pos) > 0):
+                # Submission failure fallback uses existing touch semantics;
+                # with an exchange target pending this branch is forbidden.
+                atr = float(cs.detector.structure.atr() or 0.0)
+                quote = (observed, last, last, last, last, 0.0)
+                for intent in cs.pm.on_bar(sym, quote, atr, price_only=True,
+                                           skip_trail=True):
+                    self._exec_mgmt(cs, intent, quote)
+                pos["invalid"] = pm_pos.invalid
+                self._touch_campaigns()
+            if self.price_clock == "realtime" and pm_pos.target_1 is not None:
+                frac = cs.pm._resolve_lock_frac(pm_pos)
+                # Positive frac means touch; negative frac still requires its
+                # original bar-close evidence. Never change strategy semantics.
+                if frac > 0 and d * (last - pm_pos.target_1) >= 0:
+                    pm_pos.armed = True
+                    self._touch_campaigns()
+            if (self.price_clock == "realtime" and pm_pos.target_1 is not None
+                    and pm_pos.pending_reduce
+                    and not pm_pos.reduced):
+                # The exchange owns the pending 50% exit. Advancing a defense
+                # must never consume the same partial exit locally a second time.
+                pm_pos._best = (max(pm_pos._best, last) if d > 0
+                                else min(pm_pos._best, last))
+                lock = opp_lock_step(
+                    direction=d, entry=pm_pos.entry, target=pm_pos.target_1,
+                    frac=cs.pm._resolve_lock_frac(pm_pos), peak=pm_pos._best,
+                    high=last, low=last, close=last, ref_px=ref,
+                    armed=pm_pos.armed)
+                if lock.action == "tighten":
+                    pm_pos.invalid = (max(pm_pos.invalid, lock.stop_px) if d > 0
+                                      else min(pm_pos.invalid, lock.stop_px))
+                    pos["invalid"] = pm_pos.invalid
+                    self._touch_campaigns()
+                elif lock.action == "exit":
+                    self._sub_bar_close_out(
+                        cs, pm_pos, pos, observed, ref,
+                        why="price_lock_exhausted", route="PRICE_LOCK|giveback_exhausted",
+                        executor="local_market")
+                continue
             intents = cs.pm.on_price(
                 sym, ts=observed, price=last, ref_price=ref,
                 atr=float(cs.detector.structure.atr() or 0.0))
@@ -3261,13 +3316,15 @@ class LiveRunner:
                         resp = self.client.place_limit_order(
                             sym, side=side, size=qty,
                             price=fitted_entry,
-                            client_oid=oid, trade_side=self.open_trade_side())
+                            client_oid=oid, trade_side=self.open_trade_side(),
+                            **self._entry_protection(sym, intent))
                         intent["exchange_order_id"] = str(resp.get("orderId") or "")
                         self.counters["orders_placed"] += 1
                     else:
                         resp = self.client.place_market_order(
                             sym, side=side, size=qty, client_oid=oid,
-                            trade_side=self.open_trade_side())
+                            trade_side=self.open_trade_side(),
+                            **self._entry_protection(sym, intent))
                         intent["exchange_order_id"] = str(resp.get("orderId") or "")
                         self.counters["orders_placed"] += 1
                         self._live_entry_filled(intent,
@@ -3458,7 +3515,8 @@ class LiveRunner:
             it["qty"], it["kind"], it["watch_trigger"] = qty, "market", trigger_why
             resp = self.client.place_market_order(
                 sym, side="buy" if d > 0 else "sell", size=qty, client_oid=oid,
-                trade_side=self.open_trade_side())
+                trade_side=self.open_trade_side(),
+                **self._entry_protection(sym, it))
             it["exchange_order_id"] = str(resp.get("orderId") or "")
             self.counters["orders_placed"] += 1
             self.counters["watch_triggered"] = self.counters.get("watch_triggered", 0) + 1
@@ -3472,6 +3530,12 @@ class LiveRunner:
             self._journal("order_error", {"oid": oid, "symbol": sym,
                                           "event": it.get("event_id"), "why": str(e)[:160]})
             self._api_note(e)
+
+    def _entry_protection(self, sym: str, it: dict) -> dict:
+        if self.price_clock != "realtime":
+            return {}
+        return {"preset_stop_loss": self.fit_price(
+            sym, float(it["invalid"]), int(it["direction"]))}
 
     def _register_position(self, sym: str, it: dict, price: float,
                            ts: int, *, origin: str = "strategy") -> None:
@@ -3494,7 +3558,8 @@ class LiveRunner:
             "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "box_start_ts": it.get("box_start_ts"),
-            "opened_ts": ts, "mark": price}
+            "opened_ts": ts, "mark": price,
+            "price_source": str(it.get("fill_price_source") or "ref")}
         # New position: drop any clock anchor left by a previous position on
         # this symbol. Otherwise the 15m clock would fetch from that old anchor
         # and walk the whole history in 100-bar pages.
@@ -3510,6 +3575,10 @@ class LiveRunner:
                                len(cs.cog_bars))
                 except ValueError as e:
                     self.tg.send_alert(f"{sym} pm 建仓拒绝:{e}")
+        if self.mode == "live" and self.price_clock == "realtime":
+            # Protection precedes chart rendering and notifications.
+            self._manage_stops(ts)
+            self._manage_targets(ts)
         if origin == "adopted":
             self.counters["adopted"] = self.counters.get("adopted", 0) + 1
         else:
@@ -3785,6 +3854,144 @@ class LiveRunner:
             else:
                 self._live_close_filled(it, ref_price=price)
 
+    def _manage_targets(self, now_ms: int) -> None:
+        """Rest the existing strategy's first 50% target at the exchange."""
+        if self.mode != "live" or self.price_clock != "realtime":
+            return
+        for sym, pos in list(self.positions.items()):
+            cs = self._get_cs_for(sym, pos.get("tf_label"))
+            pm = cs.pm.positions.get(sym) if cs else None
+            target = pos.get("target_1")
+            if pm is not None and pm.target_1 is None and pos.get("target_order"):
+                order = pos["target_order"]
+                try:
+                    self.client.cancel_tpsl_order(sym, order["order_id"])
+                except BitgetError as exc:
+                    self._alert_throttled(f"target_cancel:{sym}", str(exc)[:160])
+                else:
+                    pos.pop("target_order", None)
+                    pos["target_1"] = None
+                    pm.pending_reduce = False
+                continue
+            if (pm is None or pm.reduced or target is None
+                    or not cs.pm.partial_exit_enabled
+                    or cs.pm._resolve_lock_frac(pm) <= 0):
+                continue
+            if pos.get("target_order"):
+                pm.pending_reduce = True
+                continue
+            spec = self._spec(sym)
+            qty = floor_step(float(pos["qty"]) * 0.5,
+                             spec.size_step, spec.size_place)
+            if qty <= 0:
+                self._alert_throttled(f"target_size:{sym}",
+                                      f"{sym} 半仓止盈数量不足最小精度，未擅自改成全平")
+                continue
+            oid = client_oid_of(self.OID_PREFIX, sym, str(pos["event_id"]),
+                                "target", int(pos["opened_ts"]),
+                                role=f"target{int(pos.get('target_generation', 0))}")
+            try:
+                # Recover an accepted request after a crash/timeout before
+                # local state was persisted; ownership is the exact client ID.
+                self._pending_stop_ids(now_ms)
+                resp = next((row for row in self._stops_live_rows or []
+                             if str(row.get("clientOid")) == oid
+                             and str(row.get("symbol")) == sym
+                             and row.get("planType") == "profit_plan"), None)
+                if resp is None:
+                    resp = self.client.place_partial_take_profit(
+                        sym, trigger_price=self.fit_price(sym, float(target),
+                                                           -int(pos["direction"])),
+                        size=qty, hold_side=self.stop_hold_side(pos["direction"]),
+                        client_oid=oid)
+                ex_id = str((resp or {}).get("orderId") or "")
+                if not ex_id:
+                    raise BitgetError("target protection missing orderId")
+                pos["target_order"] = {"order_id": ex_id, "qty": qty,
+                                       "accounted_qty": 0.0,
+                                       "original_qty": float(pos["qty"]),
+                                       "size_frac": pm.size_frac,
+                                       "client_oid": oid}
+                pm.pending_reduce = True
+                self._touch_campaigns()
+                self._stops_live_ids, self._stops_live_rows = None, None
+                self._journal("target_protection", {"symbol": sym,
+                              "order_id": ex_id, "qty": qty, "target": target})
+            except BitgetError as exc:
+                self._journal("target_protection_error", {"symbol": sym,
+                                                           "why": str(exc)[:160]})
+                self._alert_throttled(f"target:{sym}",
+                                      f"{sym} 交易所半仓止盈未建立：{str(exc)[:120]}")
+
+    def _sync_target_fills(self, now_ms: int) -> None:
+        """Only exchange execution facts consume the one-time partial exit."""
+        for sym, pos in list(self.positions.items()):
+            order = pos.get("target_order")
+            if not order:
+                continue
+            if float(order.get("accounted_qty", 0.0)) >= float(order["qty"]) - 1e-9:
+                continue
+            cs = self._get_cs_for(sym, pos.get("tf_label"))
+            pm = cs.pm.positions.get(sym) if cs else None
+            if pm is None:
+                continue
+            try:
+                history = self.client.tpsl_order_history(sym, order["order_id"])
+            except BitgetError as exc:
+                self._journal("target_sync_error", {"symbol": sym,
+                                                    "why": str(exc)[:160]})
+                continue
+            row = next((r for r in (history or []) if str(r.get("orderId")) ==
+                        order["order_id"]), None)
+            if row is None:
+                continue  # Absence is not proof of cancellation or execution.
+            status = str(row.get("planStatus") or "")
+            if (status in ("cancelled", "fail_execute")
+                    and not row.get("executeOrderId")
+                    and float(order.get("accounted_qty", 0.0)) == 0):
+                pos.pop("target_order", None)
+                pos["target_generation"] = int(pos.get("target_generation", 0)) + 1
+                pm.pending_reduce = False
+                self._touch_campaigns()
+                self._journal("target_rearm", {"symbol": sym, "status": status})
+                continue
+            if status in ("cancelled", "fail_execute"):
+                # A triggered order may have partially filled: never blindly
+                # reissue the full target quantity.
+                self._alert_throttled(f"target_terminal:{sym}",
+                                      f"{sym} 止盈计划终态 {status}，需核对成交，保留止损")
+                continue
+            execute_id = str(row.get("executeOrderId") or "")
+            if not execute_id:
+                continue
+            fact = self._entry_fill_fact(sym, execute_id)
+            if fact is None:
+                continue
+            px, _ts, total = fact
+            total = min(float(total), float(order["qty"]))
+            delta = total - float(order.get("accounted_qty", 0.0))
+            if delta <= 1e-9:
+                continue
+            fraction = delta / float(order["original_qty"]) * float(order["size_frac"])
+            pm.pending_reduce = True
+            cs.pm.confirm_reduce(sym, min(fraction, pm.size_frac))
+            pm.armed = True
+            pm._best = min(pm._best, px) if pm.direction < 0 else max(pm._best, px)
+            pos["invalid"] = pm.invalid
+            order["accounted_qty"] = total
+            remaining = min(float(pos["qty"]), float(order["original_qty"]) - total)
+            # Reconcile may already have observed the lower exchange quantity.
+            # Feed the common fill recorder its pre-fill quantity exactly once.
+            pos["qty"] = remaining + delta
+            self._live_close_filled({
+                "oid": order["client_oid"], "symbol": sym, "role": "reduce",
+                "qty": delta, "route": "partial_exit|exchange target fill",
+                "price_source": "fills"}, ref_price=px)
+            if sym in self.positions:
+                self.positions[sym]["qty"] = remaining
+            pm.pending_reduce = total < float(order["qty"]) - 1e-9
+            self._touch_campaigns()
+
     def _pending_stop_ids(self, now_ms: int) -> Optional[set]:
         """交易所在挂 TPSL orderId 集合(TTL 缓存;取不到返回 None ≡ 不判定)。
 
@@ -3826,6 +4033,8 @@ class LiveRunner:
         by_sym: dict[str, list] = {}
         for r in rows:
             if not str(r.get("clientOid") or "").startswith(self.OID_PREFIX):
+                continue
+            if r.get("planType") in ("profit_plan", "pos_profit"):
                 continue
             by_sym.setdefault(str(r.get("symbol")), []).append(r)
         for sym, items in by_sym.items():
@@ -3937,9 +4146,33 @@ class LiveRunner:
                         f",且现价 {mark:.8g} 已越过防线 {want:.8g} → 市价离场")
                     continue
                 cur = None      # 无保护单:落到下面重挂
+            if cur is None and self.price_clock == "realtime":
+                # Preset SL can already exist before local registration. Reuse
+                # its exchange ID instead of creating a duplicate defense.
+                for row in self._stops_live_rows or []:
+                    if (str(row.get("symbol")) == sym
+                            and row.get("planType") == "pos_loss"
+                            and (row.get("holdSide") or row.get("posSide")) ==
+                            self.stop_hold_side(pos["direction"])
+                            and str(row.get("clientOid") or "").startswith(self.OID_PREFIX)
+                            and abs(float(row.get("triggerPrice") or 0) - want) < 1e-12):
+                        cur = {"trigger": want, "qty": stop_qty,
+                               "order_id": str(row["orderId"])}
+                        self.stops[sym] = cur
+                        break
             if cur is not None and abs(float(cur["trigger"]) - want) < 1e-12:
                 continue
             try:
+                if (self.price_clock == "realtime" and cur is not None
+                        and cur.get("order_id") and not missing):
+                    self.client.modify_stop_loss(
+                        sym, order_id=cur["order_id"], trigger_price=want)
+                    cur["trigger"] = want
+                    self._stops_live_ids, self._stops_live_rows = None, None
+                    self._stops_checked_at = 0.0
+                    self._journal("stop_amend", {"symbol": sym, "trigger": want,
+                                                  "order_id": cur["order_id"]})
+                    continue
                 if cur is not None and cur.get("order_id"):
                     # 撤旧单失败**不得**阻断新单:旧单可能已成交或已被交易所
                     # 撤销(cancel 返回 order does not exist)。修前该异常跳到
@@ -4038,6 +4271,15 @@ class LiveRunner:
             self._dedupe_stops(now_ms)
 
     def _cancel_stop(self, sym: str, why: str) -> None:
+        if self.price_clock == "realtime":
+            pos = self.positions.get(sym)
+            target = pos.get("target_order") if pos else None
+            if target and target.get("order_id"):
+                try:
+                    self.client.cancel_tpsl_order(sym, target["order_id"])
+                except BitgetError as exc:
+                    self._journal("target_cancel_error", {"symbol": sym,
+                                                           "why": str(exc)[:160]})
         cur = self.stops.pop(sym, None)
         if cur is not None and cur.get("order_id") and self.mode == "live":
             self._stops_live_ids, self._stops_live_rows = None, None
@@ -4327,6 +4569,7 @@ class LiveRunner:
         if px <= 0.0 or d * (px - inv) <= 0.0:
             return False        # 成交价已越过防线:交给止损路径,不覆盖
         pos["entry"] = px
+        pos["price_source"] = "fills"
         cs = self._get_cs_for(sym, pos.get("tf_label")) \
             or self.campaigns.get(sym)
         if cs is not None:

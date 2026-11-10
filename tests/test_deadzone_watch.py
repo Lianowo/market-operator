@@ -150,12 +150,16 @@ def test_live_runner_15s_watch_polling_bounce_and_played_out(tmp_path):
             self.limit_orders.append((a, kw))
             return {"orderId": "lim1"}
 
-        def place_market_order(self, symbol, *, side, size, client_oid, trade_side=None):
+        def place_market_order(self, symbol, *, side, size, client_oid, trade_side=None,
+                               preset_stop_loss=None):
             self.market_orders.append((symbol, side, size, client_oid, trade_side))
             return {"orderId": f"mkt_{len(self.market_orders)}"}
 
         def recent_fills(self, symbol=None, limit=50):
             return []
+
+        def place_partial_take_profit(self, symbol, **kw):
+            return {"orderId": "tp_watch"}
 
         def tpsl_orders_pending(self, symbol=None):
             return self.tpsl_orders

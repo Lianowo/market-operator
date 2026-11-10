@@ -287,7 +287,8 @@ class BitgetLiveClient:
 
     def place_limit_order(self, symbol: str, *, side: str, size: float,
                           price: float, client_oid: str,
-                          trade_side: Optional[str] = None) -> dict:
+                          trade_side: Optional[str] = None,
+                          preset_stop_loss: Optional[float] = None) -> dict:
         """限价 GTC 单。hedge_mode 下 side 表持仓方向、tradeSide 表开平:
 
         开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close
@@ -302,12 +303,16 @@ class BitgetLiveClient:
             "clientOid": client_oid}
         if trade_side:
             body["tradeSide"] = trade_side
+        if preset_stop_loss is not None:
+            body["presetStopLossPrice"] = str(preset_stop_loss)
+            body["presetStopLossExecutePrice"] = "0"
         return self._request("POST", EP_PLACE_ORDER, signed=True,
                              body=body) or {}
 
     def place_market_order(self, symbol: str, *, side: str, size: float,
                            client_oid: str,
-                           trade_side: Optional[str] = None) -> dict:
+                           trade_side: Optional[str] = None,
+                           preset_stop_loss: Optional[float] = None) -> dict:
         """市价单;side / tradeSide 语义同 place_limit_order。"""
         self.require_credentials()
         body = {
@@ -317,6 +322,9 @@ class BitgetLiveClient:
             "clientOid": client_oid}
         if trade_side:
             body["tradeSide"] = trade_side
+        if preset_stop_loss is not None:
+            body["presetStopLossPrice"] = str(preset_stop_loss)
+            body["presetStopLossExecutePrice"] = "0"
         return self._request("POST", EP_PLACE_ORDER, signed=True,
                              body=body) or {}
 
@@ -364,6 +372,39 @@ class BitgetLiveClient:
                                trigger_price=trigger_price,
                                hold_side=hold_side, client_oid=client_oid,
                                trigger_type=trigger_type)
+
+    def modify_stop_loss(self, symbol: str, *, order_id: str,
+                         trigger_price: float) -> dict:
+        """Amend position-level protection without cancelling the old defense."""
+        self.require_credentials()
+        return self._request(
+            "POST", "/api/v2/mix/order/modify-tpsl-order", signed=True,
+            body={"symbol": symbol, "productType": self.product_type,
+                  "marginCoin": "USDT", "orderId": str(order_id),
+                  "triggerPrice": str(trigger_price), "triggerType": "mark_price",
+                  "executePrice": "0", "size": ""}) or {}
+
+    def place_partial_take_profit(self, symbol: str, *, trigger_price: float,
+                                  size: float, hold_side: str,
+                                  client_oid: str) -> dict:
+        """Fixed-quantity target, market execution on last-price touch."""
+        self.require_credentials()
+        if size <= 0:
+            raise ValueError("take-profit size must be positive")
+        return self._request("POST", EP_PLACE_TPSL, signed=True, body={
+            "symbol": symbol, "productType": self.product_type,
+            "marginCoin": "USDT", "planType": "profit_plan",
+            "triggerPrice": str(trigger_price), "triggerType": "fill_price",
+            "executePrice": "0", "holdSide": hold_side,
+            "size": str(size), "clientOid": client_oid}) or {}
+
+    def tpsl_order_history(self, symbol: str, order_id: str) -> list:
+        self.require_credentials()
+        data = self._request(
+            "GET", "/api/v2/mix/order/orders-plan-history", signed=True,
+            params={"symbol": symbol, "productType": self.product_type,
+                    "planType": "profit_loss", "orderId": str(order_id)}) or {}
+        return (data.get("entrustedList") or []) if isinstance(data, dict) else (data or [])
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
         self.require_credentials()
