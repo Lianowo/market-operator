@@ -614,6 +614,32 @@ class PositionManager:
         if not skip_trail:
             self._trail(pos, new_pivots, atr)
 
+        # 4.4 零参数目标几何中轴半风险防线(Midpoint Half-Risk Defense):
+        #     当尚未触发对侧锁利(not pos.armed),但历史最有利极值 pos._best 已跨越
+        #     entry 与 target_1 的几何中点 mid_t = 0.5*(entry + target_1)(即对 LEVEL_REJECTED
+        #     已越过平衡箱中轴 POC,对 BREAKOUT_ACCEPTED 2x 箱体目标已完成 1x 等幅行程)时,
+        #     将初始失效位单调收紧至半风险中点 half_inv = 0.5*(entry + invalid0)(-0.5R),
+        #     杜绝已完成过半行程后坐过山车吃满 -1R 全额止损。
+        if (
+            self.partial_exit_enabled
+            and pos.target_1 is not None
+            and not pos.armed
+            and pos._best is not None
+            and pos.direction * (float(pos.target_1) - pos.entry) > 0.0
+        ):
+            mid_t = 0.5 * (pos.entry + float(pos.target_1))
+            if pos.direction * (pos._best - mid_t) >= 0.0:
+                inv0 = float(pos.invalid0 if pos.invalid0 is not None else pos.invalid)
+                half_inv = 0.5 * (pos.entry + inv0)
+                if stop_protect_dist(pos.direction, half_inv, c) > OPP_LOCK_EPS:
+                    old = pos.invalid
+                    pos.invalid = min(pos.invalid, half_inv) if pos.direction < 0 else max(pos.invalid, half_inv)
+                    if abs(pos.invalid - old) > 1e-12:
+                        pos.log.append(
+                            f"mid_halfrisk|peak={pos._best:.8g} mid_target={mid_t:.8g} "
+                            f"invalid {old:.8g}->{pos.invalid:.8g}"
+                        )
+
         # 5. §8.4 加仓(v1 关闭;逻辑保留并独立测试)
         if (not price_only) and self.allow_add and not pos.added \
                 and not pos.pending_add:

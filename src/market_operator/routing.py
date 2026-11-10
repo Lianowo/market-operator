@@ -614,9 +614,11 @@ class MarketRouter:
             if (
                 cid == BREAKOUT_ACCEPTED
                 and sk_align == "FLIPPED_BOX_EDGE"
-                and not is_mic_align
                 and sub_k_align == "A1_TIGHT"
-                and 0 < step_ms_align < 4 * 3600 * 1000
+                and (
+                    (not is_mic_align and 0 < step_ms_align < 4 * 3600 * 1000)
+                    or (is_mic_align and 0 < step_ms_align <= 1800 * 1000)
+                )
             ):
                 meta_out["size_mult"] = 0.5
         return RouteDecision(

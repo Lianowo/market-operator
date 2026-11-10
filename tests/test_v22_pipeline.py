@@ -1095,6 +1095,64 @@ def test_mic_tracker_retains_candidate_across_pause_and_gap_bar():
     assert evs_imp[0].id == BREAKOUT_ACCEPTED and evs_imp[0].attrs.get("sub_kind") == "A3_FAST"
 
 
+def test_dynamic_trade_leverage_planning_within_cap():
+    """验证开仓管理在 <= min(leverage_cap=20, maxLever) 范围内根据风险、止损距离与保证金规划自动计算杠杆:
+    1) 宽止损波段单(如 XANUSDT 4h 止损距离 7.25%, 名义仓位 0.69x 权益)自动规划为低杠杆(~8x), 而非硬设 20x;
+    2) 极宽止损长线单(止损距离 15%, 名义仓位 0.25x 权益)自动规划为 3x~4x 杠杆;
+    3) 窄止损短线单(止损距离 0.8%, 名义仓位 6.25x 权益)按需提升至上限 20x(若标的 maxLever=10 则严格受限于 10x)。
+    """
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    scripts_dir = str(Path(__file__).resolve().parents[1] / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import live_runner as lr
+
+    set_calls = []
+    fake_runner = SimpleNamespace(
+        mode="live",
+        hedge_mode=True,
+        risk={"leverage_cap": 20, "portfolio_cap_frac": 0.50},
+        contract_raw={
+            "XANUSDT": {"maxLever": "50"},
+            "BTCUSDT": {"maxLever": "125"},
+            "LOWCAPUSDT": {"maxLever": "10"},
+        },
+        positions={},
+        _leverage_done=set(),
+        leverage_by_sym={},
+        _exch_lev_cap={},
+        client=SimpleNamespace(
+            set_leverage=lambda sym, lev, hold_side=None: set_calls.append((sym, lev, hold_side))
+        ),
+        _journal=lambda *a, **k: None,
+        _alert_throttled=lambda *a, **k: None,
+    )
+    fake_runner._max_allowed_leverage = lr.LiveRunner._max_allowed_leverage.__get__(fake_runner, lr.LiveRunner)
+    fake_runner._plan_trade_leverage = lr.LiveRunner._plan_trade_leverage.__get__(fake_runner, lr.LiveRunner)
+    fake_runner._ensure_leverage = lr.LiveRunner._ensure_leverage.__get__(fake_runner, lr.LiveRunner)
+
+    # 1) 启动预检(target_lev=None): 不向交易所盲目发 20x 请求
+    fake_runner._ensure_leverage("XANUSDT")
+    assert set_calls == []
+
+    # 2) XANUSDT 4h 宽止损单(equity=1000, capital=1000, risk=50(5%), stop_dist=7.25% -> notional=690)
+    lev_xan = fake_runner._plan_trade_leverage("XANUSDT", notional=690.0, equity=1000.0, capital=1000.0, candidate_risk=55.0)
+    assert 1 <= lev_xan <= 10  # 约 8x, 远低于 20x
+    fake_runner._ensure_leverage("XANUSDT", lev_xan)
+    assert fake_runner.leverage_by_sym["XANUSDT"] == lev_xan
+    assert ("XANUSDT", lev_xan, "long") in set_calls and ("XANUSDT", lev_xan, "short") in set_calls
+
+    # 3) 窄止损单在 maxLever=10 的品种上严格受限于 <= 10x, 在 BTCUSDT 上受限于 <= 20x
+    lev_lowcap = fake_runner._plan_trade_leverage("LOWCAPUSDT", notional=5000.0, equity=1000.0, capital=1000.0, candidate_risk=55.0)
+    assert lev_lowcap == 10
+    lev_btc = fake_runner._plan_trade_leverage("BTCUSDT", notional=5000.0, equity=1000.0, capital=1000.0, candidate_risk=55.0)
+    assert lev_btc == 20
+
+
+
 
 
 

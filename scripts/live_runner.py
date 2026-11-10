@@ -46,6 +46,7 @@ from bisect import bisect_left
 import gzip
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -1467,25 +1468,74 @@ class LiveRunner:
             return self.extra_campaigns[(symbol, tf_label)]
         return self.campaigns.get(symbol)
 
-    def _ensure_leverage(self, symbol: str) -> None:
-        """杠杆初始化(每品种一次;hedge_mode 逐侧设置,one-way 省略 holdSide)。
-
-        只做一次(成功入 _leverage_done);失败仅告警不中断 —— 交易所侧杠杆
-        不足会在下单时如实暴露,不静默降级。
-        """
-        if symbol in self._leverage_done or self.mode != "live":
-            return
+    def _max_allowed_leverage(self, symbol: str) -> int:
+        """返回该标的允许的最大整数杠杆:min(配置 leverage_cap, 交易所合约 maxLever)。"""
         cap = int(self.risk.get("leverage_cap") or 20)
-        # 每个合约的杠杆上限不同(AKE/ARIA/BR/JCT=10、BTW=5、BTC=150),统一按
-        # 20x 设置会报 40797;低流动性期还会被动态限到更低(25159),故降档重试。
         try:
             max_lev = int(float((self.contract_raw.get(symbol) or {})
                                 .get("maxLever") or cap))
         except (TypeError, ValueError):
             max_lev = cap
-        want = max(1, min(cap, max_lev))
+        ceiling = max(1, min(cap, max_lev))
+        exch_cap = getattr(self, "_exch_lev_cap", {}).get(symbol)
+        if exch_cap is not None:
+            ceiling = max(1, min(ceiling, int(exch_cap)))
+        return ceiling
+
+    def _plan_trade_leverage(
+        self,
+        symbol: str,
+        notional: float,
+        equity: float,
+        capital: float,
+        candidate_risk: float,
+    ) -> int:
+        """根据单笔风险预算、止损距离(决定名义价值 notional)与组合仓位保证金规划,
+        在 [1, min(leverage_cap, maxLever)] 范围内自动计算该笔开仓所需的最小整数杠杆。
+        """
+        max_allowed = self._max_allowed_leverage(symbol)
+        if equity <= 0.0 or notional <= 0.0:
+            return max(1, min(5, max_allowed))
+        port_cap = max(float(self.risk.get("portfolio_cap_frac") or 0.50), 1e-6)
+        risk_slot_share = candidate_risk / max(port_cap * max(capital, 1e-6), 1e-6)
+        # 按该笔风险占总容量池的比例分配计划保证金预算(留出 20% 账户级缓冲,单笔保证金预算占权益 5% ~ 25%)
+        planned_margin_frac = min(0.25, max(0.05, risk_slot_share * 0.80))
+        used_margin = 0.0
+        for s_open, p_open in self.positions.items():
+            p_notional = abs(float(p_open.get("qty") or 0.0) * float(p_open.get("mark") or p_open.get("entry") or 0.0))
+            p_lev = max(1.0, float(p_open.get("leverage") or self.leverage_by_sym.get(s_open) or max_allowed))
+            used_margin += p_notional / p_lev
+        avail_margin = max(0.04 * equity, 0.85 * equity - used_margin)
+        margin_budget = max(1e-6, min(equity * planned_margin_frac, avail_margin))
+        req_lev = int(math.ceil(notional / margin_budget))
+        return max(1, min(max_allowed, req_lev))
+
+    def _ensure_leverage(self, symbol: str, target_lev: Optional[int] = None) -> None:
+        """杠杆动态设置(在 <= min(leverage_cap, maxLever) 范围内按需设置;hedge_mode 逐侧设置)。
+
+        - 启动/发现品种未指定 target_lev 时:不盲目顶格设 20x,仅记录品种上限待实际开仓时按仓位规划下发;
+        - 开仓指定 target_lev 时:若该品种当前无持仓且目标杠杆与已生效杠杆不同,动态调整为 target_lev(失败则降档重试)。
+        """
+        if self.mode != "live":
+            return
+        max_allowed = self._max_allowed_leverage(symbol)
+        if target_lev is None:
+            if symbol in self._leverage_done:
+                return
+            self.leverage_by_sym.setdefault(symbol, max_allowed)
+            return
+        want = max(1, min(int(target_lev), max_allowed))
+        if not hasattr(self.client, "set_leverage"):
+            self._leverage_done.add(symbol)
+            self.leverage_by_sym[symbol] = want
+            return
+        if symbol in self._leverage_done and self.leverage_by_sym.get(symbol) == want:
+            return
+        if symbol in self.positions and symbol in self._leverage_done:
+            # 已有在途持仓时不中途改低杠杆,避免交易所因在仓保证金重算拒单
+            return
         sides = ("long", "short") if self.hedge_mode else (None,)
-        ladder = [want] + [lv for lv in (10, 5, 3, 2, 1) if lv < want]
+        ladder = [want] + [lv for lv in (max_allowed, 10, 5, 3, 2, 1) if lv != want and lv <= max_allowed]
         last_err: Optional[Exception] = None
         for lev in ladder:
             try:
@@ -1493,8 +1543,13 @@ class LiveRunner:
                     self.client.set_leverage(symbol, lev, hold_side=hs)
                 self._leverage_done.add(symbol)
                 self.leverage_by_sym[symbol] = lev
+                if lev < want:
+                    if not hasattr(self, "_exch_lev_cap"):
+                        self._exch_lev_cap = {}
+                    self._exch_lev_cap[symbol] = lev
                 self._journal("leverage", {"symbol": symbol, "leverage": lev,
-                                           "max_lever": max_lev,
+                                           "planned_leverage": want,
+                                           "max_lever": max_allowed,
                                            "sides": [s or "single" for s in sides]})
                 return
             except BitgetError as e:
@@ -2993,10 +3048,8 @@ class LiveRunner:
         if block is None:
             # 定仓用"风险资本"(已落袋),杠杆上限仍用交易所权益(偿付能力)
             qty = eff_rf * size_mult * capital / risk_per_unit
-            # 用该品种实际生效杠杆(而非统一上限):低上限品种按 20x 算出的数量
-            # 会超出交易所可用保证金而被拒
-            eff_lev = float(self.leverage_by_sym.get(sym)
-                            or self.risk.get("leverage_cap") or 20)
+            # 最大允许杠杆上限 <= min(leverage_cap, maxLever)
+            eff_lev = float(self._max_allowed_leverage(sym))
             qty = min(qty, eff_lev * equity / entry_ref)
             qty = floor_step(qty, spec.size_step, spec.size_place)
             # 组合容量、周期独立容量与主张容量(剩余额度 >= 25% 时动态缩量分配,否则整笔跳过)
@@ -3123,9 +3176,12 @@ class LiveRunner:
             self._note_block(sym, cs, hyp, block, qty=qty, ref=entry_ref)
             return
         self.counters["signals"] += 1
+        planned_lev = self._plan_trade_leverage(
+            sym, qty * entry_ref, equity, capital, candidate
+        )
         intent = {"oid": oid, "symbol": sym, "tf_label": cs.tf_label,
                   "role": "entry", "kind": d.kind, "direction": hyp.direction,
-                  "qty": qty,
+                  "qty": qty, "leverage": planned_lev,
                   "limit_price": entry_ref if d.kind == "limit" else None,
                   "ref_px": float(entry_ref),
                   "invalid": float(hyp.invalid),
@@ -3166,22 +3222,32 @@ class LiveRunner:
                 if is_watch:
                     # 系统价格关注态:不在交易所挂死板限价单,由 15s 主循环监控回踩触发/走完作废
                     self.counters["watch_armed"] = self.counters.get("watch_armed", 0) + 1
-                elif d.kind == "limit":
-                    resp = self.client.place_limit_order(
-                        sym, side=side, size=qty,
-                        price=fitted_entry,
-                        client_oid=oid, trade_side=self.open_trade_side())
-                    intent["exchange_order_id"] = str(resp.get("orderId") or "")
-                    self.counters["orders_placed"] += 1
                 else:
-                    resp = self.client.place_market_order(
-                        sym, side=side, size=qty, client_oid=oid,
-                        trade_side=self.open_trade_side())
-                    intent["exchange_order_id"] = str(resp.get("orderId") or "")
-                    self.counters["orders_placed"] += 1
-                    self._live_entry_filled(intent,
-                                            side_fallback_price=entry_ref,
-                                            now_ms=t)
+                    try:
+                        self._ensure_leverage(sym, planned_lev)
+                    except TypeError:
+                        self._ensure_leverage(sym)
+                    act_lev = float(self.leverage_by_sym.get(sym) or planned_lev)
+                    intent["leverage"] = int(act_lev)
+                    if qty * entry_ref > act_lev * equity + 1e-9:
+                        qty = floor_step(act_lev * equity / entry_ref, spec.size_step, spec.size_place)
+                        intent["qty"] = qty
+                    if d.kind == "limit":
+                        resp = self.client.place_limit_order(
+                            sym, side=side, size=qty,
+                            price=fitted_entry,
+                            client_oid=oid, trade_side=self.open_trade_side())
+                        intent["exchange_order_id"] = str(resp.get("orderId") or "")
+                        self.counters["orders_placed"] += 1
+                    else:
+                        resp = self.client.place_market_order(
+                            sym, side=side, size=qty, client_oid=oid,
+                            trade_side=self.open_trade_side())
+                        intent["exchange_order_id"] = str(resp.get("orderId") or "")
+                        self.counters["orders_placed"] += 1
+                        self._live_entry_filled(intent,
+                                                side_fallback_price=entry_ref,
+                                                now_ms=t)
             except BitgetError as e:
                 if d.kind != "limit" and "40786" in str(e):
                     # 40786 = 重复的 clientOid:说明该笔市价单已在交易所落地成交,
@@ -3355,6 +3421,15 @@ class LiveRunner:
         if self.breaker.should_stop(self.equity) or not self.rate.allow():
             return
         try:
+            eq_now = float(self.equity or 0.0)
+            cap_now = max(0.0, eq_now - float(self.unrealized_pl or 0.0))
+            planned_lev = int(it.get("leverage") or self._plan_trade_leverage(
+                sym, qty * exec_px, eq_now, cap_now,
+                qty * abs(exec_px - inv)))
+            try:
+                self._ensure_leverage(sym, planned_lev)
+            except TypeError:
+                self._ensure_leverage(sym)
             it["qty"], it["kind"], it["watch_trigger"] = qty, "market", trigger_why
             resp = self.client.place_market_order(
                 sym, side="buy" if d > 0 else "sell", size=qty, client_oid=oid,
@@ -3389,6 +3464,7 @@ class LiveRunner:
         self.positions[sym] = {
             "symbol": sym, "tf_label": tf_lbl, "direction": it["direction"],
             "qty": it["qty"], "entry": price, "invalid": it["invalid"],
+            "leverage": int(it.get("leverage") or self.leverage_by_sym.get(sym) or self._max_allowed_leverage(sym)),
             "target_1": execution_target(it, it["target_1"]), "event_id": it["event_id"],
             "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
