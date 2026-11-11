@@ -331,6 +331,14 @@ def build_frames(market: MarketData, settings: ScenarioSettings,
                   execution_seconds: Optional[int] = None) -> dict:
     """把 (品种 × 认知周期) 装配成战役帧;触发帧按配置降档挂载。"""
     from .trigger import resolve_trigger_tf
+    if execution_seconds is None:
+        # One portfolio execution clock, no slower than any configured signal.
+        # Missing native data must fail, never silently fall back to a leaking
+        # coarse interval whose orders can be changed halfway through.
+        execution_seconds = min(
+            [900 if "1h" in timeframes else 3600]
+            + [int(settings.trigger_seconds_by_timeframe[tf])
+               for tf in timeframes if settings.trigger_seconds_by_timeframe.get(tf)])
     frames: dict = {}
     for symbol in market.symbols:
         avail_trig = market.trigger_frame[symbol]

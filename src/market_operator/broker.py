@@ -440,6 +440,12 @@ class Broker:
                 continue
             barred = (od.fill_after_ts if od.fill_after_ts is not None
                       else od.armed_at_ts)
+            # A bar may only execute an order that existed at its OPEN.
+            # In particular, a 30m decision must not reuse the containing
+            # hourly bar's earlier high/low when that hour finally closes.
+            if int(ts) < int(od.meta.get("execution_not_before", ts)):
+                kept.append(od)
+                continue
             if window_label <= barred:
                 kept.append(od)                       # 决策 bar 覆盖区间,不可成交
                 continue
@@ -1220,15 +1226,22 @@ class Broker:
 
     def mark(self, symbol: str, ts: int, close: float) -> None:
         """每 bar 收盘盯市:计提资金费、更新 mark 价、近似强平检查。"""
-        pos = self.positions.get(symbol)
-        if pos is not None:
-            self._accrue_funding(pos, close, ts)
-        self.last_mark[symbol] = close
+        self.mark_batch({symbol: close}, ts)
+
+    def mark_batch(self, prices: dict[str, float], ts: int) -> None:
+        """Publish one timestamp's prices before portfolio-wide liquidation checks."""
+        for symbol, close in prices.items():
+            pos = self.positions.get(symbol)
+            if pos is not None:
+                self._accrue_funding(pos, close, ts)
+            self.last_mark[symbol] = close
         equity = self.equity_mtm()
         for sym, p in list(self.positions.items()):
             price = self.last_mark[sym]
             upnl = p.direction * (price - p.entry) * p.qty
-            if -upnl >= self.liq_frac * equity:
+            already_pending = any(po.meta.get("liquidation")
+                                  for po in self.pending.get(sym, ()))
+            if -upnl >= self.liq_frac * equity and not already_pending:
                 self.n_liquidations += 1
                 self._seq += 1
                 fake = OrderIntent(kind=OrderKind.EXIT, symbol=sym, qty_frac=None,
