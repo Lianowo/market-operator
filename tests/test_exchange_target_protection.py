@@ -39,7 +39,10 @@ def test_entry_order_carries_original_stop():
             _client(session).place_market_order("BTCUSDT", **kw)
         body = json.loads(session.calls[0][2])
         assert body["presetStopLossPrice"] == "95.0"
-        assert body["presetStopLossExecutePrice"] == "0"
+        assert body["presetStopLossTriggerType"] == "mark_price"
+        # Bitget place-order rejects presetStopLossExecutePrice="0" (40808);
+        # omission means market execution.
+        assert "presetStopLossExecutePrice" not in body
         assert "presetStopSurplusPrice" not in body  # Do not silently close 100%.
 
 

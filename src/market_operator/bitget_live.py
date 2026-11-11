@@ -305,7 +305,9 @@ class BitgetLiveClient:
             body["tradeSide"] = trade_side
         if preset_stop_loss is not None:
             body["presetStopLossPrice"] = str(preset_stop_loss)
-            body["presetStopLossExecutePrice"] = "0"
+            # 不传 presetStopLossExecutePrice:Bitget place-order 对 "0" 按
+            # 价格校验并返回 40808(exeStopLossPrice gt 0);省略该字段走默认市价执行。
+            body["presetStopLossTriggerType"] = "mark_price"
         return self._request("POST", EP_PLACE_ORDER, signed=True,
                              body=body) or {}
 
@@ -324,7 +326,9 @@ class BitgetLiveClient:
             body["tradeSide"] = trade_side
         if preset_stop_loss is not None:
             body["presetStopLossPrice"] = str(preset_stop_loss)
-            body["presetStopLossExecutePrice"] = "0"
+            # 不传 presetStopLossExecutePrice:Bitget place-order 对 "0" 按
+            # 价格校验并返回 40808(exeStopLossPrice gt 0);省略该字段走默认市价执行。
+            body["presetStopLossTriggerType"] = "mark_price"
         return self._request("POST", EP_PLACE_ORDER, signed=True,
                              body=body) or {}
 
