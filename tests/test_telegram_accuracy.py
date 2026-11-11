@@ -96,6 +96,22 @@ def test_bw_chart_pure_price_action_ignores_volume_and_renders_cleanly():
     assert guard.errors == 1 and guard.async_mode is True
 
 
+def test_bar_gap_stats_distinguishes_visual_spacing_from_missing_bars():
+    from market_operator.tg import _bar_gap_stats
+
+    t0 = 1700000000000
+    dense = [(t0 + i * 7200000, 1.0, 1.0, 1.0, 1.0, 0.0) for i in range(6)]
+    assert _bar_gap_stats(dense) == (6, 120, 0)
+
+    # 120m, 120m, 240m: median 120m, one real 2x gap after the third bar.
+    gapped = [(t0, 1, 1, 1, 1, 0), (t0 + 7200000, 1, 1, 1, 1, 0),
+              (t0 + 14400000, 1, 1, 1, 1, 0),
+              (t0 + 28800000, 1, 1, 1, 1, 0)]
+    assert _bar_gap_stats(gapped) == (4, 120, 1)
+    assert _bar_gap_stats([]) == (0, 0, 0)
+    assert _bar_gap_stats([dense[0]]) == (1, 0, 0)
+
+
 def test_queue_full_drops_without_network_or_blocking():
     n, calls = notifier()
     n.async_mode = True

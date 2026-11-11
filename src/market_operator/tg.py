@@ -175,6 +175,32 @@ def suggest_position_and_leverage(
 
 
 
+def _bar_gap_stats(bars: Sequence[tuple]) -> tuple[int, int, int]:
+    """Return (n, median step minutes, gap count) for a chart window.
+
+    A gap is a consecutive timestamp jump >1.5x the median step.  This keeps
+    the label usable when the caller passes a finer frame (e.g. 30m trigger
+    bars with a 2h tf label) and does not turn ordinary candle spacing into a
+    false "missing bar" claim.
+    """
+    n = len(bars)
+    if n < 2:
+        return n, 0, 0
+    diffs: list[float] = []
+    for prev, cur in zip(bars, bars[1:]):
+        try:
+            diff = (int(cur[0]) - int(prev[0])) / 60000.0
+        except (TypeError, ValueError, IndexError):
+            return n, 0, 0
+        if diff > 0:
+            diffs.append(diff)
+    if not diffs:
+        return n, 0, 0
+    med = sorted(diffs)[len(diffs) // 2]
+    gaps = sum(1 for diff in diffs if diff > med * 1.5 + 1e-9)
+    return n, int(round(med)), gaps
+
+
 def render_bw_kline_png(
     bars: Sequence[tuple],
     *,
@@ -221,7 +247,7 @@ def render_bw_kline_png(
     if not bars:
         return None
     sub = list(bars[-max_bars:])
-    n = len(sub)
+    n, step_min, gaps = _bar_gap_stats(sub)
     if n == 0:
         return None
 
@@ -464,18 +490,20 @@ def render_bw_kline_png(
     _draw_level(target_price, "TARGET", dash=5, width=2, color=(40, 40, 40))
 
     step_x = plot_w / max(n, 1)
-    body_w = max(2, int(step_x * 0.68))
+    # Wider bodies and a light-grey up candle keep every 24/96-bar slot visible
+    # on a white background; the old 68% white-on-white body read as a blank gap.
+    body_w = max(3, int(step_x * 0.86))
     for idx, b in enumerate(sub):
-        _ts, o, h, l, c = float(b[0]), float(b[1]), float(b[2]), float(b[3]), float(b[4])
+        _ts, o, h, lo, c = float(b[0]), float(b[1]), float(b[2]), float(b[3]), float(b[4])
         cx = int(round(left_m + (idx + 0.5) * step_x))
-        yh, yl, yo, yc = price_to_y(h), price_to_y(l), price_to_y(o), price_to_y(c)
+        yh, yl, yo, yc = price_to_y(h), price_to_y(lo), price_to_y(o), price_to_y(c)
         draw.line([(cx, yh), (cx, yl)], fill=(0, 0, 0), width=1)
         top_b, bot_b = min(yo, yc), max(yo, yc)
         if bot_b - top_b < 2:
             bot_b = top_b + 2
         x0, x1 = cx - body_w // 2, cx + body_w // 2
         if c >= o:
-            draw.rectangle([x0, top_b, x1, bot_b], fill=(255, 255, 255), outline=(0, 0, 0), width=1)
+            draw.rectangle([x0, top_b, x1, bot_b], fill=(232, 232, 232), outline=(0, 0, 0), width=1)
         else:
             draw.rectangle([x0, top_b, x1, bot_b], fill=(0, 0, 0), outline=(0, 0, 0), width=1)
 
@@ -532,6 +560,9 @@ def render_bw_kline_png(
     head = f"{symbol} [{tf_label}] {title_tag} [{scale_tag}]".strip()
     draw.text((left_m, 6), head, fill=(0, 0, 0), font=font_b)
     draw.text((left_m, 36), f"{ts_first} -> {ts_last}", fill=(90, 90, 90), font=font_s)
+    step_txt = f"{step_min}m" if step_min else "?"
+    draw.text((left_m, 48), f"bars {n} · step {step_txt} · gaps {gaps}",
+              fill=(120, 120, 120), font=font_s)
 
     # 结构摘要(公开信号图仅展示 R:R,隐藏内部箱体/触边/ATR 参数)
     bits: list[str] = []
@@ -741,7 +772,6 @@ class TelegramNotifier:
             self._record_miss(kind, RuntimeError("telegram 未配置"))
             return False
         cap = caption if len(caption) <= MAX_CAPTION_LEN else caption[:MAX_CAPTION_LEN - 12] + "…[截断]"
-        last_err: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
                 resp = self.session.post(
@@ -753,10 +783,8 @@ class TelegramNotifier:
                 if resp.status_code == 200 and payload.get("ok"):
                     self.sent += 1
                     return True
-                last_err = RuntimeError(
-                    f"tg photo {resp.status_code}: {str(payload)[:160]}")
-            except Exception as e:
-                last_err = e
+            except Exception:
+                pass
             time.sleep(RETRY_BACKOFF_S * (attempt + 1))
         return self._post_text_sync(token, chat_id, kind, cap)
 
