@@ -146,7 +146,12 @@ def _print_positions(positions: dict, stops: dict, ex_pos: dict,
         mark = float(ex["mark_price"] or loc.get("mark") or 0.0)
         dist = (mark - stop) / mark * 100 if mark else 0.0
         stop_oid = str((stops.get(sym) or {}).get("order_id") or "")
-        live_ids = {str(r.get("orderId")) for r in pending.get(sym, [])}
+        plans = pending.get(sym, [])
+        live_ids = {str(r.get("orderId")) for r in plans}
+        # 未知类型按止损类保守计入(宁可误报,不可漏报);profit_plan 明确排除。
+        stop_like = [r for r in plans
+                     if not r.get("planType")
+                     or str(r.get("planType") or "") in ("pos_loss", "loss_plan")]
         state = "OK"
         if not stop_oid:
             stop_txt, state = "无记录", "无保护止损"
@@ -154,8 +159,8 @@ def _print_positions(positions: dict, stops: dict, ex_pos: dict,
         elif has_client and stop_oid not in live_ids:
             stop_txt, state = "已不在挂", "保护失效"
             issues.append(f"{sym}: 止损单不在交易所")
-        elif len(pending.get(sym, [])) > 1:
-            stop_txt = f"x{len(pending.get(sym, []))}"
+        elif len(stop_like) > 1:
+            stop_txt = f"x{len(stop_like)}"
             state = "重复止损单"
             issues.append(f"{sym}: 同品种多张保护单")
         else:

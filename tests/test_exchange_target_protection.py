@@ -46,6 +46,44 @@ def test_entry_order_carries_original_stop():
         assert "presetStopSurplusPrice" not in body  # Do not silently close 100%.
 
 
+def _plan_rows():
+    return {"entrustedList": [
+        # Local tracked position-level stop (what the strategy uses).
+        {"symbol": "BTCUSDT", "orderId": "POS", "clientOid": "mo21pos",
+         "planType": "pos_loss", "posSide": "long", "triggerPrice": "95",
+         "size": "0", "triggerType": "mark_price"},
+        # Exchange auto-generated preset stop from entry; must be removed.
+        {"symbol": "BTCUSDT", "orderId": "LOSS", "clientOid": "1500",
+         "planType": "loss_plan", "posSide": "long", "triggerPrice": "95",
+         "size": "10", "triggerType": "fill_price"},
+        # Half-size target; must never be treated as a stop.
+        {"symbol": "BTCUSDT", "orderId": "TP", "clientOid": "mo21tp",
+         "planType": "profit_plan", "posSide": "long", "triggerPrice": "110",
+         "size": "5", "triggerType": "fill_price"},
+    ]}
+
+
+def test_manage_stops_cancels_exchange_loss_plan_after_pos_loss(tmp_path):
+    r, client, p, now = _realtime(tmp_path)
+    r.stops["BTCUSDT"] = {"trigger": 95.0, "qty": 10.0, "order_id": "POS"}
+    r._stops_live_ids, r._stops_live_rows, r._stops_checked_at = None, None, 0.0
+    client._pending = _plan_rows()
+    r._manage_stops(now)
+    assert ("BTCUSDT", "LOSS") in client.plan_canceled
+    assert ("BTCUSDT", "POS") not in client.plan_canceled
+    assert ("BTCUSDT", "TP") not in client.plan_canceled
+    assert r.stops["BTCUSDT"]["order_id"] == "POS"
+
+
+def test_manage_stops_keeps_loss_plan_when_pos_loss_missing(tmp_path):
+    r, client, p, now = _realtime(tmp_path)
+    r.stops.pop("BTCUSDT", None)
+    r._stops_live_ids, r._stops_live_rows, r._stops_checked_at = None, None, 0.0
+    client._pending = {"entrustedList": [_plan_rows()["entrustedList"][1]]}
+    r._manage_stops(now)
+    assert ("BTCUSDT", "LOSS") not in client.plan_canceled
+
+
 def test_native_half_target_contract():
     session = _Session(data={"orderId": "tp"})
     _client(session).place_partial_take_profit(

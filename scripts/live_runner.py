@@ -3559,6 +3559,8 @@ class LiveRunner:
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "box_start_ts": it.get("box_start_ts"),
             "opened_ts": ts, "mark": price,
+            "entry_invalid": float(it["invalid"]),
+            "entry_qty": float(it["qty"]),
             "price_source": str(it.get("fill_price_source") or "ref")}
         # New position: drop any clock anchor left by a previous position on
         # this symbol. Otherwise the 15m clock would fetch from that old anchor
@@ -4061,6 +4063,86 @@ class LiveRunner:
                 self._stops_live_ids, self._stops_live_rows = None, None
                 self._stops_checked_at = 0.0
 
+    def _entry_loss_plan_rows(self, sym: str, pos: dict,
+                              rows: Optional[list]) -> list:
+        """交易所自动生成的 `loss_plan`(开仓预设止损)候选行。
+
+        这类单是 entry `presetStopLossPrice` 成交后由交易所自动生成的旧式
+        计划单,不是本地的 `pos_loss`:它不随防线推进、平仓时也不会被本地
+        撤掉。只在同 symbol/同方向、且 size 仍覆盖入场数量时认领;真正撤销
+        前由 `_cancel_entry_loss_plans` 确保 `pos_loss` 已在挂。
+        """
+        side = self.stop_hold_side(int(pos["direction"]))
+        entry_invalid = pos.get("entry_invalid")
+        want_entry = None
+        if entry_invalid is not None:
+            try:
+                want_entry = self.fit_price(
+                    sym, float(entry_invalid), int(pos["direction"]))
+            except (TypeError, ValueError):
+                want_entry = None
+        out: list = []
+        for row in rows or ():
+            if str(row.get("symbol")) != sym:
+                continue
+            if str(row.get("planType") or "") != "loss_plan":
+                continue
+            if (row.get("holdSide") or row.get("posSide")) != side:
+                continue
+            if str(row.get("clientOid") or "").startswith(self.OID_PREFIX):
+                continue
+            try:
+                trig = float(row.get("triggerPrice") or 0.0)
+                size = float(row.get("size") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if trig <= 0.0 or size <= 0.0:
+                continue
+            if want_entry is not None:
+                try:
+                    tick = 10.0 ** (-int(self._spec(sym).price_place))
+                except (TypeError, ValueError):
+                    tick = 0.0
+                if abs(trig - want_entry) > tick * 1.5 + 1e-12:
+                    continue
+            # 预设单是整仓 size;部分减仓后它仍可能大于剩余仓位,不能小于剩余仓位。
+            if size + max(1e-9, abs(size) * 1e-6) < float(pos["qty"]):
+                continue
+            out.append(row)
+        return out
+
+    def _cancel_entry_loss_plans(self, sym: str, pos: dict,
+                                 rows: Optional[list], *, reason: str) -> None:
+        """撤掉开仓预设止损的 `loss_plan`;绝不动 pos_loss / profit_plan。"""
+        if self.mode != "live":
+            return
+        for row in self._entry_loss_plan_rows(sym, pos, rows):
+            oid = str(row.get("orderId") or "")
+            if not oid:
+                continue
+            pos["entry_preset_order_id"] = oid
+            try:
+                self.client.cancel_tpsl_order(sym, oid)
+            except BitgetError as e:
+                self.counters["stop_preset_cancel_errors"] = \
+                    self.counters.get("stop_preset_cancel_errors", 0) + 1
+                self._journal("stop_preset_cancel_error",
+                              {"symbol": sym, "order_id": oid,
+                               "why": str(e)[:160], "reason": reason})
+                self._alert_throttled(
+                    f"stop_preset:{sym}",
+                    f"{sym} 开仓预设止损未能撤销({oid});保留 pos_loss 并重试")
+                continue
+            pos["entry_preset_order_id"] = None
+            self.counters["stop_preset_cancels"] = \
+                self.counters.get("stop_preset_cancels", 0) + 1
+            self._journal("stop_preset_cancel",
+                          {"symbol": sym, "order_id": oid,
+                           "trigger": row.get("triggerPrice"),
+                           "reason": reason})
+            self._stops_live_ids, self._stops_live_rows = None, None
+            self._stops_checked_at = 0.0
+
     def _manage_stops(self, now_ms: int) -> None:
         """保护止损单(交易所原生 TPSL `pos_loss` @ 当前 invalid)。
 
@@ -4266,13 +4348,23 @@ class LiveRunner:
                     self.tg.send_alert(
                         f"{sym} 保护止损挂单被拒({str(e)[:80]}),且现价 "
                         f"{mark:.8g} 已越过防线 {want:.8g} → 市价离场")
-        if live_ids is not None:
-            # 快照有效才去重(刚换过单时快照已作废,留待下轮 TTL 重读)
-            self._dedupe_stops(now_ms)
+        # pos_loss 已确认后,把开仓时交易所自动生成的 loss_plan 撤掉;
+        # 保留 pos_loss(唯一事实源)和 profit_plan(半仓止盈)。
+        if self.mode == "live" and live_ids is not None:
+            rows = self._stops_live_rows
+            for sym, pos in list(self.positions.items()):
+                cur = self.stops.get(sym)
+                if (cur is not None and cur.get("order_id")
+                        and not cur.get("mode")
+                        and str(cur["order_id"]) in live_ids):
+                    self._cancel_entry_loss_plans(
+                        sym, pos, rows, reason="pos_loss_active")
+        # 快照有效才去重(刚换过单时快照已作废,留待下轮 TTL 重读)
+        self._dedupe_stops(now_ms)
 
     def _cancel_stop(self, sym: str, why: str) -> None:
+        pos = self.positions.get(sym)
         if self.price_clock == "realtime":
-            pos = self.positions.get(sym)
             target = pos.get("target_order") if pos else None
             if target and target.get("order_id"):
                 try:
@@ -4288,6 +4380,15 @@ class LiveRunner:
                 self.client.cancel_tpsl_order(sym, cur["order_id"])
             except BitgetError:
                 pass
+        if self.mode == "live" and pos is not None:
+            rows = self._stops_live_rows
+            if rows is None:
+                try:
+                    raw = self.client.tpsl_orders_pending()
+                    rows = raw.get("entrustedList") if isinstance(raw, dict) else raw
+                except BitgetError:
+                    rows = None
+            self._cancel_entry_loss_plans(sym, pos, rows, reason="exit")
 
     def _cancel_entry(self, sym: str, reason: str) -> None:
         for oid, it in list(self.open_intents.items()):

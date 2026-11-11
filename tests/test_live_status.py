@@ -50,6 +50,22 @@ def test_status_flags_duplicate_protective_orders():
     assert any("多张保护单" in s for s in got)
 
 
+def test_status_profit_plan_is_not_a_duplicate_stop():
+    got = _issues(pending={"BTCUSDT": [
+        {"orderId": "oid-1", "planType": "pos_loss"},
+        {"orderId": "tp", "planType": "profit_plan"},
+    ]})
+    assert not any("多张保护单" in s for s in got)
+
+
+def test_status_loss_plan_plus_pos_loss_is_duplicate():
+    got = _issues(pending={"BTCUSDT": [
+        {"orderId": "oid-1", "planType": "pos_loss"},
+        {"orderId": "loss", "planType": "loss_plan"},
+    ]})
+    assert any("多张保护单" in s for s in got)
+
+
 def test_status_flags_orphan_and_stale_positions():
     assert any("交易所仓位未被本地接管" in s for s in _issues(positions={}))
     assert any("本地残留仓位" in s for s in _issues(ex={}))
