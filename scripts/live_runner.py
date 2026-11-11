@@ -4122,7 +4122,10 @@ class LiveRunner:
                 continue
             pos["entry_preset_order_id"] = oid
             try:
-                self.client.cancel_tpsl_order(sym, oid)
+                resp = self.client.cancel_plan_order(sym, oid)
+                if (isinstance(resp, dict)
+                        and not (resp.get("successList") or resp.get("failureList"))):
+                    raise BitgetError("cancel-plan-order 未返回成功项")
             except BitgetError as e:
                 self.counters["stop_preset_cancel_errors"] = \
                     self.counters.get("stop_preset_cancel_errors", 0) + 1

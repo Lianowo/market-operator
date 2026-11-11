@@ -127,6 +127,20 @@ def test_cancel_tpsl_order_sends_order_id_list():
     assert "orderId" not in body        # 单值形式撤不掉 TPSL(旧止损存活)
 
 
+def test_cancel_loss_plan_uses_singular_order_id_and_plan_type():
+    sess = _Session()
+    _client(sess).cancel_plan_order("AMATUSDT", "1504291201516285952")
+
+    method, url, raw = sess.calls[0]
+    body = json.loads(raw)
+    assert method == "POST"
+    assert url.endswith("/api/v2/mix/order/cancel-plan-order")
+    assert body["orderId"] == "1504291201516285952"
+    assert body["planType"] == "loss_plan"
+    assert body["marginCoin"] == "USDT"
+    assert "orderIdList" not in body
+
+
 # ---------------------------------------------------------------------------
 # 查:orders-plan-pending 的 planType 只能单值
 # ---------------------------------------------------------------------------

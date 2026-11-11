@@ -428,6 +428,21 @@ class BitgetLiveClient:
             "symbol": symbol, "productType": self.product_type,
             "orderIdList": [{"orderId": str(order_id)}]}) or {}
 
+    def cancel_plan_order(self, symbol: str, order_id: str,
+                          plan_type: str = "loss_plan") -> dict:
+        """撤销旧式计划单(`loss_plan`)。
+
+        与 `cancel_tpsl_order` 的 `orderIdList` 不同,交易所对
+        `presetStopLossPrice` 自动生成的 `loss_plan` 只认**单值**
+        `orderId` + `planType`;传 `orderIdList` 会返回空 successList,
+        即“请求成功但没撤掉”。这里按实测形状组装。
+        """
+        self.require_credentials()
+        return self._request("POST", EP_CANCEL_PLAN, signed=True, body={
+            "symbol": symbol, "productType": self.product_type,
+            "marginCoin": "USDT", "orderId": str(order_id),
+            "planType": str(plan_type)}) or {}
+
     def orders_pending(self, symbol: Optional[str] = None) -> list:
         self.require_credentials()
         params = {"productType": self.product_type}

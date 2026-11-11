@@ -484,6 +484,10 @@ class _FakeClient:
         self.plan_canceled.append((symbol, str(order_id)))
         return {}
 
+    def cancel_plan_order(self, symbol, order_id, plan_type="loss_plan"):
+        self.plan_canceled.append((symbol, str(order_id)))
+        return {}
+
     def recent_fills(self, symbol, limit=20):
         return []
 
