@@ -15,3 +15,22 @@ config/secrets.env
 secrets.env
 reports/_storage_growth.json
 reports/_storage_manifest.jsonl
+# reports/ 体积治理(2026-11-12):版本库只留人类可读结论(.md)与被文档/代码引用的
+# 证据;逐格 CSV/JSON 台账是可再生的字节大件,重新生成时不再入库。既有被删文件的
+# 原名/大小/原 commit 记在 var/reports_purged_20261112.json,可用
+# `git show <commit>:<path>` 取回。
+reports/equity_*.csv
+reports/trades_*.csv
+reports/event_study_events_*.csv
+reports/flow_study_events_*.csv.gz
+reports/aggtrades_contacts.csv.gz
+reports/zonebio.csv
+reports/tf_trigger_exp/
+reports/tf_solo_20261023/
+reports/exp_2h_trigger_30m/
+reports/compounding_*/
+reports/btc_claim_lifecycle*/
+reports/parity_*/
+reports/replay_uncommitted_*/
+reports/risk_budget_search_*/
+reports/tf_trigger_sweep_logs/
