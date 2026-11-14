@@ -12,10 +12,10 @@ from market_operator.broker import Broker
 
 
 @pytest.mark.parametrize("equity, expected", [
-    (300, 0.05), (1000, 0.05), (10000, 0.05),
-    (10000.01, 0.04), (50000, 0.04),
-    (50000.01, 0.03), (200000, 0.03),
-    (200000.01, 0.02), (1e9, 0.02),
+    (500, 0.05), (1000, 0.05), (5000, 0.05),
+    (5000.01, 0.03), (20000, 0.03),
+    (20000.01, 0.02), (100000, 0.02),
+    (100000.01, 0.01), (1e9, 0.01),
 ])
 def test_production_compounding_tiers(equity, expected):
     live = json.loads((ROOT / "config/live.json").read_text(encoding="utf-8"))

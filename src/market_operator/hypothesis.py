@@ -1,209 +1,206 @@
-"""交易假设构建(docs/methodology.md §7)。
+"""基于【原子水平位 Level】的可证伪交易假设(Hypothesis)与寻价目标构建。
 
-每个事件转化为一个可证伪结构 Hypothesis:direction 取自事件;invalid 取自
-`event.attrs["invalid"]`(events.py 已按 §7 口径写入结构失效价的建议值);
-entry = 知时(known_index)下一根 bar 开盘价——构建时刻不可知,由成交装配侧事后代入(`with_entry`),构建时可为 None。
-
-target_1 = 结构目标(§7:"最近的对侧区域边缘 / RANGE 对侧边缘"):
-- 一般事件:沿事件方向、状态 ∈ {ACTIVE, RETESTED, FLIPPED} 的最近对侧区域近缘。
-  多头方向取阻力区(resistance)的下缘 lo,空头取支撑区(support)的上缘 hi。
-  搜索锚点取 `event.attrs["ref"]`(事件触发处已知的结构价位,因果):
-  只接受严格沿方向越过 ref 的区域(多头 z.lo > ref;空头 z.hi < ref),
-  与事件同侧或骑跨 ref 的区域不算"前方目标"。
-  (structure.py 的 ZoneState 命名为 ACTIVE/BROKEN/RETESTED/FLIPPED/DEAD;
-  活视图中 FLIPPED/DEAD 已被移除,此处仍按 §4.2 状态名集合过滤。)
-- RANGE_ROTATED(RANGE_ROTATION):对侧边缘取 attrs["band"] 合成带边缘(多头 band_hi,
-  空头 band_lo),不做区域搜索。
-- 若无结构目标 ⇒ target_1 = None(不编造固定 R 目标,§7 纪律)。
-
-r_mult = direction·(target_1 − entry) / (direction·(entry − invalid)),
-仅当 entry 与 target_1 均存在且方向风险为正时计算;否则为 None。
-行动门槛(r_mult ≥ 1.5,§7 先验)属建仓决策,本模块只度量,不过滤。
-
-v2 增量(docs/v2-protocol.md §1):F1 失效距离下限 `f1_invalid_distance_ok`,
-dist(close(t), invalid) ≥ k_is·atr(t);由 v2 入口调用,不改变 §7 构建口径。
+核心交易逻辑(传统图表 + AMT 拍卖市场理论):
+1. 止损(``invalid``): 交易拍卖假设被彻底证伪的唯一结构极值外侧点。
+2. 目标(``target_1``): 市场完成当前水平位拍卖后,沿最小阻力路径单边寻价的终点——
+   - 若顺势前方存在未消耗的反向【原子水平位 Level】,取最近一条反向水平位的实体颈线内沿 ``neck``;
+   - 若顺势前方处于历史/波段净空区(Price Discovery,无任何反向水平位阻挡),
+     采用传统图表经典的【前一波段 1:1 等幅投射(Measured Move, AB = CD)】作为客观波段目标。
+3. 撞墙与摩擦自洽检验:
+   - 若前方存在反向阻碍水平位且净空空间 ``Room < Risk``(赔率不足 1:1,迎面撞墙),直接否决入场;
+   - 若结构止损窄到双边手续费滑点侵蚀过高比例的 1R,作为微观噪音单否决。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
 import math
+from dataclasses import dataclass, replace
+from typing import Optional, Sequence
+
+from .events import MarketEvent
+from .level import Level, nearest_opposing_level
+from .structure import Params, Pivot, PivotKind, Regime
 
 
 def execution_target(meta: dict, structural_target: Optional[float]) -> Optional[float]:
-    """Explicit None disables target-driven management; absent key is legacy."""
+    """返回持仓执行管理采用的目标位(显式置 None 时不触发目标减仓)。"""
     return meta.get("execution_target", structural_target)
 
 
-def entry_cost_error(direction: int, entry: float, invalid: float,
-                     meta: dict) -> Optional[str]:
-    """Check the configured cost/risk ceiling at a candidate or execution price.
-
-    The cost estimate is the router's frozen per-side estimate, not a second
-    fee/slippage model. Missing/disabled constraints preserve legacy behavior.
-    """
+def entry_cost_error(
+    direction: int, entry: float, invalid: float, meta: dict
+) -> Optional[str]:
+    """检查双边执行摩擦占单笔结构风险(1R)的比例是否超限。"""
     limit = meta.get("max_cost_frac")
     if limit is None:
         return None
     try:
-        limit = float(limit)
-        if limit <= 0.0:
+        limit_f = float(limit)
+        if limit_f <= 0.0:
             return None
-        entry, invalid = float(entry), float(invalid)
+        entry_f, invalid_f = float(entry), float(invalid)
         per_side = float(meta["cost_per_side"])
     except (KeyError, TypeError, ValueError, OverflowError):
         return "INVALID_COST_CONSTRAINT"
-    if (direction not in (-1, 1)
-            or not all(math.isfinite(float(x)) for x in (entry, invalid, limit, per_side))
-            or entry <= 0.0 or per_side < 0.0):
+    if (
+        direction not in (-1, 1)
+        or not all(math.isfinite(x) for x in (entry_f, invalid_f, limit_f, per_side))
+        or entry_f <= 0.0
+        or per_side < 0.0
+    ):
         return "INVALID_COST_CONSTRAINT"
-    risk = direction * (entry - invalid)
-    if risk <= 0.0 or (2.0 * per_side * entry) / risk > limit:
+    risk = direction * (entry_f - invalid_f)
+    if risk <= 0.0 or (2.0 * per_side * entry_f) / risk > limit_f:
         return "ENTRY_COST"
     return None
 
 
-def entry_contract_error(direction: int, entry: float, invalid: float,
-                         target: Optional[float], meta: dict) -> Optional[str]:
-    """Shared route/fill guard; only bounded structure trades require a target."""
+def entry_contract_error(
+    direction: int,
+    entry: float,
+    invalid: float,
+    target: Optional[float],
+    meta: dict,
+    *,
+    at_execution: bool = False,
+) -> Optional[str]:
+    """入场/成交时刻的结构契约自洽校验:
+    - 决策时刻(at_execution=False):严格校验真实障碍墙净空 >= min_rr * Risk;
+    - 市价成交时刻(at_execution=True):已由确认收盘决策通过,吸收正常盘口价差与微小滑点抖动
+      (不再因多涨1分钱或 2bps 滑点变成 1.99 < 2.0 无脑拒单),仅拦截越过止损/目标、成本超标或极端跳空(< 0.75 * min_rr)。
+    """
     if not meta.get("bounded_entry"):
         return entry_cost_error(direction, entry, invalid, meta)
-    if target is None or not all(math.isfinite(float(x)) for x in (entry, invalid, target)):
-        return "MISSING_STRUCTURE_TARGET"
-    risk = direction * (entry - invalid)
-    room = direction * (target - entry)
+    try:
+        entry_f, invalid_f = float(entry), float(invalid)
+    except (TypeError, ValueError):
+        return "BAD_INVALID"
+    if direction not in (-1, 1) or not (math.isfinite(entry_f) and math.isfinite(invalid_f)):
+        return "BAD_INVALID"
+    risk = direction * (entry_f - invalid_f)
     if risk <= 0.0:
         return "BAD_INVALID"
+    if meta.get("target_source") == "open_air":
+        return entry_cost_error(direction, entry_f, invalid_f, meta)
+    wall = meta.get("structural_target", target)
+    if wall is None or not math.isfinite(float(wall)):
+        return "MISSING_STRUCTURE_TARGET"
+    room = direction * (float(wall) - entry_f)
     if room <= 0.0:
         return "TARGET_ALREADY_PASSED"
-    max_prog = meta.get("max_box_progress_frac")
-    inner_px = meta.get("inner_edge")
-    if max_prog is not None and inner_px is not None:
-        span = direction * (float(target) - float(inner_px))
-        if span > 0.0:
-            prog = direction * (float(entry) - float(inner_px)) / span
-            if prog >= float(max_prog):
-                return "BOX_OPPOSITE_THIRD_ENTERED"
-    if room / risk < float(meta.get("entry_min_rr", 0.0)):
+    min_rr = float(meta.get("entry_min_rr", 0.0))
+    eff_min_rr = (0.75 * min_rr) if at_execution else min_rr
+    if room + 1e-9 * risk < eff_min_rr * risk:
         return "INSUFFICIENT_REMAINING_RR"
-    return entry_cost_error(direction, entry, invalid, meta)
-
-from .events import RANGE_ROTATED, MarketEvent
-
-
-
-from .structure import Params, Regime, ZoneRole, ZoneState
-
-TARGET_STATES = (ZoneState.ACTIVE, ZoneState.RETESTED, ZoneState.FLIPPED)
+    return entry_cost_error(direction, entry_f, invalid_f, meta)
 
 
 @dataclass(frozen=True)
 class StructureView:
-    """事件知时(t = known_index 收盘)的结构快照:只含当时已知的事实(A10)。"""
+    """事件确认时刻的因果市场结构只读快照。"""
 
     regime: Regime
-    zones: tuple  # tuple[Zone],只取状态仍在视图中的区域
+    zones: tuple[Level, ...]       # 当前所有活跃原子水平位
     atr: float
-    # The minimum causally confirmed pivot history used by the current
-    # structure model. Optional to preserve all frozen v1-v5 call sites.
-    pivots: tuple = ()
+    pivots: tuple[Pivot, ...] = ()
     macro_imbalance: int = 0
     tf_hours: int = 0
+    imbalance_strength: float = 0.0
+    dollar_volume: float = 0.0
+
+    @property
+    def levels(self) -> tuple[Level, ...]:
+        return self.zones
 
 
 @dataclass(frozen=True)
 class Hypothesis:
-    """§7 可证伪交易假设。entry 缺省 None(研究器代入下一根开盘价)。"""
+    """单笔可证伪结构交易假设。"""
 
     event_id: str
-    direction: int            # +1 多 / -1 空
-    ts: object
-    known_index: int
-    entry: Optional[float]
+    direction: int
     invalid: float
     target_1: Optional[float]
-    r_mult: Optional[float]
     regime: Regime
+    ts: int
+    known_index: int
+    entry: Optional[float] = None
+    target_source: str = "none"    # "opposing_level" | "measured_move" | "none"
 
-    def with_entry(self, entry: float) -> "Hypothesis":
-        """研究器代入知时下一根 bar 开盘价,并重算 r_mult(§7)。"""
-        return Hypothesis(
-            event_id=self.event_id, direction=self.direction, ts=self.ts,
-            known_index=self.known_index, entry=float(entry),
-            invalid=self.invalid, target_1=self.target_1,
-            r_mult=_r_mult(self.direction, entry, self.invalid, self.target_1),
-            regime=self.regime,
-        )
+    @property
+    def r_mult(self) -> Optional[float]:
+        if self.entry is None or self.target_1 is None:
+            return None
+        risk = self.direction * (self.entry - self.invalid)
+        if risk <= 0.0:
+            return None
+        reward = self.direction * (self.target_1 - self.entry)
+        return reward / risk
 
-
-def _structural_target(event: MarketEvent, view: StructureView) -> Optional[float]:
-    """沿事件方向最近的对侧区域近缘;RANGE_ROTATED 取合成带对侧边缘。"""
-    direction = event.direction
-    if event.id == RANGE_ROTATED and "band" in event.attrs:
-        band_lo, band_hi = event.attrs["band"]
-        return float(band_hi) if direction > 0 else float(band_lo)
-
-    ref = event.attrs.get("ref")
-    if ref is None:  # 全部冻结事件均携带 ref;缺省时退回 invalid 作锚(保守)
-        ref = event.attrs["invalid"]
-    if direction > 0:
-        cands = [z.lo for z in view.zones
-                 if z.role is ZoneRole.RESISTANCE and z.state in TARGET_STATES
-                 and z.lo > ref]
-        return min(cands) if cands else None
-    cands = [z.hi for z in view.zones
-             if z.role is ZoneRole.SUPPORT and z.state in TARGET_STATES
-             and z.hi < ref]
-    return max(cands) if cands else None
+    def with_entry(self, entry_price: float) -> "Hypothesis":
+        return replace(self, entry=float(entry_price))
 
 
-def _r_mult(direction: int, entry: Optional[float], invalid: float,
-            target: Optional[float]) -> Optional[float]:
-    if entry is None or target is None:
-        return None
-    risk = direction * (entry - invalid)      # 沿方向每单位本金的最坏结构亏损
-    if risk <= 0.0:                            # 入场已在失效价之外:假设无法成立
-        return None
-    return direction * (target - entry) / risk
-
-
-def build(event: MarketEvent, structure_view: StructureView,
-          params: Optional[Params], entry: Optional[float] = None
-          ) -> Optional[Hypothesis]:
-    """§7 假设构建。event.attrs 缺 "invalid" ⇒ None(不构成可证伪假设)。
-
-    params 保留在签名中(契约:与 §7 先验同来源);当前实现全部阈值已由
-    events.py 写入 attrs,本函数不再引用数值先验。
+def build_hypothesis(
+    ev: MarketEvent,
+    view: StructureView,
+    ref_price: float,
+    _params: Optional[Params] = None,
+    *,
+    htf_views: Sequence[StructureView] = (),
+    min_rr: float = 2.0,
+) -> Optional[Hypothesis]:
+    """由价格拍卖事件与本周期结构几何构建零魔法截断的可证伪交易假设(同时间尺度拿同时间尺度利润):
+    1. 本尺度自然波段半径(AB = CD 1:1 等幅对称投射):取本周期最近已完成波段极值间的真实主推振幅 ``ab_leg``;
+    2. 若顺势前方存在同周期反向水平位 ``opp``:取真实阻力/支撑墙 ``opp.neck`` 与本尺度能量半径 ``ab_leg`` 中更近的客观终点
+       (既不人为截断在死板的 2R,也不盲目幻想跨越本尺度能量的天边历史老顶底);
+    3. 若顺势前方完全净空无阻挡(``open_air``,如创新高价格发现区):直接按本尺度 ``1:1`` 波段投射 ``ab_leg`` 定标。
     """
-    invalid = event.attrs.get("invalid")
-    if invalid is None:
+    inv_raw = ev.attrs.get("invalid")
+    if inv_raw is None:
         return None
-    target = _structural_target(event, structure_view)
-    return Hypothesis(
-        event_id=event.id, direction=event.direction, ts=event.ts,
-        known_index=event.known_index, entry=entry, invalid=float(invalid),
-        target_1=target,
-        r_mult=_r_mult(event.direction, entry, float(invalid), target),
-        regime=structure_view.regime,
+    invalid = float(inv_raw)
+    d = int(ev.direction)
+    ref = float(ref_price)
+    risk = d * (ref - invalid)
+    if risk <= 0.0:
+        return None
+
+    ev_lv: Optional[Level] = ev.attrs.get("level") or ev.attrs.get("zone")
+    excl_uid = ev_lv.uid if ev_lv is not None else None
+
+    pivs = getattr(view, "pivots", ()) or ()
+    legs = (
+        sorted(abs(float(pivs[k].price) - float(pivs[k - 1].price)) for k in range(1, len(pivs)))
+        if len(pivs) >= 2
+        else []
     )
+    min_leg = legs[0] if legs else 0.0
+    q25_leg = legs[len(legs) // 4] if legs else 0.0
 
+    opp = nearest_opposing_level(view.zones, d, ref, exclude_uid=excl_uid)
+    if opp is not None:
+        wall_dist = d * (float(opp.neck) - ref)
+        eff_dist = (
+            min(wall_dist, max(min_leg, float(min_rr) * risk))
+            if wall_dist >= float(min_rr) * risk
+            else wall_dist
+        )
+        raw_target = ref + d * eff_dist
+        target_source = "opposing_level"
+    else:
+        eff_dist = max(q25_leg, float(min_rr) * risk)
+        raw_target = ref + d * eff_dist
+        target_source = "open_air"
 
-# ---------------------------------------------------------------------------
-# F1 失效距离下限(docs/v2-protocol.md §1;v2 增量,不进入 v1 白名单路径)
-# ---------------------------------------------------------------------------
-
-
-def f1_invalid_distance_ok(event: MarketEvent, close: float, k_is: float) -> bool:
-    """F1 门:dist(close(t), invalid) ≥ k_is·atr(t) 才允许 FLIP_RETESTED 入场。
-
-    距离取事件 bar(t)收盘至 invalid 的沿方向距离;atr 用事件 attrs["atr"]
-    (发射 bar 时写入,与 invalid 同一知时刻度)。attrs 缺 "invalid"/"atr" 或
-    atr 非正 ⇒ 判 False(无法验证不满足)。
-    """
-    invalid = event.attrs.get("invalid")
-    atr = event.attrs.get("atr")
-    if invalid is None or atr is None or float(atr) <= 0.0:
-        return False
-    dist = event.direction * (float(close) - float(invalid))
-    return dist >= float(k_is) * float(atr)
+    return Hypothesis(
+        event_id=ev.id,
+        direction=d,
+        invalid=invalid,
+        target_1=raw_target,
+        regime=view.regime,
+        ts=int(ev.ts),
+        known_index=int(ev.known_index),
+        entry=ref,
+        target_source=target_source,
+    )

@@ -77,40 +77,11 @@ from .hypothesis import StructureView, execution_target
 from .split import split_boundary
 from .routing import RouterParams, MarketRouter
 from .structure import Params
-
-@dataclass(frozen=True)
-class ExecutionConfig:
-    """Current position-management and execution settings."""
-
-    breakeven_on_reduce: bool = True
-    reject_opp_lock_frac: float = 0.0
-    # v21.7 锁利口径已收敛为单一参数 `reject_opp_lock_frac`(符号=arming 口径,
-    # |frac| = 目标处锁住的行程比例);回吐预算 = (1−|frac|)·|target−entry|。
-    # 旧的 `opp_lock_max_giveback_r`(R 单位第二把尺子)已删除。
-    # v21.6 出场推进粒度(False ⇒ 逐位旧行为:§8.2/§8.3 只在认知 bar 收盘推进)
-    # True ⇒ 每根已收盘执行细 bar 也推进价格型出场(目标/锁利/移动防线),
-    # 不影响路由、准入、开仓与任何时间类计数(见 position.on_bar.price_only)。
-    exit_exec: bool = False
-    # exit_exec=True 时是否也把 §8.3 移动防线搬到执行细 bar(False ⇒ 只提前
-    # §8.2 目标/锁利,trail 仍只在认知收盘推进)
-    exit_exec_trail: bool = True
-    # v21.6 细尺度 pivot 提前推进§8.3(False ⇒ 逐位旧行为):
-    # 帧上 `CampaignFrame.exec_pivots` 给出「更细周期在该执行细 bar 收盘确认的
-    # pivot」,本开关把它们喂给同一根 bar 的价格型裁决;不加时间计数、不消费事件。
-    # 与 exit_exec 正交:pivot_exec 只补 pivot,是否也提前 §8.2 仍由 exit_exec 决定。
-    pivot_exec: bool = False
-    # ── 回吐预算单位(2026-10-30)───────────────────────────────────────────
-    # `None` ⇒ 沿用 span 比例口径:budget = (1−|frac|)·|target−entry|。
-    # 数值 ⇒ 改用**ATR 单位**:budget = giveback_atr_k × ATR(建仓后首根冻结),
-    # 并封顶为 span(不允许回吐超过整段计划行程)。
-    # 动机:span 在 0.95R~6R 之间变化,同一个 75% 在不同目标距离下行为完全不同;
-    # `1.0–1.5R` 区间被实测为死区(均净 +0.019R),正是这种尺度不一致的机械后果。
-    giveback_atr_k: Optional[float] = None
-    accept_reenter_box_exit: bool = False
-    vol_based_frac_map: Optional[dict] = None
-    partial_exit_enabled: bool = False
-
-
+from .engine import (
+    ExecutionConfig,
+    build_position_manager,
+    select_cognition_route_events,
+)
 
 
 def require_exec_pivots(pivot_exec: bool, frames) -> None:
@@ -227,8 +198,8 @@ def build_campaign_frame(cog: SymbolCognition, df_exec: pd.DataFrame,
             raise AssertionError(
                 f"{cog.symbol}@{tf_label} exec grid gap {a} -> {b} "
                 f"(step {ms_exec})")
-    if tf_hours == 1:
-        # 1h 战役:复用 v4 的 1h⟷15m 覆盖断言(完整覆盖 + 每根 4 子 bar)
+    if tf_hours == 1 and ms_exec == MS_15M:
+        # 1h 战役配 15m 执行帧时:复用 v4 的 1h⟷15m 覆盖断言;配 30m/1h 执行帧时走下方通用网格对齐断言
         assert_aligned(cog.bars, rows)
     # TF ≥ 2h:首/末认知桶可为不完整聚合桶(同 aggregate.py 口径,如实保留,
     # 数据缺失只发生在桶的头或尾);对齐完整性由逐认知 bar 的"区间内无洞
@@ -316,7 +287,9 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
     if not (0.0 < portfolio_cap_frac <= 1.0):
         raise ValueError("portfolio_cap_frac must be in (0, 1]")
 
-    keys = sorted(frames)
+    # 自顶向下(Top-Down)严格调度优先级:同一标的永远先推进/路由高周期(如 1d),再推进下级周期(如 4h),
+    # 既确保下级周期读取到最新闭合的高周期结构地图,又赋予宏观大周期优先持仓槽位权!
+    keys = sorted(frames, key=lambda k: (frames[k].symbol, -frames[k].tf_hours, k))
     base_rp = router_params or RouterParams()
     router_cls = router_factory or MarketRouter
     seg_bounds: dict = {}
@@ -332,25 +305,14 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                            "ts_hi": f.cog.bars[hi - 1][0] if hi > 0 else None}
         rp_for_key = (router_params_by_tf.get(f.tf_label, base_rp)
                       if router_params_by_tf is not None else base_rp)
+        eff_arm = arm if arm is not None else ExecutionConfig()
         states[key] = _CampaignState(
-            frame=f, router=router_cls(rp_for_key),
-            pos_mgr=PositionManager(
-                params, allow_add=False,
-                breakeven_on_reduce=(arm.breakeven_on_reduce if arm is not None
-                                     else True),
-                time_stop=False,             # §8.6 关闭(原臂 B 接线)
-                reject_opp_lock_frac=(arm.reject_opp_lock_frac if arm is not None
-                                      else 0.0),
-                giveback_atr_k=(arm.giveback_atr_k if arm is not None
-                                else None),
-                accept_reenter_box_exit=(arm.accept_reenter_box_exit if arm is not None
-                                         else False),
-                vol_based_frac_map=(arm.vol_based_frac_map if arm is not None
-                                    else None),
-                partial_exit_enabled=(arm.partial_exit_enabled if arm is not None
-                                      else False)),
-
-            lo=lo, hi=hi)
+            frame=f,
+            router=router_cls(rp_for_key),
+            pos_mgr=build_position_manager(params, eff_arm),
+            lo=lo,
+            hi=hi,
+        )
     # 事件对象使用规范 ID(BREAKOUT_ACCEPTED/LEVEL_REJECTED)，配置允许使用
     # ACCEPT/REJECT 等别名。路由器内部已经按规范集合判定；诊断计数必须使用
     # 同一集合，否则实际发生的 mic/canonical GO 会被静默记成 0。
@@ -466,7 +428,22 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
                     _cognition_step(st, broker, i, counters, cap_skips,
                                     seg_bounds[key], go_set, n_fill, claim_events,
                                     states=states)
-        for key, index in mic_closes.get(moment, ()):
+        mic_batch = mic_closes.get(moment, ())
+        if len(mic_batch) > 1:
+            # 二维横截面真金白银流动性龙头优先调度(纯 OHLCV 因果成交额 dollar_volume 内生驱动,零人为标的偏好):
+            # 同一时刻多标的触发决策竞争有限风险槽位时,高周期先于低周期、实时资金成交额越大的市场主战场优先获配资金!
+            def _mic_rank(item: tuple[str, int]) -> tuple[int, float, float, str]:
+                k_m, idx_m = item
+                fm = frames[k_m]
+                mic_views = getattr(fm.mic, "views", None) if fm.mic is not None else None
+                vw_m = mic_views.get(idx_m) if isinstance(mic_views, dict) else None
+                dv_s = float(getattr(vw_m, "dollar_volume", 0.0)) if vw_m is not None else 0.0
+                imb_s = abs(float(getattr(vw_m, "imbalance_strength", 0.0))) if vw_m is not None else 0.0
+                return (-fm.tf_hours, -dv_s, -imb_s, k_m)
+
+            mic_batch = sorted(mic_batch, key=_mic_rank)
+
+        for key, index in mic_batch:
             st = states[key]
             # ts is the last execution opening label, preserving direct helper
             # compatibility; scheduling itself uses the actual MIC close.
@@ -480,7 +457,17 @@ def run_campaigns(frames: dict, *, segment: str, dev_frac: float,
             # queue a new close-derived liquidation for this same open.
             broker.last_mark.update({key: frames[key].exec_bars[moment][1]
                                      for key in opening})
-        # Same-time capacity competition has an explicit deterministic key FIFO.
+            if len(opening) > 1:
+                def _open_rank(k_o: str) -> tuple[int, float, str]:
+                    p_list = broker.pending.get(k_o) or ()
+                    best_pri = max(
+                        (float(po.meta.get("priority_score", 0.0)) for po in p_list if po.intent.kind is OrderKind.OPEN),
+                        default=-1e9,
+                    )
+                    return (-frames[k_o].tf_hours, -best_pri, k_o)
+
+                opening = sorted(opening, key=_open_rank)
+        # Same-time capacity competition uses endogenous 2D relative-strength priority.
         for key in opening:
             st = states[key]
             o = st.frame.exec_bars[moment][1]
@@ -700,9 +687,78 @@ def _apply_resting_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
             counters["limit_min_size_skips"] += 1
 
 
+def _tf_hours_of_key(key: str) -> int:
+    tf = capacity.timeframe_of(key)
+    return int(TF_HOURS.get(tf, 0)) if tf else 0
+
+
+def _symbol_position_open(broker, key: str) -> bool:
+    """多时间尺度仓位升格互斥:
+    - 若同标的已有【同周期或更高周期】持仓 ⇒ 阻塞当前低周期(大级别趋势在途,小周期不添乱);
+    - 若同标的仅有【更低周期】持仓,而当前更高周期确认信号 ⇒ 允许通行并在下单时触发仓位升格(SCALE_PROMOTED)!
+    """
+    my_h = _tf_hours_of_key(key)
+    if my_h <= 0:
+        fn = getattr(broker, "symbol_has_position", None)
+        return bool(fn(key)) if fn is not None else (broker.position_of(key) is not None)
+    root = capacity.symbol_root(key)
+    for k_open in getattr(broker, "positions", ()):
+        if capacity.symbol_root(k_open) == root and _tf_hours_of_key(k_open) >= my_h:
+            return True
+    return False
+
+
+def _symbol_entry_resting(broker, key: str) -> bool:
+    my_h = _tf_hours_of_key(key)
+    if my_h <= 0:
+        fn = getattr(broker, "symbol_has_entry_order", None)
+        return bool(fn(key)) if fn is not None else bool(broker.has_entry_limit(key))
+    root = capacity.symbol_root(key)
+    for k_p, orders in getattr(broker, "pending", {}).items():
+        if capacity.symbol_root(k_p) == root and _tf_hours_of_key(k_p) >= my_h:
+            if any(po.intent.kind is OrderKind.OPEN for po in orders):
+                return True
+    for k_r, orders in getattr(broker, "resting", {}).items():
+        if capacity.symbol_root(k_r) == root and _tf_hours_of_key(k_r) >= my_h:
+            if any(od.role == "entry" for od in orders):
+                return True
+    return False
+
+
+def _portfolio_breadth_at(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple[float, int, float]:
+    """在 close_moment_ms 计算同周期所有标的因果可见的横截面市场宽度与成交额中位数(纯 OHLCV 驱动)。"""
+    if not states:
+        return 0.0, 1, 0.0
+    tf_h = st.frame.tf_hours
+    ms_tf = tf_h * MS_1H
+    max_open_ts = int(close_moment_ms) - ms_tf
+    regs: list = []
+    dvs: list[float] = []
+    for other in states.values():
+        of = other.frame
+        if of.tf_hours != tf_h:
+            continue
+        bars = of.cog.bars
+        idx = bisect_right(bars, max_open_ts, key=lambda b: int(b[0])) - 1
+        if idx >= 0 and idx < len(of.cog.regimes):
+            regs.append(of.cog.regimes[idx])
+            cog_dvs = getattr(of.cog, "dollar_volumes", None)
+            if cog_dvs and idx < len(cog_dvs):
+                dvs.append(float(cog_dvs[idx]))
+    med_dv = 0.0
+    if dvs:
+        dvs.sort()
+        med_dv = float(dvs[len(dvs) // 2])
+    if len(regs) < 4:
+        return 0.0, len(regs), med_dv
+    up = sum(1 for r in regs if r.value == "trend_up")
+    dn = sum(1 for r in regs if r.value == "trend_down")
+    return float(up - dn) / float(len(regs)), len(regs), med_dv
+
+
 def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple:
-    """获取同标的更高周期(htf_hours >= 2 * tf_hours,如 2h->4h/12h/1d, 4h->12h/1d)在 close_moment_ms 前最新已收盘认知视图。"""
-    if not states or not getattr(getattr(st.router, "params", None), "htf_wall_filter", False):
+    """获取同标的更高周期(htf_hours >= 2 * tf_hours)在 close_moment_ms 前最新已收盘原子水平位与宏观状态视图。"""
+    if not states:
         return ()
     sym = st.frame.symbol
     tf_h = st.frame.tf_hours
@@ -784,19 +840,17 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
         groups.setdefault((routing_bar, routing_index), []).append(event)
     close_moment = int(_ts) + mic.trigger_tf_seconds * 1000
     htf_views = _htf_views_for(st, states, close_moment)
+    m_breadth, n_univ, med_dv = _portfolio_breadth_at(st, states, close_moment)
     decisions = []
     for (routing_bar, routing_index), events in groups.items():
-        if htf_views:
-            decisions.extend(st.router.on_bar(
-                sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
-                position_open=broker.position_of(key) is not None,
-                entry_resting=broker.has_entry_limit(key),
-                htf_views=htf_views))
-        else:
-            decisions.extend(st.router.on_bar(
-                sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
-                position_open=broker.position_of(key) is not None,
-                entry_resting=broker.has_entry_limit(key)))
+        decisions.extend(st.router.on_bar(
+            sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
+            position_open=_symbol_position_open(broker, key),
+            entry_resting=_symbol_entry_resting(broker, key),
+            htf_views=htf_views,
+            market_breadth=m_breadth,
+            universe_size=n_univ,
+            median_dollar_volume=med_dv))
     # mic 挂单可成交窗口 = 本 trigger bar 之后任意更细 bar(小时桶口径与
     # broker 窗口机制一致:fill_after = 本小时桶前一小时,即成交流程自次一
     # trigger bar 起可成交);expiry = 决策时刻 + N_fill 墙钟小时(同 canonical)
@@ -966,19 +1020,8 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     lo, hi = bounds["lo"], bounds["hi"]
     if not (lo <= i < hi):
         return
-    # 多周期级联职责边界:当本战役已挂载细周期触发器(f.mic is not None)时,
-    # 活跃箱体边界拒绝(BOX_EDGE LEVEL_REJECTED)已由细周期实时捕捉与确认,粗周期收盘不再迟钝重发;
-    # 但翻转箱沿外侧回踩拒绝(FLIPPED_BOX_EDGE LEVEL_REJECTED)依拍卖职责必须在大周期认知收盘确认,故保留。
-    route_events = (
-        [
-            e for e in new_events
-            if not (
-                e.id == "LEVEL_REJECTED"
-                and getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE") == "BOX_EDGE"
-            )
-        ]
-        if f.mic is not None
-        else new_events
+    route_events = select_cognition_route_events(
+        new_events, has_trigger_tracker=(f.mic is not None)
     )
     if not route_events:
         return
@@ -987,14 +1030,14 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     if htf_views:
         decisions = st.router.on_bar(
             sym, bar, i, cog.views.get(i), atr, route_events,
-            position_open=broker.position_of(key) is not None,
-            entry_resting=broker.has_entry_limit(key),
+            position_open=_symbol_position_open(broker, key),
+            entry_resting=_symbol_entry_resting(broker, key),
             htf_views=htf_views)
     else:
         decisions = st.router.on_bar(
             sym, bar, i, cog.views.get(i), atr, route_events,
-            position_open=broker.position_of(key) is not None,
-            entry_resting=broker.has_entry_limit(key))
+            position_open=_symbol_position_open(broker, key),
+            entry_resting=_symbol_entry_resting(broker, key))
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar
     extra = {"execution_step_ms": f.ms_exec,
              "execution_not_before": t + f.tf_hours * MS_1H}
@@ -1036,6 +1079,36 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
+        # 单标的跨周期协调:同周期或更高周期已在仓则让路;若仅有更低周期在仓,则结清低周期仓位完成【仓位升格(SCALE_PROMOTED)】!
+        if _symbol_position_open(broker, key) or _symbol_entry_resting(broker, key):
+            counters["symbol_slot_skips"] = counters.get("symbol_slot_skips", 0) + 1
+            continue
+        my_h = int(getattr(st.frame, "tf_hours", 0) or _tf_hours_of_key(key))
+        root_sym = capacity.symbol_root(key)
+        if my_h > 0:
+            for k_low, pos_low in list(broker.positions.items()):
+                if capacity.symbol_root(k_low) == root_sym and 0 < _tf_hours_of_key(k_low) < my_h:
+                    if not any(po.intent.kind is OrderKind.EXIT for po in broker.pending.get(k_low, ())):
+                        promo_exit = OrderIntent(
+                            kind=OrderKind.EXIT,
+                            symbol=k_low,
+                            qty_frac=1.0,
+                            reason=f"SCALE_PROMOTED|to={key}",
+                            ref_price=float(broker.last_mark.get(k_low, pos_low.entry)),
+                            ts=int(t),
+                        )
+                        exec_nb = extra_meta.get("execution_not_before") if extra_meta else None
+                        broker.submit(
+                            promo_exit,
+                            decision_ts=int(t),
+                            meta={"execution_not_before": exec_nb} if exec_nb is not None else None,
+                        )
+                        counters["scale_promotions"] = counters.get("scale_promotions", 0) + 1
+            for k_pend in list(broker.pending):
+                if capacity.symbol_root(k_pend) == root_sym and 0 < _tf_hours_of_key(k_pend) < my_h:
+                    broker.pending[k_pend] = [po for po in broker.pending[k_pend] if po.intent.kind is not OrderKind.OPEN]
+                    if not broker.pending[k_pend]:
+                        broker.pending.pop(k_pend, None)
         # 组合容量(口径唯一,见 capacity):优先按可用剩余额度动态缩量(>=25% 标准仓位),不足时跳过。
         # 风险金额与成交裁剪同用「风险资本」;杠杆上限仍用盯市权益(偿付能力)。
         equity = broker.equity_mtm()
@@ -1207,8 +1280,8 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
 def _arm_reduce_limit(broker: Broker, st: _CampaignState, intent,
                       decision_ts: int, n_fill: int, *,
                       known_at: Optional[int] = None) -> bool:
-    """§8.2 减仓 → 目标(target_1)限价挂单(maker);无仓/无目标/取整 0 ⇒ 市价回退。"""
-    if intent.reason and ("partial_exit" in intent.reason):
+    """状态型目标减仓(PARTIAL_TARGET / partial_exit)与实盘一致统一走市价减仓,不挂可能悬空的限价单。"""
+    if intent.reason and ("partial_exit" in intent.reason or "PARTIAL_TARGET" in intent.reason):
         return False
     f = st.frame
     key, sym = f.key, f.symbol

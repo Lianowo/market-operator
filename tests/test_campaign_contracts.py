@@ -31,10 +31,8 @@ def test_market_data_reuses_execution_and_trigger_frames(monkeypatch):
     market = scenario.load_market_data(("BTCUSDT",), Params(), progress=False)
     execution = market.trigger_frame["BTCUSDT"][3600]
     assert all(frame is execution for frame in market.execution_frame.values())
-    assert market.cognition_frame[("BTCUSDT", "2h")] is market.trigger_frame["BTCUSDT"][7200]
     assert market.cognition_frame[("BTCUSDT", "4h")] is market.trigger_frame["BTCUSDT"][14400]
     assert all(count == 1 for count in loads.values())
-    assert ("BTCUSDT", "2h") not in loads
     assert ("BTCUSDT", "4h") not in loads
 
 
@@ -81,3 +79,27 @@ def test_retired_experiments_have_no_configuration_or_position_state():
                 & {field.name for field in fields(Position)})
     with pytest.raises(TypeError):
         PositionManager(harvest_family=("LEVEL_REJECTED",))
+
+
+def test_scale_promotion_allows_higher_tf_and_closes_lower_tf():
+    from types import SimpleNamespace
+    from market_operator.broker import Broker, ContractSpec, OrderIntent, OrderKind
+
+    specs = {k: ContractSpec(k, 0.001, 0.001, 3, 2, 5) for k in ("BTCUSDT@1h", "BTCUSDT@4h", "BTCUSDT@1d")}
+    b = Broker(1000.0, risk_frac=0.02, leverage_cap=20.0, taker_fee=0.0006, slippage_per_side=0.0002, funding_per_8h=0.0, contracts=specs)
+    # Open 1h position first
+    b.submit(OrderIntent(OrderKind.OPEN, "BTCUSDT@1h", None, "init_1h", 100.0, 0), 0, direction=1, invalid=95.0)
+    b.on_bar_open("BTCUSDT@1h", 3_600_000, 100.0)
+    assert "BTCUSDT@1h" in b.positions
+
+    # Same 1h is blocked, higher 4h is NOT blocked (eligible for promotion!)
+    assert campaign._symbol_position_open(b, "BTCUSDT@1h") is True
+    assert campaign._symbol_position_open(b, "BTCUSDT@4h") is False
+
+    # Submitting 4h decision queues SCALE_PROMOTED exit on 1h and opens 4h
+    hyp = SimpleNamespace(direction=1, invalid=90.0, target_1=130.0, event_id="LEVEL_REJECTED", regime=SimpleNamespace(value="range"), r_mult=3.0, ts=3_600_000)
+    dec = SimpleNamespace(kind="market", intent=OrderIntent(OrderKind.OPEN, "BTCUSDT", None, "4h_open", 102.0, 3_600_000), hyp=hyp, route="level_rejected_market", meta={})
+    counters = {"portfolio_cap_skips": 0, "open_intents": 0}
+    campaign._submit_decisions(SimpleNamespace(frame=SimpleNamespace(key="BTCUSDT@4h", tf_hours=4)), b, [dec], 3_600_000, 3_600_000, 3_600_000, {}, counters, [], 12, 7_200_000)
+    assert counters.get("scale_promotions") == 1
+    assert any(po.intent.kind is OrderKind.EXIT and "SCALE_PROMOTED" in po.intent.reason for po in b.pending.get("BTCUSDT@1h", ()))

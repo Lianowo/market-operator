@@ -709,17 +709,30 @@ class Broker:
         return headroom, f"claim:{root}:{direction:+d}", float(frac)
 
     def opposite_claim_open(self, symbol: str, direction: int) -> Optional[str]:
-        """同标的是否已有反向在仓;有则返回那把仓位键。
-
-        语义:对同一标的,"会涨"和"会跌"不可能同时为真。两张相反仓位净敞口为零,
-        却各付一份成本、各占一份预算、各等一个止损 —— 那不是两个判断,是一个
-        没有方向的账户在付费。
-        """
+        """同标的是否已有反向在仓(若低周期反向仓已排队 EXIT 正在升格/反转交接,则不阻塞高周期接管)。"""
         root = capacity.symbol_root(symbol)
         for key, pos in self.positions.items():
             if capacity.symbol_root(key) == root and pos.direction != direction:
+                if any(po.intent.kind is OrderKind.EXIT for po in self.pending.get(key, ())):
+                    continue
                 return key
         return None
+
+    def symbol_has_position(self, symbol: str) -> bool:
+        """同标的(跨所有周期)是否已有任何在途持仓(对齐交易所单标的唯一持仓物理现实)。"""
+        root = capacity.symbol_root(symbol)
+        return any(capacity.symbol_root(k) == root for k in self.positions)
+
+    def symbol_has_entry_order(self, symbol: str) -> bool:
+        """同标的(跨所有周期)是否已有待成交开仓单或入场限价挂单。"""
+        root = capacity.symbol_root(symbol)
+        for k, orders in self.pending.items():
+            if capacity.symbol_root(k) == root and any(po.intent.kind is OrderKind.OPEN for po in orders):
+                return True
+        for k, orders in self.resting.items():
+            if capacity.symbol_root(k) == root and any(od.role == "entry" for od in orders):
+                return True
+        return False
 
     def qty_within_risk_budget(self, equity: float, price: float,
                                risk_per_unit: float,
@@ -1020,7 +1033,7 @@ class Broker:
         d = po.direction
         side = "buy" if d > 0 else "sell"
         price = self._slipped(o, side, sym)
-        error = entry_contract_error(d, price, po.invalid, po.target_1, po.meta)
+        error = entry_contract_error(d, price, po.invalid, po.target_1, po.meta, at_execution=True)
         if error:
             return self._skip_row(po, ts, error, "structure entry contract failed", price=price)
 

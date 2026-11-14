@@ -307,9 +307,16 @@ def _check_strategy() -> Check:
         raw = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         return Check("策略配置", "fail", f"解析失败:{e}")
-    if not isinstance(raw, dict) or "params" not in raw:
-        return Check("策略配置", "warn", "缺少 params 段(沿用默认参数)")
-    return Check("策略配置", "ok", f"{len(raw)} 个顶层键")
+    if not isinstance(raw, dict):
+        return Check("策略配置", "fail", "根对象不是字典")
+    if "params" not in raw and "version" not in raw:
+        return Check("策略配置", "warn", "缺少 version/params 标识")
+    try:
+        from .engine import load_strategy_bundle
+        load_strategy_bundle(p)
+    except Exception as e:
+        return Check("策略配置", "fail", f"策略装配校验失败:{e}")
+    return Check("策略配置", "ok", f"version={raw.get('version', '-')} ({len(raw)} 键)")
 
 
 def _check_secrets(cfg: dict) -> Check:

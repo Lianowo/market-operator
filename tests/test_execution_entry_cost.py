@@ -33,9 +33,12 @@ def _broker():
 
 
 def test_router_propagates_cost_contract_only_when_enabled():
-    event = MarketEvent(BREAKOUT_ACCEPTED, 1, 0, 1, {})
-    args = ("X", (0, 100, 101, 99, 100, 1), 1, StructureView(Regime.RANGE, (), 1), 1, [event])
-    params = RouterParams(max_cost_frac=.1)
+    from market_operator.level import Level, LevelKind, LevelRole, LevelState
+    lv = Level(1, LevelRole.RESISTANCE, LevelKind.EQUAL, 99.5, 99.0, LevelState.TESTED, 0, 1, 0, 1, touches=2)
+    opp = Level(2, LevelRole.RESISTANCE, LevelKind.SWING, 112.0, 110.0, LevelState.FRESH, 0, 1, 0, 1)
+    event = MarketEvent(BREAKOUT_ACCEPTED, 1, 0, 1, {"level": lv, "zone": lv, "invalid": 97.0, "ref": 99.5})
+    args = ("X", (0, 99.5, 101, 99, 100, 1), 1, StructureView(Regime.TREND_UP, (opp,), 1), 1, [event])
+    params = RouterParams(max_cost_frac=.1, cost_per_side=.0008)
     enabled, = MarketRouter(params).on_bar(*args, position_open=False, entry_resting=False)
     disabled, = MarketRouter(replace(params, max_cost_frac=None)).on_bar(
         *args, position_open=False, entry_resting=False)
@@ -158,3 +161,37 @@ def test_invalid_explicit_cost_contract_fails_closed_without_exception(tmp_path,
     runner._submit_open(_campaign(), decision, NOW, mic=False)
     assert client.market_orders == [] and runner.open_intents == {}
     assert "INVALID_COST_CONSTRAINT" in tg.signals[0]["exec_status"]
+
+
+def test_market_execution_absorbs_minor_slippage_without_cliff_rejection():
+    """决策时刻刚好满足 2.0R 的市价单,下一拍开盘多涨 1 分钱或 2bps 滑点变成 1.99R 时绝不误杀,但极端跳空(<1.5R)仍可靠拦截。"""
+    meta = {
+        "bounded_entry": True,
+        "entry_min_rr": 2.0,
+        "structural_target": 110.0,
+        "target_source": "opposing_level",
+        "cost_per_side": 0.0008,
+        "max_cost_frac": 0.12,
+    }
+    # Decision gate is strict at 2.0R:
+    assert entry_contract_error(1, 100.0, 95.0, 110.0, meta, at_execution=False) is None
+    assert entry_contract_error(1, 100.02, 95.0, 110.0, meta, at_execution=False) == "INSUFFICIENT_REMAINING_RR"
+    # Execution gate absorbs minor 2bps~5bps spread/slippage (1.99R) cleanly:
+    assert entry_contract_error(1, 100.02, 95.0, 110.0, meta, at_execution=True) is None
+    # Extreme adverse gap (< 1.5R remaining) is still blocked:
+    assert entry_contract_error(1, 101.5, 95.0, 110.0, meta, at_execution=True) == "INSUFFICIENT_REMAINING_RR"
+
+
+def test_mid_trade_opposing_auction_exits_before_hard_stop():
+    """持仓途中若市场发生突发转向并确认反向 LEVEL_REJECTED,当即离场而不必死扛到底部止损。"""
+    from market_operator.events import LEVEL_REJECTED
+    from market_operator.position import PositionManager
+
+    pm = PositionManager()
+    pm.open("BTCUSDT", 1, 100.0, 94.0, 112.0, "LEVEL_REJECTED", 0, 0)
+    rev_ev = MarketEvent(LEVEL_REJECTED, -1, 3_600_000, 1, {})
+    intents = pm.on_bar("BTCUSDT", (3_600_000, 103.0, 104.0, 98.5, 99.0, 10.0), 2.0, new_events=[rev_ev])
+    assert len(intents) == 1
+    assert intents[0].kind is OrderKind.EXIT
+    assert "OPPOSING_AUCTION_EXIT" in intents[0].reason
+

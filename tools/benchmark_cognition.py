@@ -27,10 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _plain(value):
     if dataclasses.is_dataclass(value):
-        # Process-local zone allocation is not a market fact. All structural
+        # Process-local level UID allocation is not a market fact. All structural
         # fields, order, prices and timestamps remain in the fingerprint.
         return {f.name: _plain(getattr(value, f.name))
-                for f in dataclasses.fields(value) if f.name != "zone_uid"}
+                for f in dataclasses.fields(value) if f.name not in ("zone_uid", "uid")}
     if isinstance(value, dict):
         return {key: _plain(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
@@ -40,7 +40,8 @@ def _plain(value):
 
 def _case_labels(sizes):
     return [label for n in sizes for label in (f"dense_pivots_{n}", f"no_pivots_{n}")] + [
-        f"BTCUSDT_1h_balance_{balance}" for balance in (False, True)]
+        "BTCUSDT_1h_level",
+    ]
 
 
 def _fingerprint(outcome):
@@ -94,18 +95,31 @@ def _worker(args):
     if not Path(replay.__file__).resolve().is_relative_to(args.source.resolve()):
         raise RuntimeError("worker imported replay outside requested source")
     label = args.case
-    if label.startswith(("dense_pivots_", "no_pivots_")):
+    if label.startswith("dense_pivots_"):
+        n = int(label.rsplit("_", 1)[1])
+        idx = np.arange(n, dtype="float64")
+        wave = np.where((np.arange(n) % 4) < 2, 100.0 + 4.0 * (np.arange(n) % 2), 108.0 - 4.0 * (np.arange(n) % 2))
+        df = pd.DataFrame({
+            "ts": np.arange(n, dtype="int64") * 3_600_000,
+            "open": wave,
+            "high": wave + 2.0,
+            "low": wave - 2.0,
+            "close": wave + np.where((idx.astype(int) % 4) < 2, 1.5, -1.5),
+            "volume": 1.0,
+        })
+        params = Params(swing_wing=1)
+    elif label.startswith("no_pivots_"):
         n = int(label.rsplit("_", 1)[1])
         df = pd.DataFrame({"ts": np.arange(n, dtype="int64") * 3_600_000,
                            "open": 100., "high": 102., "low": 98.,
                            "close": 100., "volume": 1.})
-        params = Params(k_rev=.5) if label.startswith("dense_pivots_") else Params()
+        params = Params()
     else:
         df = pd.read_csv(ROOT / "data" / "raw" / "BTCUSDT_1h.csv")
-        params = Params(use_balance_detector=label.endswith("_True"))
-    result = _measure(lambda: prepare_cognition(df, params, "BTCUSDT", enable_e7=True),
+        params = Params()
+    result = _measure(lambda: prepare_cognition(df, params, "BTCUSDT"),
                       args.mode, args.repeats, args.warmups)
-    if label.startswith("dense_pivots_") and result["pivots"] < len(df) // 2:
+    if label.startswith("dense_pivots_") and result["pivots"] < len(df) // 6:
         raise AssertionError("dense-pivot benchmark failed to exercise pivot updates")
     if label.startswith("no_pivots_") and result["pivots"] != 0:
         raise AssertionError("zero-pivot benchmark unexpectedly has pivots")

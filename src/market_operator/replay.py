@@ -17,7 +17,7 @@ import pandas as pd
 from .events import EventDetector
 from .hypothesis import StructureView
 from .split import split_boundary
-from .structure import Params, ZoneState
+from .structure import Params
 
 MS_PER_HOUR = 3_600_000
 MS_PER_DAY = 86_400_000
@@ -29,7 +29,7 @@ BOUNDARY_1H_INDEX_FROZEN = 12320
 
 @dataclass
 class SymbolCognition:
-    """单品种逐 bar 认知缓存。"""
+    """单品种逐 bar 认知缓存(基于【原子水平位 Level】)。"""
 
     symbol: str
     bars: list
@@ -40,16 +40,18 @@ class SymbolCognition:
     regimes: list
     macro_imbalances: list = field(default_factory=list)
     active_zones: list = field(default_factory=list)
+    imbalance_strengths: list = field(default_factory=list)
+    dollar_volumes: list = field(default_factory=list)
 
 
 def prepare_cognition(
     df: pd.DataFrame,
     params: Params,
     symbol: str,
-    enable_e7: bool = False,
+    **_ignored_legacy,
 ) -> SymbolCognition:
-    """严格时间序回放 EventDetector,缓存逐 bar 认知产物。"""
-    detector = EventDetector(params, enable_e7=enable_e7)
+    """严格因果时间序回放 EventDetector,缓存每根收盘 K 线后的原子水平位快照与事件。"""
+    detector = EventDetector(params)
     bars: list = []
     atrs: list = []
     events_by: dict = {}
@@ -58,6 +60,8 @@ def prepare_cognition(
     regimes: list = []
     macro_imbalances: list = []
     active_zones: list = []
+    imbalance_strengths: list = []
+    dollar_volumes: list = []
     n_pivots_before = 0
     for row in df[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False):
         bar = (
@@ -70,13 +74,10 @@ def prepare_cognition(
         bars.append(bar)
         atrs.append(s.atr())
         regimes.append(s.regime())
-        macro_imbalances.append(s.macro_imbalance(params.k_room))
-        if params.use_balance_detector:
-            active_zones.append(
-                tuple(z.clone() for z in s._zones.zones if z.state is ZoneState.ACTIVE)
-            )
-        else:
-            active_zones.append(())
+        macro_imbalances.append(s.macro_imbalance())
+        imbalance_strengths.append(s.imbalance_strength())
+        dollar_volumes.append(s.dollar_volume())
+        active_zones.append(tuple(lv.clone() for lv in s.levels))
         n_pivots = s.pivot_count
         if n_pivots > n_pivots_before:
             pivots_by[t] = list(s.pivot_slice(n_pivots_before))
@@ -85,9 +86,11 @@ def prepare_cognition(
             events_by[t] = list(emitted)
             views[t] = StructureView(
                 regime=s.regime(),
-                zones=s.zones,
+                zones=s.levels,
                 atr=s.atr(),
                 pivots=s.pivot_slice(-params.range_max_pivots),
+                imbalance_strength=s.imbalance_strength(),
+                dollar_volume=s.dollar_volume(),
             )
     return SymbolCognition(
         symbol=symbol,
@@ -99,6 +102,8 @@ def prepare_cognition(
         regimes=regimes,
         macro_imbalances=macro_imbalances,
         active_zones=active_zones,
+        imbalance_strengths=imbalance_strengths,
+        dollar_volumes=dollar_volumes,
     )
 
 

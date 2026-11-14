@@ -1,710 +1,357 @@
-"""市场结构行为事件检测器。
+"""原子水平位价格拍卖事件检测器(零特定蜡烛图拟合、纯价格拍卖与微观结构破坏第一性原理)。
 
-检测器与 ``MarketStructure`` 同步逐 bar 推进,所有事件均在 ``known_index = t`` 的
-bar 收盘时刻因果判出,仅依赖 ``[0, t]`` 已知历史。
+第一性原理公理(彻底废除一切影线比例、实体占比等特定单根 K 线长相拟合):
+在任何活跃【原子水平位 Level】上,多空双方的价格拍卖只存在两种可证伪的客观状态转移:
+
+1. ``LEVEL_REJECTED``(边界拍卖拒绝与控制权反转 — Failed Probe & Micro-BOS):
+   - 接近前提: 价格从水平位优势侧接近并触入 ``[extreme, neck]``(支撑自上而下 ``low <= neck``,
+     阻力自下而上 ``high >= neck``),且未在 ``extreme`` 外侧形成连续收盘价值接受。
+   - 微观压制锚点(``anchor_px``): 在测试水平位的下探/上探过程中,每当价格创出测试新极值或继续向水平位施压时,
+     记录施压 K 线的反向极值作为进攻方最后一道微观压制/支撑锚点(做多为施压 K 线的 ``high``,做空为 ``low``)。
+   - 拍卖反转确认: 当后续 K 线收盘站回 ``neck`` 优势侧,**且收盘实质性击穿 ``anchor_px``**(做多 ``close > anchor_px and close > neck``,
+     做空 ``close < anchor_px and close < neck``),证明进攻方耗尽、防守方已在微观结构上完成反攻夺权!
+
+2. ``BREAKOUT_ACCEPTED``(边界突破与价值迁移接受 — Breakout & Value Acceptance):
+   - 第一步(越界): 价格从水平位内侧出发,顺势收盘越过绝对外沿 ``extreme``(多头 ``close > extreme and close > open``,
+     空头 ``close < extreme and close < open``)。
+   - 第二步(驻留延续): 紧随确认 K 线拒绝跌回水平位背侧(多头 ``low >= band_lo``,空头 ``high <= band_hi``),
+     且继续收盘站稳在 ``extreme`` 外侧并超越突破棒收盘价(证明新价值区获得持续买/卖盘承接,排除单根诱多/诱空假突破)。
+
+3. ``STRUCTURE_BROKEN``(关键起点防线 ``ORIGIN`` 被击穿翻转 — Macro CHoCH):
+   供持仓管理实时感知宏观结构反转。
 """
-
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
-from .structure import (
-    MarketStructure,
-    Params,
-    PivotKind,
-    Regime,
-    Zone,
-    ZoneRole,
-    ZoneState,
-)
+from .level import Level, LevelKind, LevelRole
+from .structure import MarketStructure, Params, _bar_parts
 
 BREAKOUT_ACCEPTED = "BREAKOUT_ACCEPTED"
-BREAKOUT_FAILED = "BREAKOUT_FAILED"
 LEVEL_REJECTED = "LEVEL_REJECTED"
-TREND_RESUMED = "TREND_RESUMED"
-RANGE_ROTATED = "RANGE_ROTATED"
 STRUCTURE_BROKEN = "STRUCTURE_BROKEN"
-FLIP_RETESTED = "FLIP_RETESTED"
 
 ACCEPT = BREAKOUT_ACCEPTED
 REJECT = LEVEL_REJECTED
 CONSUMED = "CONSUMED"
 
-LEGACY_EVENT_CODES = {
-    "E1": BREAKOUT_ACCEPTED,
-    "E2": BREAKOUT_FAILED,
-    "E3": LEVEL_REJECTED,
-    "E4": TREND_RESUMED,
-    "E5": RANGE_ROTATED,
-    "E6": STRUCTURE_BROKEN,
-    "E7": FLIP_RETESTED,
+EVENT_ALIASES = {
     "ACCEPT": BREAKOUT_ACCEPTED,
     "REJECT": LEVEL_REJECTED,
+    "BREAKOUT_ACCEPTED": BREAKOUT_ACCEPTED,
+    "LEVEL_REJECTED": LEVEL_REJECTED,
+    "STRUCTURE_BROKEN": STRUCTURE_BROKEN,
     "CONSUMED": CONSUMED,
 }
 
 EVENT_IDENTIFIERS = (
     BREAKOUT_ACCEPTED,
-    BREAKOUT_FAILED,
     LEVEL_REJECTED,
-    TREND_RESUMED,
-    RANGE_ROTATED,
     STRUCTURE_BROKEN,
-    FLIP_RETESTED,
 )
 
 
-
 def canonical_event_id(event_id: object) -> str:
-    """把历史编号或极简原语归一为语义标识;未知标识原样返回(便于暴露拼写错误)。
-
-    归一化只有这一处:配置解析、路由白名单、计数口径都调它,因此不会出现
-   "路由认别名而计数不认"的分裂。
-    """
-    text = str(event_id)
-    return LEGACY_EVENT_CODES.get(text, text)
+    text = str(event_id).strip()
+    return EVENT_ALIASES.get(text, text)
 
 
 @dataclass(frozen=True)
 class MarketEvent:
-    """§6 事件。`ts` 为知时 bar 的时间戳,`known_index` 为知时 bar 序号(A10)。"""
-
     id: str
-    direction: int            # +1 多 / -1 空
-    ts: object
+    direction: int
+    ts: int
     known_index: int
     attrs: dict = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# 内部追踪状态
-# ---------------------------------------------------------------------------
-
-
 @dataclass
-class _Episode:
-    """区域接近过程(approach episode):自首次正面触碰起追踪,至多产出一枚主事件。"""
+class RejectionEpisode:
+    """水平位测试拍卖回合(纯追踪测试极值与最近施压棒的微观结构锚点)。"""
 
-    zone: Zone
-    opened: int
-    ex: float
-    ex_index: int
-    puncture_index: Optional[int] = None
+    level: Level
+    opened_index: int
+    extreme_px: float
+    extreme_index: int
+    anchor_px: float
+    swept: bool = False
     outside_closes: int = 0
-    approach_sep: float = 0.0
 
 
 @dataclass
-class _AcceptCandidate:
-    """突破接受候选:区域收盘破位起,连续 N_a 根收在外侧确认接受。"""
+class BreakoutCandidate:
+    """水平位突破后的价值驻留确认观察态。"""
 
-    zone: Zone
-    lo: float
-    hi: float
-    role: ZoneRole
-    count: int
-    started: int
-    start_close: float = 0.0
-
-
-@dataclass
-class _TrendResumptionCandidate:
-    """趋势恢复候选:回调终点 pivot 确认后激活,等待收盘回收回调腿。"""
-
+    level_before: Level
     direction: int
-    leg_start: float
-    pb_price: float
-    depth: float
-    activated: int
-    deadline: int
+    break_index: int
+    break_low: float
+    break_high: float
+    break_close: float
+    waited: int = 0
 
 
+class LevelAuctionEngine:
+    """零魔法阈值、纯结构破坏与价值接受驱动的原子水平位拍卖引擎(认知层与触发层完全同构共用)。"""
 
-def _reject(eid: str, direction: int, z: Zone, t: int, ts: object, bm: float,
-            extra: dict, edge: float) -> MarketEvent:
-    """BREAKOUT_FAILED/LEVEL_REJECTED(拒绝类)发射:先记 §4.3 事实(rejects+1、知时),再快照 zone 进 attrs。"""
-    z.rejects += 1
-    z.last_change_known = t
-    attrs = {"zone": z.clone(), "ref": edge, "invalid": edge - direction * bm}
-    attrs.update(extra)
-    return MarketEvent(id=eid, direction=direction, ts=ts, known_index=t, attrs=attrs)
+    def __init__(self) -> None:
+        self.episodes: dict[tuple[int, int], RejectionEpisode] = {}
+        self.breakouts: dict[tuple[int, int], BreakoutCandidate] = {}
+        self.fired_episode_keys: set[tuple[int, int, int]] = set()
+        self.fired_breakout_keys: set[tuple[int, int]] = set()
+        self.broken_role_keys: set[tuple[int, int]] = set()
 
+    def _step_breakouts(
+        self, h: float, l: float, c: float, o: float, ts: int, k_idx: int, pad: float
+    ) -> list[MarketEvent]:
+        out: list[MarketEvent] = []
+        for bkey, cand in list(self.breakouts.items()):
+            lv = cand.level_before
+            d = cand.direction
+            cand.waited += 1
+            if d > 0:
+                if c <= lv.extreme or l < lv.band_lo:
+                    self.breakouts.pop(bkey, None)
+                    continue
+                accepted = c > o and c > lv.extreme and c > cand.break_close and l >= lv.band_lo
+                if accepted and bkey not in self.fired_breakout_keys:
+                    self.fired_breakout_keys.add(bkey)
+                    self.breakouts.pop(bkey, None)
+                    inv = min(lv.band_lo, cand.break_low, l) - pad
+                    out.append(MarketEvent(
+                        id=BREAKOUT_ACCEPTED,
+                        direction=1,
+                        ts=ts,
+                        known_index=k_idx,
+                        attrs={
+                            "zone": lv.clone(),
+                            "level": lv.clone(),
+                            "ref": float(lv.extreme),
+                            "ex": float(max(cand.break_high, h)),
+                            "invalid": float(inv),
+                            "started": cand.break_index,
+                            "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
+                        },
+                    ))
+                    continue
+            else:
+                if c >= lv.extreme or h > lv.band_hi:
+                    self.breakouts.pop(bkey, None)
+                    continue
+                accepted = c < o and c < lv.extreme and c < cand.break_close and h <= lv.band_hi
+                if accepted and bkey not in self.fired_breakout_keys:
+                    self.fired_breakout_keys.add(bkey)
+                    self.breakouts.pop(bkey, None)
+                    inv = max(lv.band_hi, cand.break_high, h) + pad
+                    out.append(MarketEvent(
+                        id=BREAKOUT_ACCEPTED,
+                        direction=-1,
+                        ts=ts,
+                        known_index=k_idx,
+                        attrs={
+                            "zone": lv.clone(),
+                            "level": lv.clone(),
+                            "ref": float(lv.extreme),
+                            "ex": float(min(cand.break_low, l)),
+                            "invalid": float(inv),
+                            "started": cand.break_index,
+                            "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
+                        },
+                    ))
+                    continue
+            if cand.waited >= 2:
+                self.breakouts.pop(bkey, None)
+        return out
 
-def fast_accept_ok(p: Params, cd, *, direction: int, o: float, h: float,
-                   l: float, c: float, atr: float, regime: Regime
-                   ) -> tuple[bool, int]:
-    """仅顺趋势的第一根强收盘允许提前确认;其余候选继续普通 n_a。
+    def step(
+        self,
+        *,
+        bar_index: int,
+        bar: tuple[int, float, float, float, float, float],
+        prev_bar: Optional[tuple[int, float, float, float, float, float]],
+        recent_bars: Sequence[tuple[int, float, float, float, float, float]],
+        active_levels: Sequence[Level],
+        atr: float,
+        k_bm: float,
+        known_index_override: Optional[int] = None,
+    ) -> list[MarketEvent]:
+        ts, o, h, l, c, _ = bar
+        k_idx = bar_index if known_index_override is None else int(known_index_override)
+        pad = max(0.0, float(k_bm) * float(atr))
+        emitted = self._step_breakouts(h, l, c, o, ts, k_idx, pad)
+        if prev_bar is None:
+            return emitted
+        _, po, ph, pl, pc, _ = prev_bar
+        active_by_key = {(lv.uid, lv.flip_count): lv for lv in active_levels if lv.is_active}
 
-    两个事件时钟共用此门。报价不能触发 ACCEPT,非趋势没有快速入口。
-    """
-    if not p.use_balance_detector or p.fast_accept_atr is None:
-        return False, 0
-    if cd.count != 1 or atr <= 0.0:
-        return False, 0
-    if direction not in (-1, 1):
-        return False, 0
-    trend = Regime.TREND_UP if direction > 0 else Regime.TREND_DOWN
-    if regime is not trend:
-        return False, 0
-    rng = max(h - l, 1e-12)
-    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
-    progressing = (
-        (c >= cd.start_close and c > o and close_pos >= 0.50)
-        if direction > 0
-        else (c <= cd.start_close and c < o and close_pos >= 0.50)
-    )
-    if not progressing:
-        return False, 0
-    ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-    if p.accept_max_ext_atr is not None and ext_dist > float(p.accept_max_ext_atr) * atr:
-        return False, 0
-    if close_pos >= 0.65 and ext_dist >= float(p.fast_accept_atr) * atr:
-        return True, 1
-    return False, 0
+        for lkey, lv in active_by_key.items():
+            is_res = lv.role is LevelRole.RESISTANCE
+            is_sup = not is_res
 
+            # 1) 突破越界第一步:从水平位内侧出发收盘越过 extreme(零 ATR 魔法常数:止损自然锚定近邻微观回撤极值,赔率由前方净空几何自洽决定!)
+            if lkey not in self.breakouts and lkey not in self.fired_breakout_keys:
+                if is_res and pc <= lv.extreme and c > lv.extreme and c > o:
+                    base_lo = min(b[3] for b in recent_bars[-2:]) if recent_bars else l
+                    self.breakouts[lkey] = BreakoutCandidate(lv.clone(), 1, bar_index, min(base_lo, l), h, c)
+                elif is_sup and pc >= lv.extreme and c < lv.extreme and c < o:
+                    base_hi = max(b[2] for b in recent_bars[-2:]) if recent_bars else h
+                    self.breakouts[lkey] = BreakoutCandidate(lv.clone(), -1, bar_index, l, max(base_hi, h), c)
 
-# ---------------------------------------------------------------------------
-# EventDetector
-# ---------------------------------------------------------------------------
+            if lkey in self.broken_role_keys:
+                continue
+            ep = self.episodes.get(lkey)
+            if ep is None and ((is_sup and pc < lv.extreme) or (is_res and pc > lv.extreme)):
+                self.broken_role_keys.add(lkey)
+                continue
+
+            if ep is None:
+                approached = (
+                    (l <= lv.neck and pc > lv.neck and pl >= lv.extreme)
+                    if is_sup
+                    else (h >= lv.neck and pc < lv.neck and ph <= lv.extreme)
+                )
+                if lv.departed and approached:
+                    swept_now = (l < lv.extreme) if is_sup else (h > lv.extreme)
+                    anchor_init = (ph if (swept_now and c > ph) else h) if is_sup else (pl if (swept_now and c < pl) else l)
+                    ep = RejectionEpisode(
+                        level=lv.clone(),
+                        opened_index=bar_index,
+                        extreme_px=l if is_sup else h,
+                        extreme_index=bar_index,
+                        anchor_px=anchor_init,
+                        swept=swept_now,
+                    )
+                    self.episodes[lkey] = ep
+            else:
+                if is_sup:
+                    if l <= ep.extreme_px:
+                        ep.extreme_px, ep.extreme_index = l, bar_index
+                        ep.anchor_px = h
+                    elif c <= o and h < ep.anchor_px:
+                        ep.anchor_px = h
+                    if l < lv.extreme:
+                        ep.swept = True
+                else:
+                    if h >= ep.extreme_px:
+                        ep.extreme_px, ep.extreme_index = h, bar_index
+                        ep.anchor_px = l
+                    elif c >= o and l > ep.anchor_px:
+                        ep.anchor_px = l
+                    if h > lv.extreme:
+                        ep.swept = True
+
+            if ep is None:
+                continue
+
+            out_close = (c < lv.extreme) if is_sup else (c > lv.extreme)
+            ep.outside_closes = ep.outside_closes + 1 if out_close else 0
+            if ep.outside_closes >= 2:
+                self.broken_role_keys.add(lkey)
+                self.episodes.pop(lkey, None)
+                continue
+
+            if (bar_index - ep.opened_index) > 12:
+                self.episodes.pop(lkey, None)
+                continue
+
+            fire_key = (lv.uid, lv.flip_count, lv.geometry_version)
+            shifted = (
+                (c > o and c > lv.neck and c > ep.anchor_px)
+                if is_sup
+                else (c < o and c < lv.neck and c < ep.anchor_px)
+            )
+            if fire_key not in self.fired_episode_keys and shifted:
+                raw_stop = min(lv.extreme, ep.extreme_px) if is_sup else max(lv.extreme, ep.extreme_px)
+                inv = (raw_stop - pad) if is_sup else (raw_stop + pad)
+                if (is_sup and c <= inv) or ((not is_sup) and c >= inv):
+                    continue
+                self.fired_episode_keys.add(fire_key)
+                sub_kind = "FLIP_RETEST" if lv.kind is LevelKind.FLIPPED else ("SWEEP_TRAP" if ep.swept else f"LEVEL_REJECT_{lv.kind.value}")
+                emitted.append(MarketEvent(
+                    id=LEVEL_REJECTED,
+                    direction=1 if is_sup else -1,
+                    ts=ts,
+                    known_index=k_idx,
+                    attrs={
+                        "zone": lv.clone(),
+                        "level": lv.clone(),
+                        "ref": float(lv.neck),
+                        "ex": float(ep.extreme_px),
+                        "ex_index": ep.extreme_index,
+                        "invalid": float(inv),
+                        "started": ep.opened_index,
+                        "swept": ep.swept,
+                        "sub_kind": sub_kind,
+                    },
+                ))
+                self.episodes.pop(lkey, None)
+
+        self._cleanup(active_by_key, h, l, c)
+        return emitted
+
+    def _cleanup(
+        self, active_by_key: dict[tuple[int, int], Level], h: float, l: float, c: float
+    ) -> None:
+        for lkey in list(self.episodes):
+            if lkey not in active_by_key:
+                self.episodes.pop(lkey, None)
+        for fkey in list(self.fired_episode_keys):
+            lv_now = active_by_key.get((fkey[0], fkey[1]))
+            if lv_now is None:
+                self.fired_episode_keys.discard(fkey)
+            else:
+                if lv_now.role is LevelRole.SUPPORT and l > lv_now.band_hi and c > lv_now.band_hi:
+                    self.fired_episode_keys.discard(fkey)
+                elif lv_now.role is LevelRole.RESISTANCE and h < lv_now.band_lo and c < lv_now.band_lo:
+                    self.fired_episode_keys.discard(fkey)
 
 
 class EventDetector:
-    """与 ``MarketStructure`` 同步逐 bar 推进的事件检测器。"""
+    """认知周期价格拍卖事件检测器。"""
 
-    def __init__(self, params: Params, *, enable_e7: bool = False) -> None:
-        self.params = params
-        self.enable_e7 = bool(enable_e7)
-        self.structure = MarketStructure(params)
-        self.events: list[MarketEvent] = []
-        self._episodes: list[_Episode] = []
-        self._candidates: list[_AcceptCandidate] = []
-        self._trend_candidates: list[_TrendResumptionCandidate] = []
-        self._prev_regime: Regime = Regime.TRANSITION
-        self.consumed_episodes: int = 0
-        self._recent_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
-        self._accept_refresh_only: set[tuple] = set()
+    def __init__(self, params: Optional[Params] = None, **_ignored_legacy) -> None:
+        self.params = params or Params()
+        self.structure = MarketStructure(self.params)
+        self._auction = LevelAuctionEngine()
 
-    def update(self, bar) -> list[MarketEvent]:
-        # last_change_known also tracks property refreshes. Compare the prior
-        # lifecycle/geometry instead of treating every refreshed stamp as a break.
-        previous_edges = {z.zone_id: (z.lo, z.hi, z.role, z.source_kind, z.state)
-                          for z in self.structure._zones.zones}
-        self.structure.update(bar)
-        self._accept_refresh_only = {
-            z.zone_id for z in self.structure._zones.zones
-            if z.zone_id in previous_edges
-            and previous_edges[z.zone_id][:4] == (z.lo, z.hi, z.role, z.source_kind)
-            and previous_edges[z.zone_id][4] in (ZoneState.BROKEN, ZoneState.RETESTED)
-            and z.state is ZoneState.BROKEN
-        }
-        s = self.structure
-        t = s.bars_seen - 1
-        atr = s.atr()
-        atr_slow = s.atr_slow()
-        ts_cur, o_cur, h_cur, l_cur, c_cur, _v_cur = s._bars[t]
-        step_ms = (int(ts_cur) - self._recent_bars[-1][0]) if self._recent_bars else 0
-        self._recent_bars.append(
-            (int(ts_cur), float(o_cur), float(h_cur), float(l_cur), float(c_cur))
+    def update(self, bar: Sequence[float]) -> list[MarketEvent]:
+        b = _bar_parts(bar)
+        t = self.structure.bars_seen
+        prev_bar = self.structure.bars[-1] if t > 0 else None
+        recent_bars = tuple(self.structure.bars[-4:])
+        known_levels = tuple(lv.clone() for lv in self.structure.levels)
+
+        self.structure.update(b)
+        atr = self.structure.atr()
+        emitted = self._auction.step(
+            bar_index=t,
+            bar=b,
+            prev_bar=prev_bar,
+            recent_bars=recent_bars,
+            active_levels=known_levels,
+            atr=atr,
+            k_bm=self.params.k_bm,
         )
-        emitted: list[MarketEvent] = []
-        if t > 0 and atr > 0.0:
-            prev_close = s._bars[t - 1][4]
-            emitted.extend(
-                self._zone_events(t, ts_cur, o_cur, h_cur, l_cur, c_cur, prev_close, atr)
-            )
-            if not self.params.use_balance_detector:
-                emitted.extend(self._trend_resumption(t, ts_cur, c_cur, atr))
-            emitted.extend(self._structure_break(t, ts_cur, c_cur, atr))
-            if self.enable_e7 and not self.params.use_balance_detector:
-                emitted.extend(self._flip_retest(t, ts_cur, atr))
-        if emitted:
-            reset_tail = tuple(self._recent_bars)
-            eval_tail = reset_tail[-6:]
-            close_ts = int(ts_cur) + int(step_ms)
-            range_atr = ((float(h_cur) - float(l_cur)) / atr) if atr > 0.0 else 0.0
-            atr_slow_ratio = (atr / atr_slow) if atr_slow > 0.0 else 1.0
-            for ev in emitted:
-                ev.attrs["eval_bars"] = eval_tail
-                ev.attrs["reset_bars"] = reset_tail
-                ev.attrs["reset_step_ms"] = int(step_ms)
-                ev.attrs["close_ts"] = close_ts
-                ev.attrs.setdefault("range_atr", range_atr)
-                ev.attrs.setdefault("atr_slow_ratio", atr_slow_ratio)
-        self._prev_regime = s.regime()
-        self.events.extend(emitted)
+
+        for trans, _lv_after, lv_before in self.structure.last_transitions:
+            if trans == "FLIPPED" and lv_before is not None and lv_before.kind is LevelKind.ORIGIN:
+                direction = 1 if lv_before.role is LevelRole.RESISTANCE else -1
+                emitted.append(MarketEvent(
+                    id=STRUCTURE_BROKEN,
+                    direction=direction,
+                    ts=b[0],
+                    known_index=t,
+                    attrs={
+                        "zone": lv_before.clone(),
+                        "level": lv_before.clone(),
+                        "ref": float(lv_before.extreme),
+                        "ex": float(b[2] if direction > 0 else b[3]),
+                        "sub_kind": "ORIGIN_CHOCH",
+                    },
+                ))
         return emitted
 
 
-    # -- BREAKOUT_ACCEPTED/BREAKOUT_FAILED/LEVEL_REJECTED/RANGE_ROTATED:区域事件(A1-A6, A8) ---------------------------------------
 
-    def _zone_events(self, t: int, ts: object, o: float, h: float, l: float,
-                     c: float, prev_close: float, atr: float) -> list[MarketEvent]:
-        p = self.params
-        s = self.structure
-        bm, rj = p.k_bm * atr, p.k_rj * atr
-        n_a, n_f = p.n_a, p.n_f
-        res_role = ZoneRole.RESISTANCE
-
-        # A3 收尸:zone 离开 ACTIVE(破位/翻转/消亡)即 episode 终结;
-        # v22 R3 扩展:当 use_balance_detector=True 时,允许 1~2 根收盘假突破
-        # (只要未发生 > 1.25*ATR 单边逃逸且在 <= n_f 窗口内)暂保 _Episode 观察吞没收复!
-        live = {z.zone_id: z for z in s._zones.zones}
-        kept_eps: list[_Episode] = []
-        for ep in self._episodes:
-            z = live.get(ep.zone.zone_id)
-            if z is not None:
-                ep.zone = z
-                if z.state is ZoneState.ACTIVE:
-                    kept_eps.append(ep)
-                elif (p.use_balance_detector
-                      and z.state in (ZoneState.BROKEN, ZoneState.RETESTED)
-                      and ep.outside_closes <= 2
-                      and (t - (ep.puncture_index if ep.puncture_index is not None else ep.opened)) <= n_f):
-                    res = z.role is res_role
-                    escape = (ep.ex - z.hi) if res else (z.lo - ep.ex)
-                    if escape <= 1.25 * atr:
-                        kept_eps.append(ep)
-                continue
-            for z2 in s._zones.zones:
-                if z2.role is ep.zone.role and z2.state is ZoneState.ACTIVE \
-                        and z2.lo <= ep.zone.lo and z2.hi >= ep.zone.hi:
-                    ep.zone = z2
-                    kept_eps.append(ep)
-                    break
-        self._episodes = kept_eps
-
-        # A2 新触碰开 episode(前收在正面之外,且本 bar [low,high] 与带相交)。
-        # v22:若当根同时触碰并直接收盘破位(z 在当根刚转为 BROKEN),同样开启 _Episode 供 R3 假突破观察。
-        for z in s._zones.zones:
-            just_broken = (
-                p.use_balance_detector
-                and z.state is ZoneState.BROKEN
-                and z.last_change_known == t
-                and z.zone_id not in self._accept_refresh_only
-            )
-            if z.state is not ZoneState.ACTIVE and not just_broken:
-                continue
-            if any(ep.zone is z for ep in self._episodes):
-                continue
-            res = z.role is res_role
-            front_out = (prev_close < z.lo) if res else (prev_close > z.hi)
-            if front_out and h >= z.lo and l <= z.hi:
-                ex = h if res else l
-                sep = (z.lo - prev_close) if res else (prev_close - z.hi)
-                ep = _Episode(zone=z, opened=t, ex=ex, ex_index=t, approach_sep=sep)
-                if (h > z.hi + bm) if res else (l < z.lo - bm):
-                    ep.puncture_index = t
-                self._episodes.append(ep)
-
-        for z in s._zones.zones:
-            if z.state is ZoneState.BROKEN and z.last_change_known == t:
-                # Refreshing an already-broken edge is not a new break.
-                # Keep the original acceptance count/start and consumed state.
-                if z.zone_id in self._accept_refresh_only:
-                    continue
-                if p.use_balance_detector:
-                    res = z.role is res_role
-                    escape = (h - z.hi) if res else (z.lo - l)
-                    if escape > 1.25 * atr:
-                        self._episodes = [ep for ep in self._episodes if ep.zone.zone_id != z.zone_id]
-                else:
-                    self._episodes = [ep for ep in self._episodes if ep.zone.zone_id != z.zone_id]
-                self._candidates = [cd for cd in self._candidates if cd.zone.zone_id != z.zone_id]
-                self._candidates.append(
-                    _AcceptCandidate(
-                        zone=z, lo=z.lo, hi=z.hi, role=z.role,
-                        count=1, started=t, start_close=c,
-                    )
-                )
-
-        events: list[MarketEvent] = []
-        rng = max(h - l, 1e-12)
-        cur_regime = s.regime()
-
-        kept: list[_AcceptCandidate] = []
-        for cd in self._candidates:
-            hold = (c > cd.hi) if cd.role is res_role else (c < cd.lo)
-            if t > cd.started:
-                if not hold:
-                    continue
-                cd.count += 1
-            direction = +1 if cd.role is res_role else -1
-            ref = cd.hi if cd.role is res_role else cd.lo
-            if cd.count >= n_a:
-                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-                if p.use_balance_detector:
-                    not_counter = (
-                        (cur_regime is not Regime.TREND_DOWN)
-                        if direction > 0
-                        else (cur_regime is not Regime.TREND_UP)
-                    )
-                    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
-                    progressing = (
-                        (c >= cd.start_close and c > o and close_pos >= 0.50)
-                        if direction > 0
-                        else (c <= cd.start_close and c < o and close_pos >= 0.50)
-                    )
-                    ext_ok = (
-                        p.accept_max_ext_atr is None
-                        or ext_dist <= float(p.accept_max_ext_atr) * atr
-                    )
-                    if not_counter and progressing and ext_ok:
-                        sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * atr else "A1_TIGHT"
-                        events.append(MarketEvent(
-                            id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
-                            attrs={
-                                "zone": cd.zone.clone(),
-                                "ref": ref,
-                                "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                                "started": cd.started,
-                                "sub_kind": sub_kind,
-                                "ext_atr": (ext_dist / atr) if atr > 0.0 else 0.0,
-                                "fast": False,
-                                "fast_bars": 0,
-                            },
-                        ))
-                else:
-                    events.append(MarketEvent(
-                        id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
-                        attrs={
-                            "zone": cd.zone.clone(),
-                            "ref": ref,
-                            "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                            "started": cd.started,
-                        },
-                    ))
-                continue
-            fast, fast_bars = fast_accept_ok(
-                p, cd, direction=direction, o=o, h=h, l=l, c=c,
-                atr=atr, regime=cur_regime)
-            if fast:
-                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-                events.append(MarketEvent(
-                    id=BREAKOUT_ACCEPTED, direction=direction, ts=ts, known_index=t,
-                    attrs={
-                        "zone": cd.zone.clone(),
-                        "ref": ref,
-                        "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                        "started": cd.started,
-                        "sub_kind": "A3_FAST",
-                        "ext_atr": (ext_dist / atr) if atr > 0.0 else 0.0,
-                        "fast": True,
-                        "fast_bars": fast_bars,
-                    },
-                ))
-                continue
-            kept.append(cd)
-        self._candidates = kept
-
-
-
-
-        survivors: list[_Episode] = []
-        for ep in self._episodes:
-            z = ep.zone
-            sk = getattr(z, "source_kind", "BOX_EDGE")
-            if sk != "BOX_EDGE" and not (p.box_break_retest_enabled and sk == "FLIPPED_BOX_EDGE"):
-                continue
-            res = z.role is res_role
-            fired: Optional[MarketEvent] = None
-            edge = z.hi if res else z.lo
-            extreme_first = (c < o) if res else (c >= o)
-
-            # Balance REJECT is decided from the completed bar's close. Every
-            # trial extreme is already known then; candle colour cannot establish
-            # the intrabar high/low order or justify omitting the current trial.
-            # Legacy rejection uses intrabar retreat and keeps its old ordering.
-            if p.use_balance_detector or extreme_first:
-                new_ex = max(ep.ex, h) if res else min(ep.ex, l)
-                if new_ex != ep.ex:
-                    ep.ex, ep.ex_index = new_ex, t
-
-            if ep.puncture_index is None:
-                if (h > z.hi + bm) if res else (l < z.lo - bm):
-                    ep.puncture_index = t
-
-            closed_outside = (c > z.hi + bm) if res else (c < z.lo - bm)
-            close_pos = (h - c) / rng if res else (c - l) / rng
-
-            if (
-                p.use_balance_detector
-                and sk == "BOX_EDGE"
-                and 1 <= ep.outside_closes <= 2
-                and ((c < z.lo and close_pos >= 0.50) if res else (c > z.hi and close_pos >= 0.50))
-            ):
-                direction = -1 if res else +1
-                inv_r3 = (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm)
-                fired = _reject(
-                    LEVEL_REJECTED, direction, z, t, ts, bm,
-                    {
-                        "ex": ep.ex,
-                        "ex_index": ep.ex_index,
-                        "puncture_index": ep.puncture_index,
-                        "outside_closes": ep.outside_closes,
-                        "sub_kind": "R3_TRAP",
-                        "invalid": inv_r3,
-                    },
-                    edge,
-                )
-                z.state = ZoneState.ACTIVE
-                z.last_change_known = t
-                self._candidates = [cd for cd in self._candidates if cd.zone is not z]
-
-
-            if (
-                fired is None
-                and not p.use_balance_detector
-                and ep.puncture_index is not None
-                and t - ep.puncture_index < n_f
-            ):
-                if (c < z.hi) if res else (c > z.lo):
-                    direction = -1 if res else +1
-                    fired = _reject(
-                        BREAKOUT_FAILED, direction, z, t, ts, bm,
-                        {"puncture_index": ep.puncture_index}, edge,
-                    )
-
-            if (
-                fired is None
-                and ep.outside_closes == 0
-                and z.state is ZoneState.ACTIVE
-                and (p.use_balance_detector or extreme_first or ep.ex_index < t)
-                and t - ep.ex_index <= n_f
-            ):
-                if p.use_balance_detector:
-                    real_retreat = (ep.ex - c) if res else (c - ep.ex)
-                    back_inside = (c <= z.lo) if res else (c >= z.hi)
-                    against_trend = (
-                        (cur_regime is Regime.TREND_UP) if res else (cur_regime is Regime.TREND_DOWN)
-                    )
-                    if sk == "FLIPPED_BOX_EDGE":
-                        bar_dir_ok = (
-                            z.rejects == 0
-                            and 0 < (t - z.origin_known) <= 24
-                            and ep.approach_sep >= 0.35 * atr
-                            and not against_trend
-                            and ((c < o) if res else (c > o))
-                            and close_pos >= 0.60
-                        )
-                    elif ep.puncture_index is not None:
-                        bar_dir_ok = (((c < o) if res else (c > o)) and close_pos >= 0.50) or (
-                            not against_trend and close_pos >= 0.65
-                        )
-                    else:
-                        bar_dir_ok = ((c < o) if res else (c > o)) and close_pos >= 0.55
-                    if real_retreat >= rj and back_inside and close_pos >= 0.50 and bar_dir_ok:
-                        direction = -1 if res else +1
-                        extra_rej = {
-                            "ex": ep.ex,
-                            "ex_index": ep.ex_index,
-                            "invalid": (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm),
-                            "sub_kind": "R1_WICK" if ep.puncture_index is not None else "R2_STALL",
-                        }
-                        fired = _reject(LEVEL_REJECTED, direction, z, t, ts, bm, extra_rej, edge)
-                else:
-                    retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
-                    if retreat >= rj:
-                        direction = -1 if res else +1
-                        fired = _reject(
-                            LEVEL_REJECTED, direction, z, t, ts, bm,
-                            {"ex": ep.ex, "ex_index": ep.ex_index}, edge,
-                        )
-
-            if fired is not None:
-                events.append(fired)
-            else:
-                if not p.use_balance_detector and not extreme_first:
-                    new_ex = max(ep.ex, h) if res else min(ep.ex, l)
-                    if new_ex != ep.ex:
-                        ep.ex, ep.ex_index = new_ex, t
-                if closed_outside:
-                    ep.outside_closes += 1
-                    if p.use_balance_detector and ep.outside_closes > 2:
-                        continue
-                if p.use_balance_detector and (t - ep.opened) > (n_f + 1):
-                    self.consumed_episodes += 1
-                    continue
-                survivors.append(ep)
-
-        self._episodes = survivors
-
-        if not p.use_balance_detector:
-            events.extend(
-                self._range_rotation(
-                    t, ts, c, atr, [e for e in events if e.id == LEVEL_REJECTED]
-                )
-            )
-        return events
-
-    def _range_rotation(
-
-        self, t: int, ts: object, c: float, atr: float,
-        rejected_events: list[MarketEvent]
-    ) -> list[MarketEvent]:
-        if not rejected_events or self.structure.regime() is not Regime.RANGE:
-            return []
-        band = self._band()
-        if band is None:
-            return []
-        band_lo, band_hi = band
-        edge_tol = self.params.e5_edge_atr * atr
-        room_min = self.params.k_room * atr
-        out: list[MarketEvent] = []
-        for rejection in rejected_events:
-            z: Zone = rejection.attrs["zone"]
-            zc = 0.5 * (z.lo + z.hi)
-            near_top = abs(zc - band_hi) <= edge_tol
-            near_bot = abs(zc - band_lo) <= edge_tol
-            if not (near_top or near_bot):
-                continue
-            room = (c - band_lo) if near_top else (band_hi - c)
-            if room < room_min:
-                continue
-            out.append(MarketEvent(
-                id=RANGE_ROTATED, direction=rejection.direction, ts=ts, known_index=t,
-                attrs={
-                    "zone": z.clone(),
-                    "ref": rejection.attrs["ref"],
-                    "invalid": rejection.attrs["invalid"],
-                    "band": (band_lo, band_hi),
-                    "room": room,
-                    "via_known": rejection.known_index,
-                },
-            ))
-        return out
-
-
-    def _band(self) -> Optional[tuple]:
-        """A8 合成带:最近至多 range_max_pivots 个 confirmed pivots。"""
-        recent = self.structure.pivot_slice(-self.params.range_max_pivots)
-        if len(recent) < 4:
-            return None
-        highs = [pv.price for pv in recent if pv.kind is PivotKind.HIGH]
-        lows = [pv.price for pv in recent if pv.kind is PivotKind.LOW]
-        if not highs or not lows:
-            return None
-        return min(lows), max(highs)
-
-    def _trend_resumption(
-        self, t: int, ts: object, c: float, atr: float
-    ) -> list[MarketEvent]:
-        p = self.params
-        regime = self.structure.regime()
-        pivots = self.structure._pivots
-        lo_d, hi_d = p.e4_depth_atr
-
-        if pivots and pivots[-1].known_index == t:
-            pv = pivots[-1]
-            if pv.kind is PivotKind.LOW and regime is Regime.TREND_UP:
-                highs = [x for x in pivots[-p.range_max_pivots:] if x.kind is PivotKind.HIGH]
-                lows = [x for x in pivots[-p.range_max_pivots:] if x.kind is PivotKind.LOW]
-                if len(highs) >= 2 and len(lows) >= 2:
-                    leg_start = highs[-1].price
-                    hl_prev = lows[-2].price
-                    d = leg_start - pv.price
-                    if pv.price > hl_prev and lo_d * atr <= d <= hi_d * atr:
-                        self._trend_candidates.append(
-                            _TrendResumptionCandidate(
-                                direction=+1, leg_start=leg_start, pb_price=pv.price,
-                                depth=d, activated=t, deadline=t + p.n_f,
-                            )
-                        )
-            elif pv.kind is PivotKind.HIGH and regime is Regime.TREND_DOWN:
-                highs = [x for x in pivots[-p.range_max_pivots:] if x.kind is PivotKind.HIGH]
-                lows = [x for x in pivots[-p.range_max_pivots:] if x.kind is PivotKind.LOW]
-                if len(highs) >= 2 and len(lows) >= 2:
-                    leg_start = lows[-1].price
-                    lh_prev = highs[-2].price
-                    d = pv.price - leg_start
-                    if pv.price < lh_prev and lo_d * atr <= d <= hi_d * atr:
-                        self._trend_candidates.append(
-                            _TrendResumptionCandidate(
-                                direction=-1, leg_start=leg_start, pb_price=pv.price,
-                                depth=d, activated=t, deadline=t + p.n_f,
-                            )
-                        )
-
-        events: list[MarketEvent] = []
-        kept: list[_TrendResumptionCandidate] = []
-        for cd in self._trend_candidates:
-            if t <= cd.activated:
-                kept.append(cd)
-                continue
-            if t > cd.deadline:
-                continue
-            level = cd.pb_price + cd.direction * p.e4_recovery * cd.depth
-            if (c > level) if cd.direction > 0 else (c < level):
-                events.append(MarketEvent(
-                    id=TREND_RESUMED, direction=cd.direction, ts=ts, known_index=t,
-                    attrs={
-                        "leg_start": cd.leg_start,
-                        "pb_price": cd.pb_price,
-                        "depth": cd.depth,
-                        "ref": level,
-                        "invalid": cd.pb_price - cd.direction * p.k_bm * atr,
-                        "regime": regime.value,
-                    },
-                ))
-                continue
-            kept.append(cd)
-        self._trend_candidates = kept
-        return events
-
-    def _structure_break(
-        self, t: int, ts: object, c: float, atr: float
-    ) -> list[MarketEvent]:
-        bm = self.params.k_bm * atr
-        if self._prev_regime is Regime.TREND_UP:
-            last_low = self.structure.last_low_pivot
-            if last_low is not None and c < last_low.price - bm:
-                return [MarketEvent(
-                    id=STRUCTURE_BROKEN, direction=-1, ts=ts, known_index=t,
-                    attrs={
-                        "ref": last_low.price,
-                        "invalid": last_low.price + bm,
-                        "pivot_forming": last_low.forming_index,
-                        "regime_before": Regime.TREND_UP.value,
-                    },
-                )]
-        elif self._prev_regime is Regime.TREND_DOWN:
-            last_high = self.structure.last_high_pivot
-            if last_high is not None and c > last_high.price + bm:
-                return [MarketEvent(
-                    id=STRUCTURE_BROKEN, direction=+1, ts=ts, known_index=t,
-                    attrs={
-                        "ref": last_high.price,
-                        "invalid": last_high.price - bm,
-                        "pivot_forming": last_high.forming_index,
-                        "regime_before": Regime.TREND_DOWN.value,
-                    },
-                )]
-        return []
-
-
-    # -- FLIP_RETESTED:FLIP_RETEST(docs/v2-protocol.md §1,v2 增量) -----------------------
-
-    def _flip_retest(self, t: int, ts: object, atr: float) -> list[MarketEvent]:
-        """本 bar 发生的全部 FLIPPED 角色互换 → FLIP_RETESTED(破位→回踩→被拒绝→控制权易手)。
-
-        role_new=resistance(旧支撑破位)⇒ -1;role_new=support ⇒ +1(v2-protocol
-        §1,对称测、不做方向挑选)。invalid = zone 远端边缘 ± k_bm·atr;ref = 破位
-        边缘(short=lo,long=hi);atr = 转移 bar 的 ATR(供 F1 查验)。
-        """
-        bm = self.params.k_bm * atr
-        events: list[MarketEvent] = []
-        for flip in self.structure._zones.flips:
-            if flip.index != t:
-                continue
-            z = flip.zone                       # 新角色区快照(边界 = 旧区边界)
-            direction = -1 if z.role is ZoneRole.RESISTANCE else +1
-            ref = z.lo if direction < 0 else z.hi
-            invalid = (z.hi + bm) if direction < 0 else (z.lo - bm)
-            events.append(MarketEvent(
-                id=FLIP_RETESTED, direction=direction, ts=ts, known_index=t,
-                attrs={"zone": z.clone(), "ref": ref, "invalid": invalid,
-                       "from_role": flip.from_role.value, "atr": atr},
-            ))
-        return events

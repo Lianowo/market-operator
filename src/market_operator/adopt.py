@@ -145,19 +145,24 @@ def propose(*, symbol: str, direction: int, entry: float, mark: float,
                     risk_atr=dist / atr, already_breached=bool(breached))
 
 
-def structure_from_zones(*, atr: float, zones, k_bm: float = 0.1,
-                         k_is: float = 0.8,
+def structure_from_zones(*, atr: float, zones, k_bm: float = 0.05,
+                         k_is: float = 0.5,
                          turtle_stop_atr: float = 2.0) -> AdoptionStructure:
-    """把 `structure.Zone` 序列规约成接管用的边界(只读;剔除非 ACTIVE)。"""
+    """将活跃【原子水平位 Level】序列规约为外部持仓接管用的支撑/阻力边界。"""
     edges: list[ZoneEdge] = []
     for z in zones:
-        if str(getattr(z, "state", "ACTIVE")) not in ("ACTIVE", "ZoneState.ACTIVE"):
+        is_act = getattr(z, "is_active", None)
+        if is_act is False:
             continue
-        role = str(getattr(getattr(z, "role", ""), "value", getattr(z, "role", "")))
+        if is_act is None and str(getattr(z, "state", "")).lower() in ("consumed", "dead", "broken"):
+            continue
+        role = str(getattr(getattr(z, "role", ""), "value", getattr(z, "role", ""))).upper()
+        inner_px = float(getattr(z, "inner", z.hi if role == "SUPPORT" else z.lo))
+        outer_px = float(getattr(z, "outer", z.lo if role == "SUPPORT" else z.hi))
         if role == "SUPPORT":
-            edges.append(ZoneEdge("SUPPORT", float(z.hi), float(z.lo)))
+            edges.append(ZoneEdge("SUPPORT", inner_px, outer_px))
         elif role == "RESISTANCE":
-            edges.append(ZoneEdge("RESISTANCE", float(z.lo), float(z.hi)))
+            edges.append(ZoneEdge("RESISTANCE", inner_px, outer_px))
     return AdoptionStructure(atr=float(atr), zones=tuple(edges), k_bm=k_bm,
                              k_is=k_is, turtle_stop_atr=turtle_stop_atr)
 

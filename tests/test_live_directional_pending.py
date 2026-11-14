@@ -17,7 +17,7 @@ def _watch(runner, symbol, direction=1):
 def test_pending_same_side_blocks_second_but_opposite_side_is_independent(tmp_path, mode):
     runner = _runner(tmp_path, _FakeClient(), _SignalTG(), mode=mode)
     runner.equity = 104
-    runner.directional_cap_frac = .08
+    runner.directional_cap_frac = .07
     _watch(runner, "BTCUSDT")
     _watch(runner, "ETHUSDT")
     assert len(runner.open_intents) == 1
@@ -30,7 +30,7 @@ def test_pending_same_side_blocks_second_but_opposite_side_is_independent(tmp_pa
 def test_terminal_pending_releases_directional_budget(tmp_path, status):
     runner = _runner(tmp_path, _FakeClient(), _SignalTG(), mode="paper")
     runner.equity = 104
-    runner.directional_cap_frac = .08
+    runner.directional_cap_frac = .07
     _watch(runner, "BTCUSDT")
     first, = runner.open_intents.values()
     first["status"] = status
@@ -42,7 +42,7 @@ def test_watch_rechecks_budget_after_equity_drop_and_does_not_double_count_self(
     client = _FakeClient()
     runner = _runner(tmp_path, client, _SignalTG())
     runner.equity = 104
-    runner.directional_cap_frac = .08
+    runner.directional_cap_frac = .07
     _watch(runner, "BTCUSDT")
     oid, it = next(iter(runner.open_intents.items()))
     assert not runner._directional_entry_blocked(1, it["qty"], 100, 95, exclude_oid=oid)
@@ -54,7 +54,7 @@ def test_watch_rechecks_budget_after_equity_drop_and_does_not_double_count_self(
 def test_paper_fill_rechecks_directional_budget(tmp_path):
     runner = _runner(tmp_path, _FakeClient(), _SignalTG(), mode="paper")
     runner.equity = 104
-    runner.directional_cap_frac = .08
+    runner.directional_cap_frac = .07
     _watch(runner, "BTCUSDT")
     oid, it = next(iter(runner.open_intents.items()))
     runner.equity = 50

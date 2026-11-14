@@ -336,7 +336,7 @@ def test_replay_cognition_parity_prepare_cognition():
     want = {i: [(x.id, x.direction) for x in evs]
             for i, evs in ref.events_by.items()}
     assert got == want
-    assert trk._ctx is not None          # mic 追踪器接续:末语境在场
+    assert trk.frozen_cog_index == len(cog) - 1
 
 
 # ---------------------------------------------------------------------------
@@ -364,19 +364,26 @@ def test_live_config_has_no_engine_switch():
     assert "engine" not in _cfg_min()["cognition"]
 
 
-def test_load_strategy_params_requires_balance_detector(tmp_path):
-    """策略配置没有平衡箱 ⇒ 没有事件来源 ⇒ 直接拒绝,而不是退回 v20 语义。"""
-    strat = json.loads((ROOT / "config" / "strategy.json").read_text("utf-8"))
-    strat["use_balance_detector"] = False
-    path = tmp_path / "strategy.json"
-    path.write_text(json.dumps(strat), encoding="utf-8")
-    with pytest.raises(ValueError, match="use_balance_detector"):
-        lr.load_strategy_params(path)
+def test_load_strategy_params_matches_canonical_engine_bundle():
+    """实盘与回放必须共用同一套 engine.load_strategy_bundle 解析结果。"""
+    from market_operator.engine import load_strategy_bundle
+    bundle = load_strategy_bundle(ROOT / "config" / "strategy.json")
+    raw, params, rp, rp_by_tf = lr.load_strategy_params()
+    assert params == bundle.params
+    assert rp == bundle.router
+    assert rp_by_tf == dict(bundle.router_by_tf)
+    assert raw["version"] == bundle.raw["version"]
 
 
-def test_new_position_manager_rejects_non_balance_config():
-    with pytest.raises(ValueError, match="use_balance_detector"):
-        lr.new_position_manager(lr.Params(), {})
+def test_new_position_manager_matches_canonical_engine():
+    from market_operator.engine import build_position_manager, load_strategy_bundle
+    bundle = load_strategy_bundle(ROOT / "config" / "strategy.json")
+    pm_live = lr.new_position_manager(bundle.params, dict(bundle.raw))
+    pm_ref = build_position_manager(bundle.params, bundle.arm)
+    assert pm_live.breakeven_on_reduce == pm_ref.breakeven_on_reduce
+    assert pm_live.partial_exit_enabled == pm_ref.partial_exit_enabled
+    assert pm_live.accept_reenter_level_exit == pm_ref.accept_reenter_level_exit
+    assert pm_live.reject_opp_lock_frac == pm_ref.reject_opp_lock_frac
 
 
 def test_runner_rejects_retired_engine(tmp_path):
@@ -1433,20 +1440,20 @@ def test_edge_size_multiplier_defaults_to_one():
 
 
 def test_edge_size_multiplier_normalizes_legacy_event_codes():
-    """配置写 E1 或 BREAKOUT_ACCEPTED 等价;方向不匹配不生效。"""
+    """配置写 ACCEPT 或 BREAKOUT_ACCEPTED 等价;方向不匹配不生效。"""
     table = {"BREAKOUT_ACCEPTED|1": 0.35}
-    assert lr.edge_size_multiplier(table, "E1", 1) == pytest.approx(0.35)
-    assert lr.edge_size_multiplier(table, "E1", -1) == 1.0
+    assert lr.edge_size_multiplier(table, "ACCEPT", 1) == pytest.approx(0.35)
+    assert lr.edge_size_multiplier(table, "ACCEPT", -1) == 1.0
 
 
 def test_edge_size_multiplier_only_shrinks_and_never_removes_direction():
     """配置只能减少仓位:0/负/NaN/非法 ⇒ 1.0;放大夹回 1.0;下限 10%。"""
-    assert lr.edge_size_multiplier({"E1|1": 0.0}, "E1", 1) == 1.0
-    assert lr.edge_size_multiplier({"E1|1": -1.0}, "E1", 1) == 1.0
-    assert lr.edge_size_multiplier({"E1|1": float("nan")}, "E1", 1) == 1.0
-    assert lr.edge_size_multiplier({"E1|1": "oops"}, "E1", 1) == 1.0
-    assert lr.edge_size_multiplier({"E1|1": 3.0}, "E1", 1) == 1.0
-    assert lr.edge_size_multiplier({"E1|1": 0.01}, "E1", 1) == 0.1
+    assert lr.edge_size_multiplier({"ACCEPT|1": 0.0}, "ACCEPT", 1) == 1.0
+    assert lr.edge_size_multiplier({"ACCEPT|1": -1.0}, "ACCEPT", 1) == 1.0
+    assert lr.edge_size_multiplier({"ACCEPT|1": float("nan")}, "ACCEPT", 1) == 1.0
+    assert lr.edge_size_multiplier({"ACCEPT|1": "oops"}, "ACCEPT", 1) == 1.0
+    assert lr.edge_size_multiplier({"ACCEPT|1": 3.0}, "ACCEPT", 1) == 1.0
+    assert lr.edge_size_multiplier({"ACCEPT|1": 0.01}, "ACCEPT", 1) == 0.1
 
 
 def test_live_config_edge_multiplier_is_bounded_and_keyed_validly():
@@ -1468,7 +1475,7 @@ def test_accept_long_sized_down_while_reject_long_kept(tmp_path):
 
     r._submit_open(_campaign("BTCUSDT"), _decision(), NOW, mic=False)
     accept = _decision()
-    accept.hyp.event_id = "E1"                      # 同方向,机制换成 ACCEPT
+    accept.hyp.event_id = "ACCEPT"                  # 同方向,机制换成 ACCEPT
     r._submit_open(_campaign("ETHUSDT"), accept, NOW + 1000, mic=False)
 
     intents = {v["symbol"]: v for v in r.open_intents.values()}
@@ -1711,6 +1718,7 @@ def test_sub_bar_lock_uses_configured_frac(tmp_path):
     client, tg = _FillClient(), _FakeTG()
     r = _runner(tmp_path, client, tg, cfg=cfg)
     pm = _pm_real()
+    pm.reject_opp_lock_frac = -0.25
     pos_pm = pm.open("BTCUSDT", 1, 100.0, 94.0, 110.0, "EV1", 0, 0)
     pos_pm.armed, pos_pm._best = True, 110.0
     r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=2.0,
@@ -1731,6 +1739,8 @@ def test_sub_bar_giveback_exhaustion_takes_half_and_breakeven(tmp_path):
     client, tg = _FillClient(), _FakeTG()
     r = _runner(tmp_path, client, tg, cfg=cfg)
     pm = _pm_real()
+    pm.partial_exit_enabled = True
+    pm.reject_opp_lock_frac = -0.25
     pos_pm = pm.open("BTCUSDT", 1, 100.0, 94.0, 110.0, "EV1", 0, 0)
     pos_pm.armed, pos_pm._best = True, 110.0
     r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=94.0, qty=2.0,

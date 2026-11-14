@@ -67,6 +67,12 @@ from market_operator.bitget_live import (                        # noqa: E402
 from market_operator.broker import (                            # noqa: E402
     ContractSpec, floor_step)
 from market_operator.events import EventDetector, canonical_event_id  # noqa: E402
+from market_operator.engine import (                             # noqa: E402
+    build_position_manager,
+    load_strategy_bundle,
+    parse_execution_config,
+    select_cognition_route_events,
+)
 from market_operator.heartbeat import (                          # noqa: E402
     SCHEMA as HB_SCHEMA, HeartbeatGuard, SingletonLock, iso_utc)
 from market_operator.hypothesis import StructureView, entry_contract_error, entry_cost_error, execution_target  # noqa: E402
@@ -112,70 +118,15 @@ def initial_price_clock_ts(now_ms: int, step: int, opened_ts: int) -> int:
 
 
 def load_strategy_params(cfg_path: Path = STRATEGY_CONFIG) -> tuple:
-    """加载生产策略参数:平衡箱 + 双原语(ACCEPT/REJECT) + 周期分治路由。
-
-    与 ``scenario.load_settings`` 同一 fail-closed 纪律:事件来源必须是平衡箱,
-    否则这条链根本没有事件可路由,拿到手的只是一套"看起来在跑"的参数。
-    """
-    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-    if not bool(raw.get("use_balance_detector", False)):
-        raise ValueError(
-            f"{cfg_path}: 实盘链路要求 use_balance_detector=true"
-            "(v21 之外没有可用的生产事件来源)")
-    params = Params.from_json(cfg_path)
-    whitelist = frozenset((str(i), int(d)) for i, d in raw["whitelist"])
-    base_kw = dict(
-        k_dq=float(raw.get("k_dq", 0.5)),
-        k_imp=float(raw.get("k_imp", 1.5)),
-        k_is=float(raw.get("k_is", 0.8)),
-        turtle_stop_atr=float(raw.get("turtle_stop_atr", 2.0)),
-        k_bm=float(raw.get("k_bm", 0.1)),
-        whitelist=whitelist,
-    )
-    rp_extra = raw.get("router_params") or {}
-    base_rp = dc_replace(RouterParams(**base_kw), **rp_extra)
-    rp_by_tf = {}
-    for tf, tf_ov in (raw.get("router_params_by_tf") or {}).items():
-        rp_by_tf[tf] = dc_replace(base_rp, **tf_ov)
-    return raw, params, base_rp, rp_by_tf
+    """回放与实盘唯一共享的策略配置入口(委托 market_operator.engine)。"""
+    bundle = load_strategy_bundle(cfg_path)
+    return dict(bundle.raw), bundle.params, bundle.router, dict(bundle.router_by_tf)
 
 
 def new_position_manager(params: Params, raw: dict) -> PositionManager:
-    """持仓侧接线:唯一生产语义(对侧突破锁利 + Turtle)。
-
-    v20 arm-full(harvest/time_cap/trail_arm_gate)已随 ``lifecycle`` 退役;
-    没有平衡箱的配置直接报错,而不是拿旧 chain 的持仓参数顶上 —— 那样会让
-    "换了一套语义"在运行期悄无声息地发生。
-    """
-    if not raw.get("use_balance_detector"):
-        raise ValueError(
-            "new_position_manager: 需要 use_balance_detector=true"
-            "(v21 之外没有可用的生产持仓语义)")
-    arm_cfg = raw.get("arm_config") or {}
-    # 锁利 frac 不设兜底默认值:它已被标定过(2026-10-24 −0.50 → −0.25),任何写死的
-    # 默认值都会在下次标定后悄悄让实盘与回放分叉 —— 这正是 v21.6 的老问题。缺键
-    # 直接报错,让"没配"和"配了这个值"可区分。
-    if "reject_opp_lock_frac" not in arm_cfg:
-        raise ValueError(
-            "new_position_manager: 缺 arm_config.reject_opp_lock_frac。"
-            "锁利预算没有安全默认值,请显式写入配置(生产值见 config/strategy.json)。")
-    return PositionManager(
-        params,
-        allow_add=False,
-        breakeven_on_reduce=bool(arm_cfg.get("breakeven_on_reduce", True)),
-        time_stop=False,
-        reject_opp_lock_frac=float(arm_cfg["reject_opp_lock_frac"]),
-        giveback_atr_k=(None if arm_cfg.get("giveback_atr_k") is None
-                        else float(arm_cfg["giveback_atr_k"])),
-        accept_reenter_box_exit=bool(arm_cfg.get("accept_reenter_box_exit", False)),
-        vol_based_frac_map=arm_cfg.get("vol_based_frac_map"),
-        partial_exit_enabled=bool(arm_cfg.get("partial_exit_enabled", False)),
-
-        # 锁利只有一个参数:符号 = arming 口径(<0 收盘突破 / >0 盘中触及),
-        # |frac| = 目标处锁住的行程比例 ⇒ 回吐预算 (1−|frac|)·|target−entry|。
-        # v21.7 起回放与实盘共用 position.opp_lock_step,不再有"实盘专用"
-        # 的 R 单位缓冲(旧的 opp_lock_max_giveback_r 已删除)。
-    )
+    """回放与实盘唯一共享的持仓管理器构造器(委托 market_operator.engine)。"""
+    arm = parse_execution_config(raw)
+    return build_position_manager(params, arm)
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +474,7 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
     增量接续;bar 事件流 == prepare_cognition 由测试钉死。
     优化:同周期触发(trigger_tf_seconds >= obs_tf_seconds)无需构建/步进 MicTracker。
     """
-    detector = EventDetector(params, enable_e7=True)
+    detector = EventDetector(params)
     actual_trig_s = (
         int(trig_bars[1][0] - trig_bars[0][0]) // 1000
         if len(trig_bars) >= 2 and trig_bars[1][0] > trig_bars[0][0]
@@ -538,56 +489,26 @@ def replay_cognition(params: Params, symbol: str, cog_bars: list,
     trig_ms = eff_trig_s * 1000
     t_series = aggregate_tf(trig_bars, eff_trig_s) if eff_trig_s > actual_trig_s else trig_bars
     scale = max(1, obs_ms // trig_ms)
-    tracker = MicTracker(params, scale=scale,
-                         trigger_tf_seconds=eff_trig_s,
-                         obs_tf_seconds=obs_tf_seconds, enable_e7=True)
-    labels = {b[0]: i for i, b in enumerate(cog_bars)}
-    spans: dict = {}
-    for k, b in enumerate(t_series):
-        i = labels.get(b[0] - (b[0] % obs_ms))
-        if i is None:                             # 认知帧外的头尾 trigger:跳过
+    tracker = MicTracker(params, scale=scale)
+    first_open = int(cog_bars[0][0]) if cog_bars else 0
+    c_idx = 0
+    n_cog = len(cog_bars)
+    for tb in t_series:
+        ts_t = int(tb[0])
+        if cog_bars and ts_t < first_open:
             continue
-        sp = spans.setdefault(i, [k, k])
-        sp[1] = k
-    k = 0
-    n = len(cog_bars)
-    t0_ms = int(t_series[0][0]) if t_series else (int(cog_bars[0][0]) if cog_bars else 0)
-
-    def _span_start(p: int, _sp=spans, _n=n) -> int:
-        idx_p = min(max(p, 0), _n - 1)
-        if idx_p in _sp:
-            return _sp[idx_p][0]
-        return (int(cog_bars[idx_p][0]) - t0_ms) // trig_ms
-
-    def _span_end(p: int, _sp=spans, _n=n) -> int:
-        idx_p = min(max(p, 0), _n - 1)
-        if idx_p in _sp:
-            return _sp[idx_p][1]
-        return (int(cog_bars[idx_p][0]) + obs_ms - trig_ms - t0_ms) // trig_ms
-
-    for i, bar in enumerate(cog_bars):
-        sp = spans.get(i)
-        if sp is None:
-            if t_series and int(bar[0]) + obs_ms <= int(t_series[0][0]):
-                detector.update(bar)
-                continue
-            raise RuntimeError(f"{symbol} 认知 bar {i} 无 trigger 覆盖")
-        lo, hi = sp
-        if k < lo:
-            k = lo
-        while k <= hi:
-            tb = t_series[k]
-            tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4], tb[5] if len(tb) > 5 else 0.0)
-            k += 1
-        detector.update(bar)
-        tracker.sync(i, detector, _span_start, _span_end)
-    if cog_bars:
-        last_cog_end = int(cog_bars[-1][0]) + obs_ms
-        while k < len(t_series):
-            tb = t_series[k]
-            if int(tb[0]) >= last_cog_end:
-                tracker.on_trigger_bar(k, tb[0], tb[1], tb[2], tb[3], tb[4], tb[5] if len(tb) > 5 else 0.0)
-            k += 1
+        close_moment = ts_t + trig_ms
+        # 与 trigger.prepare_mic_cognition 及 campaign.run_campaigns 完全相同的因果时序:
+        # 凡是在 close_moment 前(含)已收盘的大周期认知 bar 先推进并冻结快照,随后再推进触发 bar!
+        while c_idx < n_cog and int(cog_bars[c_idx][0]) + obs_ms <= close_moment:
+            detector.update(cog_bars[c_idx])
+            tracker.sync_from_structure(detector.structure)
+            c_idx += 1
+        tracker.update(tb)
+    while c_idx < n_cog:
+        detector.update(cog_bars[c_idx])
+        tracker.sync_from_structure(detector.structure)
+        c_idx += 1
     return detector, tracker
 
 
@@ -1868,10 +1789,36 @@ class LiveRunner:
                     except Exception:
                         pass
 
-        for sym, cs in sorted(self.campaigns.items()):
+        # 纯 K 线内生二维相对强弱优先轮询(与回放 _mic_rank 对齐,取代字母序 A->Z 抢夺同向敞口额度)
+        ordered_campaigns = sorted(
+            self.campaigns.items(),
+            key=lambda kv: (-abs(float(kv[1].detector.structure.imbalance_strength())), kv[0]),
+        )
+        for sym, cs in ordered_campaigns:
             try:
-                # 1) 推进 30m 细周期触发战役(2h->30m 每 30m 收盘推进, 4h->1h 每 1h 收盘推进,共用同一 30m 序列)
-                sub_30m_list = sub_30m_by_sym.get(sym) or []
+                # 1) 自顶向下(Top-Down)纪律:先推进 2H 基础帧与高周期战役(如 1d->4h),
+                #    确保在 00:00 UTC 等交汇点先完成日线宏观结构闭合与优先决策权!
+                b_list = sorted(
+                    base_2h_by_sym.get(sym) or [],
+                    key=lambda c: -int(c.obs_tf_seconds),
+                )
+                if sym in due_base and b_list:
+                    new_bars = (
+                        pref_base[sym]
+                        if sym in pref_base
+                        else self.client.history_candles(
+                            sym, self.cog_cfg["granularity"], start_ms=due_base[sym], limit=100)
+                    )
+                    if new_bars:
+                        for idx_b, bc in enumerate(b_list):
+                            self._advance(bc, now_ms, new_bars=new_bars, run_paper_fills=(idx_b == 0))
+                        self._try_unlock_higher_tfs(sym, b_list[0].trig_bars)
+                        self._save_cached_bars(sym, b_list[0].trig_bars)
+                # 2) 再推进下级细周期触发战役(如 4h->1h),此时可因果读取刚刚闭合的最新日线宏观结构视图!
+                sub_30m_list = sorted(
+                    sub_30m_by_sym.get(sym) or [],
+                    key=lambda c: -int(c.obs_tf_seconds),
+                )
                 if sym in due_30m and sub_30m_list:
                     sub_new = (
                         pref_30m[sym]
@@ -1882,22 +1829,6 @@ class LiveRunner:
                         for sc in sub_30m_list:
                             self._advance(sc, now_ms, new_bars=sub_new, run_paper_fills=False)
                         self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran="30m")
-                # 2) 推进 2H 基础帧与同粒度战役
-                b_list = base_2h_by_sym.get(sym) or []
-                if sym not in due_base or not b_list:
-                    continue
-                new_bars = (
-                    pref_base[sym]
-                    if sym in pref_base
-                    else self.client.history_candles(
-                        sym, self.cog_cfg["granularity"], start_ms=due_base[sym], limit=100)
-                )
-                if not new_bars:
-                    continue
-                for idx_b, bc in enumerate(b_list):
-                    self._advance(bc, now_ms, new_bars=new_bars, run_paper_fills=(idx_b == 0))
-                self._try_unlock_higher_tfs(sym, b_list[0].trig_bars)
-                self._save_cached_bars(sym, b_list[0].trig_bars)
             except BitgetError as e:
                 self._api_note(e)
                 self.tg.send_alert(f"{sym} bar 推进异常:{str(e)[:120]}")
@@ -2197,27 +2128,22 @@ class LiveRunner:
             # 盘中子周期触价结算:持仓期间在 2H/触发子周期上检查固定 STOP / TP1,
             # 消除 12h/1d 等高周期收盘前数小时的实盘/paper 状态同步延迟
             self._on_sub_bar(cs, bar)
-            # 降档触发步(当 trigger 细于认知周期,即 trig_ms < obs_ms 时生效)
-            if cs.tracker is not None and trig_ms < obs_ms:
-                if (bar[0] + base_ms) % trig_ms == 0 and len(cs.trig_bars) >= trig_scale:
-                    t_bar = (bar if trig_scale == 1
-                             else aggregate_bucket(cs.trig_bars[-trig_scale:],
-                                                   bar[0] + base_ms - trig_ms))
-                    k = (int(t_bar[0]) - trigger_origin_ms(cs)) // trig_ms
-                    ts, o, h, low, c, _v = t_bar
-                    emitted = cs.tracker.on_trigger_bar(k, ts, o, h, low, c, _v)
-                    if emitted:
-                        ctx = cs.tracker._ctx
-                        view = StructureView(
-                            regime=ctx.regime,
-                            zones=tuple(z.clone() for z in ctx.zones), atr=ctx.atr,
-                            pivots=ctx.pivots[-self.params.range_max_pivots:])
-                        self._route_step(cs, ctx.atr, emitted, view, mic=True)
+            # 与回放 campaign.run_campaigns 同构时序:若当前时刻恰逢大周期认知收盘,先闭合认知并冻结原子水平位地图,
+            # 再推进下级触发收盘判定
             if (bar[0] + base_ms) % obs_ms == 0 and len(cs.trig_bars) >= scale:
                 cog_bar = (bar if scale == 1
                            else aggregate_bucket(cs.trig_bars[-scale:],
                                                  bar[0] + base_ms - obs_ms))
                 self._close_cognition(cs, cog_bar)
+            if cs.tracker is not None and trig_ms < obs_ms:
+                if (bar[0] + base_ms) % trig_ms == 0 and len(cs.trig_bars) >= trig_scale:
+                    t_bar = (bar if trig_scale == 1
+                             else aggregate_bucket(cs.trig_bars[-trig_scale:],
+                                                   bar[0] + base_ms - trig_ms))
+                    emitted = cs.tracker.update(t_bar)
+                    if emitted:
+                        view = cs.tracker.current_view(tf_hours=int(obs_ms // 3_600_000))
+                        self._route_step(cs, cs.tracker.frozen_atr, emitted, view, mic=True)
 
     def _stop_is_resting(self, sym: str, trigger: float) -> bool:
         """防线上是否**确有**交易所保护单在挂(本地记录 + 触发价同档)。
@@ -2672,32 +2598,14 @@ class LiveRunner:
         n_pivots_before = len(s.pivots)
         emitted = cs.detector.update(cog_bar)
         new_pivots = list(s.pivots[n_pivots_before:])
-        i = len(cs.cog_bars)
         base_s = (
             int(cs.trig_bars[1][0] - cs.trig_bars[0][0]) // 1000
             if len(cs.trig_bars) >= 2 and int(cs.trig_bars[1][0]) > int(cs.trig_bars[0][0])
             else 7200
         )
-        trig_s = max(base_s, int(cs.trigger_tf_seconds))
         obs_s = max(base_s, int(cs.obs_tf_seconds))
         if cs.tracker is not None:
-            # Historical episode anchors must map to their own trigger spans,
-            # not to the current cognition bucket. Match warmup's timestamp grid.
-            origin = trigger_origin_ms(cs)
-            step = trig_s * 1000
-
-            def span_start(p):
-                historical = cog_bar if p == i else cs.cog_bars[p]
-                return max(0, (int(historical[0]) - origin + step - 1) // step)
-
-            def span_end(p):
-                # Future trend deadlines retain warmup's current-context clamp.
-                p = min(p, i)
-                historical = cog_bar if p == i else cs.cog_bars[p]
-                return (int(historical[0]) + obs_s * 1000 - origin) // step - 1
-
-            cs.tracker.sync(i, cs.detector,
-                            span_start, span_end)
+            cs.tracker.sync_from_structure(s)
         cs.cog_bars.append(cog_bar)
         atr = s.atr()
         sym = cs.symbol
@@ -2753,26 +2661,18 @@ class LiveRunner:
             for intent in mgmt:
                 self._exec_mgmt(cs, intent, cog_bar)
         if emitted:
-            route_events = (
-                [
-                    e for e in emitted
-                    if not (
-                        e.id == "LEVEL_REJECTED"
-                        and getattr(e.attrs.get("zone"), "source_kind", "BOX_EDGE") == "BOX_EDGE"
-                    )
-                ]
-                if cs.tracker is not None
-                else list(emitted)
+            route_events = select_cognition_route_events(
+                emitted, has_trigger_tracker=(cs.tracker is not None)
             )
             if route_events:
                 view = StructureView(
-                    regime=s.regime(), zones=s.zones, atr=atr,
+                    regime=s.regime(), zones=s.levels, atr=atr,
                     pivots=s.pivots[-self.params.range_max_pivots:])
                 self._route_step(cs, atr, route_events, view, mic=False)
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
                     *, mic: bool) -> None:
-        """canonical 决策:MarketRouter → 意图(v21 唯一链)。"""
+        """与 campaign.py 完全同源的路由决策入口(MarketRouter → 意图)。"""
         sym = cs.symbol
         if mic:
             bars, bar = cs.trig_bars, cs.trig_bars[-1]
@@ -2780,7 +2680,7 @@ class LiveRunner:
             bars, bar = cs.cog_bars, cs.cog_bars[-1]
         htf_views = ()
         r_params = getattr(cs.router, "params", None)
-        if getattr(r_params, "htf_wall_filter", False):
+        if getattr(r_params, "htf_wall_check", True):
             all_cs = [self.campaigns.get(sym)] + [
                 sub for (s2, _), sub in self.extra_campaigns.items() if s2 == sym
             ]
@@ -2788,31 +2688,47 @@ class LiveRunner:
             for ocs in all_cs:
                 if (
                     ocs is None
-                    or ocs.obs_tf_seconds <= cs.obs_tf_seconds
-                    or (ocs.obs_tf_seconds < 3 * cs.obs_tf_seconds and ocs.obs_tf_seconds < 86400)
+                    or ocs.obs_tf_seconds < 2 * cs.obs_tf_seconds
                     or not ocs.cog_bars
                 ):
                     continue
                 os_st = ocs.detector.structure
-                m_imb = os_st.macro_imbalance(os_st.params.k_room)
-                z_htf = os_st.zones if ocs.obs_tf_seconds >= 3 * cs.obs_tf_seconds else ()
                 htf_list.append(StructureView(
-                    regime=os_st.regime(), zones=z_htf,
-                    atr=os_st.atr(), pivots=(),
-                    macro_imbalance=m_imb,
-                    tf_hours=int(ocs.obs_tf_seconds // 3600)))
+                    regime=os_st.regime(),
+                    zones=os_st.levels,
+                    atr=os_st.atr(),
+                    pivots=(),
+                    macro_imbalance=os_st.macro_imbalance(),
+                    tf_hours=int(ocs.obs_tf_seconds // 3600),
+                ))
             htf_views = tuple(htf_list)
-        if htf_views:
-            decisions = cs.router.on_bar(
-                sym, bar, len(bars) - 1, view, atr, events,
-                position_open=sym in self.positions,
-                entry_resting=self._entry_resting(sym),
-                htf_views=htf_views)
-        else:
-            decisions = cs.router.on_bar(
-                sym, bar, len(bars) - 1, view, atr, events,
-                position_open=sym in self.positions,
-                entry_resting=self._entry_resting(sym))
+        peer_cs = [
+            c_item
+            for c_item in (*self.campaigns.values(), *self.extra_campaigns.values())
+            if c_item is not None and c_item.obs_tf_seconds == cs.obs_tf_seconds and c_item.cog_bars
+        ]
+        peer_regs = [c_item.detector.structure.regime() for c_item in peer_cs]
+        peer_dvs = sorted(c_item.detector.structure.dollar_volume() for c_item in peer_cs)
+        med_dv = float(peer_dvs[len(peer_dvs) // 2]) if peer_dvs else 0.0
+        n_univ = len(peer_regs)
+        m_breadth = (
+            float(sum(1 for r in peer_regs if r.value == "trend_up") - sum(1 for r in peer_regs if r.value == "trend_down")) / float(n_univ)
+            if n_univ >= 4 else 0.0
+        )
+        existing_pos = self.positions.get(sym)
+        existing_tf_s = (
+            TF_SECONDS_MAP.get(str(existing_pos.get("tf_label") or ""), 0)
+            if existing_pos is not None else 0
+        )
+        blocked_by_same_or_htf = existing_pos is not None and existing_tf_s >= int(cs.obs_tf_seconds)
+        decisions = cs.router.on_bar(
+            sym, bar, len(bars) - 1, view, atr, events,
+            position_open=blocked_by_same_or_htf,
+            entry_resting=self._entry_resting(sym),
+            htf_views=htf_views,
+            market_breadth=m_breadth,
+            universe_size=n_univ,
+            median_dollar_volume=med_dv)
         t = int(bar[0])
         for d in decisions:
             if d.kind == "cancel_entry":
@@ -2828,6 +2744,19 @@ class LiveRunner:
                         "symbol": sym, "ts": int(bar[0]),
                         "event": getattr(d.hyp, "event_id", None)})
                     continue
+                # 实盘仓位升格(Scale Promotion):若同标的持有更小周期的旧仓位,先平仓落袋再无缝开立更高周期新仓位!
+                cur_pos = self.positions.get(sym)
+                if cur_pos is not None and TF_SECONDS_MAP.get(str(cur_pos.get("tf_label") or ""), 0) < int(cs.obs_tf_seconds):
+                    low_cs = self._get_cs_for(sym, cur_pos.get("tf_label"))
+                    low_pm = low_cs.pm.positions.get(sym) if low_cs is not None else None
+                    if low_cs is not None and low_pm is not None:
+                        self._sub_bar_close_out(
+                            low_cs, low_pm, cur_pos, t, float(bar[4]),
+                            why="scale_promoted",
+                            route=f"SCALE_PROMOTED|to={cs.tf_label}",
+                            executor="local_market",
+                        )
+                        self.counters["scale_promotions"] = self.counters.get("scale_promotions", 0) + 1
                 self._submit_open(cs, d, t, mic=mic, view=view)
             else:
                 raise RuntimeError(f"unknown decision {d.kind}")
@@ -3002,7 +2931,7 @@ class LiveRunner:
         checks too, and exclude the intent currently being executed.
         """
         frac = self.directional_cap_frac
-        if frac is None:
+        if frac is None or self.equity is None:
             return False
         capital = max(0.0, float(self.equity) - float(self.unrealized_pl or 0.0))
         fee, slip = float(self.risk["taker_fee"]), float(self.risk["slippage_per_side"])
@@ -3096,7 +3025,7 @@ class LiveRunner:
                                          hyp.target_1, d.meta)
         elif self.mode == "live" and d.kind == "market" and (d.meta.get("bounded_entry") or cost_limited):
             block = (entry_contract_error(hyp.direction, execution_quote, invalid,
-                     hyp.target_1, d.meta) if execution_quote is not None else "EXECUTION_QUOTE_UNAVAILABLE")
+                     hyp.target_1, d.meta, at_execution=True) if execution_quote is not None else "EXECUTION_QUOTE_UNAVAILABLE")
             if block is None:
                 # Size against the adverse quote as well as the decision price.
                 risk_per_unit = max(risk_per_unit, abs(execution_quote - invalid))
@@ -3875,15 +3804,19 @@ class LiveRunner:
                     pos["target_1"] = None
                     pm.pending_reduce = False
                 continue
-            if (pm is None or pm.reduced or target is None
-                    or not cs.pm.partial_exit_enabled
-                    or cs.pm._resolve_lock_frac(pm) <= 0):
+            if pm is None or cs is None or pm.reduced or target is None:
+                continue
+            part_en = bool(getattr(cs.pm, "partial_exit_enabled", False))
+            lock_f = float(getattr(cs.pm, "reject_opp_lock_frac", 0.0) or 0.0)
+            full_tp_mode = (not part_en) and lock_f >= 1.0 - 1e-9
+            if not part_en and not full_tp_mode:
                 continue
             if pos.get("target_order"):
                 pm.pending_reduce = True
                 continue
             spec = self._spec(sym)
-            qty = floor_step(float(pos["qty"]) * 0.5,
+            tp_frac = 1.0 if full_tp_mode else 0.5
+            qty = floor_step(float(pos["qty"]) * tp_frac,
                              spec.size_step, spec.size_place)
             if qty <= 0:
                 self._alert_throttled(f"target_size:{sym}",
@@ -3985,9 +3918,10 @@ class LiveRunner:
             # Reconcile may already have observed the lower exchange quantity.
             # Feed the common fill recorder its pre-fill quantity exactly once.
             pos["qty"] = remaining + delta
+            close_role = "exit" if remaining <= 1e-9 else "reduce"
             self._live_close_filled({
-                "oid": order["client_oid"], "symbol": sym, "role": "reduce",
-                "qty": delta, "route": "partial_exit|exchange target fill",
+                "oid": order["client_oid"], "symbol": sym, "role": close_role,
+                "qty": delta, "route": f"{'full_tp_exit' if close_role == 'exit' else 'partial_exit'}|exchange target fill",
                 "price_source": "fills"}, ref_price=px)
             if sym in self.positions:
                 self.positions[sym]["qty"] = remaining
@@ -4829,9 +4763,7 @@ class LiveRunner:
                                                 "why": f"结构读取失败:{type(e).__name__}"})
                 continue
             struct = adopt_mod.structure_from_zones(
-                atr=atr, zones=zones,
-                k_bm=float(self.rp.k_bm), k_is=float(self.rp.k_is),
-                turtle_stop_atr=float(self.rp.turtle_stop_atr))
+                atr=atr, zones=zones, k_bm=float(self.rp.k_bm))
             entry = float(p.get("entry_price") or 0.0)
             mark = float(p.get("mark_price") or 0.0) or entry
             ad = adopt_mod.propose(symbol=sym, direction=d, entry=entry,

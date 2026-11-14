@@ -20,15 +20,27 @@ def benchmark():
 
 
 def test_cognition_fingerprint_preserves_structural_identity_and_geometry(benchmark):
+    from market_operator.level import LevelKind, LevelState
     module = benchmark
-    zone = Zone(99, 100, ZoneRole.SUPPORT, box_id=7)
+    zone = Zone(
+        uid=1,
+        role=ZoneRole.SUPPORT,
+        kind=LevelKind.SWING,
+        extreme=99.0,
+        neck=100.0,
+        state=LevelState.FRESH,
+        origin_index=3,
+        known_index=6,
+        origin_ts=3600000,
+        last_change_known=6,
+    )
     same = zone.clone()
-    same.zone_uid += 1
+    same.uid += 1
     assert module._plain(zone) == module._plain(same)
     same.geometry_version += 1
     assert module._plain(zone) != module._plain(same)
     same = zone.clone()
-    same.hi += 1e-10
+    same.neck += 1e-10
     assert module._plain(zone) != module._plain(same)
 
 
@@ -88,15 +100,15 @@ def test_schedule_fresh_workers_alternate_and_memory_is_last(benchmark, monkeypa
     monkeypatch.setattr(benchmark, "_run_worker", run)
     result = benchmark._benchmark(args)
     records = result["records"]
-    assert len(calls) == 40  # 4 cases * (4 timing rounds + 1 memory round) * 2 sides
-    assert [r["mode"] for r in records] == ["timing"] * 32 + ["memory"] * 8
+    assert len(calls) == 30  # 3 cases * (4 timing rounds + 1 memory round) * 2 sides
+    assert [r["mode"] for r in records] == ["timing"] * 24 + ["memory"] * 6
     for round_index in range(4):
         expected = ["baseline", "current"]
         if bool(round_index % 2) != reverse:
             expected.reverse()
-        round_records = records[round_index * 8:(round_index + 1) * 8]
-        assert [r["side"] for r in round_records] == expected * 4
-    assert len(args.output.with_suffix(".samples.jsonl").read_text().splitlines()) == 40
+        round_records = records[round_index * 6:(round_index + 1) * 6]
+        assert [r["side"] for r in round_records] == expected * 3
+    assert len(args.output.with_suffix(".samples.jsonl").read_text().splitlines()) == 30
     for summary in result["comparison"].values():
         assert summary["equal"]
         assert summary["baseline"]["seconds"]["n"] == 8
@@ -118,7 +130,7 @@ def test_schedule_fresh_workers_alternate_and_memory_is_last(benchmark, monkeypa
 def test_default_cases_and_stats(benchmark):
     assert benchmark._case_labels([8000, 32000]) == [
         "dense_pivots_8000", "no_pivots_8000", "dense_pivots_32000", "no_pivots_32000",
-        "BTCUSDT_1h_balance_False", "BTCUSDT_1h_balance_True"]
+        "BTCUSDT_1h_level"]
     assert benchmark._stats([1., 2., 3.]) == {"median": 2., "min": 1., "max": 3., "mad": 1., "n": 3}
 
 

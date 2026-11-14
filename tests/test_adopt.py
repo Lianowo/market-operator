@@ -198,7 +198,7 @@ def test_runner_adopts_exchange_only_position_with_structure_stop(tmp_path,
     pos = r.positions["BEUSDT"]
     assert pos["direction"] == 1 and pos["qty"] == pytest.approx(0.05)
     assert pos["entry"] == pytest.approx(100.0)
-    assert pos["invalid"] == pytest.approx(94.0 - 0.1 * 2.0)   # 结构外沿锚点
+    assert pos["invalid"] == pytest.approx(94.0 - r.rp.k_bm * 2.0)   # 结构外沿锚点
     assert pos["target_1"] == pytest.approx(110.0)
     assert pos["event_id"] == "ADOPTED"
     assert r.counters["adopted"] == 1

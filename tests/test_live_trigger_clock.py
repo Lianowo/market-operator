@@ -26,13 +26,13 @@ def test_incremental_sync_maps_historical_spans_not_current_bucket(tmp_path, sca
         parent = (bar[0] - cognition[0][0]) // (obs_hours * 3_600_000)
         spans.setdefault(parent, [k, k])[1] = k
 
-    class Capture:
-        def sync(self, i, det, start, end):
-            assert i == 2
-            assert {p: [start(p), end(p)] for p in range(3)} == spans
-            assert end(100) == spans[2][1]
+    synced = []
 
-    structure = SimpleNamespace(pivots=(), atr=lambda: 1.0)
+    class Capture:
+        def sync_from_structure(self, st):
+            synced.append(st)
+
+    structure = SimpleNamespace(pivots=(), levels=(), atr=lambda: 1.0)
     cs = SimpleNamespace(
         detector=SimpleNamespace(structure=structure, update=lambda bar: []),
         tracker=Capture(), cog_bars=cognition[:2], trig_bars=raw,
@@ -41,6 +41,7 @@ def test_incremental_sync_maps_historical_spans_not_current_bucket(tmp_path, sca
     )
     runner.params = Params()
     runner._close_cognition(cs, cognition[2])
+    assert synced == [structure]
     origin = lr.trigger_origin_ms(cs)
     assert [(bar[0] - origin) // (trigger_hours * 3_600_000) for bar in series] == list(range(len(series)))
 
@@ -56,13 +57,13 @@ def test_advance_continues_cropped_warmup_trigger_indices(tmp_path, trigger_hour
     raw = [(h * base, 100, 101, 99, 100, 1) for h in range(2, 96, 2)]
     first_cog = 48 * base
     cog = [(h * base, 100, 101, 99, 100, 1) for h in range(48, 96, obs_hours)]
-    replay_raw = [b for b in raw if b[0] >= first_cog]
-    series = replay_raw if trigger_hours == 2 else lr.aggregate_tf(replay_raw, trigger_hours * 3600)
     captured = []
 
     class Capture:
-        def on_trigger_bar(self, index, *args):
-            captured.append(index)
+        frozen_atr = 1.0
+
+        def update(self, t_bar):
+            captured.append(int(t_bar[0]))
             return []
 
     cs = SimpleNamespace(symbol="OFFLINE", tf_label=f"{obs_hours}h", cog_bars=cog,
@@ -70,4 +71,4 @@ def test_advance_continues_cropped_warmup_trigger_indices(tmp_path, trigger_hour
                          trigger_tf_seconds=trigger_hours * 3600, obs_tf_seconds=obs_hours * 3600)
     new = [(h * base, 100, 101, 99, 100, 1) for h in range(96, 96 + trigger_hours, 2)]
     runner._advance(cs, (100 + trigger_hours) * base, new_bars=new, run_paper_fills=False)
-    assert captured == [len(series)]
+    assert captured == [96 * base]

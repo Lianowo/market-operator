@@ -1,945 +1,278 @@
-"""降档细周期触发跟踪器(事件知时细化层)。
+"""多周期级联触发器(HTF 原子水平位冻结锚定 + LTF 触发周期价格拍卖确认)。
 
-结构/区域/pivot/regime 在最近已收盘认知 bar 处冻结;
-触发层在细周期 bar 收盘上实时推进确认条件(突破连续站稳、刺穿拒绝与趋势破坏)。
+第一性原理(大小周期共振联动: 2h->30m / 4h->1h / 1d->4h):
+1. 大周期(HTF)负责回答【在哪里交易(Where)】:
+   仅使用当前时刻之前**已完整收盘确认**的大周期【原子水平位 Level】、波段极值与宏观拍卖状态,绝不偷看未收盘大周期 K 线。
+2. 小周期(LTF Trigger)负责回答【何时确认扣扳机(When)】:
+   当价格进入大周期原子水平位 ``[extreme, neck]`` 时,在小周期收盘上运行完全同构的
+   ``LevelAuctionEngine``(清扫流动性后夺回突破前高/前低 `LEVEL_REJECTED`,或突破后站稳跟进 `BREAKOUT_ACCEPTED`)。
 """
-
 
 from __future__ import annotations
 
-from collections import deque
+from bisect import bisect_right
+import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
-from .events import (
-    BREAKOUT_ACCEPTED,
-    BREAKOUT_FAILED,
-    FLIP_RETESTED,
-    LEVEL_REJECTED,
-    RANGE_ROTATED,
-    STRUCTURE_BROKEN,
-    TREND_RESUMED,
-    EventDetector,
-    MarketEvent,
-    fast_accept_ok,
-)
+import pandas as pd
+
+from .events import LevelAuctionEngine, MarketEvent
 from .hypothesis import StructureView
-from .structure import (
-    Params,
-    PivotKind,
-    Regime,
-    Zone,
-    ZoneRole,
-    ZoneState,
-)
+from .level import Level
+from .structure import MarketStructure, Params, Pivot, Regime, _bar_parts
+
+TRIGGER_TF_MAP: dict[int, int] = {
+    3600: 900,
+    7200: 1800,
+    14400: 3600,
+    43200: 7200,
+    86400: 14400,
+}
 
 
-# ---------------------------------------------------------------------------
-# v13 级联触发尺度映射(docs/v13-protocol.md;12h→2h、1d→4h 为协议 §1
-# "obs/4 不支持则取最近现有帧"的落地:3h/6h 无现帧 ⇒ 2h/4h,脚本如实声明)
-# ---------------------------------------------------------------------------
-
-TRIGGER_TF_MAP: dict = {3600: 900, 7200: 1800, 14400: 3600,
-                        43200: 7200, 86400: 14400}
-
-
-def resolve_trigger_tf(obs_tf_seconds: int, *, tf_map: dict = None,
-                       available: tuple = (900, 1800, 3600, 7200, 14400)
-                       ) -> tuple:
-    """obs_tf → trigger_tf 解析(v13 级联;返回值与声明由脚本/报告如实采用)。
-
-    返回 (trigger_tf_seconds, declaration):
-    - 映射命中且帧可用:declaration = None(精确档);
-    - 映射缺失或映射帧不可用:取"严格小于 obs 且整除 obs"的可用帧中与目标
-      (映射值,无映射则 obs//4)对数距离最近者(并列取更粗 —— 保守,提前
-      量更小),declaration = 如实声明字符串;无候选 ⇒ raise(该认知帧无法
-      承载 mic 语义,不得静默退回 bar)。
-    数量闸门 scale = obs // trigger 由 prepare_mic_cognition 派生。
-    """
+def resolve_trigger_tf(
+    obs_tf_seconds: int,
+    *,
+    tf_map: Optional[dict] = None,
+    available: tuple = (900, 1800, 3600, 7200, 14400),
+) -> tuple[int, Optional[str]]:
+    """解析认知周期对应的下级触发周期(秒)。"""
     obs = int(obs_tf_seconds)
-    tf_map = TRIGGER_TF_MAP if tf_map is None else {int(k): int(v) for k, v
-                                                    in dict(tf_map).items()}
+    mapping = TRIGGER_TF_MAP if tf_map is None else {int(k): int(v) for k, v in dict(tf_map).items()}
     avail = tuple(sorted(int(a) for a in available))
-    target = tf_map.get(obs, obs // 4)
-    if obs in tf_map and tf_map[obs] in avail and obs % tf_map[obs] == 0:
-        return tf_map[obs], None
+    target = mapping.get(obs, obs // 4)
+    if obs in mapping and mapping[obs] in avail and obs % mapping[obs] == 0:
+        return mapping[obs], None
     cands = [a for a in avail if a < obs and obs % a == 0]
     if not cands:
-        raise RuntimeError(f"obs_tf {obs}s 无可用 trigger 帧(候选需整除且小于 "
-                           f"obs;available={avail})")
-    import math
-    def _dist(f):
+        raise RuntimeError(f"obs_tf {obs}s 无可用 trigger 帧(available={avail})")
+
+    def _dist(f: int) -> tuple[float, int]:
         d = abs(math.log2(f / target)) if target > 0 else float("inf")
-        return (d, -f)                          # 并列取更粗(f 大者)
+        return (d, -f)
+
     best = min(cands, key=_dist)
-    why = ("映射帧不可用" if obs in tf_map else "映射缺失")
-    return best, (f"obs_tf={obs}s {why}(目标 {target}s),取最近可用 "
-                  f"{best}s(scale={obs // best};协议 §1 声明)")
-
-# ---------------------------------------------------------------------------
-# 追踪状态(mic 层私有;认知层对象只读)
-# ---------------------------------------------------------------------------
+    why = "映射帧不可用" if obs in mapping else "映射缺失"
+    return best, f"obs_tf={obs}s {why}(目标 {target}s),取最近可用 {best}s(scale={obs // best})"
 
 
-@dataclass
-class _MicEpisode:
-    """触发层接近过程;时间锚点均为 trigger 索引,认知身份单独保存。"""
+class MicTracker:
+    """状态化细周期触发跟踪器(离线回放与实盘轮询共用同一实例逻辑)。"""
 
-    zone: Zone
-    opened: int
-    ex: float
-    ex_index: int
-    puncture_index: Optional[int] = None
-    outside_closes: int = 0
-    cog_opened: Optional[int] = None
+    def __init__(self, params: Optional[Params] = None, *, scale: int = 4) -> None:
+        self.params = params or Params()
+        self.scale = max(1, int(scale))
+        self._auction = LevelAuctionEngine()
+        self.trig_bars: list[tuple[int, float, float, float, float, float]] = []
+        self._trig_atr: float = 0.0
+        self._trig_tr_sum: float = 0.0
+        self.frozen_levels: tuple[Level, ...] = ()
+        self.frozen_regime: Regime = Regime.RANGE
+        self.frozen_atr: float = 0.0
+        self.frozen_pivots: tuple[Pivot, ...] = ()
+        self.frozen_macro_imbalance: int = 0
+        self.frozen_imbalance_strength: float = 0.0
+        self.frozen_dollar_volume: float = 0.0
+        self.frozen_cog_index: int = -1
 
+    def sync_from_snapshot(
+        self,
+        *,
+        levels: Sequence[Level],
+        regime: Regime,
+        atr: float,
+        pivots: Sequence[Pivot],
+        macro_imbalance: int = 0,
+        imbalance_strength: float = 0.0,
+        dollar_volume: float = 0.0,
+        cog_index: int = -1,
+    ) -> None:
+        """在最近一根认知 K 线收盘时冻结高周期原子水平位地图。"""
+        self.frozen_levels = tuple(lv.clone() for lv in levels if lv.is_active)
+        self.frozen_regime = regime
+        self.frozen_atr = float(atr)
+        self.frozen_pivots = tuple(pivots)
+        self.frozen_macro_imbalance = int(macro_imbalance)
+        self.frozen_imbalance_strength = float(imbalance_strength)
+        self.frozen_dollar_volume = float(dollar_volume)
+        self.frozen_cog_index = int(cog_index)
 
-@dataclass
-class _MicCandidate:
-    """突破接受候选的触发层连续站稳计数。"""
+    def sync_from_structure(self, structure: MarketStructure) -> None:
+        """直接从已收盘推进后的 MarketStructure 同步冻结快照。"""
+        if structure.bars_seen <= 0:
+            return
+        self.sync_from_snapshot(
+            levels=structure.levels,
+            regime=structure.regime(),
+            atr=structure.atr(),
+            pivots=structure.pivot_slice(-self.params.range_max_pivots),
+            macro_imbalance=structure.macro_imbalance(),
+            imbalance_strength=structure.imbalance_strength(),
+            dollar_volume=structure.dollar_volume(),
+            cog_index=structure.bars_seen - 1,
+        )
 
-    zone: Zone
-    lo: float
-    hi: float
-    role: ZoneRole
-    count: int
-    started: int
-    start_close: float = 0.0
+    adopt_cognition = sync_from_structure
 
+    def current_view(self, tf_hours: int = 0) -> StructureView:
+        return StructureView(
+            regime=self.frozen_regime,
+            zones=self.frozen_levels,
+            atr=self.frozen_atr,
+            pivots=self.frozen_pivots,
+            macro_imbalance=self.frozen_macro_imbalance,
+            tf_hours=int(tf_hours),
+            imbalance_strength=self.frozen_imbalance_strength,
+            dollar_volume=self.frozen_dollar_volume,
+        )
 
+    def update(self, trig_bar: Sequence[float]) -> list[MarketEvent]:
+        """推进一根已收盘的触发细周期 K 线,使用触发周期自身的微观波动标尺锚定止损缓冲。"""
+        b = _bar_parts(trig_bar)
+        idx = len(self.trig_bars)
+        prev_bar = self.trig_bars[-1] if idx > 0 else None
+        recent_bars = tuple(self.trig_bars[-4:])
+        _ts, o, h, l, _c, _v = b
+        prev_c = prev_bar[4] if prev_bar is not None else o
+        tr = (h - l) if idx == 0 else max(h - l, abs(h - prev_c), abs(l - prev_c))
+        n = max(1, self.params.atr_n)
+        if idx < n:
+            self._trig_tr_sum += tr
+            self._trig_atr = self._trig_tr_sum / (idx + 1)
+        else:
+            self._trig_atr = ((self._trig_atr * (n - 1)) + tr) / n
 
-@dataclass
-class _MicRetest:
-    """§4.2 回踩跟踪(破位→返回带内→回退拒绝)的 trigger 级推进(FLIP_RETESTED 细化)。"""
-
-    zone: Zone                      # 认知层活引用(只读)
-    armed: bool                     # 已"首次从远侧返回带内"(RETESTED 等价)
-    extreme: Optional[float]        # 回踩最深极值(认知采用时取 _retest_extreme 快照)
-    started: int = -1               # trigger 级破位 bar(该 bar 不判回踩,镜像 §4.2)
-
-
-@dataclass
-class _MicE4:
-    """A7 TREND_RESUMED 候选(认知层激活;pivot 确认只发生在认知收盘,故只采用不新建)。"""
-
-    direction: int
-    leg_start: float
-    pb_price: float
-    depth: float
-    activated: int                  # 认知帧激活 bar 索引
-    deadline: int                   # 最后一根允许回收的 trigger bar 索引(inclusive)
-
-
-@dataclass(frozen=True)
-class _Context:
-    """认知 bar t 收盘后冻结的语境([§A 结构锁定]/[§A 阈值] 的物质承担者)。"""
-
-    atr: float
-    bm: float
-    rj: float
-    regime: Regime
-    zones: tuple                    # tuple[Zone] 认知层活引用(只读)
-    pivots: tuple                   # tuple[Pivot] 全部 confirmed
-    band: Optional[tuple]           # A8 合成带 (lo, hi)(RANGE_ROTATED 用;不足则 None)
-    l_star: Optional[float]         # pivots 全名单最后 low(STRUCTURE_BROKEN/EDGE_RECLAIMED 语境)
-    h_star: Optional[float]         # 镜像:最后 high
-    l_star_forming: Optional[int]   # STRUCTURE_BROKEN attrs 溯源(认知帧 forming 索引)
-    h_star_forming: Optional[int]
-    atr_slow: float = 0.0
-
-
-# ---------------------------------------------------------------------------
-# MicCognition(单战役 trigger 帧缓存)
-# ---------------------------------------------------------------------------
+        self.trig_bars.append(b)
+        if not self.frozen_levels or self.frozen_cog_index < 0:
+            return []
+        # 水平位本身属于高周期结构:其极值外侧防扫损呼吸垫必须匹配该水平位所属认知周期的波动量级!
+        return self._auction.step(
+            bar_index=idx,
+            bar=b,
+            prev_bar=prev_bar,
+            recent_bars=recent_bars,
+            active_levels=self.frozen_levels,
+            atr=self.frozen_atr,
+            k_bm=self.params.k_bm,
+            known_index_override=self.frozen_cog_index,
+        )
 
 
 @dataclass
 class MicCognition:
-    """单 (symbol, TF) 的 trigger 帧缓存(bar 流纯函数,成本无关)。
-
-    bars/cog_index_of/atrs 逐 trigger bar 对齐;events_by/views 仅在发射 bar
-    有键。bar_events_by = 本模块自跑认知检测器的 bar 事件流(与
-    prepare_cognition 的产品逐位对账用,脚本层硬断言)。
-    """
+    """单战役细周期触发缓存(由 MicTracker 严格按因果收盘时间轴生成)。"""
 
     symbol: str
     obs_tf_seconds: int
     trigger_tf_seconds: int
-    scale: int                      # obs // trigger(N_a_mic/N_f_mic 的换算基数)
-    bars: list                      # (ts, o, h, l, c, v) trigger,严格升序
-    cog_index_of: list              # trigger bar → 认知 bar 索引
-    atrs: list                      # trigger bar → 语境 ATR(最近已收认知 bar)
-    events_by: dict = field(default_factory=dict)   # trigger index → [MarketEvent]
-    views: dict = field(default_factory=dict)       # trigger index → StructureView
-    bar_events_by: dict = field(default_factory=dict)  # cog index → [MarketEvent]
-    counters: dict = field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# MicTracker(逐 trigger bar 状态机;同步点 = 认知收盘)
-# ---------------------------------------------------------------------------
-
-
-class MicTracker:
-    """细周期确认跟踪器;认知层结构对象只读。"""
-
-    def __init__(
-        self,
-        params: Params,
-        *,
-        scale: int,
-        trigger_tf_seconds: int,
-        obs_tf_seconds: int,
-        enable_e7: bool = True,
-    ) -> None:
-        if scale < 1:
-            raise ValueError(f"scale must be >= 1, got {scale}")
-        self.p = params
-        self.scale = int(scale)
-        self.trigger_tf_seconds = int(trigger_tf_seconds)
-        self.obs_tf_seconds = int(obs_tf_seconds)
-        self.enable_e7 = bool(enable_e7)
-        self.n_a_mic = params.n_a * self.scale
-        self.n_f_mic = params.n_f * self.scale
-        self._ctx: Optional[_Context] = None
-        self._episodes: list[_MicEpisode] = []
-        # 本认知区间自建的 episode(含已发射/淘汰者),sync 后绑定认知身份并去重。
-        self._unsynced_eps: list[_MicEpisode] = []
-        self._candidates: list[_MicCandidate] = []
-        self._retests: list[_MicRetest] = []
-        self._e4: list[_MicE4] = []
-        self._adopted_eps: set = set()
-        self._adopted_retests: set = set()
-        self._adopted_e4: set = set()
-        self._broken: set = set()
-        self._e6_fired: Optional[tuple] = None
-        self._prev_trig_close: Optional[float] = None
-        self._recent_trig_bars: deque[tuple[int, float, float, float, float]] = deque(maxlen=96)
-        self._last_trig_range_atr: float = 0.0
-
-    def sync(self, i: int, det: EventDetector, span_start_of, span_end_of) -> None:
-        """在认知 bar 收盘后校准触发层状态并刷新冻结语境。"""
-        s = det.structure
-        ctx = self._make_context(s)
-        self._ctx = ctx
-        live_ids = {z.zone_id for z in ctx.zones}
-        self._broken = {zid for zid in self._broken if zid in live_ids}
-        self._broken |= {
-            z.zone_id for z in ctx.zones
-            if z.state in (ZoneState.BROKEN, ZoneState.RETESTED)
-        }
-        self._e6_fired = None
-
-        live = {z.zone_id: z for z in ctx.zones}
-        cog_eps = {(ep.zone.zone_id, ep.opened) for ep in det._episodes}
-        span_start, span_end = span_start_of(i), span_end_of(i)
-        active_eps = {id(ep) for ep in self._episodes}
-        kept: list[_MicEpisode] = []
-        # 已结束的自建 episode 也登记身份,避免认知收盘时重新采用并重复发射。
-        pending = [ep for ep in self._unsynced_eps if id(ep) not in active_eps]
-        for ep in self._episodes + pending:
-            cog_opened = ep.cog_opened
-            if cog_opened is None and span_start <= ep.opened <= span_end:
-                cog_opened = i
-            z = live.get(ep.zone.zone_id)
-            if z is not None:
-                if z.state is not ZoneState.ACTIVE or (z.zone_id, cog_opened) not in cog_eps:
-                    continue
-            else:
-                z = next((z2 for z2 in ctx.zones if (
-                    z2.role is ep.zone.role
-                    and z2.state is ZoneState.ACTIVE
-                    and z2.lo <= ep.zone.lo
-                    and z2.hi >= ep.zone.hi
-                    and (z2.zone_id, cog_opened) in cog_eps
-                )), None)
-                if z is None:
-                    continue
-            ep.zone = z
-            ep.cog_opened = cog_opened
-            self._adopted_eps.add((z.zone_id, cog_opened))
-            if id(ep) in active_eps:
-                kept.append(ep)
-        self._episodes = kept
-        self._unsynced_eps.clear()
-
-        # 采用认知 episode(open=A2 触碰,只发生在认知收盘);窗口锚点取该认知
-        # bar 覆盖的**首根** trigger bar([刺穿 anchored]:窗口最早关闭,保守)
-        for ep in det._episodes:
-            k = (ep.zone.zone_id, ep.opened)
-            if k in self._adopted_eps:
-                continue
-            self._adopted_eps.add(k)
-            puncture = (span_start_of(ep.puncture_index)
-                        if ep.puncture_index is not None else None)
-            self._episodes.append(_MicEpisode(
-                zone=ep.zone, opened=span_start_of(ep.opened), ex=ep.ex,
-                ex_index=span_start_of(ep.ex_index),
-                puncture_index=puncture, outside_closes=ep.outside_closes,
-                cog_opened=ep.opened))
-
-        live_states = {z.zone_id: z.state for z in ctx.zones}
-        self._candidates = [
-            cd for cd in self._candidates
-            if live_states.get(cd.zone.zone_id) in (ZoneState.BROKEN, ZoneState.RETESTED, None)
-        ]
-
-        if not self.p.use_balance_detector:
-            flippable = (ZoneState.BROKEN, ZoneState.RETESTED)
-            self._retests = [rt for rt in self._retests if live.get(rt.zone.zone_id) is not None]
-            for z in ctx.zones:
-                if z.state in flippable and z.zone_id not in self._adopted_retests:
-                    self._adopted_retests.add(z.zone_id)
-                    self._retests.append(
-                        _MicRetest(
-                            zone=z,
-                            armed=(z.state is ZoneState.RETESTED),
-                            extreme=z._retest_extreme if z.state is ZoneState.RETESTED else None,
-                        )
-                    )
-
-            cog_e4 = {
-                (cd.activated, cd.pb_price, cd.leg_start, cd.direction)
-                for cd in det._trend_candidates
-            }
-            self._e4 = [
-                cd for cd in self._e4
-                if (cd.activated, cd.pb_price, cd.leg_start, cd.direction) in cog_e4
-            ]
-            for cd in det._trend_candidates:
-                k = (cd.activated, cd.pb_price, cd.leg_start, cd.direction)
-                if k in self._adopted_e4:
-                    continue
-                self._adopted_e4.add(k)
-                self._e4.append(
-                    _MicE4(
-                        direction=cd.direction,
-                        leg_start=cd.leg_start,
-                        pb_price=cd.pb_price,
-                        depth=cd.depth,
-                        activated=cd.activated,
-                        deadline=span_end_of(cd.deadline),
-                    )
-                )
-
-    def check_impulse_breakout(
-        self,
-        c: float,
-        ref: float,
-        atr: float,
-        direction: int,
-        *,
-        cd: Optional[_MicCandidate] = None,
-        o: Optional[float] = None,
-        h: Optional[float] = None,
-        l: Optional[float] = None,
-        regime: Optional[Regime] = None,
-    ) -> tuple[bool, int]:
-        """强动能破位检测(Impulse Trigger):顺势强动能条件下绕过常规 n_a 计数确认实现即时触发。"""
-        if atr <= 0.0 or direction not in (-1, 1):
-            return False, 0
-        if cd is not None and o is not None and h is not None and l is not None:
-            reg = regime if regime is not None else (self._ctx.regime if self._ctx is not None else Regime.TRANSITION)
-            return fast_accept_ok(
-                self.p, cd, direction=direction, o=o, h=h, l=l, c=c,
-                atr=atr, regime=reg,
-            )
-        thresh = float(self.p.fast_accept_atr) if self.p.fast_accept_atr is not None else 0.85
-        ext_atr = (c - ref) * direction / atr
-        if self.p.accept_max_ext_atr is not None and ext_atr > float(self.p.accept_max_ext_atr):
-            return False, 0
-        return (ext_atr >= thresh, 1 if ext_atr >= thresh else 0)
-
-    def on_trigger_bar(
-        self, a: int, ts: object, o: float, h: float, l: float, c: float,
-        v: float = 0.0,
-    ) -> list[MarketEvent]:
-        ctx = self._ctx
-        prev_c = self._prev_trig_close
-        self._prev_trig_close = c
-        self._recent_trig_bars.append((int(ts), float(o), float(h), float(l), float(c)))
-        if ctx is None or ctx.atr <= 0.0:
-            return []
-        self._last_trig_range_atr = (float(h) - float(l)) / ctx.atr
-        p = self.p
-        scale_sqrt = max(1.0, self.scale ** 0.5)
-        bm, rj = ctx.bm, ctx.rj
-        rj_trig = rj / scale_sqrt
-
-        res_role = ZoneRole.RESISTANCE
-        rng = max(h - l, 1e-12)
-        events: list[MarketEvent] = []
-
-
-        # 细周期 A2 实时触碰开 _MicEpisode (仅在平衡箱模式下启用, 消除等大周期收盘的 10~20h 入场迟缓!)
-        if p.use_balance_detector and prev_c is not None:
-            for z in ctx.zones:
-                if z.state is not ZoneState.ACTIVE or z.zone_id in self._broken:
-                    continue
-                if any(ep.zone is z for ep in self._episodes):
-                    continue
-                res = z.role is res_role
-                front_out = (prev_c < z.lo) if res else (prev_c > z.hi)
-                if front_out and h >= z.lo and l <= z.hi:
-                    ex = h if res else l
-                    ep = _MicEpisode(zone=z, opened=a, ex=ex, ex_index=a)
-                    if (h > z.hi + bm) if res else (l < z.lo - bm):
-                        ep.puncture_index = a
-                    self._episodes.append(ep)
-                    self._unsynced_eps.append(ep)
-
-        # ① 破位登记
-        for z in ctx.zones:
-            if z.state is not ZoneState.ACTIVE or z.zone_id in self._broken:
-                continue
-            res = z.role is res_role
-            broke = (c > z.hi + bm) if res else (c < z.lo - bm)
-            if not broke:
-                continue
-            self._broken.add(z.zone_id)
-            if p.use_balance_detector:
-                escape = (h - z.hi) if res else (z.lo - l)
-                if escape > 1.25 * ctx.atr:
-                    self._episodes = [ep for ep in self._episodes if ep.zone is not z]
-            else:
-                self._episodes = [ep for ep in self._episodes if ep.zone is not z]
-            self._candidates = [cd for cd in self._candidates if cd.zone is not z]
-            self._candidates.append(
-                _MicCandidate(
-                    zone=z, lo=z.lo, hi=z.hi, role=z.role,
-                    count=1, started=a, start_close=c,
-                )
-            )
-            if not p.use_balance_detector and z.zone_id not in self._adopted_retests:
-                self._adopted_retests.add(z.zone_id)
-                self._retests.append(_MicRetest(zone=z, armed=False, extreme=None, started=a))
-
-        kept_cd: list[_MicCandidate] = []
-        req_count = p.n_a if p.use_balance_detector else self.n_a_mic
-        for cd in self._candidates:
-            hold = (
-                ((c > cd.hi + bm) if cd.role is res_role else (c < cd.lo - bm))
-                if p.use_balance_detector
-                else ((c > cd.hi) if cd.role is res_role else (c < cd.lo))
-            )
-            if a > cd.started:
-                if not hold:
-                    continue
-                cd.count += 1
-            direction = +1 if cd.role is res_role else -1
-            ref = cd.hi if cd.role is res_role else cd.lo
-            if cd.count >= req_count:
-                if p.use_balance_detector:
-                    ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-                    not_counter = (
-                        (ctx.regime is not Regime.TREND_DOWN)
-                        if direction > 0
-                        else (ctx.regime is not Regime.TREND_UP)
-                    )
-                    close_pos = (c - l) / rng if direction > 0 else (h - c) / rng
-                    dir_move = (
-                        (c > o or (prev_c is not None and c > prev_c))
-                        if direction > 0
-                        else (c < o or (prev_c is not None and c < prev_c))
-                    )
-                    progressing = (
-                        (c >= cd.start_close and dir_move and close_pos >= 0.50)
-                        if direction > 0
-                        else (c <= cd.start_close and dir_move and close_pos >= 0.50)
-                    )
-                    ext_ok = (
-                        p.accept_max_ext_atr is None
-                        or ext_dist <= float(p.accept_max_ext_atr) * ctx.atr
-                    )
-                    if not_counter and progressing and ext_ok:
-                        sub_kind = "A2_OVEREXTENDED" if ext_dist > 0.80 * ctx.atr else "A1_TIGHT"
-                        events.append(
-                            self._mk(
-                                BREAKOUT_ACCEPTED, direction, ts, a,
-                                {
-                                    "zone": cd.zone.clone(),
-                                    "ref": ref,
-                                    "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                                    "started": cd.started,
-                                    "sub_kind": sub_kind,
-                                    "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
-                                    "fast": False,
-                                    "fast_bars": 0,
-                                },
-                            )
-                        )
-                    elif (
-                        ext_ok
-                        and cd.count < req_count + 2
-                        and getattr(cd.zone, "source_kind", "BOX_EDGE") == "BOX_EDGE"
-                    ):
-                        kept_cd.append(cd)
-                else:
-                    events.append(
-                        self._mk(
-                            BREAKOUT_ACCEPTED, direction, ts, a,
-                            {
-                                "zone": cd.zone.clone(),
-                                "ref": ref,
-                                "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                                "started": cd.started,
-                            },
-                        )
-                    )
-                continue
-            fast, fast_bars = self.check_impulse_breakout(
-                c, ref, ctx.atr, direction,
-                cd=cd, o=o, h=h, l=l, regime=ctx.regime,
-            )
-            if fast:
-                ext_dist = (c - cd.hi) if direction > 0 else (cd.lo - c)
-                events.append(
-                    self._mk(
-                        BREAKOUT_ACCEPTED, direction, ts, a,
-                        {
-                            "zone": cd.zone.clone(),
-                            "ref": ref,
-                            "invalid": (cd.lo - bm) if direction > 0 else (cd.hi + bm),
-                            "started": cd.started,
-                            "sub_kind": "A3_FAST",
-                            "ext_atr": (ext_dist / ctx.atr) if ctx.atr > 0.0 else 0.0,
-                            "fast": True,
-                            "fast_bars": fast_bars,
-                        },
-                    )
-                )
-                continue
-            kept_cd.append(cd)
-        self._candidates = kept_cd
-
-
-
-
-        survivors: list[_MicEpisode] = []
-        new_rejections: list[MarketEvent] = []
-        for ep in self._episodes:
-            z = ep.zone
-            if getattr(z, "source_kind", "BOX_EDGE") != "BOX_EDGE" or z.state is not ZoneState.ACTIVE:
-                continue
-            res = z.role is res_role
-            edge = z.hi if res else z.lo
-            extreme_first = (c < o) if res else (c >= o)
-            # Same close-based evidence contract as EventDetector: the completed
-            # trigger bar's trial extreme belongs to the rejection and its stop,
-            # regardless of whether that bar closed above or below its open.
-            if p.use_balance_detector or extreme_first:
-                new_ex = max(ep.ex, h) if res else min(ep.ex, l)
-                if new_ex != ep.ex:
-                    ep.ex, ep.ex_index = new_ex, a
-
-            if ep.puncture_index is None:
-                if (h > z.hi + bm) if res else (l < z.lo - bm):
-                    ep.puncture_index = a
-
-            fired: Optional[MarketEvent] = None
-            close_pos = (h - c) / rng if res else (c - l) / rng
-            if p.use_balance_detector:
-                # R3 失败突破回收:与认知层同一契约(退出 1–2 根后收盘回到箱内)。
-                # 触发层此前只在破位时移除 episode、没有 outside_closes 证据,
-                # 于是"同一个原语"在两层覆盖不同事实。这里补齐,不新增参数。
-                if 1 <= ep.outside_closes <= 2 and (
-                        (c < z.lo and close_pos >= 0.50) if res
-                        else (c > z.hi and close_pos >= 0.50)):
-                    direction = -1 if res else +1
-                    inv_r3 = ((max(z.hi, ep.ex) + bm) if res
-                              else (min(z.lo, ep.ex) - bm))
-                    fired = self._mk(
-                        LEVEL_REJECTED, direction, ts, a,
-                        {
-                            "zone": z.clone(),
-                            "ref": edge,
-                            "invalid": inv_r3,
-                            "ex": ep.ex,
-                            "ex_index": ep.ex_index,
-                            "puncture_index": ep.puncture_index,
-                            "outside_closes": ep.outside_closes,
-                            "sub_kind": "R3_TRAP",
-                        },
-                    )
-                    new_rejections.append(fired)
-                    self._broken.discard(z.zone_id)
-                    self._candidates = [cd for cd in self._candidates if cd.zone is not z]
-                elif ep.outside_closes == 0 and a - ep.ex_index <= self.n_f_mic:
-                    real_retreat = (ep.ex - c) if res else (c - ep.ex)
-                    back_inside = (c <= z.lo) if res else (c >= z.hi)
-                    against_trend = (
-                        (ctx.regime is Regime.TREND_UP) if res else (ctx.regime is Regime.TREND_DOWN)
-                    )
-                    if ep.puncture_index is not None:
-                        bar_dir_ok = (((c < o) if res else (c > o)) and close_pos >= 0.50) or (
-                            not against_trend and close_pos >= 0.65
-                        )
-                    else:
-                        bar_dir_ok = ((c < o) if res else (c > o)) and close_pos >= 0.55
-                    if real_retreat >= rj_trig and back_inside and close_pos >= 0.50 and bar_dir_ok:
-                        direction = -1 if res else +1
-                        fired = self._mk(
-                            LEVEL_REJECTED, direction, ts, a,
-                            {
-                                "zone": z.clone(),
-                                "ref": edge,
-                                "invalid": (max(z.hi, ep.ex) + bm) if res else (min(z.lo, ep.ex) - bm),
-                                "ex": ep.ex,
-                                "ex_index": ep.ex_index,
-                                "puncture_index": ep.puncture_index,
-                                "sub_kind": "R1_WICK" if ep.puncture_index is not None else "R2_STALL",
-                            },
-                        )
-                        new_rejections.append(fired)
-
-            else:
-                if ep.puncture_index is not None and a - ep.puncture_index < self.n_f_mic:
-                    if (c < z.hi) if res else (c > z.lo):
-                        direction = -1 if res else +1
-                        fired = self._reject(BREAKOUT_FAILED, direction, ep, z, ts, a, bm, edge)
-                if fired is None and (extreme_first or ep.ex_index < a) and a - ep.ex_index <= self.n_f_mic:
-                    retreat = (ep.ex - min(l, c)) if res else (max(h, c) - ep.ex)
-                    if retreat >= rj:
-                        direction = -1 if res else +1
-                        fired = self._reject(LEVEL_REJECTED, direction, ep, z, ts, a, bm, edge)
-                        new_rejections.append(fired)
-
-            if fired is not None:
-                events.append(fired)
-            else:
-                if not p.use_balance_detector and not extreme_first:
-                    new_ex = max(ep.ex, h) if res else min(ep.ex, l)
-                    if new_ex != ep.ex:
-                        ep.ex, ep.ex_index = new_ex, a
-                # 与认知层同步:收盘落在箱外就是"外侧驻留"的证据,下一根才可判 R3(超过 2 根则假突破窗口结束)。
-                if p.use_balance_detector and (
-                        (c > z.hi + bm) if res else (c < z.lo - bm)):
-                    ep.outside_closes += 1
-                    if ep.outside_closes > 2:
-                        continue
-                # v22 的 N_f+1 是认知根数;按 v10 数量闸门换算为 trigger 根数。
-                if not p.use_balance_detector or (a - ep.opened) <= (p.n_f + 1) * self.scale:
-                    survivors.append(ep)
-        self._episodes = survivors
-
-        if not p.use_balance_detector:
-            events.extend(self._range_rotation(ts, a, c, ctx, new_rejections))
-
-            kept_e4: list[_MicE4] = []
-            for cd in self._e4:
-                if a > cd.deadline:
-                    continue
-                level = cd.pb_price + cd.direction * p.e4_recovery * cd.depth
-                if (c > level) if cd.direction > 0 else (c < level):
-                    events.append(
-                        self._mk(
-                            TREND_RESUMED, cd.direction, ts, a,
-                            {
-                                "leg_start": cd.leg_start,
-                                "pb_price": cd.pb_price,
-                                "depth": cd.depth,
-                                "ref": level,
-                                "invalid": cd.pb_price - cd.direction * p.k_bm * ctx.atr,
-                                "regime": ctx.regime.value,
-                            },
-                        )
-                    )
-                    continue
-                kept_e4.append(cd)
-            self._e4 = kept_e4
-
-
-        # ⑥ STRUCTURE_BROKEN:冻结语境 regime 曾为趋势 ⇒ 收盘破坏最近 HL/LH(A9 镜像);
-        # 同现象每覆盖区间至多一发(镜像认知层"每合格认知收盘一发"的频率)
-        e6_key = None
-        if ctx.regime is Regime.TREND_UP and ctx.l_star is not None \
-                and c < ctx.l_star - bm:
-            e6_key = (ctx.l_star, Regime.TREND_UP.value)
-            if self._e6_fired != e6_key:
-                events.append(self._mk(STRUCTURE_BROKEN, -1, ts, a, {
-                    "ref": ctx.l_star, "invalid": ctx.l_star + bm,
-                    "pivot_forming": ctx.l_star_forming,
-                    "regime_before": Regime.TREND_UP.value}))
-        elif ctx.regime is Regime.TREND_DOWN and ctx.h_star is not None \
-                and c > ctx.h_star + bm:
-            e6_key = (ctx.h_star, Regime.TREND_DOWN.value)
-            if self._e6_fired != e6_key:
-                events.append(self._mk(STRUCTURE_BROKEN, +1, ts, a, {
-                    "ref": ctx.h_star, "invalid": ctx.h_star - bm,
-                    "pivot_forming": ctx.h_star_forming,
-                    "regime_before": Regime.TREND_DOWN.value}))
-        if e6_key is not None:
-            self._e6_fired = e6_key
-
-        if self.enable_e7 and not p.use_balance_detector:
-            kept_rt: list[_MicRetest] = []
-            for rt in self._retests:
-                z = rt.zone
-                res = z.role is res_role
-                if rt.started >= 0 and a <= rt.started:
-                    kept_rt.append(rt)
-                    continue
-                if not rt.armed:
-                    back = (l <= z.hi) if res else (h >= z.lo)
-                    if not back:
-                        kept_rt.append(rt)
-                        continue
-                    rt.armed = True
-                    rt.extreme = l if res else h
-                ex = min(rt.extreme, l) if res else max(rt.extreme, h)
-                rt.extreme = ex
-                rej = ((h - ex >= rj) or (c - ex >= rj)) if res else ((ex - l >= rj) or (ex - c >= rj))
-                if rej:
-                    direction = +1 if res else -1
-                    ref = z.lo if direction < 0 else z.hi
-                    invalid = (z.hi + bm) if direction < 0 else (z.lo - bm)
-                    events.append(
-                        self._mk(
-                            FLIP_RETESTED, direction, ts, a,
-                            {
-                                "zone": z.clone(),
-                                "ref": ref,
-                                "invalid": invalid,
-                                "from_role": z.role.value,
-                                "atr": ctx.atr,
-                            },
-                        )
-                    )
-                    continue
-                kept_rt.append(rt)
-            self._retests = kept_rt
-        return events
-
-    def _mk(self, eid: str, direction: int, ts: object, a: int, attrs: dict) -> MarketEvent:
-        attrs = dict(attrs)
-        attrs["mic"] = True
-        attrs["trigger_tf"] = self.trigger_tf_seconds
-        step_ms = int(self.trigger_tf_seconds) * 1000
-        reset_tail = tuple(self._recent_trig_bars)
-        attrs["eval_bars"] = reset_tail[-6:]
-        attrs["reset_bars"] = reset_tail
-        attrs["reset_step_ms"] = step_ms
-        attrs["close_ts"] = int(ts) + step_ms
-        attrs.setdefault("range_atr", self._last_trig_range_atr)
-        if self._ctx is not None and self._ctx.atr_slow > 0.0:
-            attrs.setdefault("atr_slow_ratio", self._ctx.atr / self._ctx.atr_slow)
-        else:
-            attrs.setdefault("atr_slow_ratio", 1.0)
-        return MarketEvent(id=eid, direction=direction, ts=ts, known_index=a, attrs=attrs)
-
-
-    def _reject(self, eid: str, direction: int, ep: _MicEpisode, z: Zone,
-                ts: object, a: int, bm: float, edge: float) -> MarketEvent:
-        """BREAKOUT_FAILED/LEVEL_REJECTED 发射(镜像 events._reject 的 attrs 契约;不碰认知 zone 计数)。"""
-        if eid == BREAKOUT_FAILED:
-            extra = {"puncture_index": ep.puncture_index}
-        else:
-            extra = {"ex": ep.ex, "ex_index": ep.ex_index}
-        return self._mk(eid, direction, ts, a, {
-            "zone": z.clone(), "ref": edge, "invalid": edge - direction * bm,
-            **extra})
-
-    def _band_of(self, pivots: tuple) -> Optional[tuple]:
-        recent = pivots[-self.p.range_max_pivots:]
-        if len(recent) < 4:
-            return None
-        highs = [pv.price for pv in recent if pv.kind is PivotKind.HIGH]
-        lows = [pv.price for pv in recent if pv.kind is PivotKind.LOW]
-        if not highs or not lows:
-            return None
-        return min(lows), max(highs)
-
-    def _make_context(self, s) -> _Context:
-        atr = float(s.atr())
-        atr_slow_fn = getattr(s, "atr_slow", None)
-        atr_slow = float(atr_slow_fn() if callable(atr_slow_fn) else atr) or atr
-        pivots = s.pivots
-        last_low = s.last_low_pivot
-        last_high = s.last_high_pivot
-        return _Context(
-            atr=atr,
-            bm=self.p.k_bm * atr,
-            rj=self.p.k_rj * atr,
-            regime=s.regime(),
-            zones=tuple(s._zones.zones),
-            pivots=pivots,
-            band=None if self.p.use_balance_detector else self._band_of(pivots),
-            l_star=last_low.price if last_low is not None else None,
-            h_star=last_high.price if last_high is not None else None,
-            l_star_forming=last_low.forming_index if last_low is not None else None,
-            h_star_forming=last_high.forming_index if last_high is not None else None,
-            atr_slow=atr_slow,
-        )
-
-    def _range_rotation(
-        self, ts: object, a: int, c: float, ctx: _Context, rejected_events: list
-    ) -> list[MarketEvent]:
-        if not rejected_events or ctx.regime is not Regime.RANGE or ctx.band is None:
-            return []
-        band_lo, band_hi = ctx.band
-        edge_tol = self.p.e5_edge_atr * ctx.atr
-        room_min = self.p.k_room * ctx.atr
-        out: list[MarketEvent] = []
-        for rejection in rejected_events:
-            z: Zone = rejection.attrs["zone"]
-            zc = 0.5 * (z.lo + z.hi)
-            near_top = abs(zc - band_hi) <= edge_tol
-            near_bot = abs(zc - band_lo) <= edge_tol
-            if not (near_top or near_bot):
-                continue
-            room = (c - band_lo) if near_top else (band_hi - c)
-            if room < room_min:
-                continue
-            out.append(
-                self._mk(
-                    RANGE_ROTATED, rejection.direction, ts, a,
-                    {
-                        "zone": z.clone(),
-                        "ref": rejection.attrs["ref"],
-                        "invalid": rejection.attrs["invalid"],
-                        "band": (band_lo, band_hi),
-                        "room": room,
-                        "via_known": rejection.known_index,
-                    },
-                )
-            )
-        return out
-
-
-
-# ---------------------------------------------------------------------------
-# 构建入口(脚本/测试共用)
-# ---------------------------------------------------------------------------
+    scale: int
+    bars: list[tuple[int, float, float, float, float, float]]
+    cog_index_of: list[int]
+    atrs: list[float]
+    events_by: dict[int, list[MarketEvent]] = field(default_factory=dict)
+    views: dict[int, StructureView] = field(default_factory=dict)
 
 
 def prepare_mic_cognition(
-    df_cog,
-    df_trig,
+    cog_or_df,
+    df_trig: pd.DataFrame,
     params: Params,
-    symbol: str,
+    symbol: Optional[str] = None,
     *,
     obs_tf_seconds: int,
-    trigger_tf_seconds: int = 900,
-    enable_e7: bool = True,
+    trigger_tf_seconds: int,
+    **_ignored_legacy,
 ) -> MicCognition:
+    """严格因果对齐认知帧与触发帧,逐根调用 MicTracker 产出触发事件缓存。"""
+    if isinstance(cog_or_df, pd.DataFrame):
+        from .replay import prepare_cognition
+        cog = prepare_cognition(cog_or_df, params, symbol or "UNKNOWN")
+    else:
+        cog = cog_or_df
+    obs_ms = int(obs_tf_seconds) * 1000
+    trig_ms = int(trigger_tf_seconds) * 1000
+    if obs_ms <= trig_ms or obs_ms % trig_ms != 0:
+        raise ValueError(f"trigger_tf {trigger_tf_seconds}s 必须整除且小于 obs_tf {obs_tf_seconds}s")
+    if not cog.bars:
+        raise ValueError(f"{cog.symbol}: empty cognition bars")
 
-    """认知帧(结构锁定)× trigger 帧(知时细化)双流回放 → MicCognition。
+    cog_opens = [int(b[0]) for b in cog.bars]
+    cog_closes = [t + obs_ms for t in cog_opens]
+    first_open = cog_opens[0]
+    last_end = cog_opens[-1] + obs_ms
 
-    df_cog/df_trig 均为 (ts, o, h, l, c, v) 网格;trigger 帧步长必须整除认知
-    步长,且每个认知 bar 的 trigger 覆盖区间内无洞(首/末认知桶可为不完整
-    聚合桶 —— 与 build_campaign_frame 同一容忍度)。bar 事件流(本模块自跑
-    的 EventDetector 产品)存于 bar_events_by 供逐位对账;使用前须断言与
-    prepare_cognition 一致(脚本层;[认知尺度零改动] 的硬约束)。
-    """
-    import pandas as pd  # 局部导入:模块本体不依赖 pandas 输入(测试用 tuple)
+    raw_rows = [
+        (int(r.ts), float(r.open), float(r.high), float(r.low), float(r.close), float(r.volume))
+        for r in df_trig[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False)
+        if first_open <= int(r.ts) < last_end
+    ]
 
-    trig_step = int(trigger_tf_seconds) * 1000
-    obs_step = int(obs_tf_seconds) * 1000
-    if obs_step % trig_step != 0:
-        raise ValueError(f"obs_tf {obs_tf_seconds}s 不被 trigger_tf "
-                         f"{trigger_tf_seconds}s 整除")
-    scale = obs_step // trig_step
+    tracker = MicTracker(params, scale=obs_ms // trig_ms)
+    bars: list[tuple[int, float, float, float, float, float]] = []
+    cog_index_of: list[int] = []
+    atrs: list[float] = []
+    events_by: dict[int, list[MarketEvent]] = {}
+    views: dict[int, StructureView] = {}
+    tf_hours = int(obs_tf_seconds // 3600)
+    synced_cog_idx = -1
 
-    def rows_of(df) -> list:
-        if isinstance(df, pd.DataFrame):
-            return [(int(r.ts), float(r.open), float(r.high), float(r.low),
-                     float(r.close), float(r.volume))
-                    for r in df[["ts", "open", "high", "low", "close",
-                                 "volume"]].itertuples(index=False)]
-        return [(int(b[0]), float(b[1]), float(b[2]), float(b[3]),
-                 float(b[4]), float(b[5])) for b in df]
+    for tb in raw_rows:
+        ts_t = tb[0]
+        bucket_idx = bisect_right(cog_opens, ts_t) - 1
+        if bucket_idx < 0:
+            continue
+        close_moment = ts_t + trig_ms
+        known_cog = bisect_right(cog_closes, close_moment) - 1
+        if known_cog >= 0 and known_cog != synced_cog_idx:
+            p_slice = _pivots_up_to(cog, known_cog, params.range_max_pivots)
+            tracker.sync_from_snapshot(
+                levels=cog.active_zones[known_cog],
+                regime=cog.regimes[known_cog],
+                atr=cog.atrs[known_cog],
+                pivots=p_slice,
+                macro_imbalance=cog.macro_imbalances[known_cog] if cog.macro_imbalances else 0,
+                imbalance_strength=(
+                    float(cog.imbalance_strengths[known_cog])
+                    if getattr(cog, "imbalance_strengths", None) and known_cog < len(cog.imbalance_strengths)
+                    else 0.0
+                ),
+                dollar_volume=(
+                    float(cog.dollar_volumes[known_cog])
+                    if getattr(cog, "dollar_volumes", None) and known_cog < len(cog.dollar_volumes)
+                    else 0.0
+                ),
+                cog_index=known_cog,
+            )
+            synced_cog_idx = known_cog
 
-    cog = rows_of(df_cog)
-    trig = rows_of(df_trig)
-    if not cog or not trig:
-        raise ValueError("empty frame")
-    trig_index = {b[0]: k for k, b in enumerate(trig)}
-    if len(trig_index) != len(trig):
-        raise AssertionError(f"{symbol} duplicate trigger ts")
+        out_idx = len(bars)
+        bars.append(tb)
+        cog_index_of.append(bucket_idx)
+        atrs.append(tracker.frozen_atr)
+        emitted = tracker.update(tb)
+        if emitted:
+            events_by[out_idx] = emitted
+            views[out_idx] = tracker.current_view(tf_hours=tf_hours)
 
-    # trigger → 认知 bucket(认知 grid 对齐断言同 build_campaign_frame)
-    cog_of_trig: list[int] = []
-    keep: list[int] = []
-    cog_labels = {int(b[0]): i for i, b in enumerate(cog)}
-    for k, b in enumerate(trig):
-        bucket = b[0] - (b[0] % obs_step)
-        i = cog_labels.get(bucket)
-        if i is None:
-            continue                        # 认知覆盖范围外的 trigger bar(头尾)
-        keep.append(k)
-        cog_of_trig.append(i)
-    if not keep:
-        raise AssertionError(f"{symbol} trigger frame has no cognition coverage")
-    trig = [trig[k] for k in keep]
-    # 区间内无洞:同一认知 bar 的在场 trigger bar 连续成网格
-    last_i, spans = None, {}
-    for k, i in enumerate(cog_of_trig):
-        if i != last_i:
-            spans[i] = [k, k]
-            last_i = i
-        else:
-            prev = spans[i][1]
-            if trig[k][0] - trig[prev][0] != trig_step:
-                raise AssertionError(
-                    f"{symbol} cognition bar {i}: trigger hole "
-                    f"{trig[prev][0]} -> {trig[k][0]}")
-            spans[i][1] = k
-    for i in cog_labels.values():
-        if i not in spans:
-            raise AssertionError(f"{symbol} cognition bar {i} has no trigger bars")
-
-    detector = EventDetector(params, enable_e7=enable_e7)
-    tracker = MicTracker(
-        params,
-        scale=scale,
-        trigger_tf_seconds=trigger_tf_seconds,
-        obs_tf_seconds=obs_tf_seconds,
-        enable_e7=enable_e7,
+    return MicCognition(
+        symbol=cog.symbol,
+        obs_tf_seconds=int(obs_tf_seconds),
+        trigger_tf_seconds=int(trigger_tf_seconds),
+        scale=obs_ms // trig_ms,
+        bars=bars,
+        cog_index_of=cog_index_of,
+        atrs=atrs,
+        events_by=events_by,
+        views=views,
     )
 
 
-    events_by: dict = {}
-    views: dict = {}
-    atrs: list = [0.0] * len(trig)
-    bar_events_by: dict = {}
-    counters: dict = {}
+def _pivots_up_to(cog, cog_idx: int, limit: int) -> tuple[Pivot, ...]:
+    collected: list[Pivot] = []
+    for t in sorted(cog.pivots_by):
+        if t > cog_idx:
+            break
+        collected.extend(cog.pivots_by[t])
+    return tuple(collected[-limit:]) if limit > 0 else tuple(collected)
 
-    k = 0
-    for i, bar in enumerate(cog):
-        # 本认知 bar 覆盖区间:以上一认知收盘冻结的语境逐 trigger bar 推进
-        lo, hi = spans[i]
-        while k <= hi:
-            ts, o, h, l, c, v = trig[k]
-            emitted = tracker.on_trigger_bar(k, ts, o, h, l, c, v)
-            atrs[k] = tracker._ctx.atr if tracker._ctx is not None else 0.0
-            if emitted:
-                events_by[k] = emitted
-                views[k] = StructureView(
-                    regime=tracker._ctx.regime,
-                    zones=tuple(z.clone() for z in tracker._ctx.zones),
-                    atr=tracker._ctx.atr,
-                    pivots=tracker._ctx.pivots[-params.range_max_pivots:])
-                for e in emitted:
-                    counters[e.id] = counters.get(e.id, 0) + 1
-            k += 1
-        # 认知收盘:bar 事件流(对账)+ 同步
-        bar_emitted = detector.update(bar)
-        if bar_emitted:
-            bar_events_by[i] = list(bar_emitted)
-        n_cog = len(cog)
-        tracker.sync(i, detector,
-                     lambda p, _sp=spans: _sp[p][0],
-                     lambda p, _sp=spans, _n=n_cog: _sp[min(p, _n - 1)][1])
-
-    return MicCognition(
-        symbol=symbol, obs_tf_seconds=int(obs_tf_seconds),
-        trigger_tf_seconds=int(trigger_tf_seconds), scale=scale,
-        bars=trig, cog_index_of=cog_of_trig, atrs=atrs,
-        events_by=events_by, views=views, bar_events_by=bar_events_by,
-        counters=counters)
-
-
-__all__ = [
-    "MicCognition", "MicTracker", "prepare_mic_cognition",
-    "TRIGGER_TF_MAP", "resolve_trigger_tf",
-]
