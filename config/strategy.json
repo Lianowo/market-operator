@@ -1,27 +1,15 @@
 {
-  "version": "v22-pure-pa-amt",
-  "note": "纯传统图表+价格行为+价格拍卖(AMT)三级正交尺度架构: 2h->30m(日内短线), 4h->1h(日内/隔日波段), 1d->4h(长线波段)。平衡箱确认边界防滑坡锁定 + 四大拍卖对齐铁律(balance_auction_alignment) + 同尺度结构止损与箱体等幅扩展目标兑现(accept_target_box_mult=2.0, reentry_target_management=true, reject_opp_lock_frac=0.25, partial_exit_enabled=true, exit_exec=true)。",
+  "version": "2d-spatiotemporal-field-v3-triple-screen",
+  "note": "纯二维 (t, P) 时空势场与双视野(广角 Macro + 近景聚焦 Foveal)架构: 零 ATR 比例魔法常数、零滞后二维价值盒状态直读取代旧道氏计数; 1d 专职战略导航与日线大墙拦截(whitelist=[]), 4h->1h 专职执行单标的唯一仓位与两段式波段持仓管理。",
   "meta": {
-    "parent": "config/canonical.json",
-    "model": "TrueBalanceDetector + Pure PA/AMT Alignment + 3-TF Cascade (2h->30m, 4h->1h, 1d->4h) + Same-TF Box Target & Partial Lock"
+    "model": "2DSpatioTemporalField(Macro+Foveal Vision + 2D Balance-Imbalance Tensor + Self-Calibrated Anti-POC) + Single-Slot Per Symbol"
   },
   "atr_n": 14,
-  "k_rev": 1.0,
-  "k_bm": 0.1,
-  "k_rj": 0.3,
-  "k_span": 3.0,
-  "k_room": 2.0,
-  "tol_atr": 0.1,
-  "n_a": 3,
-  "n_f": 3,
-  "n_time": 24,
+  "canvas_bars": 160,
+  "swing_wing": 3,
+  "max_active_levels_per_side": 8,
   "range_max_pivots": 8,
-  "use_balance_detector": true,
-  "balance_quality_min": 0.35,
-  "accept_max_ext_atr": null,
-  "fast_accept_atr": null,
-  "box_reentry_enabled": true,
-  "box_break_retest_enabled": true,
+  "k_bm": 0.15,
   "risk_frac": 0.0075,
   "leverage_cap": 20.0,
   "taker_fee": 0.0006,
@@ -31,70 +19,49 @@
   "funding_source": "history",
   "slippage_by_symbol": {},
   "dev_frac": 0.7,
-  "tf_list": ["2h", "4h", "1d"],
+  "tf_list": ["4h", "1d"],
   "trigger_tf_by_htf": {
-    "2h": 1800,
     "4h": 3600,
-    "1d": 14400
+    "1d": null
   },
-  "k_is": 0.8,
   "portfolio_cap_frac": 0.12,
+  "directional_cap_frac": 0.06,
   "capacity_mode": "admission_full_cost",
   "tf_cap_by_tf": {
-    "2h": 0.0225,
-    "4h": 0.0225,
-    "1d": 0.0225
+    "4h": 0.12
   },
   "router_params": {
-    "reject_use_struct_stop": true,
-    "reject_target_mode": "opposite",
-    "accept_use_struct_stop": true,
-    "reentry_use_struct_stop": true,
-    "balance_auction_alignment": true,
-    "accept_target_box_mult": 2.0,
-    "reentry_target_management": true,
-    "struct_impulse_confirm": true,
-    "zone_departure_reset": true,
-    "max_accept_ext_atr": 1.5,
-    "max_box_progress_frac": 0.75,
-    "min_box_rr": 1.5,
-    "htf_wall_filter": true,
-    "htf_min_room_r": 1.0,
-    "max_cost_frac": null,
-    "cost_per_side": 0.0008
+    "min_rr": 2.0,
+    "htf_wall_check": true,
+    "cost_per_side": 0.0008,
+    "max_cost_frac": 0.12
   },
   "router_params_by_tf": {
-    "2h": {
-      "struct_impulse_confirm": true
-    },
-    "4h": {
-      "struct_impulse_confirm": true
-    },
     "1d": {
-      "struct_impulse_confirm": true
+      "whitelist": []
     }
   },
   "arm_config": {
     "breakeven_on_reduce": true,
-    "reject_opp_lock_frac": 0.25,
-    "accept_reenter_box_exit": true,
-    "partial_exit_enabled": true,
-    "exit_exec": true
+    "partial_exit_enabled": false,
+    "accept_reenter_level_exit": true,
+    "reject_opp_lock_frac": 1.0,
+    "exit_exec": true,
+    "exit_exec_trail": true
   },
   "small_account_compounding": {
-    "equity0": 104.0,
+    "equity0": 500.0,
     "leverage_cap": 20.0,
-    "portfolio_cap_frac": 0.55,
+    "portfolio_cap_frac": 0.24,
+    "directional_cap_frac": 0.13,
     "tf_cap_by_tf": {
-      "2h": 0.20,
-      "4h": 0.20,
-      "1d": 0.20
+      "4h": 0.24
     },
     "dynamic_risk_tiers": [
-      [10000.0, 0.05],
-      [50000.0, 0.04],
-      [200000.0, 0.03],
-      [1000000000.0, 0.02]
+      [5000.0, 0.05],
+      [20000.0, 0.03],
+      [100000.0, 0.02],
+      [1000000000.0, 0.01]
     ]
   },
   "whitelist": [
@@ -105,5 +72,6 @@
   ],
   "n_fill": 12
 }
+
 
 

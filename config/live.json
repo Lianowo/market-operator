@@ -1,10 +1,10 @@
 {
-  "version": "live-v22-pure-pa-amt-2026-11-06",
-  "note": "实盘接入件配置(v22 纯传统图表+价格行为+拍卖市场理论统一架构):20x 杠杆 × Plan3 阶梯动态复利(<=10000U:5%, <=50000U:4%, <=200000U:3%, >200000U:2%, 配置上界10亿U) × 三级正交周期独立风险容量池(2h/4h/1d 各 15%/TF, portfolio_cap_frac=0.50) × 同周期箱体目标 25% 触及锁利(reject_opp_lock_frac=0.25, accept_target_box_mult=2.0, reentry_target_management=true) × 锁利武装时 50% 部分止盈(市价,余仓移保本) + 结构/Turtle移动防线。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
+  "version": "live-atomic-level-v2-triple-screen",
+  "note": "实盘接入件配置(三重滤网正交架构: 1D 战略导航 -> 4H 原子水平位结构 -> 1H 价格拍卖扳机): 20x 杠杆 × 阶梯动态复利 × 1D 专职提供宏观趋势顺从与日线大墙拦截、4H->1H 专职执行单标的唯一仓位与两段式波段持仓管理。凭证统一由 config/secrets.env 自动加载(绝不入库/不打印)。",
   "meta": {
-    "semantics": "v22 TrueBalanceDetector(确认边界防滑坡锁定 + 因果自适应寿命2.5x + 对侧贯穿消亡) + Pure PA/AMT Alignment + 3-TF Cascade(2h->30m, 4h->1h, 1d->4h) + Per-TF Cap(15%) + Plan3 Dynamic Compounding + Same-TF Box Target & 50% Partial Exit + Dual-Bot Telegram K-Line Charts",
+    "semantics": "TripleScreen(1D Macro Compass & Wall -> 4H Atomic Level -> 1H Auction Trigger) + Single-Slot Per Symbol + 2-Leg Position Management",
     "strategy_config": "config/strategy.json",
-    "cognition_frame": "支持 v22 三级正交多周期并发(2h->30m, 4h->1h, 1d->4h)",
+    "cognition_frame": "三重滤网正交级联(1d 战略导航 -> 4h 结构 -> 1h 触发)",
     "execution_approximation": [
       "市价决策:canonical 于次一执行细 bar 开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
       "限价单:GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
@@ -22,17 +22,16 @@
   "risk": {
     "risk_frac": 0.05,
     "dynamic_risk_tiers": [
-      [10000.0, 0.05],
-      [50000.0, 0.04],
-      [200000.0, 0.03],
-      [1000000000.0, 0.02]
+      [5000.0, 0.05],
+      [20000.0, 0.03],
+      [100000.0, 0.02],
+      [1000000000.0, 0.01]
     ],
     "leverage_cap": 20,
-    "portfolio_cap_frac": 0.55,
+    "portfolio_cap_frac": 0.24,
+    "directional_cap_frac": 0.13,
     "tf_cap_by_tf": {
-      "2h": 0.20,
-      "4h": 0.20,
-      "1d": 0.20
+      "4h": 0.24
     },
     "max_daily_loss_frac": 0.1,
     "edge_size_by_event_direction": {},
@@ -94,11 +93,10 @@
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
-    "tf_list": ["2h", "4h", "1d"],
+    "tf_list": ["4h", "1d"],
     "trigger_tf_by_htf": {
-      "2h": 1800,
       "4h": 3600,
-      "1d": 14400
+      "1d": null
     },
     "main_tf_label": "1d",
     "obs_tf_seconds": 86400,
@@ -109,7 +107,7 @@
     "warmup_trigger_bars": 1800
   },
   "paper": {
-    "equity0": 104.0
+    "equity0": 500.0
   },
   "adopt_external_positions": {
     "enabled": true,
