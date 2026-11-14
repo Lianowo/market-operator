@@ -55,7 +55,9 @@ MOMENTS = (DECISION, FILL)
 FULL_COST = "full_cost"                    # 两个时刻都按含成本的完整最坏情景
 STOP_RISK = "stop_risk"                    # 两个时刻都只按止损风险
 ADMISSION_FULL_COST = "admission_full_cost"  # 准入含成本、成交裁剪只按止损风险
+CASH_NET_ADMISSION = "cash_net_admission"    # 本金风险口径(浮盈不扣现金池) + 已成交反向仓位 Beta 对冲抵扣
 MODES = (FULL_COST, STOP_RISK, ADMISSION_FULL_COST)
+VALID_MODES = MODES + (CASH_NET_ADMISSION,)
 
 
 def timeframe_of(symbol: Optional[str]) -> Optional[str]:
@@ -114,8 +116,8 @@ class RiskBudget:
     mode: str = ADMISSION_FULL_COST
 
     def __post_init__(self) -> None:
-        if self.mode not in MODES:
-            raise ValueError(f"capacity mode 必须是 {MODES},收到 {self.mode!r}")
+        if self.mode not in VALID_MODES:
+            raise ValueError(f"capacity mode 必须是 {VALID_MODES},收到 {self.mode!r}")
         checks = [("portfolio_frac", self.portfolio_frac),
                   ("directional_cap_frac", self.directional_cap_frac)]
 
@@ -162,7 +164,7 @@ class RiskBudget:
         sym_frac = self.symbol_frac.get(symbol) if symbol else None
         sym_pools = ((("symbol", float(sym_frac), f"sym:{symbol}"),)
                      if sym_frac is not None else ())
-        if self.mode == ADMISSION_FULL_COST and moment == DECISION:
+        if self.mode in (ADMISSION_FULL_COST, CASH_NET_ADMISSION) and moment == DECISION:
             # 账户池是唯一预算主体的总额度;周期池只是它的内部分配。
             # 原实现让周期池在准入时刻取代账户池,于是"账户最多同时亏多少"
             # 根本没有被任何一处定义(4×12% 可相加成 48%)。语义优先:账户池
@@ -195,7 +197,17 @@ class RiskBudget:
         """
         if self.mode == STOP_RISK:
             return False
-        return not (self.mode == ADMISSION_FULL_COST and moment == FILL)
+        return not (self.mode in (ADMISSION_FULL_COST, CASH_NET_ADMISSION) and moment == FILL)
+
+    @property
+    def cash_principal_basis(self) -> bool:
+        """分母为已实现现金(risk_capital)时,分子止损仅计量本金风险(浮盈不倒扣现金额度)。"""
+        return self.mode == CASH_NET_ADMISSION
+
+    @property
+    def net_directional_hedge(self) -> bool:
+        """同向风险上限计量净 Beta 敞口(已成交反向持仓提供天然大盘崩盘/逼空对冲抵扣,未成交挂单不抵扣)。"""
+        return self.mode == CASH_NET_ADMISSION
 
 
 def stop_distance(direction: int, price: float, stop: Optional[float]) -> float:
@@ -233,7 +245,8 @@ def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *
                          scope: Optional[str] = None,
                          direction: Optional[int] = None,
                          taker_fee: float = 0.0,
-                         slippage: float = 0.0) -> Exposure:
+                         slippage: float = 0.0,
+                         cash_basis: bool = False) -> Exposure:
     """全部未平仓仓位的最坏情景;``scope``/``timeframe``/``direction`` 非 None 时只算该范围。"""
     total = Exposure()
     for symbol, pos in positions.items():
@@ -242,10 +255,19 @@ def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *
         if not _scope_matches(symbol, scope, timeframe):
             continue
 
-        mark = marks.get(symbol, pos.entry)
-        total = total + position_exposure(
-            pos.qty, pos.direction, mark, pos.invalid,
-            taker_fee=taker_fee, slippage=slippage)
+        mark = float(marks.get(symbol, pos.entry))
+        if cash_basis:
+            entry_px = float(getattr(pos, "entry", mark))
+            ref_px = min(entry_px, mark) if pos.direction > 0 else max(entry_px, mark)
+            distance = stop_distance(pos.direction, ref_px, pos.invalid)
+            exp = (Exposure(stop_loss=math.inf, exit_cost=0.0) if not math.isfinite(distance)
+                   else Exposure(stop_loss=pos.qty * distance,
+                                 exit_cost=pos.qty * mark * (taker_fee + slippage)))
+            total = total + exp
+        else:
+            total = total + position_exposure(
+                pos.qty, pos.direction, mark, pos.invalid,
+                taker_fee=taker_fee, slippage=slippage)
     return total
 
 
@@ -288,7 +310,8 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
                     taker_fee: float, slippage: float,
                     include_costs: bool,
                     reserve_by_tf: Optional[Mapping[str, float]] = None,
-                    candidate_timeframe: Optional[str] = None
+                    candidate_timeframe: Optional[str] = None,
+                    cash_basis: bool = False
                     ) -> tuple[float, str, float]:
     """各池剩余额度的最小值;返回 ``(剩余额度, 最紧池名, 该池上限占比)``。
 
@@ -308,7 +331,8 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
     for name, frac, scope in pools:
         used = outstanding_exposure(positions, marks, scope=scope,
                                     taker_fee=taker_fee,
-                                    slippage=slippage).measure(
+                                    slippage=slippage,
+                                    cash_basis=cash_basis).measure(
                                         include_costs=include_costs)
         headroom = frac * equity - used
         if headroom < best_headroom:
@@ -318,7 +342,8 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
         for tf, frac in reserve_by_tf.items():
             used = outstanding_exposure(positions, marks, timeframe=tf,
                                         taker_fee=taker_fee,
-                                        slippage=slippage).measure(
+                                        slippage=slippage,
+                                        cash_basis=cash_basis).measure(
                                             include_costs=include_costs)
             reserved += max(0.0, float(frac) * equity - used)
         if reserved > 0.0 and math.isfinite(best_headroom):
@@ -328,11 +353,11 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
 
 
 __all__ = [
-    "ADMISSION_FULL_COST", "DECISION", "FILL", "FULL_COST", "MODES",
-    "MOMENTS", "STOP_RISK", "Exposure", "RiskBudget", "budget_headroom",
-    "candidate_exposure", "delta_exposure", "outstanding_exposure",
-    "position_exposure", "qty_for_budget", "stop_distance", "symbol_root",
-    "timeframe_of",
+    "ADMISSION_FULL_COST", "CASH_NET_ADMISSION", "DECISION", "FILL", "FULL_COST",
+    "MODES", "MOMENTS", "STOP_RISK", "VALID_MODES", "Exposure", "RiskBudget",
+    "budget_headroom", "candidate_exposure", "delta_exposure",
+    "outstanding_exposure", "position_exposure", "qty_for_budget",
+    "stop_distance", "symbol_root", "timeframe_of",
 ]
 
 

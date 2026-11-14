@@ -656,7 +656,8 @@ class Broker:
             taker_fee=self.taker_fee, slippage=self.slippage,
             include_costs=self.risk_budget.includes_costs(moment),
             reserve_by_tf=self.reserve_by_tf,
-            candidate_timeframe=capacity.timeframe_of(symbol))
+            candidate_timeframe=capacity.timeframe_of(symbol),
+            cash_basis=self.risk_budget.cash_principal_basis)
         if math.isfinite(headroom):
             headroom = max(0.0, headroom)
         return headroom, name, frac
@@ -698,13 +699,23 @@ class Broker:
         root = capacity.symbol_root(symbol)
         used = 0.0
         include_costs = self.risk_budget.includes_costs(moment)
+        cb = self.risk_budget.cash_principal_basis
         for key, pos in self.positions.items():
             if capacity.symbol_root(key) != root or pos.direction != direction:
                 continue
-            used += capacity.position_exposure(
-                pos.qty, pos.direction, self.last_mark.get(key, pos.entry),
-                pos.invalid, taker_fee=self.taker_fee,
-                slippage=self.slippage).measure(include_costs=include_costs)
+            mk = float(self.last_mark.get(key, pos.entry))
+            if cb:
+                ref_px = min(float(pos.entry), mk) if pos.direction > 0 else max(float(pos.entry), mk)
+                dist = capacity.stop_distance(pos.direction, ref_px, pos.invalid)
+                exp = (capacity.Exposure(stop_loss=math.inf, exit_cost=0.0) if not math.isfinite(dist)
+                       else capacity.Exposure(stop_loss=pos.qty * dist,
+                                              exit_cost=pos.qty * mk * (self.taker_fee + self.slippage)))
+            else:
+                exp = capacity.position_exposure(
+                    pos.qty, pos.direction, mk,
+                    pos.invalid, taker_fee=self.taker_fee,
+                    slippage=self.slippage)
+            used += exp.measure(include_costs=include_costs)
         headroom = float(frac) * float(capital) - used
         return headroom, f"claim:{root}:{direction:+d}", float(frac)
 
@@ -788,10 +799,17 @@ class Broker:
         再以真实成交数量另计一次,其余未处理订单仍可见。
         """
         include_costs = self.risk_budget.includes_costs(moment)
+        cb = self.risk_budget.cash_principal_basis
         used = capacity.outstanding_exposure(
             self.positions, self.last_mark, direction=direction,
-            taker_fee=self.taker_fee, slippage=self.slippage).measure(
-                include_costs=include_costs)
+            taker_fee=self.taker_fee, slippage=self.slippage,
+            cash_basis=cb).measure(include_costs=include_costs)
+        if self.risk_budget.net_directional_hedge:
+            opp_filled = capacity.outstanding_exposure(
+                self.positions, self.last_mark, direction=-direction,
+                taker_fee=self.taker_fee, slippage=self.slippage,
+                cash_basis=cb).measure(include_costs=include_costs)
+            used = max(0.0, used - opp_filled)
         capital = self.risk_capital() if capital is None else capital
         equity = self.equity_mtm() if notional_equity is None else notional_equity
         entries = [(po.intent.symbol, po.direction, po.intent.ref_price,

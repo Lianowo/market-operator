@@ -262,3 +262,58 @@ def test_2d_prominence_allows_major_single_touch_sweep_and_htf_wall_unlocks_top_
     assert len(r2.on_bar("Y", (2000, 104.5, 105.5, 102.5, 103.0, 10.0), 2, view_4h, 1.0, [ev_major], htf_views=htf_at_ceiling)) == 1
 
 
+def test_cash_net_admission_frees_floating_profit_and_hedges_filled_beta(tmp_path):
+    """安全管理与资金周转闭环测试(回放 Broker 与实盘 LiveRunner 同源一致):
+    1. 本金风险对齐:已持仓标的产生浮盈(mark > entry)时,不倒扣已实现现金风险额度,不误杀后续同向信号;
+    2. 已成交反向 Beta 对冲抵扣:已成交反向持仓抵扣系统性同向崩盘敞口,而未成交挂单绝不抵扣,总组合上限依然严守。
+    """
+    import pytest
+    from market_operator import capacity
+    from market_operator.broker import Broker, ContractSpec, OrderIntent, OrderKind
+    from tests.test_live_runtime import _FakeClient, _SignalTG, _pos, _runner
+
+    syms = ("BTCUSDT@4h", "ETHUSDT@4h", "SOLUSDT@4h")
+    specs = {s: ContractSpec(s, 0.001, 0.001, 3, 2, 0.0) for s in syms}
+    b = Broker(
+        equity=1000.0,
+        risk_frac=0.05,
+        leverage_cap=20.0,
+        taker_fee=0.0,
+        slippage_per_side=0.0,
+        funding_per_8h=0.0,
+        contracts=specs,
+        portfolio_stop_risk_frac=0.18,
+        directional_stop_risk_frac=0.11,
+        capacity_mode=capacity.CASH_NET_ADMISSION,
+    )
+    # 1) Open BTC Long @ 100, stop 90 (principal cash risk = 50 = 5% of 1000)
+    b.submit(OrderIntent(OrderKind.OPEN, "BTCUSDT@4h", None, "T", 100.0, 0), 0, direction=1, invalid=90.0, target_1=130.0)
+    b.on_bar_open("BTCUSDT@4h", 3600_000, 100.0)
+    # BTC surges to 125 (+2.5R unrealized floating gain!). Under cash_net_admission, principal cash risk stays 50 (not 175!), so ETH Long (50) is admitted!
+    b.last_mark["BTCUSDT@4h"] = 125.0
+    assert b.directional_usage(1, moment=capacity.DECISION) == pytest.approx(50.0)
+    b.submit(OrderIntent(OrderKind.OPEN, "ETHUSDT@4h", None, "T", 100.0, 3600_000), 3600_000, direction=1, invalid=90.0, target_1=130.0)
+    b.on_bar_open("ETHUSDT@4h", 7200_000, 100.0)
+    assert len(b.positions) == 2
+
+    # 2) Now Long usage = 100 (10% vs 11% cap), 3rd Long (50) would exceed 110 -> blocked without hedge;
+    #    Once a FILLED Short (SOL Short, risk 50) opens, net Long Beta drops to 50 -> 3rd Long is unlocked (while Gross 150 <= 180 portfolio cap)!
+    assert b.directional_blocked(1, 100.0, 90.0, "SOLUSDT@4h", moment=capacity.DECISION)
+    b.submit(OrderIntent(OrderKind.OPEN, "SOLUSDT@4h", None, "T", 100.0, 7200_000), 7200_000, direction=-1, invalid=110.0, target_1=70.0)
+    # Pending (unfilled) Short must NOT offset Long directional usage yet:
+    assert b.directional_usage(1, moment=capacity.DECISION) == pytest.approx(100.0)
+    b.on_bar_open("SOLUSDT@4h", 10800_000, 100.0)
+    # Once filled, Short offsets systemic crash risk -> net Long usage drops to 50!
+    assert b.directional_usage(1, moment=capacity.DECISION) == pytest.approx(50.0)
+
+    # 3) LiveRunner parity check:
+    runner = _runner(tmp_path, _FakeClient(), _SignalTG())
+    runner.capacity_mode = capacity.CASH_NET_ADMISSION
+    runner.equity = 1250.0
+    runner.unrealized_pl = 250.0  # realized capital = 1000.0
+    runner.directional_cap_frac = 0.11
+    runner.positions["BTCUSDT"] = {**_pos(qty=5.0), "entry": 100.0, "mark": 150.0, "invalid": 90.0, "direction": 1}
+    # Floating profit (mark=150 > entry=100) does NOT block 2nd Long of qty=5 (stop risk 50):
+    assert not runner._directional_entry_blocked(1, 5.0, 100.0, 90.0)
+
+

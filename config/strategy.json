@@ -26,7 +26,7 @@
   },
   "portfolio_cap_frac": 0.12,
   "directional_cap_frac": 0.06,
-  "capacity_mode": "admission_full_cost",
+  "capacity_mode": "cash_net_admission",
   "tf_cap_by_tf": {
     "4h": 0.12
   },

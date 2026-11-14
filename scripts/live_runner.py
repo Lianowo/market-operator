@@ -618,6 +618,7 @@ class LiveRunner:
                 f"cognition.engine={engine!r} 不再支持:实盘只有 v21 一条生产链"
                 "(v20/lifecycle 已退役,见 reports/refactor_20261023/DESIGN.md D9)")
         self.raw_strat, self.params, self.rp, self.rp_by_tf = load_strategy_params()
+        self.capacity_mode = str(self.raw_strat.get("capacity_mode") or "admission_full_cost")
         directional = self.risk.get("directional_cap_frac", self.raw_strat.get("directional_cap_frac"))
         self.directional_cap_frac = float(directional) if directional is not None else None
         if self.directional_cap_frac is not None and not (0.0 < self.directional_cap_frac <= 1.0):
@@ -2941,6 +2942,19 @@ class LiveRunner:
         "DUPLICATE": (),
     }
 
+    def _position_worst_case(self, p: dict, fee_rate: float) -> float:
+        """与 capacity 模块严格同源的持仓风险占用(cash_net_admission 下浮盈不倒扣本金池)。"""
+        d = int(p["direction"])
+        qty = float(p["qty"])
+        mk = float(p.get("mark") or p["entry"])
+        inv = float(p["invalid"])
+        if getattr(self, "capacity_mode", "") == "cash_net_admission":
+            en = float(p["entry"])
+            ref = min(en, mk) if d > 0 else max(en, mk)
+            stop = qty * max(0.0, d * (ref - inv)) if ref > 0 else 0.0
+            return stop + qty * mk * float(fee_rate)
+        return worst_case_of_position(d, qty, mk, inv, fee_rate)
+
     def _directional_entry_blocked(self, direction: int, qty: float, price: float,
                                    invalid: float, *, exclude_oid: Optional[str] = None) -> bool:
         """Derive same-side in-flight exposure; no reservation state to leak.
@@ -2953,9 +2967,12 @@ class LiveRunner:
             return False
         capital = max(0.0, float(self.equity) - float(self.unrealized_pl or 0.0))
         fee, slip = float(self.risk["taker_fee"]), float(self.risk["slippage_per_side"])
-        used = sum(worst_case_of_position(direction, p["qty"], p.get("mark") or p["entry"],
-                                          p["invalid"], fee + slip)
+        used = sum(self._position_worst_case(p, fee + slip)
                    for p in self.positions.values() if p["direction"] == direction)
+        if getattr(self, "capacity_mode", "") == "cash_net_admission":
+            opp_filled = sum(self._position_worst_case(p, fee + slip)
+                             for p in self.positions.values() if p["direction"] == -direction)
+            used = max(0.0, used - opp_filled)
         for oid, it in self.open_intents.items():
             if (oid == exclude_oid or it.get("status") != "armed"
                     or it.get("role") != "entry" or it["direction"] != direction
@@ -3056,9 +3073,7 @@ class LiveRunner:
             qty = floor_step(qty, spec.size_step, spec.size_place)
             # 组合容量、周期独立容量与主张容量(剩余额度 >= 25% 时动态缩量分配,否则整笔跳过)
             outstanding = sum(
-                worst_case_of_position(p["direction"], p["qty"],
-                                       p.get("mark") or p["entry"], p["invalid"],
-                                       self.risk["taker_fee"])
+                self._position_worst_case(p, self.risk["taker_fee"])
                 for p in self.positions.values())
             unit_exp = risk_per_unit + entry_ref * 2.0 * (
                 self.risk["taker_fee"] + self.risk["slippage_per_side"])
@@ -3069,15 +3084,11 @@ class LiveRunner:
             group = 0.0
             if tf_cap is not None:
                 tf_out = sum(
-                    worst_case_of_position(p["direction"], p["qty"],
-                                           p.get("mark") or p["entry"],
-                                           p["invalid"], self.risk["taker_fee"])
+                    self._position_worst_case(p, self.risk["taker_fee"])
                     for p in self.positions.values()
                     if p.get("tf_label", "12h") == cs.tf_label)
                 group = sum(
-                    worst_case_of_position(p["direction"], p["qty"],
-                                           p.get("mark") or p["entry"],
-                                           p["invalid"], self.risk["taker_fee"])
+                    self._position_worst_case(p, self.risk["taker_fee"])
                     for key, p in self.positions.items()
                     if key.split("@")[0] == sym and p["direction"] == hyp.direction)
             opposite_open = any(
