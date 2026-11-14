@@ -27,6 +27,8 @@ from typing import Callable, Iterable, Optional
 import requests
 
 from . import __version__, heartbeat as hb, ops, paths
+# 长文本切分规则唯一事实在 `tg.py`;回复层复用同一份实现(发送处传 SEND_LIMIT)。
+from .tg import split_text
 
 TG_API = "https://api.telegram.org/bot{token}/{method}"
 TG_FILE_API = "https://api.telegram.org/file/bot{token}/{path}"
@@ -134,27 +136,6 @@ class TelegramRateLimited(TelegramError):
     def __init__(self, method: str, retry_after: int) -> None:
         super().__init__(f"{method} 限流,{retry_after}s 后重试")
         self.retry_after = retry_after
-
-
-def split_text(text: str, limit: int = SEND_LIMIT) -> list[str]:
-    """按行切分,硬切只在单行超长时发生;保证每条 < 4096。"""
-    out: list[str] = []
-    buf = ""
-    for line in str(text).splitlines():
-        while len(line) > limit:                 # 极长单行:硬切
-            if buf:
-                out.append(buf)
-                buf = ""
-            out.append(line[:limit])
-            line = line[limit:]
-        if len(buf) + len(line) + 1 > limit:
-            out.append(buf)
-            buf = line
-        else:
-            buf = f"{buf}\n{line}" if buf else line
-    if buf:
-        out.append(buf)
-    return out or [""]
 
 
 # ---------------------------------------------------------------------------

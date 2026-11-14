@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased] — 2026-11-14 — 基础组件维护:Telegram 通知链路(策略链路零改动)
+
+主线已切到「1d 战略 → 4h 原子水平位 → 1h 触发」三重滤网,本轮只维护外设面:
+`tg.py` 发信/渲染、`tg_commands` 回复层共用切分规则、通知契约测试。**未改动**
+`engine / events / level / routing / trigger / structure / hypothesis / position /
+campaign / replay / broker` 与 `config/strategy.json`,交易决策与仓位语义保持原样。
+
+- **长消息不再静默截断(修 bug)**:修前 `TelegramNotifier.send()` 把 4000 字符
+  以后的内容直接换成 `…[截断]`,长告警、盘前诊断、关注条件会在运营群里丢尾巴。
+  现在 `split_text()` 按行切分、逐条发送(硬切只发生在单行超长时),并修掉硬切
+  路径会产生**空消息**的缺陷(Telegram 对空 `text` 直接 400)。
+- **429 限流按服务端 `retry_after` 等待**:此前只做线性退避,遇到限流会连续撞墙
+  直到把重试预算耗光;现在优先读 `parameters.retry_after`(上限 60s),图片与文本
+  两条路径一致;重试预算用尽后不再白睡最后一轮退避(`_retry_delay()` 一次算清)。
+- **漏发补报从死代码变成可用闭环**:`flush_dropped_report()` 修前成功后不清零
+  (同一次故障会被反复播报),而补报自身失败时 `_record_miss()` 又 +1(2 条漏发
+  越报越多)。现在成功才清零、失败原数保留;并在任意一次成功投递后自动补报一次
+  (`_maybe_report_drops()`),补报自身成功不会再触发第二轮。
+- **图片失败不重复计数**:`_post_photo_sync()` 重试用尽后走文本兜底,只有文本也
+  失败才记一次 dropped;图片失败原因只写 `dropped_log` 明细,避免同一条消息被
+  计成两条。
+- **通知术语对齐主线(不改参数名)**:运营图/成交通知里的「平衡箱体 / BOX HI-LO /
+  入场箱内」改为「原子水平位带 / BAND HI-LO / 入场带内」,公开图仍只显示
+  `UPPER/LOWER`;`send_*` 的 `box_lo/box_hi` 参数名保留,runner 调用零改动。
+- **切分规则单一事实**:`tg_commands.split_text()` 改为复用 `tg.py` 的实现
+  (回复层上限仍为 3900),避免「机器人回复切坏」与「通知被截断」各修一次。
+- **测试**:`tests/test_telegram_accuracy.py` 增加 10 条(共 18 条),覆盖长文本
+  切分不丢尾、硬切不产空片、429 `retry_after`、预算耗尽不白等、补报清零/失败
+  保留/自动补报不套娃(含异步工作线程真实补报)、图片失败只计一条、成交通知
+  水平带口径。全库 `601 passed, 1 skipped`;
+  `tg.py` / `tg_commands.py` / 通知测试 `ruff check` 全绿。
+
 ## [Unreleased] — 2026-10-25 — 一条命令的可移植启动:代码同步 + TG 托管 + 全局菜单清场
 
 三条要求落到同一处:**新机器上一条命令就能把"代码→依赖→目录→服务→机器人"全拉

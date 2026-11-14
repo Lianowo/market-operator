@@ -10,7 +10,7 @@
 - 通道由 `_KIND_CHANNEL` 一张表决定,调用方不再手写开关 —— 一张表就是唯一事实,
   避免"某个告警走错房间";
 - 黑白 K 线图(`render_bw_kline_png`)与 Emoji 逐行关键信息在同一条消息内发送
-  (`sendPhoto` + `caption`);图上带平衡箱体、事件区间(zone)、`±R` 标尺、
+  (`sendPhoto` + `caption`);图上带原子水平位带(旧口径的平衡箱体)、事件区间(zone)、`±R` 标尺、
   pivot 与入场/止损/目标位,读图即可回答"这笔交易在结构里的哪个位置";
 - 每一行仅一条关键信息,行首配 Emoji;
 - 渲染 + 上传都可放进后台队列(`png_factory`):实盘主循环只做一次
@@ -37,8 +37,9 @@ API_PHOTO = "https://api.telegram.org/bot{token}/sendPhoto"
 RETRIES = 5
 RETRY_BACKOFF_S = 1.5
 TIMEOUT_S = 15
-MAX_LEN = 4000
+MAX_LEN = 4000                   # Telegram 单条 4096;留出标签前缀余量
 MAX_CAPTION_LEN = 1024
+RATE_LIMIT_WAIT_MAX_S = 60.0     # 429 的 retry_after 上限:再长也不傻等
 
 _KIND_TAG = {"signal": "信号", "fill": "成交", "daily": "日结", "alert": "告警",
              "watch": "关注状态"}
@@ -91,11 +92,57 @@ def _fmt_px(value: float) -> str:
     return f"{float(value):.8g}"
 
 
+def split_text(text: str, limit: int = MAX_LEN) -> list[str]:
+    """按行切分长文本(单行超长才硬切),保证每条不超过 `limit`。
+
+    修前 `send()` 直接 `…[截断]` 掉 4000 字符以后的全部内容,告警细节与关注
+    条件会被静默丢掉;Telegram 单条上限 4096,这里默认 4000 留标签前缀余量。
+    与 `tg_commands` 回复层共用同一套切分规则(那边上限 3900)。
+    """
+    out: list[str] = []
+    buf = ""
+    for line in str(text).splitlines():
+        while len(line) > limit:                 # 极长单行:硬切
+            if buf:
+                out.append(buf)
+                buf = ""
+            out.append(line[:limit])
+            line = line[limit:]
+        if len(buf) + len(line) + 1 > limit:
+            if buf:                              # 空 buf 不能切成空消息(Telegram 400)
+                out.append(buf)
+            buf = line
+        else:
+            buf = f"{buf}\n{line}" if buf else line
+    if buf:
+        out.append(buf)
+    return out or [""]
+
+
+def _retry_after_seconds(payload: object) -> Optional[float]:
+    """从 Telegram 429 响应取 `parameters.retry_after`(秒);缺失/坏值 ⇒ None。"""
+    try:
+        params = (payload or {}).get("parameters") or {}     # type: ignore[union-attr]
+        after = float(params.get("retry_after"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if after <= 0.0:
+        return None
+    return min(after, RATE_LIMIT_WAIT_MAX_S)
+
+
+def _retry_delay(attempt: int, retry_after: Optional[float]) -> float:
+    """429 优先按服务端 retry_after;其余按线性退避。"""
+    if retry_after is not None:
+        return max(0.0, float(retry_after))
+    return RETRY_BACKOFF_S * (attempt + 1)
+
+
 def box_position_pct(price: Optional[float], box_lo: Optional[float],
                      box_hi: Optional[float]) -> Optional[float]:
-    """价格在箱体内的相对位置(0=下沿,1=上沿);缺边/箱体退化 ⇒ None。
+    """价格在水平带内的相对位置(0=下沿,1=上沿);缺边/带退化 ⇒ None。
 
-    纯展示量,不参与任何交易判定,故允许落在箱外(返回 <0 或 >1 的原值)。
+    纯展示量,不参与任何交易判定,故允许落在带外(返回 <0 或 >1 的原值)。
     """
     try:
         px, lo, hi = float(price), float(box_lo), float(box_hi)
@@ -108,7 +155,7 @@ def box_position_pct(price: Optional[float], box_lo: Optional[float],
 
 def box_position_text(price: Optional[float], box_lo: Optional[float],
                       box_hi: Optional[float]) -> str:
-    """箱内位置的人读短语(百分比 + 靠上/靠下/居中),缺失时返回空串。"""
+    """带内位置的人读短语(百分比 + 靠上/靠下/居中),缺失时返回空串。"""
     pct = box_position_pct(price, box_lo, box_hi)
     if pct is None:
         return ""
@@ -229,16 +276,17 @@ def render_bw_kline_png(
 
     图上叠加的结构事实与策略决策同源,不做二次推断:
 
-    - 平衡箱体 `box_lo/box_hi`:浅灰带 + 上下沿粗虚线 + 右栏 `BOX HI/LO`;
+    - 原子水平位带 `box_lo/box_hi`(参数名沿用旧口径):浅灰带 + 上下沿粗虚线
+      + 右栏 `BAND HI/LO`(公开图只写 `UPPER/LOWER`);
     - 事件区间 `zone_lo/zone_hi`(`zone_touches` 为触边次数):斜线填充 + 细虚线
-      + 右栏 `ZONE HI/LO` —— 回答"这次触发发生在箱体的哪一段";
+      + 右栏 `ZONE HI/LO` —— 回答"这次触发发生在水平带的哪一段";
     - `±R` 标尺:以 `entry_price`/`stop_price` 定义 1R,顺方向画出 `+1R/+2R/+3R`;
     - `pivots`:`[(下标, 价格, "high"|"low")]`,三角标记 + 最近两个价位标签,
       下标越界/缺失只画到窗口末根,不猜位置;
     - `atr`/`zone_touches` 只进表头摘要,不改变坐标轴。
 
     远端 pivot(超出 K 线窗口 30% 振幅)不纳入纵轴,否则最近几十根会被压成
-    一条线。默认对数坐标,不同价格级别都能看清箱体厚度。
+    一条线。默认对数坐标,不同价格级别都能看清水平带厚度。
     """
     try:
         from PIL import Image, ImageDraw, ImageFont
@@ -346,7 +394,7 @@ def render_bw_kline_png(
             frac = (y_hi - pf) / (y_hi - y_lo)
         return int(round(top_m + max(0.0, min(1.0, frac)) * plot_h))
 
-    # 右侧标签栏:所有水平线/箱体/区间先登记,统一避让后再画 ——
+    # 右侧标签栏:所有水平线/水平带/区间先登记,统一避让后再画 ——
     # 修前每条线各自把文字压在图上,价位接近时标签互相盖住。
     rail: list[list] = []
 
@@ -399,7 +447,7 @@ def render_bw_kline_png(
         except (TypeError, ValueError):
             b_start_idx = 0
     elif box_lo is not None and box_hi is not None and box_hi > box_lo and n > 12:
-        # 未显式传 box_start_ts 时,回溯最近一段连续驻留箱内的起点
+        # 未显式传 box_start_ts 时,回溯最近一段连续驻留水平带内的起点
         for idx_b in range(n - 1, -1, -1):
             bh, bl = float(sub[idx_b][2]), float(sub[idx_b][3])
             if bh < box_lo or bl > box_hi:
@@ -408,7 +456,7 @@ def render_bw_kline_png(
 
     box_x0 = int(round(left_m + b_start_idx * step_x)) if b_start_idx > 0 else left_m
 
-    # 平衡箱体/关键结构区:从真实计算起点 box_x0 开始绘制浅灰带 + 上下沿粗虚线 + 左边界竖线
+    # 原子水平位带/关键结构区:从真实计算起点 box_x0 开始绘制浅灰带 + 上下沿粗虚线 + 左边界竖线
     if box_lo is not None and box_hi is not None and box_hi > box_lo:
         y1, y2 = price_to_y(box_hi), price_to_y(box_lo)
         if y2 > y1:
@@ -417,8 +465,8 @@ def render_bw_kline_png(
                 vline(box_x0, y1, y2, 5, 3, (90, 90, 90), 2)
         hline(y1, 8, 4, (0, 0, 0), 2, x_start=box_x0)
         hline(y2, 8, 4, (0, 0, 0), 2, x_start=box_x0)
-        hi_tag = "UPPER" if public_mode else "BOX HI"
-        lo_tag = "LOWER" if public_mode else "BOX LO"
+        hi_tag = "UPPER" if public_mode else "BAND HI"
+        lo_tag = "LOWER" if public_mode else "BAND LO"
         rail_add(y1, f"{hi_tag} {_fmt_px(box_hi)}")
         rail_add(y2, f"{lo_tag} {_fmt_px(box_lo)}")
 
@@ -564,7 +612,7 @@ def render_bw_kline_png(
     draw.text((left_m, 48), f"bars {n} · step {step_txt} · gaps {gaps}",
               fill=(120, 120, 120), font=font_s)
 
-    # 结构摘要(公开信号图仅展示 R:R,隐藏内部箱体/触边/ATR 参数)
+    # 结构摘要(公开信号图仅展示 R:R,隐藏内部水平带/触边/ATR 参数)
     bits: list[str] = []
     rr = rr_multiple(d_int, entry_price, stop_price, target_price)
     if rr is not None:
@@ -574,14 +622,14 @@ def render_bw_kline_png(
         if atr is not None and entry_price:
             bits.append(f"ATR {atr / entry_price:.2%}")
         if box_lo is not None and box_hi is not None and entry_price:
-            bits.append((f"箱体跨度 {(box_hi - box_lo) / entry_price:.2%}" if cjk_ok
-                         else f"BOX span {(box_hi - box_lo) / entry_price:.2%}"))
+            bits.append((f"水平带跨度 {(box_hi - box_lo) / entry_price:.2%}" if cjk_ok
+                         else f"BAND span {(box_hi - box_lo) / entry_price:.2%}"))
         if zone_touches:
             bits.append((f"触边 {int(zone_touches)} 次" if cjk_ok
                          else f"touch {int(zone_touches)}x"))
         if pos_txt:
-            bits.append((f"入场箱内 {pos_txt}") if cjk_ok
-                        else f"entry in box {box_position_pct(entry_price, box_lo, box_hi):.0%}")
+            bits.append((f"入场带内 {pos_txt}") if cjk_ok
+                        else f"entry in band {box_position_pct(entry_price, box_lo, box_hi):.0%}")
     if bits:
         summary = " | ".join(bits)
         draw.text((max(left_m, left_m + plot_w - text_w(summary, font_s)), 36),
@@ -722,25 +770,58 @@ class TelegramNotifier:
             self._record_miss("dispatch", e)
             return False
 
+    def _log_miss(self, kind: str, err: Exception) -> None:
+        """只落漏发明细,不动计数(供"有文本兜底、不重复计一条"的路径使用)。"""
+        if self.dropped_log is None:
+            return
+        try:
+            self.dropped_log.parent.mkdir(parents=True, exist_ok=True)
+            rec = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                   "kind": kind, "err": f"{type(err).__name__}: {str(err)[:160]}"}
+            with self.dropped_log.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
     def _record_miss(self, kind: str, err: Exception) -> None:
         self.dropped += 1
-        if self.dropped_log is not None:
-            try:
-                self.dropped_log.parent.mkdir(parents=True, exist_ok=True)
-                rec = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       "kind": kind, "err": f"{type(err).__name__}: {str(err)[:160]}"}
-                with self.dropped_log.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            except OSError:
-                pass
+        self._log_miss(kind, err)
 
     def flush_dropped_report(self) -> int:
-        """连接恢复后补发漏失告警;返回补发时累计漏失条数(0 ⇒ 不动)。"""
+        """连接恢复后补报一次累计漏失;成功才清零,返回本次补报的条数。
+
+        修前成功也**不清零**:同一次故障会被反复播报;而补报自身失败时
+        `_record_miss` 又 +1,漏发数越报越大。现在失败时原数保留。
+        """
         n = self.dropped
-        if n and self.send_alert(
-                f"⚠️ 此前 Telegram 连接故障\n📉 累计漏发 {n} 条消息(已补报)"):
-            return n
-        return 0
+        if n <= 0:
+            return 0
+        self.dropped = 0
+        try:
+            ok = self.send_alert(
+                f"⚠️ 此前 Telegram 连接故障\n📉 累计漏发 {n} 条消息(已补报)")
+        except Exception:
+            ok = False
+        if not ok:
+            self.dropped = n
+            return 0
+        return n
+
+    def _maybe_report_drops(self) -> None:
+        """每成功投递一条就检查一次漏发账;0 ⇒ 不动(补报自身成功不会再套娃)。"""
+        if self.dropped > 0:
+            self.flush_dropped_report()
+
+    def _post_text_chunks(self, token: str, chat_id: str, kind: str,
+                          body: str) -> bool:
+        """按 Telegram 单条上限逐条发送;任一条失败即返回 False(不再静默截断)。"""
+        ok = True
+        for chunk in split_text(body, MAX_LEN):
+            if not self._post_text_sync(token, chat_id, kind, chunk):
+                ok = False
+        if ok:                       # 整条逻辑消息投递完成后再补报漏发账
+            self._maybe_report_drops()
+        return ok
 
     def _post_text_sync(self, token: str, chat_id: str, kind: str, body: str) -> bool:
         if not (token and chat_id):
@@ -748,6 +829,7 @@ class TelegramNotifier:
             return False
         last_err: Optional[Exception] = None
         for attempt in range(self.max_retries):
+            retry_after: Optional[float] = None
             try:
                 resp = self.session.post(
                     API.format(token=token),
@@ -758,11 +840,13 @@ class TelegramNotifier:
                 if resp.status_code == 200 and payload.get("ok"):
                     self.sent += 1
                     return True
+                retry_after = _retry_after_seconds(payload)
                 last_err = RuntimeError(
                     f"tg {resp.status_code}: {str(payload)[:160]}")
             except Exception as e:
                 last_err = e
-            time.sleep(RETRY_BACKOFF_S * (attempt + 1))
+            if attempt + 1 < self.max_retries:      # 预算用尽后不再白等一轮
+                time.sleep(_retry_delay(attempt, retry_after))
         self._record_miss(kind, last_err or RuntimeError("unknown"))
         return False
 
@@ -771,8 +855,11 @@ class TelegramNotifier:
         if not (token and chat_id):
             self._record_miss(kind, RuntimeError("telegram 未配置"))
             return False
-        cap = caption if len(caption) <= MAX_CAPTION_LEN else caption[:MAX_CAPTION_LEN - 12] + "…[截断]"
+        cap = (caption if len(caption) <= MAX_CAPTION_LEN
+               else caption[:MAX_CAPTION_LEN - 12] + "…[截断]")
+        last_err: Optional[Exception] = None
         for attempt in range(self.max_retries):
+            retry_after: Optional[float] = None
             try:
                 resp = self.session.post(
                     API_PHOTO.format(token=token),
@@ -783,10 +870,20 @@ class TelegramNotifier:
                 if resp.status_code == 200 and payload.get("ok"):
                     self.sent += 1
                     return True
-            except Exception:
-                pass
-            time.sleep(RETRY_BACKOFF_S * (attempt + 1))
-        return self._post_text_sync(token, chat_id, kind, cap)
+                retry_after = _retry_after_seconds(payload)
+                last_err = RuntimeError(
+                    f"tg photo {resp.status_code}: {str(payload)[:160]}")
+            except Exception as e:
+                last_err = e
+            if attempt + 1 < self.max_retries:
+                time.sleep(_retry_delay(attempt, retry_after))
+        # 图片失败不单独计一条(下面还有纯文本兜底);文本也失败才记一次漏发,
+        # 图片原因只进明细日志,避免同一条消息被计成两条。
+        if self._post_text_sync(token, chat_id, kind, cap):
+            return True
+        if last_err is not None:
+            self._log_miss(f"{kind}:photo", last_err)
+        return False
 
     def _post_photo_or_render(self, token: str, chat_id: str, kind: str,
                               body: str, png_bytes: Optional[bytes],
@@ -800,14 +897,17 @@ class TelegramNotifier:
                 self._record_miss("render", e)
                 png = None
         if png:
-            if len(body) > MAX_CAPTION_LEN:
-                # Preserve watch conditions/status instead of silently chopping
-                # them off a photo caption. Both sends run on the same worker.
-                text_ok = self._post_text_sync(token, chat_id, kind, body)
-                photo_ok = self._post_photo_sync(token, chat_id, kind, "K线结构图（详见配套文字）", png)
-                return text_ok and photo_ok
-            return self._post_photo_sync(token, chat_id, kind, body, png)
-        return self._post_text_sync(token, chat_id, kind, body)
+            if len(body) <= MAX_CAPTION_LEN:
+                ok = self._post_photo_sync(token, chat_id, kind, body, png)
+                if ok:
+                    self._maybe_report_drops()
+                return ok
+            # Preserve watch conditions/status instead of silently chopping
+            # them off a photo caption. Both sends run on the same worker.
+            text_ok = self._post_text_chunks(token, chat_id, kind, body)
+            photo_ok = self._post_photo_sync(token, chat_id, kind, "K线结构图（详见配套文字）", png)
+            return text_ok and photo_ok
+        return self._post_text_chunks(token, chat_id, kind, body)
 
     def channel_of(self, kind: str) -> str:
         """消息类型 → 通道(未知类型落运营通道:宁可多给运营看,也不进公开群)。"""
@@ -828,12 +928,11 @@ class TelegramNotifier:
             token, chat_id = self._ops_token, self._ops_chat_id
         tag = _KIND_TAG.get(kind, kind)
         prefix = "" if text.startswith("【") else f"【{tag}】\n"
-        body = prefix + (text if len(text) <= MAX_LEN
-                         else text[:MAX_LEN - 20] + "…[截断]")
+        body = prefix + text          # 长文本由 _post_text_chunks 切分,不再截断
         if png_bytes or png_factory is not None:
             return self._dispatch(self._post_photo_or_render, token, chat_id,
                                   kind, body, png_bytes, png_factory)
-        return self._dispatch(self._post_text_sync, token, chat_id, kind, body)
+        return self._dispatch(self._post_text_chunks, token, chat_id, kind, body)
 
     # ------------------------------------------------------------------
     # 四类模板(每行仅一条关键信息,行首配 Emoji;图文同条消息)
@@ -860,7 +959,7 @@ class TelegramNotifier:
 
         保密纪律(构建技术壁垒):
         1. 隐藏核心算法思想:不输出原语事件(ACCEPT/REJECT)、市场状态(Regime)、
-           平衡箱体/事件区间数值、触边次数、结构子形态(R3_TRAP/A1_TIGHT/FLIPPED_BOX_EDGE)
+           原子水平位带/事件区间数值、触边次数、结构子形态(R3_TRAP/A1_TIGHT/FLIPPED_BOX_EDGE)
            及内部 ATR 距离过滤指标;
         2. 隐藏信号与实际开仓关系:不输出 exec_status(容量是否已满/本系统是否开仓)、
            size_note(降档/仓位权重)与路由执行细节。
@@ -998,11 +1097,11 @@ class TelegramNotifier:
         if target_price is not None:
             lines.append(f"🏁 结构目标: {target_price:.8g}")
         if box_lo is not None and box_hi is not None:
-            lines.append(f"📦 平衡箱体: [{float(box_lo):.8g}, {float(box_hi):.8g}]")
+            lines.append(f"📦 水平带: [{float(box_lo):.8g}, {float(box_hi):.8g}]")
             pos_txt = box_position_text(
                 price if entry_price is None else entry_price, box_lo, box_hi)
             if pos_txt:
-                lines.append(f"📍 入场箱内: {pos_txt}")
+                lines.append(f"📍 入场带内: {pos_txt}")
         if pnl is not None:
             pnl_emoji = "💰" if pnl >= 0 else "💸"
             lines.append(f"{pnl_emoji} 本次平仓估算盈亏: {pnl:+.2f} USDT（按当前记账口径，非整笔净收益）")
@@ -1064,4 +1163,4 @@ class TelegramNotifier:
 
 
 __all__ = ["TelegramNotifier", "render_bw_kline_png", "box_position_pct",
-           "box_position_text", "rr_multiple"]
+           "box_position_text", "rr_multiple", "split_text"]
