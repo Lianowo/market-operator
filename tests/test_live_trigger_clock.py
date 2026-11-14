@@ -72,3 +72,12 @@ def test_advance_continues_cropped_warmup_trigger_indices(tmp_path, trigger_hour
     new = [(h * base, 100, 101, 99, 100, 1) for h in range(96, 96 + trigger_hours, 2)]
     runner._advance(cs, (100 + trigger_hours) * base, new_bars=new, run_paper_fills=False)
     assert captured == [96 * base]
+def test_cascade_label_treats_null_trigger_as_direct_tf():
+    """三重滤网配置里 `1d: null` 是合法值;启动横幅不得 int(None) 崩掉 runner。"""
+    import live_runner as lr
+
+    trig = {"4h": 3600, "1d": None}
+    labels = [lr.cascade_label(tf, trig.get(tf)) for tf in ("4h", "1d")]
+    assert labels == ["4h->1h", "1d"]
+    assert lr.cascade_label("2h", 1800) == "2h->30m"
+    assert lr.cascade_label("1d", "bogus") == "1d"

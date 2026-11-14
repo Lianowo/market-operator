@@ -112,6 +112,24 @@ def initial_price_clock_ts(now_ms: int, step: int, opened_ts: int) -> int:
     return max(floor - step, (int(opened_ts) // step) * step)
 
 
+def cascade_label(tf: str, trigger_s: object) -> str:
+    """周期级联的展示串。`None`/0 表示该周期没有下级扳机(如 1d 直达)。
+
+    修前主写 `int(trig_map[tf]) // 60`,而三重滤网配置里 `1d: null` 是合法值,
+    启动横幅会在进入主循环前抛 `int(None)` —— runner 抓完冷数据即崩,看护
+    只能反复重拉。展示层必须把"没有下级周期"当成一等状态。
+    """
+    try:
+        secs = int(float(trigger_s or 0))
+    except (TypeError, ValueError):
+        secs = 0
+    if secs <= 0:
+        return tf
+    if secs < 3600:
+        return f"{tf}->{secs // 60}m"
+    return f"{tf}->{secs // 3600}h"
+
+
 # ---------------------------------------------------------------------------
 # canonical 参数组(v21 唯一生产链)
 # ---------------------------------------------------------------------------
@@ -5106,9 +5124,7 @@ def main(argv=None) -> None:
     tf_list = list((cfg.get("cognition") or {}).get("tf_list") or ["2h", "4h", "1d"])
     trig_map = (cfg.get("cognition") or {}).get("trigger_tf_by_htf") or {}
     cascade_txt = ", ".join(
-        f"{tf}->{int(trig_map[tf]) // 60}m" if int(trig_map.get(tf) or 0) < 3600
-        else (f"{tf}->{int(trig_map[tf]) // 3600}h" if trig_map.get(tf) else tf)
-        for tf in tf_list
+        cascade_label(tf, trig_map.get(tf)) for tf in tf_list
     )
     print(f"[live_runner] mode={args.mode} 主循环起动(每 {poll}s;cascade=[{cascade_txt}];risk_frac="
           f"{r['risk_frac']} 杠杆≤{r['leverage_cap']} 组合≤"

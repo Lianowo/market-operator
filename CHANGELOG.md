@@ -26,10 +26,16 @@ campaign / replay / broker` 与 `config/strategy.json`,交易决策与仓位语�
   `UPPER/LOWER`;`send_*` 的 `box_lo/box_hi` 参数名保留,runner 调用零改动。
 - **切分规则单一事实**:`tg_commands.split_text()` 改为复用 `tg.py` 的实现
   (回复层上限仍为 3900),避免「机器人回复切坏」与「通知被截断」各修一次。
+- **修 bug:新主线 `1d: null` 让实盘启动横幅崩掉(本次重启时暴露)**:
+  `trigger_tf_by_htf` 里 `1d: null` 是合法配置(1d 没有下级扳机),但启动横幅
+  写的是 `int(trig_map[tf]) // 60`,对 `None` 抛 `TypeError` —— runner 抓完冷
+  数据、写完初始心跳、正要进主循环就退出,看护只能反复重拉(表现是"心跳缺失
+  但日志没有业务错误")。新增 `cascade_label()`,把"无下级扳机"当成一等状态;
+  `tests/test_live_trigger_clock.py` 补回归。**只改启动展示,不碰策略/仓位判定**。
 - **测试**:`tests/test_telegram_accuracy.py` 增加 10 条(共 18 条),覆盖长文本
   切分不丢尾、硬切不产空片、429 `retry_after`、预算耗尽不白等、补报清零/失败
   保留/自动补报不套娃(含异步工作线程真实补报)、图片失败只计一条、成交通知
-  水平带口径。全库 `601 passed, 1 skipped`;
+  水平带口径。全库 `602 passed, 1 skipped`;
   `tg.py` / `tg_commands.py` / 通知测试 `ruff check` 全绿。
 
 ## [Unreleased] — 2026-10-25 — 一条命令的可移植启动:代码同步 + TG 托管 + 全局菜单清场
