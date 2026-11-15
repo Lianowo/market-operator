@@ -2162,7 +2162,7 @@ class LiveRunner:
                     emitted = cs.tracker.update(t_bar)
                     if emitted:
                         view = cs.tracker.current_view(tf_hours=int(obs_ms // 3_600_000))
-                        self._route_step(cs, cs.tracker.frozen_atr, emitted, view, mic=True)
+                        self._route_step(cs, cs.tracker.frozen_atr, emitted, view, mic=True, trig_bar=t_bar)
 
     def _stop_is_resting(self, sym: str, trigger: float) -> bool:
         """防线上是否**确有**交易所保护单在挂(本地记录 + 触发价同档)。
@@ -2690,11 +2690,12 @@ class LiveRunner:
                 self._route_step(cs, atr, route_events, view, mic=False)
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
-                    *, mic: bool) -> None:
+                    *, mic: bool, trig_bar: Optional[tuple] = None) -> None:
         """与 campaign.py 完全同源的路由决策入口(MarketRouter → 意图)。"""
         sym = cs.symbol
         if mic:
-            bars, bar = cs.trig_bars, cs.trig_bars[-1]
+            bars = cs.trig_bars
+            bar = trig_bar if trig_bar is not None else cs.trig_bars[-1]
         else:
             bars, bar = cs.cog_bars, cs.cog_bars[-1]
         htf_views = ()
