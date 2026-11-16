@@ -2158,3 +2158,118 @@ def test_secrets_loader_ops_channel_is_optional(tmp_path):
     assert sec2["TELEGRAM_TRADE_BOT_TOKEN"] == "0:OPS"
     assert sec2["TELEGRAM_TRADE_CHAT_ID"] == "-100123"
 
+
+# ---------------------------------------------------------------------------
+# ⑪ 账本丢失 / 掉出交易宇宙:自有仓位必须被认回来并继续被管理
+# ---------------------------------------------------------------------------
+
+
+GRVT_FILL = {
+    "ts": NOW - 7 * 3600_000, "kind": "fill", "mode": "live",
+    "oid": "mo213eb55ab3d1bf", "symbol": "GRVTUSDT", "qty": 36.0,
+    "price": 0.17281, "ref_px": 0.17281, "fill_px": 0.17281,
+    "price_source": "ref", "invalid": 0.1792107691908496, "direction": -1,
+    "tf_label": "4h", "opened_ts": 1_794_700_800_000,
+    "event_id": "BREAKOUT_ACCEPTED",
+    "structural_target": 0.15396999999999997,
+    "execution_target": 0.15396999999999997,
+    "role": "entry", "origin": "strategy", "route": "breakout_accepted_market",
+}
+
+
+def _write_journal(path: Path, *rows: dict) -> Path:
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
+                    + "\n", encoding="utf-8")
+    return path
+
+
+def test_recover_own_intent_from_journal(tmp_path):
+    """账本被清空后:审计日志里的自有成交必须能被重建,平掉/反向的不算。"""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    _write_journal(logs / "live_20261115.jsonl", GRVT_FILL)
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    it = r._recover_intent_from_journal("GRVTUSDT", -1)
+    assert it is not None
+    assert it["invalid"] == pytest.approx(0.1792107691908496)
+    assert it["tf_label"] == "4h"
+    assert it["event_id"] == "BREAKOUT_ACCEPTED"
+    assert it["decision_ts"] == 1_794_700_800_000
+    assert it["target_1"] == pytest.approx(0.15397)
+    assert it["qty"] == 36.0
+    assert r._recover_intent_from_journal("GRVTUSDT", 1) is None    # 反向非同一笔
+
+    # 同 oid 已平仓 ⇒ 不是当前持仓事实
+    _write_journal(logs / "live_20261116.jsonl", {
+        "ts": NOW, "kind": "close_fill", "mode": "live",
+        "oid": GRVT_FILL["oid"], "symbol": "GRVTUSDT", "qty": 36.0,
+        "price": 0.16, "role": "exit"})
+    assert r._recover_intent_from_journal("GRVTUSDT", -1) is None
+
+
+def test_exchange_only_own_position_recovered_and_protection_reused(tmp_path):
+    """交易所独有仓位 = 本系统 4h 空单(账本丢失):恢复原始事实,保护单按 clientOid 沿用。"""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    _write_journal(logs / "live_20261116.jsonl", GRVT_FILL)
+    ex = [{"symbol": "GRVTUSDT", "direction": -1, "qty": 36.0,
+           "entry_price": 0.1715, "mark_price": 0.16958}]
+    pending = {"entrustedList": [{
+        "orderId": "1505665044390572032", "symbol": "GRVTUSDT",
+        "planType": "pos_loss", "posSide": "short", "holdSide": "short",
+        "triggerPrice": "0.17922", "clientOid": "mo21129d379decbd"}]}
+    client, tg = _FakeClient(ex, pending), _FakeTG()
+    cfg = json.loads(json.dumps(_cfg_min()))
+    cfg.setdefault("protection", {})["price_clock"] = "realtime"
+    r = _runner(tmp_path, client, tg, cfg=cfg)
+    r.contracts["GRVTUSDT"] = lr.ContractSpec("GRVTUSDT", 1.0, 1.0, 0, 5, 5.0)
+
+    r._reconcile()
+
+    pos = r.positions["GRVTUSDT"]
+    assert pos["direction"] == -1 and pos["qty"] == 36.0
+    assert pos["entry"] == pytest.approx(0.1715)          # 交易所真实均价
+    assert pos["invalid"] == pytest.approx(0.1792107691908496)   # 原始防线,不重算
+    assert pos["tf_label"] == "4h"
+    assert r.counters["recovered_positions"] == 1
+    assert r.counters["fills"] == 0                        # 不伪装成新开仓成交
+    assert tg.fills == []                                  # 不发"开仓"成交单
+
+    # 保护单:沿用交易所已挂的 pos_loss,绝不新建第二张
+    r._manage_stops(NOW)
+    assert r.stops["GRVTUSDT"]["order_id"] == "1505665044390572032"
+    assert r.stops["GRVTUSDT"]["trigger"] == pytest.approx(0.17922)
+    assert client.plan_placed == []
+
+    # 掉出宇宙 ⇒ 只许出场:入场闸门对该标的封锁
+    r._manage_only.add("GRVTUSDT")
+    assert r._manage_only_block("GRVTUSDT") == "MANAGE_ONLY"
+    assert lr.LiveRunner._BLOCK_COUNTERS["MANAGE_ONLY"] == (("manage_only_skips", 1),)
+    assert "MANAGE_ONLY" in lr.LiveRunner._BLOCK_STATUS
+
+
+def test_manage_only_blocks_new_entries(tmp_path):
+    """仅出场管理的标的:入场闸门返回 MANAGE_ONLY;正常标的不受影响。"""
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    assert r._manage_only_block("BTCUSDT") is None
+    r._manage_only.add("GRVTUSDT")
+    assert r._manage_only_block("GRVTUSDT") == "MANAGE_ONLY"
+    assert r._manage_only_block("BTCUSDT") is None
+    assert lr.LiveRunner._BLOCK_COUNTERS["MANAGE_ONLY"] == (("manage_only_skips", 1),)
+
+
+def test_universe_tick_marks_held_out_of_universe_symbols_manage_only(tmp_path, monkeypatch):
+    """宇宙是入场口径:持仓掉出宇宙 ⇒ 只许出场;仍在宇宙的持仓不受影响。"""
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    r.positions["GRVTUSDT"] = _pos(sym="GRVTUSDT", direction=-1, entry=0.1715,
+                                   invalid=0.1792, qty=36.0, mark=0.16958, tf="4h")
+    r.positions["BTCUSDT"] = _pos(qty=1.0)
+    monkeypatch.setattr(r.client, "universe", lambda *a, **k: ["BTCUSDT"],
+                        raising=False)
+    r._universe_at = 0.0
+    r._universe_tick()
+    assert r._universe_symbols == {"BTCUSDT"}
+    assert r._manage_only == {"GRVTUSDT"}
+    assert r._manage_only_block("BTCUSDT") is None
+
+

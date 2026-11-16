@@ -670,6 +670,10 @@ class LiveRunner:
         self.campaigns: dict[str, CampaignState] = {}
         self.extra_campaigns: dict[tuple[str, str], CampaignState] = {}
         self.symbols_pending: list = sorted(symbols)
+        # 已退出交易宇宙但仍持有仓位的标的:战役只用于出场管理,不再新开仓。
+        self._manage_only: set[str] = set()
+        # 最近一次宇宙筛选结果(空集 = 还没算过,不拿它做"非宇宙"判断)。
+        self._universe_symbols: set[str] = set()
         self._short_history_alerted: set[str] = set()
         self.positions: dict[str, dict] = {}
         self.open_intents: dict[str, dict] = {}
@@ -2095,6 +2099,11 @@ class LiveRunner:
             contracts=list(self.contract_raw.values()) if self.contract_raw else None,
         )
         self._journal("universe", {"config": uni_cfg, "n": len(uni), "head": uni[:8]})
+        self._universe_symbols = set(uni)
+        # 宇宙是入场口径:已持仓但不在本轮宇宙的标的只许出场(重启后也按此重算,
+        # 不依赖内存态),否则掉量/掉出宇宙的仓位会被继续新开仓。
+        self._manage_only = {sym for sym in self.positions
+                             if sym not in self._universe_symbols}
         known = set(self.campaigns) | set(self.symbols_pending)
         missing_specs = [sym for sym in uni if sym not in self.contracts]
         if missing_specs:
@@ -2960,6 +2969,7 @@ class LiveRunner:
         "DIRECTIONAL_CAP": "仅参考 · 同向风险额度已用完,本系统本拍未开仓",
         "RWA_MARKET_CLOSED": "仅参考 · 非加密传统标的处于周末休市窗口,本系统暂停开新仓",
         "RWA_INACTIVE_SESSION": "仅参考 · 非加密传统标的处于零成交休市死水时段,本系统暂停开新仓",
+        "MANAGE_ONLY": "仅参考 · 该标的已退出交易宇宙但仍有持仓,本系统只管理出场、不新开仓",
         "MIN_NOTIONAL": "仅参考 · 数量低于交易所最小下单,本系统本拍未开仓",
         "DAILY_LOSS_BREAKER": "仅参考 · 当日亏损熔断,本系统暂停新开仓",
         "RATE_LIMIT": "仅参考 · 触达下单频率上限,本系统本拍未开仓",
@@ -2976,6 +2986,7 @@ class LiveRunner:
         "DIRECTIONAL_CAP": (("cap_skips", 1),),
         "RWA_MARKET_CLOSED": (("rwa_session_skips", 1),),
         "RWA_INACTIVE_SESSION": (("rwa_session_skips", 1),),
+        "MANAGE_ONLY": (("manage_only_skips", 1),),
         "MIN_NOTIONAL": (("min_notional_skips", 1),),
         "DAILY_LOSS_BREAKER": (("breaker_blocks", 1),),
         "RATE_LIMIT": (("rate_skips", 1),),
@@ -3101,6 +3112,8 @@ class LiveRunner:
         if block is None:
             eval_bar = trigger_bar if trigger_bar is not None else (cs.trig_bars[-1] if mic and cs.trig_bars else (cs.cog_bars[-1] if cs.cog_bars else None))
             block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar)
+        if block is None:
+            block = self._manage_only_block(sym)
         qty = 0.0
         if self.mode == "live" and self.api_halted:
             block = "API_HALT"
@@ -3496,6 +3509,12 @@ class LiveRunner:
                                   now_ms: int, trigger_why: str) -> None:
         sym = str(it["symbol"])
         d, inv = int(it["direction"]), float(it["invalid"])
+        if sym in self._manage_only:
+            it["status"] = "canceled"
+            self._journal("watch_cancel", {"oid": oid, "symbol": sym,
+                                           "why": "MANAGE_ONLY"})
+            self._notify_watch(it, "关注作废", "该标的仅出场管理,不再新开仓")
+            return
         error = entry_contract_error(d, exec_px, inv, it.get("target_1"), it)
         if error:
             it["status"] = "canceled"
@@ -3604,6 +3623,10 @@ class LiveRunner:
             self._manage_targets(ts)
         if origin == "adopted":
             self.counters["adopted"] = self.counters.get("adopted", 0) + 1
+        elif origin == "recovered":
+            # 账本重建:成交发生在被清空的旧账本上,不重复计入 fills(否则污染归因)
+            self.counters["recovered_positions"] = \
+                self.counters.get("recovered_positions", 0) + 1
         else:
             self.counters["fills"] += 1
         chart_bars = (cs.trig_bars[-96:] if (cs and it.get("mic") and cs.trig_bars)
@@ -3617,6 +3640,13 @@ class LiveRunner:
                 f"失效 {float(it['invalid']):.8g}"
                 f"({'struct' if it.get('stop_source') == 'structure' else 'atr'})"
                 f", 目标 {it.get('target_1')}；此后由 §8 统一管理")
+        elif origin == "recovered":
+            # 账本重建:本系统自己的仓被状态清空后认回来,绝不伪装成新开仓。
+            self.tg.send_alert(
+                f"🧾 {sym} 账本重建:按审计日志的原始成交记录恢复持仓事实 "
+                f"dir={it['direction']} qty={it['qty']} @ {price:.8g} "
+                f"(原始防线 {float(it['invalid']):.8g},目标 {it.get('target_1')})"
+                f" —— 非新开仓;交易所既有 TPSL 按确定性 clientOid 直接沿用")
         else:
             self.tg.send_fill(
                 sym, (f"开仓暂记({self.mode},待成交回执)"
@@ -3635,7 +3665,9 @@ class LiveRunner:
                 bars=chart_bars)
         # 开仓事实必须**自解释**:口径归因(MFE/ATR、按 TF 分桶、参考价 vs 成交价)
         # 全靠这一行,缺 `tf_label`/`opened_ts` 就只能靠事后猜。
-        self._journal("adopt" if origin == "adopted" else "fill",
+        kind = ("adopt" if origin == "adopted"
+                else ("fill_recovered" if origin == "recovered" else "fill"))
+        self._journal(kind,
                       {"oid": it["oid"], "symbol": sym,
                        "qty": it["qty"], "price": price,
                        "ref_px": float(it.get("ref_px") or price),
@@ -4780,6 +4812,123 @@ class LiveRunner:
             price_label=("成交价" if px is not None else "参考价(无成交回执)"))
 
 
+    def _journal_paths_recent(self, days: int = 14) -> list:
+        """按 UTC 日期倒序的审计日志 —— 账本丢失后唯一还能证明"这是我们的仓"的事实源。"""
+        prefix = str(self.loop_cfg.get("journal_prefix") or "live_")
+        paths = sorted(self.journal_dir.glob(f"{prefix}*.jsonl"),
+                       key=lambda p: p.name, reverse=True)
+        return paths[:max(1, int(days))]
+
+    def _recover_intent_from_journal(self, sym: str, direction: int) -> Optional[dict]:
+        """从审计日志重建本系统自己的建仓事实(账本丢失后的恢复口径)。
+
+        为什么需要:2026-11-16 实测 GRVTUSDT 的 4h 空单是本系统 11-15 01:00 UTC 开的
+        (日志 `signal_structure` → `leverage` → `stop` → `fill`),而 `runtime/live`
+        的 state/campaigns 被清空后,对账只剩"exchange_only 交易所独有仓位" ——
+        自有仓被当成异己仓丢给人工核查。
+
+        判据:同 symbol + 同 direction 的**最新** `fill`(`origin=strategy`),且其后
+        没有同 `oid` 的 `close_fill`。返回的 intent 保留原始 invalid/target/
+        tf_label/event_id/opened_ts,使确定性 clientOid 与交易所既有 TPSL 完全对上
+        (恢复时零换单、不产生第二张保护单)。
+        """
+        if self.mode != "live":
+            return None
+        fills: list[dict] = []
+        closed: set = set()
+        for path in self._journal_paths_recent():
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):          # 新 → 旧
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("symbol") != sym:
+                    continue
+                kind = rec.get("kind")
+                if kind == "close_fill":
+                    closed.add(str(rec.get("oid")))
+                elif (kind == "fill"
+                      and int(rec.get("direction") or 0) == int(direction)
+                      and str(rec.get("role") or "entry") == "entry"
+                      and str(rec.get("origin") or "strategy") == "strategy"):
+                    fills.append(rec)
+        for rec in fills:
+            if str(rec.get("oid")) in closed:
+                continue                       # 已经平掉的仓:不是当前持仓事实
+            try:
+                invalid = float(rec.get("invalid"))
+                qty = float(rec.get("qty") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0.0 or not math.isfinite(invalid):
+                continue
+            tgt = rec.get("structural_target")
+            intent = {
+                "oid": rec.get("oid") or f"{self.OID_PREFIX}recover{sym}",
+                "symbol": sym, "role": "entry", "kind": "market",
+                "direction": int(direction), "qty": qty, "limit_price": None,
+                "ref_px": rec.get("ref_px") or rec.get("price"),
+                "invalid": invalid,
+                "target_1": float(tgt) if tgt is not None else None,
+                "structural_target": tgt,
+                "tf_label": rec.get("tf_label"),
+                "event_id": rec.get("event_id"),
+                "route": rec.get("route") or "recovered",
+                "decision_ts": int(rec.get("opened_ts") or rec.get("ts") or 0),
+                "mic": bool(rec.get("mic")), "size_mult": 1.0, "edge_mult": 1.0,
+                "fill_price": float(rec.get("fill_px") or rec.get("price") or 0.0),
+                "fill_price_source": "fills",
+            }
+            if rec.get("execution_target") is not None:
+                intent["execution_target"] = float(rec["execution_target"])
+            return intent
+        return None
+
+    def _ensure_campaign_for_manage(self, sym: str) -> Optional[CampaignState]:
+        """为"已持有但当前不在交易宇宙"的标的惰性重建战役事实(只管理出场)。
+
+        宇宙筛选是**入场口径**,不是"已持仓该不该被管理"的口径:持仓的交易所止损、
+        §8 移动防线与结构出场都依赖战役事实。掉出宇宙后若连战役也没有,仓位就只剩
+        交易所那张 TPSL,系统不再管理 —— 这正是 11-16 GRVTUSDT(24h 量 18 万,
+        远低于 3M 门槛)的处境。重建后该标的进 `_manage_only`:只许出场,禁新开仓。
+        """
+        cs = self.campaigns.get(sym)
+        if cs is not None:
+            return cs
+        if not hasattr(self.client, "history_candles"):
+            return None
+        try:
+            want = int(self.cog_cfg["warmup_trigger_bars"])
+            bars = self._prefetch_bars_parallel([sym], want).get(sym) or []
+            cs = self._build_all_tf_campaigns(sym, bars2h=bars) if bars else None
+        except (BitgetError, RuntimeError) as e:
+            self._journal("manage_campaign_failed",
+                          {"symbol": sym, "why": type(e).__name__})
+            return None
+        if cs is None:
+            return None
+        self.campaigns[sym] = cs
+        self._manage_only.add(sym)
+        self._touch_campaigns()
+        if sym in self.symbols_pending:
+            self.symbols_pending.remove(sym)
+        self._cancel_entry(sym, "manage_only")
+        self._journal("manage_campaign_built",
+                      {"symbol": sym, "tf_label": cs.tf_label})
+        self._alert_throttled(
+            f"manage:{sym}",
+            f"{sym} 已不在交易宇宙但仍有持仓:重建战役仅用于出场管理"
+            f"(不再新开仓,交易所在挂 TPSL 照旧保护)")
+        return cs
+
+    def _manage_only_block(self, sym: str) -> Optional[str]:
+        """仅出场管理的标的禁止新开仓(宇宙是入场口径;持仓必须仍被管理)。"""
+        return "MANAGE_ONLY" if sym in self._manage_only else None
+
     def _adopt_exchange_only(self, ex_pos: list) -> None:
         """接管"交易所独有仓位"(扩展层;策略链路零改动)。
 
@@ -4839,13 +4988,36 @@ class LiveRunner:
                 continue
             cs = (self._get_cs_for(sym, str(self.cog_cfg.get("main_tf_label") or "12h"))
                   or self.campaigns.get(sym))
+            # 账本丢失/掉出宇宙时,自有仓必须先被认回来(审计日志是唯一事实源):
+            # 以原始 invalid/target/event_id/opened_ts 重建,确定性 clientOid 与
+            # 交易所既有 TPSL 完全对上,恢复过程零换单、不产生第二张保护单。
+            # 优先级高于"按当前结构重算失效价":后者会把原始防线改掉。
+            own_rec = self._recover_intent_from_journal(sym, d)
+            if own_rec is not None \
+                    and d * (entry - float(own_rec["invalid"])) > 0.0 \
+                    and d * (mark - float(own_rec["invalid"])) > 0.0:
+                own_rec["qty"] = qty
+                self._ensure_campaign_for_manage(sym)      # 出场管理仍需战役事实
+                self._register_position(
+                    sym, own_rec, entry,
+                    int(own_rec.get("decision_ts") or now_ms), origin="recovered")
+                self._journal("intent_recovered", {
+                    "symbol": sym, "direction": d, "qty": qty,
+                    "invalid": float(own_rec["invalid"]),
+                    "target_1": own_rec.get("target_1"),
+                    "tf_label": own_rec.get("tf_label"),
+                    "event_id": own_rec.get("event_id"),
+                    "source": "journal"})
+                continue
+            if cs is None:
+                cs = self._ensure_campaign_for_manage(sym)
             if cs is None:
                 self._journal("adopt_skipped", {"symbol": sym, "direction": d,
-                                                "why": "无战役(不在交易宇宙)"})
+                                                "why": "无战役(不在交易宇宙)且日志无自有成交记录"})
                 self._alert_throttled(
                     f"adopt:{sym}",
-                    f"{sym} 交易所独有仓位无法接管:该标的无战役/无结构事实"
-                    f"(不在宇宙),人工核查")
+                    f"{sym} 交易所独有仓位无法接管:该标的无战役/无结构事实,"
+                    f"且审计日志里查不到本系统的建仓记录(确认非本系统所开),人工核查")
                 continue
             try:
                 atr = float(cs.detector.structure.atr())
