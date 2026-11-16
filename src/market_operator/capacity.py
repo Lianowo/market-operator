@@ -74,6 +74,20 @@ def symbol_root(symbol: Optional[str]) -> Optional[str]:
     return symbol
 
 
+def asset_class_of(symbol: Optional[str],
+                   contracts: Optional[Mapping[str, Any]] = None) -> str:
+    """从合约规格提取资产类别('rwa' | 'crypto');缺失规格时默认归入 'crypto'。"""
+    if not symbol or not contracts:
+        return "crypto"
+    spec = contracts.get(symbol)
+    if spec is None:
+        root = symbol_root(symbol)
+        spec = contracts.get(root) if root else None
+    if spec is not None and bool(getattr(spec, "is_rwa", False)):
+        return "rwa"
+    return "crypto"
+
+
 @dataclass(frozen=True)
 class Exposure:
     """最坏情景的拆解:止损亏损 + 平仓侧成本。"""
@@ -244,13 +258,17 @@ def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *
                          timeframe: Optional[str] = None,
                          scope: Optional[str] = None,
                          direction: Optional[int] = None,
+                         asset_class: Optional[str] = None,
+                         contracts: Optional[Mapping[str, Any]] = None,
                          taker_fee: float = 0.0,
                          slippage: float = 0.0,
                          cash_basis: bool = False) -> Exposure:
-    """全部未平仓仓位的最坏情景;``scope``/``timeframe``/``direction`` 非 None 时只算该范围。"""
+    """全部未平仓仓位的最坏情景;``scope``/``timeframe``/``direction``/``asset_class`` 非 None 时只算该范围。"""
     total = Exposure()
     for symbol, pos in positions.items():
         if direction is not None and getattr(pos, "direction", None) != direction:
+            continue
+        if asset_class is not None and asset_class_of(symbol, contracts) != asset_class:
             continue
         if not _scope_matches(symbol, scope, timeframe):
             continue
@@ -355,7 +373,7 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
 __all__ = [
     "ADMISSION_FULL_COST", "CASH_NET_ADMISSION", "DECISION", "FILL", "FULL_COST",
     "MODES", "MOMENTS", "STOP_RISK", "VALID_MODES", "Exposure", "RiskBudget",
-    "budget_headroom", "candidate_exposure", "delta_exposure",
+    "asset_class_of", "budget_headroom", "candidate_exposure", "delta_exposure",
     "outstanding_exposure", "position_exposure", "qty_for_budget",
     "stop_distance", "symbol_root", "timeframe_of",
 ]

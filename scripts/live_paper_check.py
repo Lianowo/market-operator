@@ -58,7 +58,8 @@ class ReplayClient:
                and (end_ms is None or b[0] < end_ms)]
         return out[:limit] if end_ms is None else out[-limit:]
 
-    def universe(self, min_usdt_volume_24h):
+    def universe(self, thresholds=None, tickers=None, contracts=None,
+                 rwa_no_volume_filter=None):
         return ["BTCUSDT"]
 
     # paper 防呆:一切下单类路径必须不存在

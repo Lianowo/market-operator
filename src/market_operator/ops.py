@@ -429,8 +429,8 @@ def _check_exchange(cfg: dict) -> list[Check]:
     out: list[Check] = []
     try:
         tickers = client.tickers()
-        min_v = float(uni.get("min_usdt_volume_24h") or 0.0)
-        picked = client.universe(min_v, tickers=tickers)
+        uni_cfg = uni
+        picked = client.universe(uni_cfg, tickers=tickers)
         core = [s for s in (cfg.get("symbols_core") or []) if s in picked]
         status = "ok" if picked else "fail"
         out.append(Check("交易所行情", status,
@@ -1174,8 +1174,7 @@ def warmup(cfg: dict, *, symbols: Iterable[str] | None = None,
                     "errors": [], "warnings": [], "at_utc": utc_now_iso()}
     if not core:
         try:
-            min_v = float((cfg.get("universe") or {}).get("min_usdt_volume_24h") or 0.0)
-            core = list(client.universe(min_v))[:20]
+            core = list(client.universe(cfg.get("universe") or {}))[:20]
         except Exception:
             core = []
     if not core:

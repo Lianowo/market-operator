@@ -71,6 +71,7 @@ from market_operator.engine import (                             # noqa: E402
     build_position_manager,
     load_strategy_bundle,
     parse_execution_config,
+    rwa_session_entry_block,
     select_cognition_route_events,
 )
 from market_operator.heartbeat import (                          # noqa: E402
@@ -912,7 +913,8 @@ class LiveRunner:
                     target_cs = self._get_cs_for(sym, pos_tf) or cs
                     target_cs.pm.positions[s] = pos
                 self.campaigns[sym] = cs
-                self._ensure_leverage(sym)
+                if sym in self.positions or self.mode != "live":
+                    self._ensure_leverage(sym)
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
         if not self._gap_bars:
@@ -1726,7 +1728,9 @@ class LiveRunner:
         self.breaker.update(now_ms, self.equity)
         self._universe_tick()
         if self.symbols_pending:
-            pending_batch = list(self.symbols_pending)
+            # 大宇宙(460+ 合约)分批预热:每步最多预热 48 个新标的并仅在实际下单前惰性设杠杆,
+            # 确保每轮 step 耗时平稳(< 10s),实时心跳与既有持仓止损守护绝不因全量预热阻塞。
+            pending_batch = list(self.symbols_pending[:48])
             want = int(self.cog_cfg["warmup_trigger_bars"])
             prefetched = self._prefetch_bars_parallel(pending_batch, want)
             for sym in pending_batch:
@@ -1745,7 +1749,8 @@ class LiveRunner:
                 if cs is not None:
                     self.campaigns[sym] = cs
                     self._touch_campaigns()      # 新纳入宇宙的品种要进冷档
-                    self._ensure_leverage(sym)
+                    if sym in self.positions or self.mode != "live":
+                        self._ensure_leverage(sym)
                 if sym in self.symbols_pending:
                     self.symbols_pending.remove(sym)
         if self.mode == "live":
@@ -1788,7 +1793,7 @@ class LiveRunner:
         pref_base: dict[str, list] = {}
         if self.mode == "live" and (len(due_30m) + len(due_base)) > 2:
             gran_base = self.cog_cfg["granularity"]
-            with ThreadPoolExecutor(max_workers=8) as ex:
+            with ThreadPoolExecutor(max_workers=12) as ex:
                 f30 = {
                     ex.submit(self.client.history_candles, s, "30m", start_ms=st, limit=100): s
                     for s, st in due_30m.items()
@@ -2084,11 +2089,21 @@ class LiveRunner:
         if now - self._universe_at < self.loop_cfg["universe_refresh_seconds"]:
             return
         self._universe_at = now
-        min_vol = self.cfg["universe"]["min_usdt_volume_24h"]
-        uni = self.client.universe(min_vol)
-        self._journal("universe", {"min_usdt_volume_24h": min_vol,
-                                   "n": len(uni), "head": uni[:8]})
+        uni_cfg = self.cfg["universe"]
+        uni = self.client.universe(
+            uni_cfg,
+            contracts=list(self.contract_raw.values()) if self.contract_raw else None,
+        )
+        self._journal("universe", {"config": uni_cfg, "n": len(uni), "head": uni[:8]})
         known = set(self.campaigns) | set(self.symbols_pending)
+        missing_specs = [sym for sym in uni if sym not in self.contracts]
+        if missing_specs:
+            try:
+                fresh_specs, fresh_raw = load_contracts_live(self.client, missing_specs)
+                self.contracts.update(fresh_specs)
+                self.contract_raw.update(fresh_raw)
+            except Exception:
+                pass
         for sym in uni:
             if sym not in known:
                 self.symbols_pending.append(sym)
@@ -2722,10 +2737,16 @@ class LiveRunner:
                     tf_hours=int(ocs.obs_tf_seconds // 3600),
                 ))
             htf_views = tuple(htf_list)
+        my_rwa = self._is_rwa(sym)
         peer_cs = [
             c_item
             for c_item in (*self.campaigns.values(), *self.extra_campaigns.values())
-            if c_item is not None and c_item.obs_tf_seconds == cs.obs_tf_seconds and c_item.cog_bars
+            if (
+                c_item is not None
+                and c_item.obs_tf_seconds == cs.obs_tf_seconds
+                and c_item.cog_bars
+                and self._is_rwa(c_item.symbol) == my_rwa
+            )
         ]
         peer_regs = [c_item.detector.structure.regime() for c_item in peer_cs]
         peer_dvs = sorted(c_item.detector.structure.dollar_volume() for c_item in peer_cs)
@@ -2777,7 +2798,7 @@ class LiveRunner:
                             executor="local_market",
                         )
                         self.counters["scale_promotions"] = self.counters.get("scale_promotions", 0) + 1
-                self._submit_open(cs, d, t, mic=mic, view=view)
+                self._submit_open(cs, d, t, mic=mic, view=view, trigger_bar=bar)
             else:
                 raise RuntimeError(f"unknown decision {d.kind}")
 
@@ -2791,11 +2812,25 @@ class LiveRunner:
 
     def _spec(self, sym: str) -> ContractSpec:
         sp = self.contracts.get(sym)
+        raw_ent = self.contract_raw.get(sym)
         if sp is None:                             # 无规格 ⇒ 兜底保守值
+            is_rwa = str((raw_ent or {}).get("isRwa") or "").strip().upper() == "YES"
             return ContractSpec(symbol=sym, size_min=1e-6, size_step=1e-6,
                                 size_place=6, price_place=4,
-                                min_trade_usdt=5.0)
+                                min_trade_usdt=5.0, is_rwa=is_rwa)
+        if raw_ent is not None and not sp.is_rwa and str(raw_ent.get("isRwa") or "").strip().upper() == "YES":
+            return ContractSpec(symbol=sp.symbol, size_min=sp.size_min, size_step=sp.size_step,
+                                size_place=sp.size_place, price_place=sp.price_place,
+                                min_trade_usdt=sp.min_trade_usdt, is_rwa=True)
         return sp
+
+    def _is_rwa(self, sym: str) -> bool:
+        root = sym.split("@", 1)[0] if "@" in sym else sym
+        sp = self.contracts.get(root)
+        if sp is not None and bool(getattr(sp, "is_rwa", False)):
+            return True
+        raw_ent = self.contract_raw.get(root)
+        return str((raw_ent or {}).get("isRwa") or "").strip().upper() == "YES"
 
     @staticmethod
     def _box_bounds(zone_lo, zone_hi, box_opposite):
@@ -2923,6 +2958,8 @@ class LiveRunner:
         "OPPOSITE_CLAIM": "仅参考 · 同标的已有反向持仓,本系统本拍未开仓",
         "CLAIM_CAP": "仅参考 · 该标的同向判断的风险额度已用完,本系统本拍未开仓",
         "DIRECTIONAL_CAP": "仅参考 · 同向风险额度已用完,本系统本拍未开仓",
+        "RWA_MARKET_CLOSED": "仅参考 · 非加密传统标的处于周末休市窗口,本系统暂停开新仓",
+        "RWA_INACTIVE_SESSION": "仅参考 · 非加密传统标的处于零成交休市死水时段,本系统暂停开新仓",
         "MIN_NOTIONAL": "仅参考 · 数量低于交易所最小下单,本系统本拍未开仓",
         "DAILY_LOSS_BREAKER": "仅参考 · 当日亏损熔断,本系统暂停新开仓",
         "RATE_LIMIT": "仅参考 · 触达下单频率上限,本系统本拍未开仓",
@@ -2937,6 +2974,8 @@ class LiveRunner:
         "OPPOSITE_CLAIM": (("cap_skips", 1),),
         "CLAIM_CAP": (("cap_skips", 1),),
         "DIRECTIONAL_CAP": (("cap_skips", 1),),
+        "RWA_MARKET_CLOSED": (("rwa_session_skips", 1),),
+        "RWA_INACTIVE_SESSION": (("rwa_session_skips", 1),),
         "MIN_NOTIONAL": (("min_notional_skips", 1),),
         "DAILY_LOSS_BREAKER": (("breaker_blocks", 1),),
         "RATE_LIMIT": (("rate_skips", 1),),
@@ -2957,27 +2996,37 @@ class LiveRunner:
         return worst_case_of_position(d, qty, mk, inv, fee_rate)
 
     def _directional_entry_blocked(self, direction: int, qty: float, price: float,
-                                   invalid: float, *, exclude_oid: Optional[str] = None) -> bool:
-        """Derive same-side in-flight exposure; no reservation state to leak.
+                                   invalid: float, *, symbol: Optional[str] = None,
+                                   exclude_oid: Optional[str] = None) -> bool:
+        """Derive same-side in-flight exposure per asset class ('crypto' vs 'rwa'); no reservation state to leak.
 
-        Live admission already uses full costs. Keep that unit at trigger/fill
-        checks too, and exclude the intent currently being executed.
+        Crypto and RWA(non-crypto stocks/commodities) maintain independent directional correlation buckets,
+        while total account exposure remains strictly bounded by ``portfolio_cap_frac``.
         """
         frac = self.directional_cap_frac
         if frac is None or self.equity is None:
             return False
+        target_rwa = self._is_rwa(symbol) if symbol is not None else None
         capital = max(0.0, float(self.equity) - float(self.unrealized_pl or 0.0))
         fee, slip = float(self.risk["taker_fee"]), float(self.risk["slippage_per_side"])
-        used = sum(self._position_worst_case(p, fee + slip)
-                   for p in self.positions.values() if p["direction"] == direction)
+        used = sum(
+            self._position_worst_case(p, fee + slip)
+            for k_sym, p in self.positions.items()
+            if p["direction"] == direction and (target_rwa is None or self._is_rwa(k_sym) == target_rwa)
+        )
         if getattr(self, "capacity_mode", "") == "cash_net_admission":
-            opp_filled = sum(self._position_worst_case(p, fee + slip)
-                             for p in self.positions.values() if p["direction"] == -direction)
+            opp_filled = sum(
+                self._position_worst_case(p, fee + slip)
+                for k_sym, p in self.positions.items()
+                if p["direction"] == -direction and (target_rwa is None or self._is_rwa(k_sym) == target_rwa)
+            )
             used = max(0.0, used - opp_filled)
         for oid, it in self.open_intents.items():
             if (oid == exclude_oid or it.get("status") != "armed"
                     or it.get("role") != "entry" or it["direction"] != direction
                     or it["symbol"] in self.positions):
+                continue
+            if target_rwa is not None and self._is_rwa(str(it["symbol"])) != target_rwa:
                 continue
             ref = float(it.get("limit_price") or it["ref_px"])
             used += float(it["qty"]) * (abs(ref - float(it["invalid"])) + ref * 2.0 * (fee + slip))
@@ -2985,7 +3034,7 @@ class LiveRunner:
         return used + candidate > frac * capital + 1e-9
 
     def _submit_open(self, cs: CampaignState, d, t: int, *, mic: bool,
-                     view=None) -> None:
+                     view=None, trigger_bar: Optional[tuple] = None) -> None:
         """意图 → 闸门 → 信号广播 → 装配(执行在撮合/live 下单层)。
 
         信号广播与容量/熔断/下单结果**完全解耦**:检测到事件就推送结构
@@ -3049,6 +3098,9 @@ class LiveRunner:
             if on_cog else []
         # ---- 闸门:只产出 block 码,不决定要不要通知 ----
         block: Optional[str] = entry_cost_error(hyp.direction, fitted_entry, invalid, d.meta)
+        if block is None:
+            eval_bar = trigger_bar if trigger_bar is not None else (cs.trig_bars[-1] if mic and cs.trig_bars else (cs.cog_bars[-1] if cs.cog_bars else None))
+            block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar)
         qty = 0.0
         if self.mode == "live" and self.api_halted:
             block = "API_HALT"
@@ -3080,6 +3132,12 @@ class LiveRunner:
                 self.risk["taker_fee"] + self.risk["slippage_per_side"])
             candidate = qty * unit_exp
             tf_caps = self.risk.get("tf_cap_by_tf") or {}
+            
+            # 应用资产类别的容量乘数 (RWA 默认 0.5)
+            if self._is_rwa(sym):
+                mult = self.cfg["universe"].get("rwa", {}).get("capacity_multiplier", 1.0)
+                tf_caps = {k: v * mult for k, v in tf_caps.items()}
+                
             tf_cap = tf_caps.get(cs.tf_label)
             tf_out = 0.0
             group = 0.0
@@ -3134,7 +3192,8 @@ class LiveRunner:
             if block is None and self._directional_entry_blocked(
                     hyp.direction, qty,
                     (execution_quote if self.mode == "live" and d.kind == "market"
-                     and execution_quote is not None else fitted_entry), invalid):
+                     and execution_quote is not None else fitted_entry), invalid,
+                    symbol=sym):
                 block = "DIRECTIONAL_CAP"
             if block is None and self.breaker.should_stop(equity):
                 block = "DAILY_LOSS_BREAKER"
@@ -3454,7 +3513,10 @@ class LiveRunner:
             qty = min(qty, floor_step(risk_cap / abs(exec_px - inv), spec.size_step, spec.size_place))
         if qty <= 0.0 or qty * exec_px < max(spec.min_trade_usdt, spec.size_min * exec_px):
             return
-        if self._directional_entry_blocked(d, qty, exec_px, inv, exclude_oid=oid):
+        rwa_block = rwa_session_entry_block(self._is_rwa(sym), int(now_ms))
+        if rwa_block is not None:
+            return
+        if self._directional_entry_blocked(d, qty, exec_px, inv, symbol=sym, exclude_oid=oid):
             it["status"] = "canceled"
             self._journal("watch_cancel", {"oid": oid, "symbol": sym, "why": "DIRECTIONAL_CAP"})
             self._notify_watch(it, "关注作废", "DIRECTIONAL_CAP")
@@ -5138,11 +5200,16 @@ def main(argv=None) -> None:
     cascade_txt = ", ".join(
         cascade_label(tf, trig_map.get(tf)) for tf in tf_list
     )
+    uni_cfg = cfg.get("universe") or {}
+    crypto_min = float((uni_cfg.get("crypto") or {}).get(
+        "min_usdt_volume_24h", uni_cfg.get("min_usdt_volume_24h") or 0.0) or 0.0)
+    rwa_txt = ("RWA 不限" if uni_cfg.get("rwa_no_volume_filter") else
+               f"RWA >= {float((uni_cfg.get('rwa') or {}).get('min_usdt_volume_24h') or 0.0):.0f}")
     print(f"[live_runner] mode={args.mode} 主循环起动(每 {poll}s;cascade=[{cascade_txt}];risk_frac="
           f"{r['risk_frac']} 杠杆≤{r['leverage_cap']} 组合≤"
           f"{r['portfolio_cap_frac']} 日损熔断 {r['max_daily_loss_frac']} "
-          f"每时单限 {r['orders_per_hour']};宇宙 >= "
-          f"{cfg['universe']['min_usdt_volume_24h']:.0f} USDT)", flush=True)
+          f"每时单限 {r['orders_per_hour']};宇宙 crypto >= "
+          f"{crypto_min:.0f} USDT / {rwa_txt})", flush=True)
     tg.send_alert(f"live_runner 起动(mode={args.mode} | 策略={cfg.get('version', 'v22-pure-pa-amt')})\n"
                   f"⏱️ 周期级联: {cascade_txt}\n"
                   f"🛡️ 风控配置: 单笔风险 {r['risk_frac']:.1%} (动态阶梯复利) | 单周期上限 {list((r.get('tf_cap_by_tf') or {}).values())[0] if r.get('tf_cap_by_tf') else 0.15:.0%} | 组合上限 {r['portfolio_cap_frac']:.0%}\n"

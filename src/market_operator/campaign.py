@@ -80,6 +80,7 @@ from .structure import Params
 from .engine import (
     ExecutionConfig,
     build_position_manager,
+    rwa_session_entry_block,
     select_cognition_route_events,
 )
 
@@ -725,18 +726,26 @@ def _symbol_entry_resting(broker, key: str) -> bool:
     return False
 
 
-def _portfolio_breadth_at(st: _CampaignState, states: Optional[dict], close_moment_ms: int) -> tuple[float, int, float]:
-    """在 close_moment_ms 计算同周期所有标的因果可见的横截面市场宽度与成交额中位数(纯 OHLCV 驱动)。"""
+def _portfolio_breadth_at(
+    st: _CampaignState,
+    states: Optional[dict],
+    close_moment_ms: int,
+    contracts: Optional[dict] = None,
+) -> tuple[float, int, float]:
+    """在 close_moment_ms 计算同周期、同资产类别(crypto vs rwa)标的因果可见的横截面市场宽度与成交额中位数。"""
     if not states:
         return 0.0, 1, 0.0
     tf_h = st.frame.tf_hours
     ms_tf = tf_h * MS_1H
     max_open_ts = int(close_moment_ms) - ms_tf
+    my_ac = capacity.asset_class_of(st.frame.key, contracts) if contracts else None
     regs: list = []
     dvs: list[float] = []
     for other in states.values():
         of = other.frame
         if of.tf_hours != tf_h:
+            continue
+        if my_ac is not None and capacity.asset_class_of(of.key, contracts) != my_ac:
             continue
         bars = of.cog.bars
         idx = bisect_right(bars, max_open_ts, key=lambda b: int(b[0])) - 1
@@ -840,9 +849,14 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
         groups.setdefault((routing_bar, routing_index), []).append(event)
     close_moment = int(_ts) + mic.trigger_tf_seconds * 1000
     htf_views = _htf_views_for(st, states, close_moment)
-    m_breadth, n_univ, med_dv = _portfolio_breadth_at(st, states, close_moment)
+    b_contracts = getattr(broker, "contracts", None) or {}
+    m_breadth, n_univ, med_dv = _portfolio_breadth_at(st, states, close_moment, b_contracts)
     decisions = []
+    is_rwa = capacity.asset_class_of(key, b_contracts) == "rwa"
     for (routing_bar, routing_index), events in groups.items():
+        if rwa_session_entry_block(is_rwa, close_moment, routing_bar) is not None:
+            counters["rwa_session_skips"] = counters.get("rwa_session_skips", 0) + 1
+            continue
         decisions.extend(st.router.on_bar(
             sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
             position_open=_symbol_position_open(broker, key),
@@ -1026,7 +1040,12 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     if not route_events:
         return
     _count_go(counters, route_events, go_set)
-    htf_views = _htf_views_for(st, states, t + f.tf_hours * MS_1H)
+    close_moment_cog = t + f.tf_hours * MS_1H
+    b_contracts_cog = getattr(broker, "contracts", None) or {}
+    if rwa_session_entry_block(capacity.asset_class_of(key, b_contracts_cog) == "rwa", close_moment_cog, bar) is not None:
+        counters["rwa_session_skips"] = counters.get("rwa_session_skips", 0) + 1
+        return
+    htf_views = _htf_views_for(st, states, close_moment_cog)
     if htf_views:
         decisions = st.router.on_bar(
             sym, bar, i, cog.views.get(i), atr, route_events,
@@ -1172,12 +1191,12 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
                         skip_reason = "CLAIM_CAP"
                         pool = claim_pool
 
-        # v22:同向净风险上限 (directional_cap_frac, §6.4)
+        # v22:同向净风险上限 (directional_cap_frac, §6.4; 按 crypto vs rwa 独立同向桶计量)
         dir_cap = broker.risk_budget.directional_cap_frac
         if not cap_blocked and dir_cap is not None and dir_cap > 0.0:
             dir_used = broker.directional_usage(
                 direction, moment=capacity.DECISION, capital=capital,
-                notional_equity=equity)
+                notional_equity=equity, symbol=key)
             # 同向意图用实际计划入场价及 size_mult,与 direct broker 准入一致;
             # 普通池的既有整笔判断/成交裁剪口径不变。
             dir_price = d.intent.ref_price if d.kind == "market" else d.limit_price

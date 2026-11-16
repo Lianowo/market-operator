@@ -21,7 +21,8 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Optional
+from collections.abc import Mapping as _MappingABC
+from typing import Optional, Union
 from urllib.parse import urlencode
 
 import requests
@@ -167,16 +168,59 @@ class BitgetLiveClient:
         base, last = float(t.get("baseVolume") or 0.0), float(t.get("lastPr") or 0.0)
         return base * last
 
-    def universe(self, min_usdt_volume_24h: float = UNIVERSE_MIN_USDT_VOLUME_24H,
-                 tickers: Optional[list] = None) -> list[str]:
-        """宇宙筛选:24h USDT 名义量**严格大于**阈值(恰 3M 不入选)。"""
-        out = []
-        for t in (self.tickers() if tickers is None else tickers):
+    def universe(self, thresholds: Optional[Union[dict, float]] = None,
+                 tickers: Optional[list] = None,
+                 contracts: Optional[list] = None,
+                 rwa_no_volume_filter: Optional[bool] = None) -> list[str]:
+        """宇宙筛选:Crypto 与非加密传统(RWA)合约按各自规则独立判定。
+
+        判据:
+        * 成交量**严格大于**阈值(恰等于不入选),沿用冻结的 3M 口径;
+        * ``thresholds`` 接受 `live.json` 的 ``universe`` 段(dict),也兼容历史
+          的单值 float(只设 Crypto 阈值);缺省 3M;
+        * RWA(合约规格 ``isRwa == 'YES'``)在 ``rwa_no_volume_filter`` 为真时
+          不看成交量(周末/节假日零成交也保留,只按 ``symbolStatus`` 剔除
+          停盘/下架),否则按 ``rwa.min_usdt_volume_24h`` 同样严格大于;
+        * 只有显式传入 ``contracts`` 才用 ``symbolStatus`` 过滤并区分 crypto/rwa,
+          不传就保持历史"纯成交量"口径(不额外联网拉规格)。
+        """
+        if isinstance(thresholds, _MappingABC):
+            uni: dict = dict(thresholds)
+        elif thresholds is None:
+            uni = {}
+        else:
+            uni = {"crypto": {"min_usdt_volume_24h": float(thresholds)}}
+        crypto_min = float((uni.get("crypto") or {}).get(
+            "min_usdt_volume_24h",
+            uni.get("min_usdt_volume_24h", UNIVERSE_MIN_USDT_VOLUME_24H)) or 0.0)
+        rwa_min = float((uni.get("rwa") or {}).get("min_usdt_volume_24h",
+                                                   crypto_min) or 0.0)
+        skip_rwa_volume = (bool(uni.get("rwa_no_volume_filter"))
+                           if rwa_no_volume_filter is None
+                           else bool(rwa_no_volume_filter))
+
+        specs: dict = {}
+        for c in (contracts or ()):
+            sym = c.get("symbol")
+            if sym:
+                specs[str(sym)] = c
+
+        out = set()
+        for t in (tickers if tickers is not None else self.tickers()):
             sym = t.get("symbol")
             if not sym:
                 continue
-            if self._usdt_volume(t) > min_usdt_volume_24h:
-                out.append(str(sym))
+            spec = specs.get(str(sym))
+            if spec is not None and str(
+                    spec.get("symbolStatus") or "normal").strip().lower() != "normal":
+                continue
+            is_rwa = str((spec or {}).get("isRwa") or "").strip().upper() == "YES"
+            if is_rwa and skip_rwa_volume:
+                out.add(str(sym))
+                continue
+            floor = rwa_min if is_rwa else crypto_min
+            if self._usdt_volume(t) > floor:
+                out.add(str(sym))
         return sorted(out)
 
     @staticmethod

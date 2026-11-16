@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, fields, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -155,4 +156,29 @@ def blocked_by_market_breadth(
     if direction < 0 and breadth > 0.5:
         return True
     return False
+
+
+def rwa_session_entry_block(
+    is_rwa: bool,
+    confirm_ts_ms: int,
+    bar: Optional[Sequence[float]] = None,
+) -> Optional[str]:
+    """非加密传统资产合约(Bitget isRwa == 'YES')休市与影子死水盘禁开新仓保护(回放与实盘共用):
+    - 24x7 原生加密资产(is_rwa=False)恒放行;
+    - 既有持仓的交易所原生止损/止盈单不受本函数影响,保持 24x7 全天候守护;
+    - 当触发确认棒本身为零成交或一字静止死水棒(volume <= 0 或 high <= low)时,拦截新开仓(覆盖平日节假日/临时停盘);
+    - 当确认时刻落入全球传统现货/期货周末休市窗口(周五 21:00 UTC 收盘后 ~ 周日 22:00 UTC CME/夜盘重开前)时,
+      底层纳斯达克/纽交所/CME 无真实价格发现,拦截影子盘口新开仓以规避点差放大与周一开盘跳空缺口风险。
+    """
+    if not is_rwa:
+        return None
+    if bar is not None and len(bar) >= 6:
+        if float(bar[5]) <= 0.0 or float(bar[2]) <= float(bar[3]):
+            return "RWA_INACTIVE_SESSION"
+    dt = datetime.fromtimestamp(int(confirm_ts_ms) / 1000.0, tz=timezone.utc)
+    wd = dt.weekday()
+    if wd == 5 or (wd == 4 and dt.hour >= 21) or (wd == 6 and dt.hour < 22):
+        return "RWA_MARKET_CLOSED"
+    return None
+
 

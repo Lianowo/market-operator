@@ -364,8 +364,15 @@ def _symbols_text(cfg: dict, secrets: dict, *, ops_role: bool) -> str:
         lines.append("⭐ 全市场无差别动态扫描(无固定核心标的绑定)")
     if ops_role:
         lines.append(f"🌐 选币上限 {uni.get('max_symbols', '?')} 个")
-        lines.append(f"📈 24h 成交额门槛 "
-                     f"{_fmt_num(uni.get('min_usdt_volume_24h'), 0)} USDT")
+        crypto_min = (uni.get("crypto") or {}).get(
+            "min_usdt_volume_24h", uni.get("min_usdt_volume_24h"))
+        if uni.get("rwa_no_volume_filter"):
+            lines.append(
+                f"📈 24h 成交额门槛 Crypto > {_fmt_num(crypto_min, 0)} USDT · 非Crypto(RWA) 不限"
+            )
+        else:
+            lines.append(f"📈 24h 成交额门槛 "
+                         f"{_fmt_num(crypto_min, 0)} USDT")
         lines.append(f"🔁 刷新 {uni.get('refresh_minutes', '?')} 分钟")
         lines.append(f"🧮 产品线 {uni.get('product_type', '?')}")
     return "\n".join(lines)

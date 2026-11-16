@@ -317,3 +317,109 @@ def test_cash_net_admission_frees_floating_profit_and_hedges_filled_beta(tmp_pat
     assert not runner._directional_entry_blocked(1, 5.0, 100.0, 90.0)
 
 
+def test_crypto_vs_rwa_independent_directional_buckets_and_session_gate(tmp_path):
+    """跨资产(Crypto vs RWA 非加密传统合约)独立同向风险分桶 + RWA 休市禁开新仓测试:
+    1. Crypto 同向池打满时阻塞新增 Crypto 同向单,但放行零相关的 RWA(如 NVDAUSDT/XAUUSDT)同向单;
+    2. 全账户总风险上限 portfolio_cap_frac 依然统一硬封顶跨资产总敞口;
+    3. RWA 合约在传统市场周末休市窗口(周五 21:00 UTC ~ 周日 22:00 UTC)或零成交一字棒拦截新开仓,工作日正常放行,Crypto 24x7 不受限。
+    """
+    from datetime import datetime, timezone
+    from market_operator import capacity
+    from market_operator.broker import Broker, ContractSpec, OrderIntent, OrderKind
+    from market_operator.engine import rwa_session_entry_block
+    from tests.test_live_runtime import _FakeClient, _SignalTG, _pos, _runner
+
+    specs = {
+        "BTCUSDT@4h": ContractSpec("BTCUSDT@4h", 0.001, 0.001, 3, 2, 0.0, is_rwa=False),
+        "ETHUSDT@4h": ContractSpec("ETHUSDT@4h", 0.001, 0.001, 3, 2, 0.0, is_rwa=False),
+        "SOLUSDT@4h": ContractSpec("SOLUSDT@4h", 0.001, 0.001, 3, 2, 0.0, is_rwa=False),
+        "NVDAUSDT@4h": ContractSpec("NVDAUSDT@4h", 0.01, 0.01, 2, 2, 0.0, is_rwa=True),
+        "XAUUSDT@4h": ContractSpec("XAUUSDT@4h", 0.01, 0.01, 2, 2, 0.0, is_rwa=True),
+    }
+    assert ContractSpec.from_entry({
+        "symbol": "NVDAUSDT", "minTradeNum": "0.01", "sizeMultiplier": "0.01",
+        "volumePlace": "2", "pricePlace": "2", "minTradeUSDT": "5", "isRwa": "YES",
+    }).is_rwa is True
+
+    # Total portfolio cap = 20% (200U), per-asset-class directional cap = 11% (110U), per-trade = 5% (50U)
+    b = Broker(
+        equity=1000.0, risk_frac=0.05, leverage_cap=20.0,
+        taker_fee=0.0, slippage_per_side=0.0, funding_per_8h=0.0,
+        contracts=specs,
+        portfolio_stop_risk_frac=0.20,
+        directional_stop_risk_frac=0.11,
+        capacity_mode=capacity.CASH_NET_ADMISSION,
+    )
+    b.submit(OrderIntent(OrderKind.OPEN, "BTCUSDT@4h", None, "T", 100.0, 0), 0, direction=1, invalid=90.0, target_1=130.0)
+    b.submit(OrderIntent(OrderKind.OPEN, "ETHUSDT@4h", None, "T", 100.0, 0), 0, direction=1, invalid=90.0, target_1=130.0)
+    b.on_bar_open("BTCUSDT@4h", 3600_000, 100.0)
+    b.on_bar_open("ETHUSDT@4h", 3600_000, 100.0)
+
+    # Crypto Long bucket = 100U -> 3rd Crypto Long (SOL, +50U => 150U > 110U) MUST be blocked:
+    assert b.directional_blocked(1, 100.0, 90.0, "SOLUSDT@4h", moment=capacity.DECISION)
+    # Uncorrelated RWA Long bucket = 0U -> NVDAUSDT Long (+50U <= 110U, total 150U <= 200U) MUST be allowed!
+    assert not b.directional_blocked(1, 100.0, 90.0, "NVDAUSDT@4h", moment=capacity.DECISION)
+
+    # LiveRunner parity for Crypto vs RWA directional bucket:
+    runner = _runner(tmp_path, _FakeClient(), _SignalTG())
+    runner.capacity_mode = capacity.CASH_NET_ADMISSION
+    runner.equity = 1000.0
+    runner.unrealized_pl = 0.0
+    runner.directional_cap_frac = 0.11
+    runner.contracts["NVDAUSDT"] = ContractSpec("NVDAUSDT", 0.01, 0.01, 2, 2, 5.0, is_rwa=True)
+    runner.positions["BTCUSDT"] = {**_pos(qty=5.0), "entry": 100.0, "mark": 100.0, "invalid": 90.0, "direction": 1}
+    runner.positions["ETHUSDT"] = {**_pos(qty=5.0), "entry": 100.0, "mark": 100.0, "invalid": 90.0, "direction": 1}
+    assert runner._directional_entry_blocked(1, 5.0, 100.0, 90.0, symbol="SOLUSDT")
+    assert not runner._directional_entry_blocked(1, 5.0, 100.0, 90.0, symbol="NVDAUSDT")
+
+    # Session gate checks:
+    sat_noon = int(datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)   # Saturday 12:00 UTC
+    fri_late = int(datetime(2026, 11, 13, 21, 30, tzinfo=timezone.utc).timestamp() * 1000)  # Friday 21:30 UTC
+    sun_open = int(datetime(2026, 11, 15, 22, 30, tzinfo=timezone.utc).timestamp() * 1000)  # Sunday 22:30 UTC (CME reopen)
+    wed_us = int(datetime(2026, 11, 11, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)     # Wednesday US Open
+    active_bar = (wed_us, 160.0, 162.0, 159.5, 161.5, 12000.0)
+    flat_bar = (wed_us, 160.0, 160.0, 160.0, 160.0, 0.0)
+
+    assert rwa_session_entry_block(False, sat_noon, flat_bar) is None
+    assert rwa_session_entry_block(True, sat_noon, active_bar) == "RWA_MARKET_CLOSED"
+    assert rwa_session_entry_block(True, fri_late, active_bar) == "RWA_MARKET_CLOSED"
+    assert rwa_session_entry_block(True, sun_open, active_bar) is None
+    assert rwa_session_entry_block(True, wed_us, active_bar) is None
+    assert rwa_session_entry_block(True, wed_us, flat_bar) == "RWA_INACTIVE_SESSION"
+
+
+def test_universe_crypto_3m_and_rwa_unfiltered():
+    """双轨宇宙筛选规则验证:
+    1. Crypto(isRwa != 'YES')严格要求 24h 成交额 > 3,000,000 USDT;
+    2. 非 Crypto(isRwa == 'YES' 且 symbolStatus == 'normal')不做成交量过滤(即使周末 24h 成交额为 0 亦保留),停盘下架合约除外。
+    """
+    from market_operator.bitget_live import BitgetLiveClient
+
+    cli = BitgetLiveClient(None)
+    contracts = [
+        {"symbol": "BTCUSDT", "isRwa": "NO", "symbolStatus": "normal"},
+        {"symbol": "LOWCOINUSDT", "isRwa": "NO", "symbolStatus": "normal"},
+        {"symbol": "EXACT3MUSDT", "isRwa": "NO", "symbolStatus": "normal"},
+        {"symbol": "AMDUSDT", "isRwa": "YES", "symbolStatus": "normal"},
+        {"symbol": "NVDAUSDT", "isRwa": "YES", "symbolStatus": "normal"},
+        {"symbol": "DELISTRWAUSDT", "isRwa": "YES", "symbolStatus": "off"},
+    ]
+    tickers = [
+        {"symbol": "BTCUSDT", "usdtVolume": "50000000"},
+        {"symbol": "LOWCOINUSDT", "usdtVolume": "1200000"},
+        {"symbol": "EXACT3MUSDT", "usdtVolume": "3000000"},
+        {"symbol": "AMDUSDT", "usdtVolume": "0"},
+        {"symbol": "NVDAUSDT", "usdtVolume": "800000"},
+        {"symbol": "DELISTRWAUSDT", "usdtVolume": "9000000"},
+    ]
+    picked = cli.universe(
+        3_000_000.0,
+        tickers=tickers,
+        rwa_no_volume_filter=True,
+        contracts=contracts,
+    )
+    assert picked == ["AMDUSDT", "BTCUSDT", "NVDAUSDT"]
+
+
+
+

@@ -136,6 +136,11 @@ class ContractSpec:
     size_place: int        # volumePlace
     price_place: int       # pricePlace
     min_trade_usdt: float  # minTradeUSDT
+    is_rwa: bool = False   # Bitget 原生字段 isRwa == 'YES'(股票/贵金属/大宗 RWA 合约)
+
+    @property
+    def asset_class(self) -> str:
+        return "rwa" if self.is_rwa else "crypto"
 
     @classmethod
     def from_entry(cls, entry: dict) -> "ContractSpec":
@@ -146,6 +151,7 @@ class ContractSpec:
             size_place=int(entry["volumePlace"]),
             price_place=int(entry["pricePlace"]),
             min_trade_usdt=float(entry["minTradeUSDT"]),
+            is_rwa=(str(entry.get("isRwa") or "").strip().upper() == "YES"),
         )
 
 
@@ -790,23 +796,25 @@ class Broker:
 
     def directional_usage(self, direction: int, *, moment: str,
                           capital: Optional[float] = None,
-                          notional_equity: Optional[float] = None) -> float:
+                          notional_equity: Optional[float] = None,
+                          symbol: Optional[str] = None) -> float:
         """同向在仓 + 活跃 OPEN/entry 意图;不维护额外预留状态。
 
-        待成交数量按当前风险资本、size_mult 与名义上限重新派生,不受普通
-        风险池裁剪。决策/成交各沿用 capacity_mode 的成本单位;撤单、过期、
-        watch 转 pending 均直接反映在活跃订单集合中。撮合先移除当前订单,
-        再以真实成交数量另计一次,其余未处理订单仍可见。
+        传入 ``symbol`` 时按合约原生资产类别(``crypto`` vs ``rwa``)独立计量同向相关性桶与同类别反向对冲,
+        避免无相关的传统资产与加密资产互相占用同向槽位(全账户总风险仍由 ``portfolio_cap_frac`` 统一硬封顶)。
         """
         include_costs = self.risk_budget.includes_costs(moment)
         cb = self.risk_budget.cash_principal_basis
+        ac = capacity.asset_class_of(symbol, self.contracts) if symbol is not None else None
         used = capacity.outstanding_exposure(
             self.positions, self.last_mark, direction=direction,
+            asset_class=ac, contracts=self.contracts,
             taker_fee=self.taker_fee, slippage=self.slippage,
             cash_basis=cb).measure(include_costs=include_costs)
         if self.risk_budget.net_directional_hedge:
             opp_filled = capacity.outstanding_exposure(
                 self.positions, self.last_mark, direction=-direction,
+                asset_class=ac, contracts=self.contracts,
                 taker_fee=self.taker_fee, slippage=self.slippage,
                 cash_basis=cb).measure(include_costs=include_costs)
             used = max(0.0, used - opp_filled)
@@ -819,11 +827,13 @@ class Broker:
         entries.extend((od.symbol, od.direction, od.limit_price, od.invalid, od.meta)
                        for orders in self.resting.values() for od in orders
                        if od.role == "entry")
-        for symbol, d, price, stop, meta in entries:
+        for entry_sym, d, price, stop, meta in entries:
             if d != direction:
                 continue
+            if ac is not None and capacity.asset_class_of(entry_sym, self.contracts) != ac:
+                continue
             qty = self.qty_for_entry(
-                capital, price, stop, symbol, use_budget=False,
+                capital, price, stop, entry_sym, use_budget=False,
                 size_mult=float(meta.get("size_mult", 1.0) or 1.0),
                 notional_equity=equity, direction=d)
             used += capacity.delta_exposure(
@@ -850,7 +860,7 @@ class Broker:
             slippage=self.slippage,
             include_costs=self.risk_budget.includes_costs(moment))
         used = self.directional_usage(direction, moment=moment, capital=capital,
-                                      notional_equity=equity)
+                                      notional_equity=equity, symbol=symbol)
         return used + delta > frac * capital + 1e-9
 
     def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:

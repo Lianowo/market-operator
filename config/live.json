@@ -89,7 +89,15 @@
   },
   "universe": {
     "enabled": true,
-    "min_usdt_volume_24h": 5000000.0,
+    "crypto": {
+      "min_usdt_volume_24h": 3000000.0,
+      "capacity_multiplier": 1.0
+    },
+    "rwa": {
+      "min_usdt_volume_24h": 500000.0,
+      "capacity_multiplier": 0.5
+    },
+    "rwa_no_volume_filter": true,
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
