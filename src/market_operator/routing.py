@@ -210,6 +210,10 @@ class MarketRouter:
             lv.kind in (LevelKind.EQUAL, LevelKind.ORIGIN)
             or lv.prominence_2d > view.med_prominence_2d
         )
+        is_dominant_rej = (
+            lv.kind is LevelKind.ORIGIN
+            or lv.prominence_2d > view.med_prominence_2d
+        )
         ev_ex = float(ev.attrs.get("ex") or px)
         topo, _, _ = infer_2d_barrier_topology(px, view)
 
@@ -236,12 +240,16 @@ class MarketRouter:
         if eid == LEVEL_REJECTED:
             if lv.kind is LevelKind.FLIPPED:
                 return False
-            if bool(ev.attrs.get("swept")) and not is_dominant_2d:
+            if view.regime is Regime.TREND_DOWN and lv.kind is not LevelKind.ORIGIN:
+                return False
+            if bool(ev.attrs.get("swept")) and not is_dominant_rej:
                 return False
             if htf_naked_against:
                 return False
-            # 首次极性互换位(untested_flip)：专用于失衡突破后的顺势回踩确认，不在震荡箱体内部反复拉锯
+            # 首次极性互换位(untested_flip)：专用于失衡突破后的顺势回踩确认，且须具备真实二维突出度
             if lv.flipped:
+                if not is_dominant_rej:
+                    return False
                 if d > 0 and topo == BarrierTopology.IMBALANCE_UP:
                     return True
                 if d < 0 and topo == BarrierTopology.IMBALANCE_DOWN:
@@ -252,8 +260,11 @@ class MarketRouter:
                 return False
             if d < 0 and topo == BarrierTopology.IMBALANCE_UP:
                 return False
-            if topo in (BarrierTopology.IMBALANCE_UP, BarrierTopology.IMBALANCE_DOWN):
-                return is_dominant_2d
+            if topo in (BarrierTopology.IMBALANCE_UP, BarrierTopology.IMBALANCE_DOWN) or view.regime in (
+                Regime.TREND_UP,
+                Regime.TREND_DOWN,
+            ):
+                return is_dominant_rej
             return True
 
         if eid == BREAKOUT_ACCEPTED:

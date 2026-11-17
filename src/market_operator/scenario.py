@@ -42,7 +42,7 @@ COGNITION_TIMEFRAMES: tuple[str, ...] = ("4h", "1d")
 
 #: 认知周期 → 触发周期(秒;None = 该周期不做降档触发,直接用自身收盘)。
 DEFAULT_TRIGGER_SECONDS: dict[str, Optional[int]] = {
-    "4h": 3600, "12h": 7200, "1d": 14400,
+    "1h": 900, "2h": 1800, "4h": 3600, "12h": 7200, "1d": 14400,
 }
 
 #: 触发粒度(秒) → 行情粒度标签。行情层提供这五种原始/聚合粒度。
@@ -353,11 +353,16 @@ def build_frames(market: MarketData, settings: ScenarioSettings,
                     obs_tf_seconds=obs_seconds,
                     trigger_tf_seconds=eff_trig,
                 )
+            sym_exec_sec = (
+                execution_seconds
+                if execution_seconds in avail_trig
+                else min(avail_trig.keys())
+            )
             frame = build_campaign_frame(
                 market.cognition[(symbol, tf)],
                 (market.execution_frame[(symbol, tf)] if execution_seconds is None
-                 else avail_trig[execution_seconds]),
-                tf, mic_cog=trigger_cognition, execution_seconds=execution_seconds)
+                 else avail_trig[sym_exec_sec]),
+                tf, mic_cog=trigger_cognition, execution_seconds=sym_exec_sec)
             frames[frame.key] = frame
     return frames
 

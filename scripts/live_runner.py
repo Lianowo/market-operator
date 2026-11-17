@@ -806,11 +806,16 @@ class LiveRunner:
         return round(lo + step, place) if lo < px - 1e-12 else lo
 
     def current_risk_frac(self, equity: Optional[float] = None) -> float:
-        """阶梯动态复利:根据当前已实现净值自动匹配风险档位。"""
+        """阶梯动态复利:按历史最高已实现净值(High-Water Mark)单向降档匹配风险档位,禁止回撤期逆向跳回高档。"""
         eq = float(self.equity if equity is None else equity)
+        if equity is None:
+            hwm = max(eq, float(getattr(self, "peak_equity", eq) or eq))
+            self.peak_equity = hwm
+        else:
+            hwm = eq
         tiers = self.risk.get("dynamic_risk_tiers") or []
         for max_eq, rf in tiers:
-            if eq <= float(max_eq):
+            if hwm <= float(max_eq):
                 return float(rf)
         return float(self.risk["risk_frac"])
 
@@ -1212,8 +1217,9 @@ class LiveRunner:
             return {sym: self._fetch_trigger_bars(sym, want, seed_by_sym.get(sym))}
         out: dict[str, list] = {}
         max_workers = min(16, len(symbols))
+        sub_gran, sub_sec = self._sub_gran_and_seconds()
         trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
-        need_30m = (
+        need_sub = (
             self.mode == "live"
             and hasattr(self.client, "history_candles")
             and any(int(trig_map.get(tf) or 7200) < 7200 for tf in (self.cog_cfg.get("tf_list") or ()))
@@ -1222,9 +1228,9 @@ class LiveRunner:
 
         def _fetch_one(s: str) -> list:
             res_2h = self._fetch_trigger_bars(s, want, seed_by_sym.get(s))
-            if need_30m:
+            if need_sub:
                 try:
-                    self._fetch_trigger_bars(s, sub_want, gran="30m")
+                    self._fetch_trigger_bars(s, sub_want, gran=sub_gran)
                 except Exception:
                     pass
             return res_2h
@@ -1239,6 +1245,16 @@ class LiveRunner:
                     out[sym] = []
         return out
 
+    def _sub_gran_and_seconds(self) -> tuple[str, int]:
+        trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
+        tf_list = self.cog_cfg.get("tf_list") or ()
+        min_trig = min(
+            (int(trig_map[tf]) for tf in tf_list if trig_map.get(tf) is not None),
+            default=7200,
+        )
+        if min_trig <= 900:
+            return "15m", 900
+        return "30m", 1800
 
     def _min_cog_bars_for_tf(self) -> int:
         return max(30, int(self.cog_cfg.get("min_warmup_cog_bars", 60)))
@@ -1277,6 +1293,7 @@ class LiveRunner:
                 self.tg.send_alert(f"{symbol} 2H 序列缺口 {a[0]}→{b[0]},"
                                    f"暂不交易")
                 return None
+        sub_gran, sub_sec = ("15m", 900) if trig_s <= 900 else ("30m", 1800)
         if (
             trig_bars is None
             and trig_s < base_s
@@ -1284,12 +1301,12 @@ class LiveRunner:
             and hasattr(self.client, "history_candles")
         ):
             sub_want = max(520, (min_cog_bars + 5) * 8)
-            cand_30m = self._fetch_trigger_bars(symbol, sub_want, gran="30m")
-            if self._base_step_seconds(cand_30m, gran="30m") == 1800 and len(cand_30m) >= min_cog_bars * 4:
-                trig_bars = cand_30m
+            cand_sub = self._fetch_trigger_bars(symbol, sub_want, gran=sub_gran)
+            if self._base_step_seconds(cand_sub, gran=sub_gran) == sub_sec and len(cand_sub) >= min_cog_bars * 4:
+                trig_bars = cand_sub
         use_trig = trig_bars if trig_bars is not None else bars2h
         if trig_bars is not None:
-            trig_base_s = self._base_step_seconds(trig_bars, gran="30m")
+            trig_base_s = self._base_step_seconds(trig_bars, gran=sub_gran)
             for a, b in zip(trig_bars, trig_bars[1:]):
                 if b[0] - a[0] != trig_base_s * 1000:
                     use_trig = bars2h
@@ -1770,7 +1787,8 @@ class LiveRunner:
             if self.price_clock == "realtime":
                 self._manage_stops(now_ms)
         base_ms = self._base_step_seconds() * 1000
-        sub_ms = 1800 * 1000
+        sub_gran, sub_sec = self._sub_gran_and_seconds()
+        sub_ms = sub_sec * 1000
         sub_30m_by_sym: dict[str, list[CampaignState]] = {}
         base_2h_by_sym: dict[str, list[CampaignState]] = {}
         due_30m: dict[str, int] = {}
@@ -1780,7 +1798,7 @@ class LiveRunner:
                 sub_cs for (s2, _tf), sub_cs in sorted(self.extra_campaigns.items())
                 if s2 == sym
             ]
-            s_list = [c for c in all_cs if self._base_step_seconds(c.trig_bars) == 1800]
+            s_list = [c for c in all_cs if self._base_step_seconds(c.trig_bars) in (900, 1800)]
             b_list = [c for c in all_cs if self._base_step_seconds(c.trig_bars) == base_ms // 1000]
             if s_list:
                 sub_30m_by_sym[sym] = s_list
@@ -1799,7 +1817,7 @@ class LiveRunner:
             gran_base = self.cog_cfg["granularity"]
             with ThreadPoolExecutor(max_workers=12) as ex:
                 f30 = {
-                    ex.submit(self.client.history_candles, s, "30m", start_ms=st, limit=100): s
+                    ex.submit(self.client.history_candles, s, sub_gran, start_ms=st, limit=100): s
                     for s, st in due_30m.items()
                 }
                 fb = {
@@ -1842,7 +1860,7 @@ class LiveRunner:
                             self._advance(bc, now_ms, new_bars=new_bars, run_paper_fills=(idx_b == 0))
                         self._try_unlock_higher_tfs(sym, b_list[0].trig_bars)
                         self._save_cached_bars(sym, b_list[0].trig_bars)
-                # 2) 再推进下级细周期触发战役(如 4h->1h),此时可因果读取刚刚闭合的最新日线宏观结构视图!
+                # 2) 再推进下级细周期触发战役(如 4h->1h, 2h->30m, 1h->15m),此时可因果读取刚刚闭合的最新日线宏观结构视图!
                 sub_30m_list = sorted(
                     sub_30m_by_sym.get(sym) or [],
                     key=lambda c: -int(c.obs_tf_seconds),
@@ -1851,12 +1869,12 @@ class LiveRunner:
                     sub_new = (
                         pref_30m[sym]
                         if sym in pref_30m
-                        else self.client.history_candles(sym, "30m", start_ms=due_30m[sym], limit=100)
+                        else self.client.history_candles(sym, sub_gran, start_ms=due_30m[sym], limit=100)
                     )
                     if sub_new:
                         for sc in sub_30m_list:
                             self._advance(sc, now_ms, new_bars=sub_new, run_paper_fills=False)
-                        self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran="30m")
+                        self._save_cached_bars(sym, sub_30m_list[0].trig_bars, gran=sub_gran)
             except BitgetError as e:
                 self._api_note(e)
                 self.tg.send_alert(f"{sym} bar 推进异常:{str(e)[:120]}")
@@ -2145,11 +2163,13 @@ class LiveRunner:
                     f"{cs.symbol}({cs.tf_label}) 序列缺口 {cs.trig_bars[-1][0]} → "
                     f"{bar[0]};认知帧重装配(持仓事实保留)")
                 sub_trig = None
-                if base_ms == 1800 * 1000 and self.mode == "live" and hasattr(self.client, "history_candles"):
+                if base_ms in (900 * 1000, 1800 * 1000) and self.mode == "live" and hasattr(self.client, "history_candles"):
+                    s_gran = "15m" if base_ms == 900 * 1000 else "30m"
+                    s_sec = base_ms // 1000
                     sub_want = max(520, (self._min_cog_bars_for_tf() + 5) * 8)
-                    cand_30m = self._fetch_trigger_bars(cs.symbol, sub_want, gran="30m")
-                    if self._base_step_seconds(cand_30m, gran="30m") == 1800:
-                        sub_trig = cand_30m
+                    cand_sub = self._fetch_trigger_bars(cs.symbol, sub_want, gran=s_gran)
+                    if self._base_step_seconds(cand_sub, gran=s_gran) == s_sec:
+                        sub_trig = cand_sub
                 fresh = self._build_campaign(cs.symbol, cs.tf_label, trig_bars=sub_trig)
                 if fresh is None and sub_trig is not None:
                     fresh = self._build_campaign(cs.symbol, cs.tf_label)

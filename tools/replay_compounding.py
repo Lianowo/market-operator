@@ -174,6 +174,7 @@ def main() -> int:
             funding_rates=funding, slippage_by_symbol=costs.slippage_by_symbol,
             contracts=runner.contracts, params=settings.structure, n_fill=settings.n_fill,
             portfolio_cap_frac=risk["portfolio_cap_frac"],
+            directional_cap_frac=risk.get("directional_cap_frac"),
             tf_cap_by_tf=risk["tf_cap_by_tf"], dynamic_risk_tiers=risk["dynamic_risk_tiers"],
             capacity_mode=settings.capacity_mode, arm=settings.arm,
             router_params=settings.router, router_params_by_tf=dict(settings.router_by_timeframe),

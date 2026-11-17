@@ -627,12 +627,14 @@ class Broker:
         pos.invalid = float(invalid)
 
     def current_risk_frac(self) -> float:
-        """基于已落袋本金(self.cash)的阶梯动态单笔风险率;未配置时返回静态 self.risk_frac。"""
+        """基于历史最高已落袋本金(High-Water Mark)的单向降档阶梯动态单笔风险率;禁止回撤期逆向升档加仓。"""
         if not self.dynamic_risk_tiers:
             return self.risk_frac
-        realized = self.cash
+        realized = float(self.cash)
+        hwm = max(realized, float(getattr(self, "peak_cash", realized) or realized))
+        self.peak_cash = hwm
         for max_cash, r_frac in self.dynamic_risk_tiers:
-            if realized <= max_cash:
+            if hwm <= max_cash:
                 return r_frac
         return self.dynamic_risk_tiers[-1][1]
 
