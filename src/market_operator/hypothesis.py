@@ -112,6 +112,15 @@ class StructureView:
     def levels(self) -> tuple[Level, ...]:
         return self.zones
 
+    @property
+    def active_levels(self) -> tuple[Level, ...]:
+        return tuple(z for z in self.zones if z.is_active)
+
+    @property
+    def med_prominence_2d(self) -> float:
+        proms = sorted(float(z.prominence_2d) for z in self.zones if z.is_active)
+        return proms[len(proms) // 2] if proms else 0.0
+
 
 @dataclass(frozen=True)
 class Hypothesis:

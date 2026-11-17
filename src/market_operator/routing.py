@@ -33,9 +33,56 @@ from .hypothesis import (
     StructureView,
     build_hypothesis,
     entry_contract_error,
+    entry_cost_error,
 )
-from .level import Level, LevelKind, LevelRole, nearest_opposing_level
-from .structure import Regime, _bar_parts
+from .level import Level, LevelKind, LevelRole, LevelSide, nearest_opposing_level
+from .structure import BarrierTopology, Regime, _bar_parts
+
+
+def infer_2d_barrier_topology(
+    cur_price: float,
+    view: StructureView,
+    probe_price: Optional[float] = None,
+) -> tuple[BarrierTopology, Level | None, Level | None]:
+    """零参数二维势垒包络与失衡状态机。"""
+    dominant_levels = [
+        lv for lv in view.active_levels
+        if lv.kind in (LevelKind.EQUAL, LevelKind.ORIGIN)
+        or lv.prominence_2d > view.med_prominence_2d
+    ]
+
+    supports = [
+        lv for lv in dominant_levels
+        if lv.side == LevelSide.SUPPORT and lv.band_lo <= cur_price
+    ]
+    resistances = [
+        lv for lv in dominant_levels
+        if lv.side == LevelSide.RESISTANCE and lv.band_hi >= cur_price
+    ]
+
+    nearest_sup = max(supports, key=lambda x: x.band_hi) if supports else None
+    nearest_res = min(resistances, key=lambda x: x.band_lo) if resistances else None
+
+    # 1. 若显式传入试探极值(如高周期墙面对决校验)且打入主导势垒结构带 [band_lo, band_hi] 内，进入墙面对决态
+    if probe_price is not None:
+        px_lo, px_hi = min(cur_price, probe_price), max(cur_price, probe_price)
+        for lv in dominant_levels:
+            if lv.band_lo <= px_hi and px_lo <= lv.band_hi:
+                return BarrierTopology.BARRIER_CONTEST, nearest_sup, nearest_res
+
+    # 2. 净空失衡推进态：本周期处于单边失衡推进
+    if view.regime is Regime.TREND_UP:
+        return BarrierTopology.IMBALANCE_UP, nearest_sup, nearest_res
+    if view.regime is Regime.TREND_DOWN:
+        return BarrierTopology.IMBALANCE_DOWN, nearest_sup, nearest_res
+
+    # 3. 若价格当前正处于任意主导势垒的结构带 [band_lo, band_hi] 内，进入墙面对决态
+    for lv in dominant_levels:
+        if lv.band_lo <= cur_price <= lv.band_hi:
+            return BarrierTopology.BARRIER_CONTEST, nearest_sup, nearest_res
+
+    # 4. 结构包络域（支持双向水平位本位博弈）
+    return BarrierTopology.ENCLOSED_BALANCE, nearest_sup, nearest_res
 
 ROUTE_BREAKOUT_ACCEPTED = "breakout_accepted_market"
 ROUTE_LEVEL_REJECTED = "level_rejected_market"
@@ -145,42 +192,83 @@ class MarketRouter:
             elif lv.role is LevelRole.RESISTANCE and h < lv.band_lo - 3.0 * w:
                 self._consumed_claims.pop(cid, None)
 
-    def _auction_aligned(self, ev: MarketEvent, view: StructureView) -> bool:
-        """统一二维 (t, P) 时空场对齐公理(零魔法常数、零人工触碰次数歧视、跨任何市场普适):
-        1. 二维势垒显著度(is_dominant_2d):
-           不靠死板的一维触碰计数歧视 1-touch 大顶底,直接读取该水平势垒在二维画布上的【留白统治面积 prominence_2d】:
-           凡跨时间共线势垒(EQUAL / ORIGIN)或二维留白面积高于画布当前中位数的显著势垒,即使仅触碰 1 次亦具备真实流动性池,允许清扫反转(SFP/2B);
-           唯有二维留白面积低于等于中位数的局部小褶皱被刺穿(swept)时,属顺势推平而非清扫陷阱。
-        2. 二维场相空间匹配:
-           - 背景价值盒均衡与极值折返域(RANGE / TRANSITION):只做边界拒绝回归(LEVEL_REJECTED);
-           - 净空失衡域(TREND_UP / TREND_DOWN):顺应失衡流向执行显著二维台阶拒绝或蓄势突破。
-        """
-        lv: Optional[Level] = ev.attrs.get("level") or ev.attrs.get("zone")
-        if lv is None or lv.kind is LevelKind.FLIPPED:
+    def _auction_aligned(
+        self,
+        ev: MarketEvent,
+        view: StructureView,
+        htf_views: Optional[Sequence[StructureView]] = None,
+        cur_price: Optional[float] = None,
+    ) -> bool:
+        lv: Optional[Level] = ev.level
+        if lv is None:
             return False
-        d = int(ev.direction)
-        reg = view.regime
         eid = canonical_event_id(ev.id)
+        d = int(ev.direction)
+        px = float(cur_price) if cur_price is not None else float(ev.price)
 
-        proms = sorted(float(z.prominence_2d) for z in view.zones) if view.zones else []
-        med_prom = proms[len(proms) // 2] if proms else 0.0
         is_dominant_2d = (
             lv.kind in (LevelKind.EQUAL, LevelKind.ORIGIN)
-            or float(lv.prominence_2d) > med_prom
+            or lv.prominence_2d > view.med_prominence_2d
         )
+        ev_ex = float(ev.attrs.get("ex") or px)
+        topo, _, _ = infer_2d_barrier_topology(px, view)
 
-        if eid == LEVEL_REJECTED and bool(ev.attrs.get("swept")) and not is_dominant_2d:
-            return False
+        # 检查高周期(1D)是否处于无墙保护的反向单边失衡真空中（防真接飞刀）
+        htf_naked_against = False
+        if htf_views:
+            want_role = LevelSide.RESISTANCE if d < 0 else LevelSide.SUPPORT
+            for hv in htf_views:
+                backed_by_htf_wall = False
+                if eid == LEVEL_REJECTED:
+                    for hlv in hv.active_levels:
+                        if hlv.side is want_role:
+                            if (d < 0 and ev_ex >= hlv.band_lo and px <= hlv.band_hi) or (
+                                d > 0 and ev_ex <= hlv.band_hi and px >= hlv.band_lo
+                            ):
+                                backed_by_htf_wall = True
+                                break
+                h_topo, _, _ = infer_2d_barrier_topology(px, hv)
+                if d > 0 and h_topo == BarrierTopology.IMBALANCE_DOWN and not backed_by_htf_wall:
+                    htf_naked_against = True
+                elif d < 0 and h_topo == BarrierTopology.IMBALANCE_UP and not backed_by_htf_wall:
+                    htf_naked_against = True
 
-        if reg in (Regime.RANGE, Regime.TRANSITION):
-            return eid == LEVEL_REJECTED
+        if eid == LEVEL_REJECTED:
+            if lv.kind is LevelKind.FLIPPED:
+                return False
+            if bool(ev.attrs.get("swept")) and not is_dominant_2d:
+                return False
+            if htf_naked_against:
+                return False
+            # 首次极性互换位(untested_flip)：专用于失衡突破后的顺势回踩确认，不在震荡箱体内部反复拉锯
+            if lv.flipped:
+                if d > 0 and topo == BarrierTopology.IMBALANCE_UP:
+                    return True
+                if d < 0 and topo == BarrierTopology.IMBALANCE_DOWN:
+                    return True
+                return False
+            # 本周期非反向单边失衡扩张：包络域允许所有未清扫失格拒绝，顺势失衡允许主导水平位拒绝
+            if d > 0 and topo == BarrierTopology.IMBALANCE_DOWN:
+                return False
+            if d < 0 and topo == BarrierTopology.IMBALANCE_UP:
+                return False
+            if topo in (BarrierTopology.IMBALANCE_UP, BarrierTopology.IMBALANCE_DOWN):
+                return is_dominant_2d
+            return True
 
-        with_trend = (reg is Regime.TREND_UP and d > 0) or (reg is Regime.TREND_DOWN and d < 0)
-        if not with_trend:
-            return False
         if eid == BREAKOUT_ACCEPTED:
-            return lv.kind in (LevelKind.EQUAL, LevelKind.ORIGIN)
-        return is_dominant_2d
+            if lv.kind is LevelKind.FLIPPED or lv.flipped:
+                return False
+            # 顺势二维显著势垒突破：统一允许具备 is_dominant_2d 的结构位，禁止逆高周期大势突破
+            if not is_dominant_2d or htf_naked_against:
+                return False
+            if d > 0 and topo != BarrierTopology.IMBALANCE_UP:
+                return False
+            if d < 0 and topo != BarrierTopology.IMBALANCE_DOWN:
+                return False
+            return True
+
+        return False
 
     def _blocked_by_htf_macro(
         self,
@@ -191,42 +279,29 @@ class MarketRouter:
         risk: float,
         htf_views: Sequence[StructureView],
     ) -> Optional[str]:
-        """自顶向下(Top-Down)二维空间势垒共振治理(既不半空螳臂当车,也不错失日线天花板摸顶与地板抄底):
-        1. 高周期趋势共振与顶底反转解锁:
-           - 当高周期(如 1D)处于单边趋势且价格悬在半空无遮挡区时,严禁逆势开仓;
-           - 当价格直接打入或清扫了高周期自身活跃的反向大水平势垒 [band_lo, band_hi](脚踏日线天花板/地板共振区)时,
-             自动解锁 LEVEL_REJECTED 极值摸顶/抄底!
-        2. 高周期极值折返期禁追突破:高周期处于折返期(TRANSITION)时,禁止追高杀跌做突破(BREAKOUT_ACCEPTED)。
-        3. 高周期前方阻碍墙:顺势正前方不足 min_rr * Risk 处横亘高周期反向势垒时,拒绝多在天花板、空在地板!
-        """
-        if not htf_views:
+        if not self.params.htf_wall_check or not htf_views or risk <= 0.0:
             return None
-        eid = canonical_event_id(ev.id)
-        ev_ex = float(ev.attrs.get("ex") or entry_ref)
         for hv in htf_views:
-            against_htf = (hv.regime is Regime.TREND_UP and direction < 0) or (
-                hv.regime is Regime.TREND_DOWN and direction > 0
+            h_topo, _, _ = infer_2d_barrier_topology(entry_ref, hv)
+            # trend_weak_wall：当交易方向与高周期净空失衡一致，或高周期已进入突破顺势段时，
+            # 前方高周期 SWING/EQUAL 墙视为顺势磁吸目标，仅保留 1.0R 基本防撞墙校验
+            with_htf_imbalance = (
+                (direction > 0 and h_topo == BarrierTopology.IMBALANCE_UP)
+                or (direction < 0 and h_topo == BarrierTopology.IMBALANCE_DOWN)
+                or (direction > 0 and hv.regime == Regime.TREND_UP)
+                or (direction > 0 and hv.regime == Regime.TREND_DOWN and False)
+                or (direction < 0 and hv.regime == Regime.TREND_DOWN)
             )
-            if against_htf:
-                backed_by_htf_wall = False
-                if eid == LEVEL_REJECTED:
-                    want_role = LevelRole.RESISTANCE if direction < 0 else LevelRole.SUPPORT
-                    for hlv in hv.zones:
-                        if hlv.is_active and hlv.role is want_role:
-                            if (direction < 0 and ev_ex >= hlv.band_lo) or (
-                                direction > 0 and ev_ex <= hlv.band_hi
-                            ):
-                                backed_by_htf_wall = True
-                                break
-                if not backed_by_htf_wall:
-                    return "htf_counter_trend"
-            if hv.regime is Regime.TRANSITION and eid == BREAKOUT_ACCEPTED:
-                return "htf_transition_breakout"
-            if self.params.htf_wall_check and risk > 0.0:
-                opp = nearest_opposing_level(hv.zones, direction, entry_ref)
-                if opp is not None:
-                    room = direction * (opp.neck - entry_ref)
-                    if room < self.params.min_rr * risk:
+            for h_lv in hv.active_levels:
+                if direction > 0 and h_lv.side == LevelSide.RESISTANCE and h_lv.band_lo > entry_ref:
+                    room = h_lv.band_lo - entry_ref
+                    req = risk if with_htf_imbalance else (self.params.min_rr * risk)
+                    if room < req:
+                        return "htf_wall"
+                elif direction < 0 and h_lv.side == LevelSide.SUPPORT and h_lv.band_hi < entry_ref:
+                    room = entry_ref - h_lv.band_hi
+                    req = risk if with_htf_imbalance else (self.params.min_rr * risk)
+                    if room < req:
                         return "htf_wall"
         return None
 
@@ -268,7 +343,7 @@ class MarketRouter:
                 self._inc("skipped_duplicate_claim")
                 continue
 
-            if not self._auction_aligned(ev, view):
+            if not self._auction_aligned(ev, view, htf_views=htf_views, cur_price=c):
                 self._inc("rejected_counter_trend")
                 continue
 

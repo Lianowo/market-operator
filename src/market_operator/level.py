@@ -35,6 +35,9 @@ class LevelRole(str, Enum):
     RESISTANCE = "resistance"
 
 
+LevelSide = LevelRole
+
+
 class LevelKind(str, Enum):
     SWING = "SWING"        # 高二维留白统治面积的单波段边界
     EQUAL = "EQUAL"        # 同极性多顶点水平共线颈线(EQH / EQL)
@@ -69,18 +72,40 @@ class Level:
     departed: bool = True
     prominence_2d: float = 0.0
     vacuum_ahead: float = 1.0  # 该势垒优势侧邻域的二维净空通畅度
+    flipped: bool = False
+    flip_retested: bool = False
+    _band_lo: Optional[float] = None
+    _band_hi: Optional[float] = None
+    _probe_lo: Optional[float] = None
+    _probe_hi: Optional[float] = None
 
     @property
     def price(self) -> float:
         return self.extreme
 
     @property
+    def side(self) -> LevelRole:
+        return self.role
+
+    @side.setter
+    def side(self, value: LevelRole) -> None:
+        self.role = value
+
+    @property
     def band_lo(self) -> float:
-        return min(self.extreme, self.neck)
+        return float(self._band_lo) if self._band_lo is not None else min(self.extreme, self.neck)
 
     @property
     def band_hi(self) -> float:
-        return max(self.extreme, self.neck)
+        return float(self._band_hi) if self._band_hi is not None else max(self.extreme, self.neck)
+
+    @property
+    def probe_lo(self) -> float:
+        return float(self._probe_lo) if self._probe_lo is not None else self.band_lo
+
+    @property
+    def probe_hi(self) -> float:
+        return float(self._probe_hi) if self._probe_hi is not None else self.band_hi
 
     @property
     def inner(self) -> float:
@@ -132,6 +157,12 @@ class Level:
             departed=self.departed,
             prominence_2d=self.prominence_2d,
             vacuum_ahead=self.vacuum_ahead,
+            flipped=self.flipped,
+            flip_retested=self.flip_retested,
+            _band_lo=self._band_lo,
+            _band_hi=self._band_hi,
+            _probe_lo=self._probe_lo,
+            _probe_hi=self._probe_hi,
         )
 
 
@@ -204,7 +235,7 @@ def _extract_subcanvas_vertices(
                 tw = 1.0 / (1.0 + ((W - 1) - i) / denom_t)
                 area = ((r_cross - l_cross) / W) * (dp / p_span) * tw
                 nk = max(float(B_hi[i]), hi_i - px_unit)
-                verts.append((global_offset + i, "PEAK", hi_i, nk, area, i))
+                verts.append((global_offset + i, "PEAK", hi_i, nk, area, i, float(B_hi[i])))
 
     tr_mask = (L[1 : W - 1] <= L[0 : W - 2]) & (L[1 : W - 1] < L[2:W])
     for idx_m in np.flatnonzero(tr_mask):
@@ -222,7 +253,7 @@ def _extract_subcanvas_vertices(
                 tw = 1.0 / (1.0 + ((W - 1) - i) / denom_t)
                 area = ((r_cross - l_cross) / W) * (dp / p_span) * tw
                 nk = min(float(B_lo[i]), lo_i + px_unit)
-                verts.append((global_offset + i, "TROUGH", lo_i, nk, area, i))
+                verts.append((global_offset + i, "TROUGH", lo_i, nk, area, i, float(B_lo[i])))
     return verts
 
 
@@ -235,6 +266,7 @@ class Canvas2DLevelScanner:
         self.canvas_bars = max(32, int(canvas_bars))
         self.max_active_per_side = max(3, int(max_active_per_side))
         self._registry: dict[tuple[int, str], Level] = {}
+        self._flip_retested_anchors: set[int] = set()
         self._active: list[Level] = []
         self._regime_2d: str = "range"
         self._imbalance_strength: float = 0.0
@@ -362,11 +394,11 @@ class Canvas2DLevelScanner:
                 H[near_off:], L[near_off:], B_lo[near_off:], B_hi[near_off:], start + near_off, px_unit
             )
             foveal_verts = [
-                (g_i, vk, ex, nk, sc, near_off + li)
-                for (g_i, vk, ex, nk, sc, li) in raw_foveal
+                (g_i, vk, ex, nk, sc, near_off + li, bd)
+                for (g_i, vk, ex, nk, sc, li, bd) in raw_foveal
             ]
 
-        by_gidx: dict[tuple[int, str], tuple[int, str, float, float, float, int]] = {}
+        by_gidx: dict[tuple[int, str], tuple] = {}
         for v in macro_verts + foveal_verts:
             key = (v[0], v[1])
             prev = by_gidx.get(key)
@@ -383,7 +415,7 @@ class Canvas2DLevelScanner:
 
         clusters: list[dict] = []
         for v in verts:
-            g_idx, v_kind, ext, neck, area, local_i = v
+            g_idx, v_kind, ext, neck, area, local_i, _bd = v
             e_n, n_n = normalize_band(
                 LevelRole.RESISTANCE if v_kind == "PEAK" else LevelRole.SUPPORT, ext, neck
             )
@@ -466,11 +498,13 @@ class Canvas2DLevelScanner:
                     continue
 
             if last_i + 1 < W:
-                if int(np.sum((B_lo[last_i + 1 :] < lo) & (B_hi[last_i + 1 :] > hi))) >= 1:
+                is_eq_or_origin = (touches >= 2) or (score >= 0.75 * max_score and max_score > 0.0)
+                pierce_cnt = int(np.sum((B_lo[last_i + 1 :] < lo) & (B_hi[last_i + 1 :] > hi)))
+                if pierce_cnt >= (2 if is_eq_or_origin else 1):
                     continue
             self._append_level_candidate(
-                cl, touches, score, max_score, lo, hi, mid, last_i, W, H, L, C, cur_c,
-                t_now, prev_by_anchor, sup_cands, res_cands, transitions,
+                cl, touches, score, max_score, lo, hi, mid, last_i, W, H, L, C, cur_c, px_unit,
+                t_now, prev_by_anchor, sup_cands, res_cands, transitions, pierce_cnt if last_i + 1 < W else 0,
             )
 
         sup_cands.sort(key=lambda z: abs(cur_c - z.inner))
@@ -493,11 +527,13 @@ class Canvas2DLevelScanner:
         L: np.ndarray,
         C: np.ndarray,
         cur_c: float,
+        px_unit: float,
         t_now: int,
         prev_by_anchor: dict[int, Level],
         sup_cands: list[Level],
         res_cands: list[Level],
         transitions: list[tuple[str, Level, Optional[Level]]],
+        pierce_cnt: int = 0,
     ) -> None:
         anchor_idx = int(cl["anchor_idx"])
         prev_lv = prev_by_anchor.get(anchor_idx)
@@ -513,6 +549,29 @@ class Canvas2DLevelScanner:
                 prev_c = float(C[-2]) if W >= 2 else cur_c
                 role = LevelRole.SUPPORT if prev_c >= mid else LevelRole.RESISTANCE
 
+        # 还原 [body, extreme] 真实二维结构带
+        v_anchor = cl["verts"][0]
+        if role is LevelRole.RESISTANCE:
+            band_hi = max(max(v[2], v[6]) for v in cl["verts"])
+            band_lo = min(min(v[2], v[6]) for v in cl["verts"])
+            if band_hi <= band_lo:
+                band_lo = band_hi - px_unit
+            v_ext = max(cl["verts"], key=lambda v: max(v[2], v[6]))
+            probe_hi = band_hi
+            probe_lo = min(v_anchor[2], v_anchor[6], v_ext[2], v_ext[6])
+            if probe_hi <= probe_lo:
+                probe_lo = probe_hi - px_unit
+        else:
+            band_lo = min(min(v[2], v[6]) for v in cl["verts"])
+            band_hi = max(max(v[2], v[6]) for v in cl["verts"])
+            if band_hi <= band_lo:
+                band_hi = band_lo + px_unit
+            v_ext = min(cl["verts"], key=lambda v: min(v[2], v[6]))
+            probe_lo = band_lo
+            probe_hi = max(v_anchor[2], v_anchor[6], v_ext[2], v_ext[6])
+            if probe_hi <= probe_lo:
+                probe_hi = probe_lo + px_unit
+
         target_pool = sup_cands if role is LevelRole.SUPPORT else res_cands
         cand_neck = hi if role is LevelRole.SUPPORT else lo
         if any(not self._has_saddle_void_between(ex_c.neck, cand_neck, L, H) for ex_c in target_pool):
@@ -522,11 +581,38 @@ class Canvas2DLevelScanner:
         trough_idxs = [v[5] for v in cl["verts"] if v[1] == "TROUGH"]
         has_peaks = bool(peak_idxs)
         has_troughs = bool(trough_idxs)
+        is_eq_or_origin = (touches >= 2) or (score >= 0.75 * max_score and max_score > 0.0)
         pure_cross_flip = (
             (role is LevelRole.SUPPORT and has_peaks and not has_troughs)
             or (role is LevelRole.RESISTANCE and has_troughs and not has_peaks)
         )
+        untested_flip = False
         if pure_cross_flip:
+            if not is_eq_or_origin or anchor_idx in self._flip_retested_anchors:
+                return
+            after_c = C[last_i + 1 :]
+            if role is LevelRole.SUPPORT:
+                if not (cur_c > band_hi):
+                    return
+                brks = np.flatnonzero(after_c > band_hi)
+                if len(brks) == 0:
+                    return
+                b0 = int(brks[0])
+                if np.any(after_c[b0 + 1 :] < band_lo):
+                    self._flip_retested_anchors.add(anchor_idx)
+                    return
+            else:
+                if not (cur_c < band_lo):
+                    return
+                brks = np.flatnonzero(after_c < band_lo)
+                if len(brks) == 0:
+                    return
+                b0 = int(brks[0])
+                if np.any(after_c[b0 + 1 :] > band_hi):
+                    self._flip_retested_anchors.add(anchor_idx)
+                    return
+            untested_flip = True
+        elif pierce_cnt >= 1:
             return
 
         is_flipped = False
@@ -543,33 +629,48 @@ class Canvas2DLevelScanner:
         if is_flipped:
             kind, state, flip_cnt = LevelKind.FLIPPED, LevelState.FLIPPED, 1
         elif touches >= 2:
-            kind, state, flip_cnt = LevelKind.EQUAL, LevelState.TESTED, 0
+            kind = LevelKind.EQUAL
+            state = LevelState.FLIPPED if untested_flip else LevelState.TESTED
+            flip_cnt = 1 if untested_flip else 0
         elif score >= 0.75 * max_score and max_score > 0.0:
-            kind, state, flip_cnt = LevelKind.ORIGIN, LevelState.FRESH, 0
+            kind = LevelKind.ORIGIN
+            state = LevelState.FLIPPED if untested_flip else LevelState.FRESH
+            flip_cnt = 1 if untested_flip else 0
         else:
             kind, state, flip_cnt = LevelKind.SWING, LevelState.FRESH, 0
 
         ext = lo if role is LevelRole.SUPPORT else hi
         neck = hi if role is LevelRole.SUPPORT else lo
-        departed = (
-            bool(np.any(L[last_i + 1 :] > hi) if role is LevelRole.SUPPORT else np.any(H[last_i + 1 :] < lo))
-            if (last_i + 1 < W)
-            else False
-        )
+        if untested_flip:
+            departed = True
+        else:
+            departed = (
+                bool(np.any(L[last_i + 1 :] > hi) if role is LevelRole.SUPPORT else np.any(H[last_i + 1 :] < lo))
+                if (last_i + 1 < W)
+                else False
+            )
         vac = self.path_vacuum_ratio(neck, cur_c)
 
         reg_key = (anchor_idx, role.value)
         existing = self._registry.get(reg_key)
         if existing is not None:
+            if existing.flipped and existing.flip_retested:
+                self._flip_retested_anchors.add(anchor_idx)
+                return
             existing.kind = kind
             existing.state = state
             existing.extreme = ext
             existing.neck = neck
+            existing._band_lo = band_lo
+            existing._band_hi = band_hi
+            existing._probe_lo = probe_lo
+            existing._probe_hi = probe_hi
             existing.touches = touches
             existing.flip_count = flip_cnt
             existing.departed = departed
             existing.prominence_2d = score
             existing.vacuum_ahead = vac
+            existing.flipped = untested_flip or is_flipped
             existing.last_change_known = t_now
             lv_obj = existing
         else:
@@ -590,6 +691,12 @@ class Canvas2DLevelScanner:
                 departed=departed,
                 prominence_2d=score,
                 vacuum_ahead=vac,
+                flipped=untested_flip or is_flipped,
+                flip_retested=False,
+                _band_lo=band_lo,
+                _band_hi=band_hi,
+                _probe_lo=probe_lo,
+                _probe_hi=probe_hi,
             )
             self._registry[reg_key] = lv_obj
 

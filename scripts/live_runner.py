@@ -2710,7 +2710,12 @@ class LiveRunner:
             if route_events:
                 view = StructureView(
                     regime=s.regime(), zones=s.levels, atr=atr,
-                    pivots=s.pivots[-self.params.range_max_pivots:])
+                    pivots=s.pivots[-self.params.range_max_pivots:],
+                    macro_imbalance=s.macro_imbalance(),
+                    tf_hours=int(cs.obs_tf_seconds // 3600),
+                    imbalance_strength=s.imbalance_strength(),
+                    dollar_volume=s.dollar_volume(),
+                )
                 self._route_step(cs, atr, route_events, view, mic=False)
 
     def _route_step(self, cs: CampaignState, atr: float, events: list, view,
@@ -2744,6 +2749,8 @@ class LiveRunner:
                     pivots=(),
                     macro_imbalance=os_st.macro_imbalance(),
                     tf_hours=int(ocs.obs_tf_seconds // 3600),
+                    imbalance_strength=os_st.imbalance_strength(),
+                    dollar_volume=os_st.dollar_volume(),
                 ))
             htf_views = tuple(htf_list)
         my_rwa = self._is_rwa(sym)

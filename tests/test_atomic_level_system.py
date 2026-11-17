@@ -140,9 +140,9 @@ def test_breakout_requires_tight_buildup_and_two_step_hold() -> None:
     assert len(ev_trap) == 1 and ev_trap[0].id == LEVEL_REJECTED and ev_trap[0].direction == -1
 
     eng_ok = LevelAuctionEngine()
-    b2_hold = (11000, 101.3, 102.2, 101.1, 102.0, 10.0)
-    eng_ok.step(bar_index=6, bar=b1, prev_bar=b0, recent_bars=[b0], active_levels=[res], atr=2.0, k_bm=0.1)
-    ev_ok = eng_ok.step(bar_index=7, bar=b2_hold, prev_bar=b1, recent_bars=[b0, b1], active_levels=[res], atr=2.0, k_bm=0.1)
+    b0_absorb = (9500, 99.8, 100.6, 99.7, 100.4, 10.0)
+    assert eng_ok.step(bar_index=5, bar=b0_absorb, prev_bar=b0, recent_bars=[b0], active_levels=[res], atr=2.0, k_bm=0.1) == []
+    ev_ok = eng_ok.step(bar_index=6, bar=b1, prev_bar=b0_absorb, recent_bars=[b0, b0_absorb], active_levels=[res], atr=2.0, k_bm=0.1)
     assert len(ev_ok) == 1
     assert ev_ok[0].id == BREAKOUT_ACCEPTED
 

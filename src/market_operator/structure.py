@@ -109,6 +109,13 @@ class Regime(str, Enum):
     TRANSITION = "transition"
 
 
+class BarrierTopology(str, Enum):
+    ENCLOSED_BALANCE = "ENCLOSED_BALANCE"
+    IMBALANCE_UP = "IMBALANCE_UP"
+    IMBALANCE_DOWN = "IMBALANCE_DOWN"
+    BARRIER_CONTEST = "BARRIER_CONTEST"
+
+
 class MarketStructure:
     """逐收盘 K 线因果推进的二维 (t, P) 空间层析结构地图。"""
 

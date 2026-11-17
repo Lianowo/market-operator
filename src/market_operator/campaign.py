@@ -792,6 +792,11 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
                 if idx < len(getattr(hf.cog, "macro_imbalances", ()))
                 else 0
             )
+            imb_str = (
+                float(hf.cog.imbalance_strengths[idx])
+                if idx < len(getattr(hf.cog, "imbalance_strengths", ()))
+                else (vw.imbalance_strength if vw is not None else 0.0)
+            )
             out.append(
                 StructureView(
                     regime=(vw.regime if vw is not None else hf.cog.regimes[idx]),
@@ -800,6 +805,7 @@ def _htf_views_for(st: _CampaignState, states: Optional[dict], close_moment_ms: 
                     pivots=(vw.pivots if vw is not None else ()),
                     macro_imbalance=m_imb,
                     tf_hours=hf.tf_hours,
+                    imbalance_strength=imb_str,
                 )
             )
     return tuple(out)
