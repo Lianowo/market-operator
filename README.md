@@ -101,6 +101,23 @@ python research/rounds/v5/run_backtest_v5.py
 python research/rounds/v6/run_backtest_v6.py   # v6 A/B 双臂(复现判选)
 ```
 
+## 换机 / 首次部署(只配交易所与 Telegram)
+
+```bash
+git clone <repo> && cd market-operator
+# config/secrets.env 只放两组键:BITGET_* 与 TELEGRAM_*
+python scripts/mo.py bootstrap --update
+```
+
+`bootstrap` 自动完成:布局决策(全新主机 → portable)→ 依赖安装(`pip install -e .`,含
+`tzdata`)→ 自检(含时区库与会话日历可加载)→ **注册 4 条计划任务**(看护/存储/日历/
+资金费)→ 启动看护与 TG → 暖机 → 交易所对账。
+
+所有运行态数据都在目标机器本地生成、不入库:`runtime/live/*`、`data/calendars/assignments.json`
+(缺失时按 `weekday_only` 兜底,每日任务会自动补齐)、`config/paths.json`(布局标记)。
+人工只需维护交易所与 Telegram 凭证;需要强制某个合约的时段时,再写
+`data/calendars/overrides.json`。
+
 ## 运维台 `mo`(跨平台一条命令)
 
 `scripts/mo.py`(等价 `python -m market_operator`,装包后直接 `mo`)把启停 / 自检 /

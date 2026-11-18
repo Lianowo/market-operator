@@ -3203,7 +3203,10 @@ class LiveRunner:
             eval_bar = trigger_bar if trigger_bar is not None else (cs.trig_bars[-1] if mic and cs.trig_bars else (cs.cog_bars[-1] if cs.cog_bars else None))
             hist = None
             if eval_bar is not None:
-                hist = [b for b in (cs.trig_bars or ())[-400:]
+                # 与回放同粒度:mic 决策用触发帧(2H),认知决策用认知帧(4H/1D);
+                # 250 根 ≈ 同一小时桶有 ≥20 个样本,且两侧窗口完全一致(parity)。
+                src_bars = cs.trig_bars if mic else cs.cog_bars
+                hist = [b for b in (src_bars or ())[-250:]
                         if len(b) >= 6 and int(b[0]) < int(eval_bar[0])]
             block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar,
                                            symbol=sym, history=hist)

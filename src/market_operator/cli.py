@@ -47,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-warmup", action="store_true")
     p.add_argument("--no-exchange", action="store_true")
     p.add_argument("--no-tg", action="store_true", help="不启动 Telegram 机器人")
+    p.add_argument("--no-tasks", action="store_true",
+                   help="不注册/刷新计划任务(默认自动注册:看护/存储/日历/资金费)")
     p.add_argument("--tg-wait", type=float, default=10.0)
     p.add_argument("--force", action="store_true", help="自检失败也继续")
     p.add_argument("--bars", type=int, default=300)
@@ -124,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include-data", action="store_true")
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    _add_json(p)
+
+    p = sub.add_parser("tasks", help="注册/刷新计划任务(看护/存储/日历/资金费)")
     _add_json(p)
 
     p = sub.add_parser("paths", help="打印目录布局与占用")
@@ -340,7 +345,7 @@ def cmd_bootstrap(args, cfg: dict) -> int:
 
     doc = ops.doctor(cfg, cfg_file=ops.config_path(args.config))
     result: dict = {"update": update_rep, "layout": layout, "doctor": doc,
-                    "start": None, "tg": None, "warmup": None,
+                    "tasks": None, "start": None, "tg": None, "warmup": None,
                     "positions": None, "ok": True}
 
     def _emit(step: str, rep: dict) -> None:
@@ -368,6 +373,16 @@ def cmd_bootstrap(args, cfg: dict) -> int:
         else:
             print("自检未通过:已停止(加 --force 可继续)。")
         return 1
+
+    if not getattr(args, "no_tasks", False):
+        result["tasks"] = ops.register_tasks(cfg)
+        if not args.json:
+            rep = result["tasks"]
+            print(f"计划任务 ok={rep.get('ok')} supported={rep.get('supported')}"
+                  + (f" skipped={rep['skipped']}" if rep.get("skipped") else ""))
+            for t in rep.get("tasks") or []:
+                print(f"  {'OK  ' if t.get('ok') else 'FAIL'} {t.get('name')}"
+                      + (f" · {t.get('why')}" if t.get("why") else ""))
 
     if args.no_start:
         result["start"] = {"started": False, "skipped": True}
@@ -672,6 +687,19 @@ def cmd_migrate(args, cfg: dict) -> int:
     return 0 if not rep.get("errors") else 1
 
 
+def cmd_tasks(args, cfg: dict) -> int:
+    rep = ops.register_tasks(cfg)
+    if args.json:
+        print(json.dumps(rep, ensure_ascii=False, indent=2, default=str))
+    else:
+        print(f"计划任务 ok={rep.get('ok')} supported={rep.get('supported')}"
+              + (f" skipped={rep['skipped']}" if rep.get("skipped") else ""))
+        for t in rep.get("tasks") or []:
+            print(f"  {'OK  ' if t.get('ok') else 'FAIL'} {t.get('name')}"
+                  + (f" · {t.get('why')}" if t.get("why") else ""))
+    return 0 if (rep.get("ok") or not rep.get("supported")) else 1
+
+
 def cmd_paths(args, cfg: dict) -> int:
     rep = paths.layout_report()
     usage = paths.category_usage()
@@ -700,6 +728,7 @@ HANDLERS = {
     "tg-run": cmd_tg_run,
     "package": cmd_package,
     "migrate-data": cmd_migrate,
+    "tasks": cmd_tasks,
     "paths": cmd_paths,
 }
 

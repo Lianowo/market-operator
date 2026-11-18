@@ -37,6 +37,19 @@ hypothesis / position / campaign / replay / broker / capacity` 的风险、容�
   `rwa_only`)在真实时段内用交易所公开 tickers 快照拦截 `QUOTE_STALE` /
   `SPREAD_WIDE` / `BASIS_WIDE`,计数 `quote_guard_skips`;既有仓位、交易所原生
   止损/止盈不受影响。
+- **运行态与代码分离**:`data/calendars/assignments.json` 改为**不入库**(`.gitignore`),
+  由每日任务在目标机器本地生成;缺失时 `sessions` 回退 `weekday_only`(安全方向),
+  不需要人工准备。`data/calendars/overrides.json` 同理(可选的强制覆盖)。
+- **无缝换机**:`mo bootstrap` 现在会自动注册/刷新 4 条计划任务
+  (`MarketOperatorLive` 每 3 分钟、`MarketOperatorStorageGC` 每日 04:10、
+  `MarketOperatorLearnSessions` 每日 06:10、`MarketOperatorFunding` 每周日 07:30),
+  入口 `.cmd` 自解析仓库根,不依赖 Task Scheduler 的 Start In;`mo tasks` 可单独重注册。
+  `doctor` 新增"时区库(tzdata)"与"会话日历配置可加载"两项检查。
+  新机器只需 clone + `config/secrets.env`(Bitget/Telegram 键)+ `mo bootstrap --update`。
+- **静默窗口的分桶与回放对齐**:基线桶改为(是否周末, UTC 小时),250 根 2H 历史即可
+  得到 ≥20 个样本;实盘的 `history` 与回放同帧( mic 决策用 2H 触发帧、认知决策用
+  4H/1D 认知帧),窗口长度两侧都取 250 根,保证回放/实盘判定口径一致。
+
 - **定时任务(自动保持最新)**:`\MarketOperator\MarketOperatorLearnSessions` 每日 06:10 跑
   `tools\schedule\learn_sessions.cmd`(自动重算 `data/calendars/assignments.json`,内容不变则不写),
   `\MarketOperator\MarketOperatorFunding` 每周日 07:30 跑 `tools\schedule\fetch_funding.cmd`

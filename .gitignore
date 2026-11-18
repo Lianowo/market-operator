@@ -15,6 +15,7 @@ config/secrets.env
 secrets.env
 # 会话日历的逐标的登记是运行数据(随交易所上下架变化),不进版本库
 data/calendars/overrides.json
+data/calendars/assignments.json
 
 reports/_storage_growth.json
 reports/_storage_manifest.jsonl

@@ -431,9 +431,14 @@ def _activity(bar: Sequence[float], metric: str) -> float:
 
 
 def _bucket(ts_ms: int) -> tuple[int, int]:
-    """UTC(星期, 小时);只用 UTC 是为了可复现,不引入任何本地日历假设。"""
+    """(是否周末, UTC 小时)。
+
+    只用 UTC 是为了可复现、不引入任何本地日历假设;周末与工作日分开取基线,
+    这样"一个假日本身活动塌陷"能被识别,而周末的正常低活跃不会被误判。
+    以小时(而非星期×小时)为桶,是为了让 250 根 2H/4H 历史也能有足够样本。
+    """
     dt = datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=timezone.utc)
-    return dt.weekday(), dt.hour
+    return (1 if dt.weekday() >= 5 else 0, dt.hour)
 
 
 def _quiet_block(bar: Sequence[float],

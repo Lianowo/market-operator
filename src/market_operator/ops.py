@@ -277,6 +277,31 @@ def _check_python() -> Check:
     return Check("Python", "fail", platform.python_version(), "需要 >= 3.11")
 
 
+def _check_timezones() -> Check:
+    """IANA 时区可用(Windows 需要 tzdata 包;否则 sessions/日历全部失效)。"""
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo("America/New_York")
+        ZoneInfo("Asia/Tokyo")
+    except Exception as e:                        # noqa: BLE001 - 只做可用性判断
+        return Check("时区库", "fail", f"{type(e).__name__}", "pip install tzdata")
+    return Check("时区库", "ok", "America/New_York · Asia/Tokyo")
+
+
+def _check_sessions_config() -> Check:
+    """会话日历配置可加载(结构/时区/正则都在加载时校验)。"""
+    from . import sessions
+    p = paths.app_home() / "config" / "sessions.json"
+    if not p.exists():
+        return Check("会话日历", "warn", f"未找到 {p.name}",
+                     "回退 legacy_weekend(非加密按旧周末窗口)")
+    try:
+        cfg = sessions.load_config(p)
+    except Exception as e:                        # noqa: BLE001 - 配置错误要显式
+        return Check("会话日历", "fail", f"{type(e).__name__}: {e}")
+    return Check("会话日历", "ok", f"{len(cfg.get('calendars') or {})} 个日历")
+
+
 def _check_deps() -> Check:
     import importlib.util
     missing = [m for m in ("numpy", "pandas", "requests")
@@ -477,6 +502,8 @@ def build_checks(cfg: dict, *, exchange: bool = False,
     checks = [
         _check_python(),
         _check_deps(),
+        _check_timezones(),
+        _check_sessions_config(),
         Check("版本", "ok", __version__),
         _check_config_file(cfg_file or config_path()),
         _check_strategy(),
@@ -872,6 +899,55 @@ def start_supervisor(cfg: dict, *, cfg_file: Path | None = None,
             "heartbeat_reset": heartbeat,
             "stdout": str(out), "stderr": str(err)}
 
+
+
+def register_tasks(cfg: dict) -> dict:
+    """注册/刷新 Windows 计划任务(幂等;非 Windows 返回 skipped)。
+
+    换机场景:`mo bootstrap` 直接调用本函数,新主机只需 clone + secrets.env 即可
+    拥有"看护每 3 分钟拉起 + 每日存储治理 + 每日日历学习 + 每周资金费刷新"。
+    所有入口 `.cmd` 自行切换到仓库根(相对脚本目录上两级),因此不依赖
+    Task Scheduler 的 Start In(命令行也能在任意工作目录正确运行)。
+    """
+    out: dict = {"supported": os.name == "nt", "ok": True, "tasks": []}
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MO_NO_TASKS"):
+        out["skipped"] = "测试/禁用环境(MO_NO_TASKS)"
+        return out
+    if os.name != "nt":
+        out["skipped"] = "非 Windows:用 systemd/cron 承载等价调度"
+        return out
+    home = paths.app_home()
+    specs = (
+        ("MarketOperatorLive", ("/SC", "MINUTE", "/MO", "3"),
+         "live_supervisor.cmd"),
+        ("MarketOperatorStorageGC", ("/SC", "DAILY", "/ST", "04:10"),
+         "storage_gc.cmd"),
+        ("MarketOperatorLearnSessions", ("/SC", "DAILY", "/ST", "06:10"),
+         "learn_sessions.cmd"),
+        ("MarketOperatorFunding", ("/SC", "WEEKLY", "/D", "SUN", "/ST", "07:30"),
+         "fetch_funding.cmd"),
+    )
+    for name, sched, entry in specs:
+        script = home / "tools" / "schedule" / entry
+        if not script.exists():
+            out["ok"] = False
+            out["tasks"].append({"name": name, "ok": False,
+                                 "why": f"缺少入口 {script}"})
+            continue
+        argv = ["schtasks", "/Create", "/TN", f"\\MarketOperator\\{name}",
+                "/TR", f'cmd.exe /c "{script}"', *sched, "/F"]
+        try:
+            res = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+            ok = res.returncode == 0
+            why = (res.stdout or res.stderr or "").strip().splitlines()
+            out["tasks"].append({"name": name, "ok": ok,
+                                 "why": (why[-1] if why else "")[:160]})
+            out["ok"] = out["ok"] and ok
+        except Exception as exc:                  # noqa: BLE001 - 运维命令不冒泡
+            out["ok"] = False
+            out["tasks"].append({"name": name, "ok": False,
+                                 "why": f"{type(exc).__name__}: {exc}"})
+    return out
 
 
 def start_tg_bot(cfg: dict, *, cfg_file: Path | None = None,
