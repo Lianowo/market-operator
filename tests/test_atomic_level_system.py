@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -419,6 +420,36 @@ def test_universe_crypto_3m_and_rwa_unfiltered():
         contracts=contracts,
     )
     assert picked == ["AMDUSDT", "BTCUSDT", "NVDAUSDT"]
+
+
+def test_live_config_rwa_volume_floor_3m():
+    """实盘配置口径:非加密(RWA)与 Crypto 同一 3M 成交额门槛(严格大于)。
+
+    2026-11-18 运营决策:不再豁免非加密合约成交量。这里同时锁住
+    `config/live.json` 的实际值,防止配置被无声改回 500k / 豁免。
+    """
+    from market_operator.bitget_live import BitgetLiveClient
+
+    cfg = json.loads((Path(__file__).resolve().parents[1] / "config"
+                      / "live.json").read_text(encoding="utf-8"))
+    uni_cfg = cfg["universe"]
+    assert uni_cfg["crypto"]["min_usdt_volume_24h"] == 3_000_000.0
+    assert uni_cfg["rwa"]["min_usdt_volume_24h"] == 3_000_000.0
+    assert uni_cfg["rwa_no_volume_filter"] is False
+
+    cli = BitgetLiveClient(None)
+    contracts = [
+        {"symbol": "BTCUSDT", "isRwa": "NO", "symbolStatus": "normal"},
+        {"symbol": "AMDUSDT", "isRwa": "YES", "symbolStatus": "normal"},
+        {"symbol": "NVDAUSDT", "isRwa": "YES", "symbolStatus": "normal"},
+    ]
+    tickers = [
+        {"symbol": "BTCUSDT", "usdtVolume": "50000000"},
+        {"symbol": "AMDUSDT", "usdtVolume": "3000000"},     # 恰 3M ⇒ 不入选
+        {"symbol": "NVDAUSDT", "usdtVolume": "3200000"},    # > 3M ⇒ 入选
+    ]
+    assert cli.universe(uni_cfg, tickers=tickers,
+                        contracts=contracts) == ["BTCUSDT", "NVDAUSDT"]
 
 
 

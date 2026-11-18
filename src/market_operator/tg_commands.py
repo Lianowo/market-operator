@@ -366,13 +366,16 @@ def _symbols_text(cfg: dict, secrets: dict, *, ops_role: bool) -> str:
         lines.append(f"🌐 选币上限 {uni.get('max_symbols', '?')} 个")
         crypto_min = (uni.get("crypto") or {}).get(
             "min_usdt_volume_24h", uni.get("min_usdt_volume_24h"))
+        rwa_min = (uni.get("rwa") or {}).get("min_usdt_volume_24h", crypto_min)
         if uni.get("rwa_no_volume_filter"):
             lines.append(
                 f"📈 24h 成交额门槛 Crypto > {_fmt_num(crypto_min, 0)} USDT · 非Crypto(RWA) 不限"
             )
         else:
-            lines.append(f"📈 24h 成交额门槛 "
-                         f"{_fmt_num(crypto_min, 0)} USDT")
+            lines.append(
+                f"📈 24h 成交额门槛 Crypto > {_fmt_num(crypto_min, 0)} USDT"
+                f" · 非Crypto(RWA) > {_fmt_num(rwa_min, 0)} USDT"
+            )
         lines.append(f"🔁 刷新 {uni.get('refresh_minutes', '?')} 分钟")
         lines.append(f"🧮 产品线 {uni.get('product_type', '?')}")
     return "\n".join(lines)

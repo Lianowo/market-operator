@@ -97,10 +97,11 @@
       "capacity_multiplier": 1.0
     },
     "rwa": {
-      "min_usdt_volume_24h": 500000.0,
+      "min_usdt_volume_24h": 3000000.0,
       "capacity_multiplier": 0.5
     },
-    "rwa_no_volume_filter": true,
+    "rwa_no_volume_filter": false,
+    "note": "非加密(RWA)与 Crypto 同口径:24h USDT 名义量严格大于 3,000,000(恰等于不入选),symbolStatus 非 normal 仍剔除;仅当 rwa_no_volume_filter=true 才豁免非加密成交量。",
     "product_type": "USDT-FUTURES"
   },
   "cognition": {

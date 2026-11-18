@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased] — 2026-11-18 — 非Crypto(RWA) 与 Crypto 同口径 3M 成交额门槛
+
+本轮只改宇宙筛选口径,策略链路(`engine / events / level / routing / trigger /
+structure / position / campaign`)与仓位语义零改动。
+
+- **RWA 不再豁免成交量**:`config/live.json` 的 `universe.rwa.min_usdt_volume_24h`
+  由 500,000 提到 3,000,000,`rwa_no_volume_filter` 由 `true` 改为 `false` ——
+  非加密合约与 Crypto 同口径「24h USDT 名义量严格大于 3,000,000」(恰等于不入选);
+  `symbolStatus` 停盘/下架剔除不变,`capacity_multiplier` 仍为 0.5。
+- **展示口径对齐**:`/symbols` 运营命令分别列出 Crypto 与非Crypto 门槛;
+  runner 启动横幅的 `>=` 改为严格 `>`(仅文案,不改判定)。
+- **测试**:新增 `tests/test_atomic_level_system.py::test_live_config_rwa_volume_floor_3m`,
+  锁住实盘配置值 + RWA「恰 3M 不入选」边界。
+
 ## [Unreleased] — 2026-11-14 — 基础组件维护:Telegram 通知链路(策略链路零改动)
 
 主线已切到「1d 战略 → 4h 原子水平位 → 1h 触发」三重滤网,本轮只维护外设面:

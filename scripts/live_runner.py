@@ -5403,11 +5403,11 @@ def main(argv=None) -> None:
     crypto_min = float((uni_cfg.get("crypto") or {}).get(
         "min_usdt_volume_24h", uni_cfg.get("min_usdt_volume_24h") or 0.0) or 0.0)
     rwa_txt = ("RWA 不限" if uni_cfg.get("rwa_no_volume_filter") else
-               f"RWA >= {float((uni_cfg.get('rwa') or {}).get('min_usdt_volume_24h') or 0.0):.0f}")
+               f"RWA > {float((uni_cfg.get('rwa') or {}).get('min_usdt_volume_24h') or 0.0):.0f}")
     print(f"[live_runner] mode={args.mode} 主循环起动(每 {poll}s;cascade=[{cascade_txt}];risk_frac="
           f"{r['risk_frac']} 杠杆≤{r['leverage_cap']} 组合≤"
           f"{r['portfolio_cap_frac']} 日损熔断 {r['max_daily_loss_frac']} "
-          f"每时单限 {r['orders_per_hour']};宇宙 crypto >= "
+          f"每时单限 {r['orders_per_hour']};宇宙 crypto > "
           f"{crypto_min:.0f} USDT / {rwa_txt})", flush=True)
     tg.send_alert(f"live_runner 起动(mode={args.mode} | 策略={cfg.get('version', 'v22-pure-pa-amt')})\n"
                   f"⏱️ 周期级联: {cascade_txt}\n"
