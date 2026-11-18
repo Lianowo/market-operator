@@ -18,9 +18,9 @@ set "LOGDIR="
 for /f "usebackq delims=" %%d in (`python -c "import sys;sys.path.insert(0,'src');from market_operator import paths;print(paths.log_dir())" 2^>nul`) do set "LOGDIR=%%d"
 if not defined LOGDIR set "LOGDIR=logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
-if "%~1"=="" (
-  python scripts\learn_sessions.py --days 21 --workers 6 1>>"%LOGDIR%\learn_sessions.log" 2>&1
-) else (
-  python scripts\learn_sessions.py %*
-)
+if not "%~1"=="" goto :passthrough
+python scripts\learn_sessions.py --days 21 --workers 6 1>>"%LOGDIR%\learn_sessions.log" 2>&1
+exit /b %ERRORLEVEL%
+:passthrough
+python scripts\learn_sessions.py %*
 exit /b %ERRORLEVEL%

@@ -12188,6 +12188,1056 @@
       "ts_first": 1728864000000,
       "ts_last": 1792540800000,
       "source": "binance_fapi/fapi/v1/fundingRate"
+    },
+    "bitget_mix_funding/AAOIUSDT.csv": {
+      "path": "data/raw/funding/AAOIUSDT.csv",
+      "sha256": "7c614c536da1ce5f23131084291aff782a582f4dbec52d8800d9679c7843f06e",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157361452
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/AAPLUSDT.csv": {
+      "path": "data/raw/funding/AAPLUSDT.csv",
+      "sha256": "c0da240331c45b864def32bbda35c471aa8356436d1875c5f22562eabe6e972b",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157361830
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/AMDUSDT.csv": {
+      "path": "data/raw/funding/AMDUSDT.csv",
+      "sha256": "718f601e348a1291e6f73e05f284b0dc5cf11875b768a1d03dc160a19d194740",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157362209
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/AMZNUSDT.csv": {
+      "path": "data/raw/funding/AMZNUSDT.csv",
+      "sha256": "8a502e62c9e0e4c99301daac04bde1a9c3e0c83c906a4cb7601f976b256d5ac6",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157362610
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/ANTUSDT.csv": {
+      "path": "data/raw/funding/ANTUSDT.csv",
+      "sha256": "af3339d718c1816500c5995df1fa9f967066af988d0f6012e0fbb240882b687d",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157363008
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/ARMUSDT.csv": {
+      "path": "data/raw/funding/ARMUSDT.csv",
+      "sha256": "1c00a354dac4b3ee96d0d498d0db942619022e915d77ffd3b138daa0cbc7d45a",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157363449
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/AVGOUSDT.csv": {
+      "path": "data/raw/funding/AVGOUSDT.csv",
+      "sha256": "d794ce0f6f579affddc1245168a94dbe60408465832d30a77c611ec09abe411a",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157363868
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/AXTIUSDT.csv": {
+      "path": "data/raw/funding/AXTIUSDT.csv",
+      "sha256": "efeee4ea8e5be48c2dc8e315db849d11ee2b34edcf0d9b3a0f087cb52f66fb4a",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157364293
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/BEUSDT.csv": {
+      "path": "data/raw/funding/BEUSDT.csv",
+      "sha256": "52df1b02cf597582d465f981ddc322f56f4e859267b11ade493b278704778054",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157365098
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/BMNRUSDT.csv": {
+      "path": "data/raw/funding/BMNRUSDT.csv",
+      "sha256": "4fa66d99501beaa4b7a033d21c7956420ae1417a5a826bb746c0403f8c5dbf6e",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157365549
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/BZUSDT.csv": {
+      "path": "data/raw/funding/BZUSDT.csv",
+      "sha256": "19fd3f849a7442ddfd1d7303aa092daaab736d29ae9443cc6716aea5a8fbdcfc",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157366021
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CBRSUSDT.csv": {
+      "path": "data/raw/funding/CBRSUSDT.csv",
+      "sha256": "bdadc4dc10cb931e69051c6c9812393f509e631d760220a15faba8526067efd4",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157366471
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CLUSDT.csv": {
+      "path": "data/raw/funding/CLUSDT.csv",
+      "sha256": "3d299ce258c1e3047a361f7eee1e9a61515eb0aec022c9b8b97c6baeb9e5c017",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157366896
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/COHRUSDT.csv": {
+      "path": "data/raw/funding/COHRUSDT.csv",
+      "sha256": "b0bcc4ffd6619b332f751d21f23b8ac3c667a64c8859cb7396c89e4bf87950e0",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157367341
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/COINUSDT.csv": {
+      "path": "data/raw/funding/COINUSDT.csv",
+      "sha256": "5cc6267d81135d544401e5ca93ca761ab0969b1247b47fc84fde067f900617d2",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157367771
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CRCLUSDT.csv": {
+      "path": "data/raw/funding/CRCLUSDT.csv",
+      "sha256": "9d4ac34e09feeddd49535d7e20903bfac80da7a4908f00544acdf2b33dac744f",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157368224
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CRWVUSDT.csv": {
+      "path": "data/raw/funding/CRWVUSDT.csv",
+      "sha256": "04118b5143858c7977dac583b9da3c73f993724d9f0dbee20bed61ce1130228f",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157368690
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CSOPSK2LHKDUSDT.csv": {
+      "path": "data/raw/funding/CSOPSK2LHKDUSDT.csv",
+      "sha256": "555b1f3b4a11ddbf7cefb41c8b1621d8d661ebc8023faf16d0f4ad6f18df86ba",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157369115
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CSOPSS2LHKDUSDT.csv": {
+      "path": "data/raw/funding/CSOPSS2LHKDUSDT.csv",
+      "sha256": "7beb0710940cd71eddd393d36f3d9e08cf16d139c8806bb23dd758ac6a591e9b",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157369506
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/CXMTUSDT.csv": {
+      "path": "data/raw/funding/CXMTUSDT.csv",
+      "sha256": "38d0047f21c446b5b618868a16ecfe5e0ff388a76d1b143c296a8c6b98585e7d",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157369985
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/DELLUSDT.csv": {
+      "path": "data/raw/funding/DELLUSDT.csv",
+      "sha256": "08f7317ea9f1dbf84344ccbed647c27f764acda1d6350d97d3e61475ac869797",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157370474
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/DRAMUSDT.csv": {
+      "path": "data/raw/funding/DRAMUSDT.csv",
+      "sha256": "9138d549aa2eb5c63ad026bc1ee0b76048eb21baf58bcdb2ac6de8916972f699",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157370953
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/EWYUSDT.csv": {
+      "path": "data/raw/funding/EWYUSDT.csv",
+      "sha256": "dc9ad70d416b336069dc5f948a7fccacb6b64c69982628c46f52c7efc0087505",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157371457
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/GOOGLUSDT.csv": {
+      "path": "data/raw/funding/GOOGLUSDT.csv",
+      "sha256": "8329f0004fa325607b869a70add3099a8a68df9dc50b5aa1509a561a11d38a80",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157372197
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/HOODUSDT.csv": {
+      "path": "data/raw/funding/HOODUSDT.csv",
+      "sha256": "37fce0f15628e1b0ad91bb012da4231317200a381ee7159d956ef970f9ec9d7b",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157372667
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/INTCUSDT.csv": {
+      "path": "data/raw/funding/INTCUSDT.csv",
+      "sha256": "cc42687cd159d77be27400cf8e1ca3592dc910eaf696ff26e23af0d819176ad2",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157373189
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/INTWUSDT.csv": {
+      "path": "data/raw/funding/INTWUSDT.csv",
+      "sha256": "5c057d2ee7ed164e84ced851cc4d592d0926afd882c6ce37cd03db938be50fd8",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157373673
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/IRENUSDT.csv": {
+      "path": "data/raw/funding/IRENUSDT.csv",
+      "sha256": "6b49805de637a94492220acf0bf17f9b4a6f550e957c88a8f95631af417e153c",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157374198
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/KORUUSDT.csv": {
+      "path": "data/raw/funding/KORUUSDT.csv",
+      "sha256": "909fadf7440ee5f60d4c6395f18d2452f8f5ea655c46197f46e33cc0ce41fabc",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157374723
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/LITEUSDT.csv": {
+      "path": "data/raw/funding/LITEUSDT.csv",
+      "sha256": "abaad649193c33d748f82d0a46759625e1a803666dba17a85b9602b1e14b49e3",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157375175
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/METAUSDT.csv": {
+      "path": "data/raw/funding/METAUSDT.csv",
+      "sha256": "5f71239014dad2d60580bb921f2c6e32c53767a7edf5cb91ee71c4389308fea6",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157375676
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MINIMAXHKDUSDT.csv": {
+      "path": "data/raw/funding/MINIMAXHKDUSDT.csv",
+      "sha256": "464a343cd18715d9c7d7638ff3a2d51031c640ceec3e92060eb1a78a95b2cecd",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157376170
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MINIMAXUSDT.csv": {
+      "path": "data/raw/funding/MINIMAXUSDT.csv",
+      "sha256": "5ce493dafdb812ab8f614462d77e3e40d9a10f4b8f8aac7bfc0ba6fc7e32ff40",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157376596
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MRVLUSDT.csv": {
+      "path": "data/raw/funding/MRVLUSDT.csv",
+      "sha256": "0cb5be55df7299ad8e3937c592f608e8083f9bccc2cbad7f86ef5331c01ffbaa",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157377133
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MSFTUSDT.csv": {
+      "path": "data/raw/funding/MSFTUSDT.csv",
+      "sha256": "e8adf4e4a8830156e22d144c150110cfe9a9480b3e58394b8fbafaf8fce091d5",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157377578
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MSTRUSDT.csv": {
+      "path": "data/raw/funding/MSTRUSDT.csv",
+      "sha256": "cfe25ed4774af37e0e9658068ca58acea0851c528ccab4a41dbadcdbf48ef74e",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157378124
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MSTUUSDT.csv": {
+      "path": "data/raw/funding/MSTUUSDT.csv",
+      "sha256": "e3e910c1666d523ec8f542638a30b98a1e1b54baf42f88e316ae80e1cf7739a5",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157378571
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MUUSDT.csv": {
+      "path": "data/raw/funding/MUUSDT.csv",
+      "sha256": "c1ebbe3428fcb8653d71b7eda36c5586153ec2d24b1ba360ee8c70939a572452",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157379052
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MUUUSDT.csv": {
+      "path": "data/raw/funding/MUUUSDT.csv",
+      "sha256": "da6447f989be82a7aa87bf25ef89922caebc9de7d5d2e12621419d874d04303d",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157379548
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/MVLLUSDT.csv": {
+      "path": "data/raw/funding/MVLLUSDT.csv",
+      "sha256": "648f7088db5f7b311af357fc103a41a7f19d56337a1aa802a3bdd6e2d6225ead",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157380000
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/NATGASUSDT.csv": {
+      "path": "data/raw/funding/NATGASUSDT.csv",
+      "sha256": "c5cbc93682337375e908e2fb70f7656d49dcd295917a5a69928b2cbfd1b013ec",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157380468
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/NBISUSDT.csv": {
+      "path": "data/raw/funding/NBISUSDT.csv",
+      "sha256": "c9f412703e3c9714c286d76c612f62982c9493816c573540fe4a186c9d593ab3",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157380917
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/NVDAUSDT.csv": {
+      "path": "data/raw/funding/NVDAUSDT.csv",
+      "sha256": "5ec488fc8072550d01a732d48460dea649955fcfdc280dc0a1b219bd29c27319",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157381356
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/OPENAIUSDT.csv": {
+      "path": "data/raw/funding/OPENAIUSDT.csv",
+      "sha256": "f88f28d69d5fef78d9780deda198e405d60faa89deff17f29c48499d0f8375e7",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157381811
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/ORCLUSDT.csv": {
+      "path": "data/raw/funding/ORCLUSDT.csv",
+      "sha256": "bab9e34446ae82a57355cbbe5cdf99b3250065337bbf9d3463a04c97a65cc339",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157382296
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/PAXGUSDT.csv": {
+      "path": "data/raw/funding/PAXGUSDT.csv",
+      "sha256": "1e5df74aadc40e089994a642158a2867ce227d5e8d40854e3925e9c63d4b70dd",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157382726
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/PLTRUSDT.csv": {
+      "path": "data/raw/funding/PLTRUSDT.csv",
+      "sha256": "ae9ecfa84b4772438fc75cd8dd05842afd974fab162fe177d0d1a860dceaeb02",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157383185
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/QCOMUSDT.csv": {
+      "path": "data/raw/funding/QCOMUSDT.csv",
+      "sha256": "93dd17555128671ef91adbf1b1d3166bee25a589cb467b2ec88dc32587a6d43c",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157383623
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/QQQUSDT.csv": {
+      "path": "data/raw/funding/QQQUSDT.csv",
+      "sha256": "1af57bdc6c0410d650aa10d7e6cc4761309e6bf43e7410ed882e8d2cd44eafcc",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157384102
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/RAMUSDT.csv": {
+      "path": "data/raw/funding/RAMUSDT.csv",
+      "sha256": "f37926f8224da6bdc7515d46e71a7cb80dbe050d1fd06b5d9d856c7ccdff6492",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157384547
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/RKLBUSDT.csv": {
+      "path": "data/raw/funding/RKLBUSDT.csv",
+      "sha256": "1cbf2d4b465f15e8cd49bd88310d41aac87726ac41d51303677b1ad37265b932",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157384992
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SAMSUNGUSDT.csv": {
+      "path": "data/raw/funding/SAMSUNGUSDT.csv",
+      "sha256": "bbcc131bd672e351744fcd4ad5cdf045a6dbb3bba556431896fd593ddec38400",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157385426
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SKDDUSDT.csv": {
+      "path": "data/raw/funding/SKDDUSDT.csv",
+      "sha256": "ef062067d45fa0bd7f7be164d71b9db94f54d258b1e037298d919dfa61236acc",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157385908
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SKHYNIXUSDT.csv": {
+      "path": "data/raw/funding/SKHYNIXUSDT.csv",
+      "sha256": "0d03221c399adf7c4e3514943a6f1c94f769d6268e30ffc5f1e06f764f4b48ac",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157386402
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SKHYUSDT.csv": {
+      "path": "data/raw/funding/SKHYUSDT.csv",
+      "sha256": "2877752d87c56fab56c5c9a758f1574caec3fd2df75ac785334ab41cd2dba9ea",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157386878
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SNDKUSDT.csv": {
+      "path": "data/raw/funding/SNDKUSDT.csv",
+      "sha256": "1ade4bf43efc2ea74a7681806b2f4d284833f80916b807d6f8b2177327b88401",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157387369
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SNXXUSDT.csv": {
+      "path": "data/raw/funding/SNXXUSDT.csv",
+      "sha256": "81430dda6d61b18e4130686ed0d5190792e49543817d8e99364623ba8aa722ee",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157387895
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SOXLUSDT.csv": {
+      "path": "data/raw/funding/SOXLUSDT.csv",
+      "sha256": "739811d479afcb59543dc1055d542bd20fadc43c800a80d36a7a8938bd1bc76d",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157388367
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SOXSUSDT.csv": {
+      "path": "data/raw/funding/SOXSUSDT.csv",
+      "sha256": "8703d2fa517a50c27a49a9bc8196ac9f8eb719dabc38fcc7eaeaf087f41aea56",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157388878
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SOXXUSDT.csv": {
+      "path": "data/raw/funding/SOXXUSDT.csv",
+      "sha256": "1f4679743b86a8fb06d787141be7ae54e4c709be937f659535e3956d8bb2626e",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157389367
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SPCXUSDT.csv": {
+      "path": "data/raw/funding/SPCXUSDT.csv",
+      "sha256": "00118f6d0c4121e6306ad50a02580d7b9a436a974c4757a2ddd3c5cce63ccef8",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157389958
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SPYUSDT.csv": {
+      "path": "data/raw/funding/SPYUSDT.csv",
+      "sha256": "a45bd8e4e590be6de5fd8854974c40a2684268298fbc98a23cbabb20ca492010",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157391497
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/SQQQUSDT.csv": {
+      "path": "data/raw/funding/SQQQUSDT.csv",
+      "sha256": "c8b1c083038935d25244304f7b93a67e4a772117eaedc2bb6948bf1da9c42943",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157391971
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/TQQQUSDT.csv": {
+      "path": "data/raw/funding/TQQQUSDT.csv",
+      "sha256": "7d1435066c21ab468b744d5cdcff5ae7c24b42b932bd68f2c091b656eeafe396",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157392377
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/TSLAUSDT.csv": {
+      "path": "data/raw/funding/TSLAUSDT.csv",
+      "sha256": "af933ea7f5b963621821067e4a1d88d189cef15941da7ecd26398445ee0c5034",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157392850
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/TSMUSDT.csv": {
+      "path": "data/raw/funding/TSMUSDT.csv",
+      "sha256": "987da66afd21b639a1871278ff9179055dd4eefafb2642adf5eecf6dbffdef4b",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157393364
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/UNITREEUSDT.csv": {
+      "path": "data/raw/funding/UNITREEUSDT.csv",
+      "sha256": "cdcdf6a50131363fa04959353e4ae4f78f0148ea11f7c49d294ac50e23aedfa0",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157394495
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/UVXYUSDT.csv": {
+      "path": "data/raw/funding/UVXYUSDT.csv",
+      "sha256": "29e1355140e003d63e4b8631a7904351e87d01b368de398df33b73c535cf2502",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157395035
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/WDCUSDT.csv": {
+      "path": "data/raw/funding/WDCUSDT.csv",
+      "sha256": "a8c282bda1a7a924b0e72ac431e89589e25b1d98127c1473d761a0e2cd0b842d",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157395496
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/XAGUSDT.csv": {
+      "path": "data/raw/funding/XAGUSDT.csv",
+      "sha256": "d6c34454bb118940c0723998fe8784e2f369037ec71157cb36c48d206115fb4b",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157395948
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/XAUTUSDT.csv": {
+      "path": "data/raw/funding/XAUTUSDT.csv",
+      "sha256": "5df15cf9bfab6693a3ab63d09f94742a1e9f6c553f22e4db580ee58d271c8efb",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157396604
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/XAUUSDT.csv": {
+      "path": "data/raw/funding/XAUUSDT.csv",
+      "sha256": "df33612160818bf53dffa70fce486bde6719ac0340917d6eeee6eec0a9406923",
+      "rows": 540,
+      "ts_first": 1787212800000,
+      "ts_last": 1794974400000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794974400001,
+        "end": 1795157397100
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/ZHIPUHKDUSDT.csv": {
+      "path": "data/raw/funding/ZHIPUHKDUSDT.csv",
+      "sha256": "a6d185f0eb6e3eece19d8408ad8a8e5c8079773032f3a662582cd3ab9902b778",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157397708
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/ZHIPUUSDT.csv": {
+      "path": "data/raw/funding/ZHIPUUSDT.csv",
+      "sha256": "29d0b0c6356910a28f2fb8ae0cb0a6d2c5600afef77643e3a2752beacaaf99c4",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157398194
+      },
+      "issues": []
+    },
+    "bitget_mix_funding/ZHONGJIUSDT.csv": {
+      "path": "data/raw/funding/ZHONGJIUSDT.csv",
+      "sha256": "b029c2de7cfddbeb221f2ed2123cdac1b1c8cb34e2b6b11196edeb0322e6d707",
+      "rows": 270,
+      "ts_first": 1787212800000,
+      "ts_last": 1794960000000,
+      "source": "bitget_mix/market/history-fund-rate",
+      "note": "settlements every 4h or 8h (exchange fundInterval); signed rate",
+      "window": {
+        "start": 1794960000001,
+        "end": 1795157398670
+      },
+      "issues": []
     }
   }
 }

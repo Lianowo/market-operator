@@ -18,9 +18,9 @@ set "LOGDIR="
 for /f "usebackq delims=" %%d in (`python -c "import sys;sys.path.insert(0,'src');from market_operator import paths;print(paths.log_dir())" 2^>nul`) do set "LOGDIR=%%d"
 if not defined LOGDIR set "LOGDIR=logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
-if "%~1"=="" (
-  python scripts\fetch_funding.py --source bitget --all-rwa --days 90 --incremental 1>>"%LOGDIR%\fetch_funding.log" 2>&1
-) else (
-  python scripts\fetch_funding.py %*
-)
+if not "%~1"=="" goto :passthrough
+python scripts\fetch_funding.py --source bitget --all-rwa --days 90 --incremental 1>>"%LOGDIR%\fetch_funding.log" 2>&1
+exit /b %ERRORLEVEL%
+:passthrough
+python scripts\fetch_funding.py %*
 exit /b %ERRORLEVEL%
