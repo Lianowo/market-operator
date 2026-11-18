@@ -729,7 +729,9 @@ def test_tg_sync_purges_every_scope_and_language(monkeypatch):
     entry = rep["bots"][0]
     labels = {row["label"] for row in entry["purged"]}
     assert {"default", "all_private_chats", "all_group_chats",
-            "all_chat_administrators", "chat:111", "chat_admin:111"} <= labels
+            "all_chat_administrators", "chat:111"} <= labels
+    # 私有聊天(正 chat id)没有 chat_administrators scope:打过去 Telegram 只回 400
+    assert not {lbl for lbl in labels if lbl.startswith("chat_admin:")}
     # 两个 token 都各清一遍:scope 数 × 语言数 × 机器人数
     assert len(api.deleted) == (
         sum(len(b["purged"]) for b in rep["bots"])
@@ -757,10 +759,26 @@ def test_tg_sync_dry_run_lists_global_scopes_without_writing(monkeypatch):
     entry = rep["bots"][0]
     labels = {row["label"] for row in entry["purged"]}
     assert {"default", "all_private_chats", "all_group_chats",
-            "all_chat_administrators", "chat:111", "chat_admin:111"} <= labels
+            "all_chat_administrators", "chat:111"} <= labels
+    assert not {lbl for lbl in labels if lbl.startswith("chat_admin:")}
     row = next(r for r in entry["purged"] if r["label"] == "all_group_chats")
     assert row["current"]["zh"] == ["status"]
     assert row["current"]["default"] == []
+
+
+def test_tg_sync_purges_chat_admin_scope_for_group_chats(monkeypatch):
+    """群/超级群(负 chat id)才有 chat_administrators scope —— 必须清,否则群管看到残留菜单。"""
+    api = _FakeTgAPI()
+    monkeypatch.setattr(tg_commands, "_api_for",
+                        lambda token, secrets: api)
+    group_bots = {"TELEGRAM_BOT_TOKEN": "PUB", "TELEGRAM_CHAT_ID": "-100111",
+                  "TELEGRAM_TRADE_BOT_TOKEN": "OPS",
+                  "TELEGRAM_TRADE_CHAT_ID": "-100222"}
+    rep = tg_commands.sync_commands(group_bots)
+    assert rep["ok"] is True and rep["errors"] == []
+    labels = {row["label"] for row in rep["bots"][0]["purged"]}
+    assert "chat_admin:-100111" in labels
+    assert ("chat_administrators", "-100111", "") in api.deleted
 
 
 def test_tg_sync_reports_residual_global_commands(monkeypatch):

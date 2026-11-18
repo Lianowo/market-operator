@@ -1179,6 +1179,23 @@ def _invalid_language(err: object) -> bool:
     return "invalid language code" in str(err).lower()
 
 
+def _invalid_scope(err: object) -> bool:
+    """`chat_administrators` scope 只对群/超级群有效:私有聊天会 400。
+
+    私有 chat id 为正整数、群/超级群为负整数,本应在挑 scope 时就不生成;
+    这里再兜一层 —— 万一配置写错,也不该把整份菜单同步判成失败。
+    """
+    return "can't use specified scope in private chats" in str(err).lower()
+
+
+def _is_private_chat(chat_id: object) -> bool:
+    """Telegram chat id:私有聊天为正,群/超级群为负。"""
+    try:
+        return int(str(chat_id).strip()) >= 0
+    except (TypeError, ValueError):
+        return False
+
+
 def sync_commands(secrets: dict, *, purge: bool = True,
                   dry_run: bool = False) -> dict:
     """把两套命令写进 Telegram,并清掉旧版残留(含全局 scope 与语言覆盖)。
@@ -1222,8 +1239,10 @@ def sync_commands(secrets: dict, *, purge: bool = True,
         purge_targets: list[tuple[str, dict]] = list(GLOBAL_SCOPES)
         for chat in chats:
             purge_targets.append((f"chat:{chat}", _chat_scope(chat)))
-            purge_targets.append(
-                (f"chat_admin:{chat}", _chat_admin_scope(chat)))
+            if not _is_private_chat(chat):
+                # 私有聊天没有"群管理员"这个 scope,打过去只会 400。
+                purge_targets.append(
+                    (f"chat_admin:{chat}", _chat_admin_scope(chat)))
 
         if dry_run:
             # 干跑也必须把"将要清哪些 scope"列全:只看 default 会漏掉客户端缓存的
@@ -1248,7 +1267,7 @@ def sync_commands(secrets: dict, *, purge: bool = True,
                         api.delete_commands(scope, lang)
                         row["purged"] += 1
                     except TelegramError as e:
-                        if _invalid_language(e):
+                        if _invalid_language(e) or _invalid_scope(e):
                             row.setdefault("skipped_languages", []).append(
                                 lang or "default")
                             continue
@@ -1297,6 +1316,9 @@ def sync_commands(secrets: dict, *, purge: bool = True,
                     got = [c.get("command")
                            for c in api.get_commands(scope)]
                 except TelegramError as e:
+                    if _invalid_scope(e):
+                        entry["residual"][label] = "skipped: scope 不适用于该 chat"
+                        continue
                     entry["residual"][label] = f"ERR {e}"
                     entry["errors"].append(f"residual {label}: {e}")
                     report["errors"].append(f"residual {label}: {e}")
