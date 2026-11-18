@@ -2339,6 +2339,26 @@ def test_settle_queues_reload_from_state(tmp_path):
 
 
 
+def test_gate_falls_back_to_cognition_bar_on_placeholder_trigger(tmp_path):
+    """触发子周期是 volume=0/一字占位条时,闸门改用有成交的认知条(避免误判死水)。"""
+    import types as _types
+
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    now = 1_794_988_800_000
+    placeholder = (now, 54.83, 54.83, 54.83, 54.83, 0.0)
+    cog = (now - 4 * 3600_000, 55.2, 56.2, 54.7, 55.0, 1200.0)
+    cs = _types.SimpleNamespace(
+        symbol="FCXUSDT", tf_label="4h",
+        trig_bars=[placeholder], cog_bars=[cog])
+    bar, hist = r._gate_bar_and_history(cs, placeholder, mic=True)
+    assert bar == cog and hist == []
+    assert r.counters.get("gate_bar_fallbacks") == 1
+    # 真实触发条(有量)→ 原样使用
+    real = (now, 54.83, 54.86, 54.11, 54.11, 992.11)
+    bar2, _ = r._gate_bar_and_history(cs, real, mic=True)
+    assert bar2 == real
+
+
 def test_quote_guard_blocks_stale_wide_and_basis(tmp_path):
     """RWA 成交质量闸门:缺失/过期/点差过宽/基差过大 ⇒ 拦;原生加密不受影响。"""
     from market_operator.broker import ContractSpec

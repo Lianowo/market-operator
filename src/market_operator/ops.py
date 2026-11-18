@@ -1156,7 +1156,7 @@ def local_orders(cfg: dict) -> dict:
 
 _GATE_KEYS = (
     "tf_cap_skips", "cap_skips", "rwa_session_skips", "quote_guard_skips",
-    "manage_only_skips",
+    "gate_bar_fallbacks", "manage_only_skips",
     "min_notional_skips", "rate_skips", "breaker_blocks",
     "signal_notice_errors", "adopted", "gap_recoveries",
     "unprotected_stop_exits", "protection_unavailable",

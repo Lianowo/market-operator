@@ -1203,19 +1203,26 @@ class LiveRunner:
             last_ts = max(have)
             if now_ms >= last_ts + 2 * base_ms:
                 guard_fwd = 0
+                # 回看一小段再取并 UPSERT:交易所偶发把未成交的子周期写成
+                # volume=0/一字占位条;若"只追加新 ts",这些毒条会永久留在缓存里,
+                # 死水闸门随后把整个时段误判成休市(RWA 4h 信号全灭的真实原因)。
+                refresh_from = max(0, last_ts - 64 * base_ms)
                 while guard_fwd < 20:
                     fresh = self.client.history_candles(
                         symbol, use_gran,
-                        start_ms=last_ts + 1, limit=200)
-                    new_items = [b for b in fresh if b[0] not in have]
-                    if not new_items:
+                        start_ms=refresh_from, limit=200)
+                    if not fresh:
                         break
-                    for b in new_items:
+                    for b in fresh:                       # 同 ts 覆盖
                         have[int(b[0])] = b
-                    last_ts = max(have)
+                    new_last = max(have)
                     guard_fwd += 1
+                    if new_last <= last_ts:
+                        break
+                    last_ts = new_last
                     if len(fresh) < 200 or now_ms < last_ts + 2 * base_ms:
                         break
+                    refresh_from = last_ts + 1
         bars_cached = [have[t] for t in sorted(have)]
         if len(bars_cached) >= 2:
             if any(b[0] - a[0] != base_ms for a, b in zip(bars_cached, bars_cached[1:])):
@@ -3126,6 +3133,35 @@ class LiveRunner:
         candidate = qty * (abs(price - invalid) + price * 2.0 * (fee + slip))
         return used + candidate > frac * capital + 1e-9
 
+    def _gate_bar_and_history(self, cs, eval_bar, mic: bool):
+        """闸门输入:(bar, history)。
+
+        触发子周期(30m/15m)偶发被交易所写成 volume=0 且一字(占位/未成交),
+        若直接拿它做"零成交/静默"判定,会把正常交易时段误判成死水(RWA 4h
+        信号全灭的真实原因)。因此:仅当**认知条显示该窗口确有成交**时,用认知条
+        作为活跃度判定基准;其余情况照旧用触发条,保证与回放口径一致。
+        """
+        src = cs.trig_bars if mic else cs.cog_bars
+        if eval_bar is None:
+            return None, None
+        hist = [b for b in (src or ())[-250:]
+                if len(b) >= 6 and int(b[0]) < int(eval_bar[0])]
+        bar = eval_bar
+        if (mic and cs.cog_bars and len(eval_bar) >= 6
+                and (float(eval_bar[5]) <= 0.0
+                     or float(eval_bar[2]) <= float(eval_bar[3]))):
+            cog = cs.cog_bars[-1]
+            if int(cog[0]) <= int(eval_bar[0]) and len(cog) >= 6 and float(cog[5]) > 0.0:
+                bar = cog
+                hist = [b for b in cs.cog_bars[-250:]
+                        if len(b) >= 6 and int(b[0]) < int(cog[0])]
+                self.counters["gate_bar_fallbacks"] = \
+                    self.counters.get("gate_bar_fallbacks", 0) + 1
+                self._journal("gate_bar_fallback", {
+                    "symbol": cs.symbol, "tf": cs.tf_label,
+                    "eval_ts": int(eval_bar[0]), "cog_ts": int(cog[0])})
+        return bar, hist
+
     def _submit_open(self, cs: CampaignState, d, t: int, *, mic: bool,
                      view=None, trigger_bar: Optional[tuple] = None) -> None:
         """意图 → 闸门 → 信号广播 → 装配(执行在撮合/live 下单层)。
@@ -3201,14 +3237,8 @@ class LiveRunner:
         block: Optional[str] = entry_cost_error(hyp.direction, fitted_entry, invalid, d.meta)
         if block is None:
             eval_bar = trigger_bar if trigger_bar is not None else (cs.trig_bars[-1] if mic and cs.trig_bars else (cs.cog_bars[-1] if cs.cog_bars else None))
-            hist = None
-            if eval_bar is not None:
-                # 与回放同粒度:mic 决策用触发帧(2H),认知决策用认知帧(4H/1D);
-                # 250 根 ≈ 同一小时桶有 ≥20 个样本,且两侧窗口完全一致(parity)。
-                src_bars = cs.trig_bars if mic else cs.cog_bars
-                hist = [b for b in (src_bars or ())[-250:]
-                        if len(b) >= 6 and int(b[0]) < int(eval_bar[0])]
-            block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar,
+            gate_bar, hist = self._gate_bar_and_history(cs, eval_bar, mic)
+            block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), gate_bar,
                                            symbol=sym, history=hist)
         if block is None:
             block = self._manage_only_block(sym)

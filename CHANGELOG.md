@@ -37,7 +37,13 @@ hypothesis / position / campaign / replay / broker / capacity` 的风险、容�
   `rwa_only`)在真实时段内用交易所公开 tickers 快照拦截 `QUOTE_STALE` /
   `SPREAD_WIDE` / `BASIS_WIDE`,计数 `quote_guard_skips`;既有仓位、交易所原生
   止损/止盈不受影响。
-- **运行态与代码分离**:`data/calendars/assignments.json` 改为**不入库**(`.gitignore`),
+- **修复"占位条被当成死水"导致 RWA 信号全灭**:触发子周期(30m/15m)偶发被写成
+  `volume=0` 且一字,而 `_fetch_trigger_bars` 只追加新 ts、从不覆盖旧 ts,毒条
+  永久留在缓存里 → 死水闸门把正常时段判成休市。现在回看 64 根做 UPSERT 覆盖,
+  并在闸门侧增加兜底:占位条存在时用**同窗口有成交的认知条**做活跃度判定,
+  计数 `gate_bar_fallbacks` 并记 `gate_bar_fallback` 日志。
+
+:`data/calendars/assignments.json` 改为**不入库**(`.gitignore`),
   由每日任务在目标机器本地生成;缺失时 `sessions` 回退 `weekday_only`(安全方向),
   不需要人工准备。`data/calendars/overrides.json` 同理(可选的强制覆盖)。
 - **无缝换机**:`mo bootstrap` 现在会自动注册/刷新 4 条计划任务
