@@ -7,7 +7,7 @@ name = "market-operator"
 version = "0.1.0"
 description = "Causal market-structure cognition and falsifiable trading research system for crypto USDT perpetuals"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "pandas>=2.0", "requests>=2.31"]
+dependencies = ["numpy>=1.26", "pandas>=2.0", "requests>=2.31", "tzdata>=2024.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

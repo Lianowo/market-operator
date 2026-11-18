@@ -2337,3 +2337,29 @@ def test_settle_queues_reload_from_state(tmp_path):
     assert r2._exit_settle["ETHUSDT"]["oid"] == "X"
 
 
+
+
+def test_quote_guard_blocks_stale_wide_and_basis(tmp_path):
+    """RWA 成交质量闸门:缺失/过期/点差过宽/基差过大 ⇒ 拦;原生加密不受影响。"""
+    from market_operator.broker import ContractSpec
+
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    r.contracts["NVDAUSDT"] = ContractSpec("NVDAUSDT", 0.01, 0.01, 2, 2, 5.0,
+                                           is_rwa=True)
+    guard = {"enabled": True, "rwa_only": True, "max_quote_age_seconds": 30,
+             "max_spread_bps": 30.0, "max_basis_bps": 150.0}
+    r.cfg.setdefault("execution", {})["quote_guard"] = guard
+    now = int(time.time() * 1000)
+    ok = {"bid": 100.0, "ask": 100.01, "last": 100.0, "index": 100.0, "ts": now}
+
+    assert r._quote_guard_block("NVDAUSDT", ok) is None
+    assert r._quote_guard_block("NVDAUSDT", None) == "QUOTE_STALE"
+    assert r._quote_guard_block("NVDAUSDT", {**ok, "bid": None}) == "QUOTE_STALE"
+    assert r._quote_guard_block("NVDAUSDT", {**ok, "ts": now - 60_000}) == "QUOTE_STALE"
+    assert r._quote_guard_block("NVDAUSDT", {**ok, "ask": 101.0}) == "SPREAD_WIDE"
+    assert r._quote_guard_block("NVDAUSDT",
+                                {**ok, "last": 103.0, "index": 100.0}) == "BASIS_WIDE"
+    assert r._quote_guard_block("BTCUSDT", None) is None      # rwa_only:加密不判
+    guard["enabled"] = False
+    assert r._quote_guard_block("NVDAUSDT", None) is None
+

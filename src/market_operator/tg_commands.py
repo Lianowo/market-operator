@@ -805,7 +805,8 @@ def cmd_capacity(ctx: CommandContext, args: list[str]) -> str:
 def cmd_gates(ctx: CommandContext, args: list[str]) -> str:
     labels = {
         "tf_cap_skips": "周期容量", "cap_skips": "容量跳过",
-        "rwa_session_skips": "非加密休市", "manage_only_skips": "只管理出场",
+        "rwa_session_skips": "非加密休市", "quote_guard_skips": "非加密成交质量",
+        "manage_only_skips": "只管理出场",
         "min_notional_skips": "最小下单", "rate_skips": "频率",
         "breaker_blocks": "当日熔断", "signal_notice_errors": "信号发送失败",
         "adopted": "接管", "gap_recoveries": "缺口补做",

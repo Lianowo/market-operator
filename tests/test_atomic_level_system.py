@@ -322,7 +322,7 @@ def test_crypto_vs_rwa_independent_directional_buckets_and_session_gate(tmp_path
     """跨资产(Crypto vs RWA 非加密传统合约)独立同向风险分桶 + RWA 休市禁开新仓测试:
     1. Crypto 同向池打满时阻塞新增 Crypto 同向单,但放行零相关的 RWA(如 NVDAUSDT/XAUUSDT)同向单;
     2. 全账户总风险上限 portfolio_cap_frac 依然统一硬封顶跨资产总敞口;
-    3. RWA 合约在传统市场周末休市窗口(周五 21:00 UTC ~ 周日 22:00 UTC)或零成交一字棒拦截新开仓,工作日正常放行,Crypto 24x7 不受限。
+    3. RWA 合约的时段闸门按"标的→日历"判定:未登记标的走 weekday_only 兜底(周末关闭),命名族规则(外汇/HKD/TW)与运维覆盖文件见 tests/test_sessions_calendar.py;Crypto 24x7 不受限。
     """
     from datetime import datetime, timezone
     from market_operator import capacity
@@ -373,20 +373,28 @@ def test_crypto_vs_rwa_independent_directional_buckets_and_session_gate(tmp_path
     assert runner._directional_entry_blocked(1, 5.0, 100.0, 90.0, symbol="SOLUSDT")
     assert not runner._directional_entry_blocked(1, 5.0, 100.0, 90.0, symbol="NVDAUSDT")
 
-    # Session gate checks:
+    # Session gate checks:未登记标的 = weekday_only 兜底(周五夜间放行、周末关闭);
+    # 各资产类别的真实日历(美股 RTH/DST/假日/半日市、CME、FX、港日韩台印)在
+    # tests/test_sessions_calendar.py 里用显式 cfg/overrides 逐条锁定。
     sat_noon = int(datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)   # Saturday 12:00 UTC
     fri_late = int(datetime(2026, 11, 13, 21, 30, tzinfo=timezone.utc).timestamp() * 1000)  # Friday 21:30 UTC
-    sun_open = int(datetime(2026, 11, 15, 22, 30, tzinfo=timezone.utc).timestamp() * 1000)  # Sunday 22:30 UTC (CME reopen)
-    wed_us = int(datetime(2026, 11, 11, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)     # Wednesday US Open
+    sun_open = int(datetime(2026, 11, 15, 22, 30, tzinfo=timezone.utc).timestamp() * 1000)  # Sunday 22:30 UTC
+    wed_us = int(datetime(2026, 11, 11, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)     # Wednesday 15:00 UTC
     active_bar = (wed_us, 160.0, 162.0, 159.5, 161.5, 12000.0)
     flat_bar = (wed_us, 160.0, 160.0, 160.0, 160.0, 0.0)
+    unassigned = "ZZZUSDT"                     # 没有命名族/覆盖记录 ⇒ weekday_only
 
     assert rwa_session_entry_block(False, sat_noon, flat_bar) is None
-    assert rwa_session_entry_block(True, sat_noon, active_bar) == "RWA_MARKET_CLOSED"
-    assert rwa_session_entry_block(True, fri_late, active_bar) == "RWA_MARKET_CLOSED"
-    assert rwa_session_entry_block(True, sun_open, active_bar) is None
-    assert rwa_session_entry_block(True, wed_us, active_bar) is None
-    assert rwa_session_entry_block(True, wed_us, flat_bar) == "RWA_INACTIVE_SESSION"
+    assert rwa_session_entry_block(
+        True, sat_noon, active_bar, symbol=unassigned) == "RWA_MARKET_CLOSED"
+    assert rwa_session_entry_block(
+        True, fri_late, active_bar, symbol=unassigned) is None
+    assert rwa_session_entry_block(
+        True, sun_open, active_bar, symbol=unassigned) == "RWA_MARKET_CLOSED"
+    assert rwa_session_entry_block(
+        True, wed_us, active_bar, symbol=unassigned) is None
+    assert rwa_session_entry_block(
+        True, wed_us, flat_bar, symbol=unassigned) == "RWA_INACTIVE_SESSION"
 
 
 def test_universe_crypto_3m_and_rwa_unfiltered():

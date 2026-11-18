@@ -67,6 +67,15 @@
   },
   "execution": {
     "require_exchange_protection": true,
+    "quote_guard": {
+      "enabled": true,
+      "rwa_only": true,
+      "max_quote_age_seconds": 30,
+      "max_spread_bps": 30.0,
+      "max_basis_bps": 150.0,
+      "note": "非加密(RWA)标的成交质量闸门:开仓前用交易所公开 tickers 快照校验(与信号图同一份 15s 缓存)。报价缺失/过期 ⇒ QUOTE_STALE;买卖点差 (ask-bid)/mid 超过 max_spread_bps ⇒ SPREAD_WIDE;|last-index|/index 超过 max_basis_bps ⇒ BASIS_WIDE。只在真实交易时段内生效(时段外已由 session gate 拦),原生加密不判(rwa_only)。阈值按 bps 计(30bps=0.30%),先用 live_cost_audit 的实测点差/基差分位再收紧。",
+      "threshold_note": "默认值是保守起点:模型滑点先验只有 2bps/边,30bps 点差约 7.5 倍先验;基差 150bps 覆盖资金费驱动的正常偏离。收紧前先看 quote_guard_skips 计数与被拦标的的实际成交质量。"
+    },
     "note": "新开仓必须能挂上交易所仓位止损。下单或首次挂止损返回 43023 时本笔不开仓(已成交则立即平掉)。启动前已存在的仓位没有 protection_required,仍允许本地止损兜底。不改变风险比例与杠杆。"
   },
   "protection": {
@@ -104,7 +113,8 @@
     },
     "rwa": {
       "min_usdt_volume_24h": 3000000.0,
-      "capacity_multiplier": 0.5
+      "capacity_multiplier": 0.5,
+      "costs_note": "实测(交易所公开 contracts 接口):422 个 RWA 合约的 taker/maker 与 Crypto 同为 0.0006/0.0002,故 risk 段的费用先验原样适用;但 fundInterval 为 4h/8h 混合,资金费**不再用 1bp/8h 常数先验**——用 `python scripts/fetch_funding.py --source bitget --symbols ... --days N` 落盘真实结算,回放自动按真实结算点计提(4h 标的自然按 4h)。滑点没有公开来源,只能用 `scripts/live_cost_audit.py` 的 `[fees:rwa]`/`[fund:rwa]` 实测加权 bps 再决定是否写入 strategy.json 的 slippage_by_symbol。"
     },
     "rwa_no_volume_filter": false,
     "note": "非加密(RWA)与 Crypto 同口径:24h USDT 名义量严格大于 3,000,000(恰等于不入选),symbolStatus 非 normal 仍剔除;仅当 rwa_no_volume_filter=true 才豁免非加密成交量。",

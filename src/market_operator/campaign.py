@@ -860,7 +860,8 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
     decisions = []
     is_rwa = capacity.asset_class_of(key, b_contracts) == "rwa"
     for (routing_bar, routing_index), events in groups.items():
-        if rwa_session_entry_block(is_rwa, close_moment, routing_bar) is not None:
+        if rwa_session_entry_block(is_rwa, close_moment, routing_bar,
+                                   symbol=key) is not None:
             counters["rwa_session_skips"] = counters.get("rwa_session_skips", 0) + 1
             continue
         decisions.extend(st.router.on_bar(
@@ -1048,7 +1049,9 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     _count_go(counters, route_events, go_set)
     close_moment_cog = t + f.tf_hours * MS_1H
     b_contracts_cog = getattr(broker, "contracts", None) or {}
-    if rwa_session_entry_block(capacity.asset_class_of(key, b_contracts_cog) == "rwa", close_moment_cog, bar) is not None:
+    if rwa_session_entry_block(
+            capacity.asset_class_of(key, b_contracts_cog) == "rwa",
+            close_moment_cog, bar, symbol=key) is not None:
         counters["rwa_session_skips"] = counters.get("rwa_session_skips", 0) + 1
         return
     htf_views = _htf_views_for(st, states, close_moment_cog)

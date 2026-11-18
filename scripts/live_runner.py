@@ -3043,8 +3043,11 @@ class LiveRunner:
         "OPPOSITE_CLAIM": "仅参考 · 同标的已有反向持仓,本系统本拍未开仓",
         "CLAIM_CAP": "仅参考 · 该标的同向判断的风险额度已用完,本系统本拍未开仓",
         "DIRECTIONAL_CAP": "仅参考 · 同向风险额度已用完,本系统本拍未开仓",
-        "RWA_MARKET_CLOSED": "仅参考 · 非加密传统标的处于周末休市窗口,本系统暂停开新仓",
+        "RWA_MARKET_CLOSED": "仅参考 · 该非加密标的处于其底层市场的休市时段,本系统暂停开新仓",
         "RWA_INACTIVE_SESSION": "仅参考 · 非加密传统标的处于零成交休市死水时段,本系统暂停开新仓",
+        "QUOTE_STALE": "仅参考 · 非加密标的报价缺失或过期,本系统本拍未开仓",
+        "SPREAD_WIDE": "仅参考 · 非加密标的买卖点差过宽,本系统本拍未开仓",
+        "BASIS_WIDE": "仅参考 · 非加密标的与指数价格偏离过大,本系统本拍未开仓",
         "MANAGE_ONLY": "仅参考 · 该标的已退出交易宇宙但仍有持仓,本系统只管理出场、不新开仓",
         "MIN_NOTIONAL": "仅参考 · 数量低于交易所最小下单,本系统本拍未开仓",
         "DAILY_LOSS_BREAKER": "仅参考 · 当日亏损熔断,本系统暂停新开仓",
@@ -3062,6 +3065,9 @@ class LiveRunner:
         "DIRECTIONAL_CAP": (("cap_skips", 1),),
         "RWA_MARKET_CLOSED": (("rwa_session_skips", 1),),
         "RWA_INACTIVE_SESSION": (("rwa_session_skips", 1),),
+        "QUOTE_STALE": (("quote_guard_skips", 1),),
+        "SPREAD_WIDE": (("quote_guard_skips", 1),),
+        "BASIS_WIDE": (("quote_guard_skips", 1),),
         "MANAGE_ONLY": (("manage_only_skips", 1),),
         "MIN_NOTIONAL": (("min_notional_skips", 1),),
         "DAILY_LOSS_BREAKER": (("breaker_blocks", 1),),
@@ -3166,6 +3172,7 @@ class LiveRunner:
                     getattr(cs, "obs_tf_seconds", TF_SECONDS_MAP.get(cs.tf_label, 0)))
         confirm_ts = d.meta.get("confirm_ts") or (t + int(period_s) * 1000)
         snapshot_px, snapshot_ts, execution_quote = None, None, None
+        quote: Optional[dict] = None
         if self.mode == "live":
             try:
                 now_s = time.time()
@@ -3178,6 +3185,13 @@ class LiveRunner:
                         snapshot_px = float(row.get("lastPr") or 0.0) or None
                         snapshot_ts = int(cache[0] * 1000)
                         execution_quote = float(row.get("askPr" if hyp.direction > 0 else "bidPr") or 0.0) or None
+                        quote = {
+                            "bid": float(row.get("bidPr") or 0.0) or None,
+                            "ask": float(row.get("askPr") or 0.0) or None,
+                            "last": snapshot_px,
+                            "index": float(row.get("indexPrice") or 0.0) or None,
+                            "ts": int(row.get("ts") or snapshot_ts or 0) or snapshot_ts,
+                        }
                         break
             except Exception:
                 pass  # Missing quote is explicit; notification must not invent one.
@@ -3187,9 +3201,12 @@ class LiveRunner:
         block: Optional[str] = entry_cost_error(hyp.direction, fitted_entry, invalid, d.meta)
         if block is None:
             eval_bar = trigger_bar if trigger_bar is not None else (cs.trig_bars[-1] if mic and cs.trig_bars else (cs.cog_bars[-1] if cs.cog_bars else None))
-            block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar)
+            block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar,
+                                           symbol=sym)
         if block is None:
             block = self._manage_only_block(sym)
+        if block is None and self.mode == "live":
+            block = self._quote_guard_block(sym, quote)
         qty = 0.0
         if self.mode == "live" and self.api_halted:
             block = "API_HALT"
@@ -3629,7 +3646,7 @@ class LiveRunner:
             qty = min(qty, floor_step(risk_cap / abs(exec_px - inv), spec.size_step, spec.size_place))
         if qty <= 0.0 or qty * exec_px < max(spec.min_trade_usdt, spec.size_min * exec_px):
             return
-        rwa_block = rwa_session_entry_block(self._is_rwa(sym), int(now_ms))
+        rwa_block = rwa_session_entry_block(self._is_rwa(sym), int(now_ms), symbol=sym)
         if rwa_block is not None:
             return
         if self._directional_entry_blocked(d, qty, exec_px, inv, symbol=sym, exclude_oid=oid):
@@ -5092,6 +5109,44 @@ class LiveRunner:
     def _manage_only_block(self, sym: str) -> Optional[str]:
         """仅出场管理的标的禁止新开仓(宇宙是入场口径;持仓必须仍被管理)。"""
         return "MANAGE_ONLY" if sym in self._manage_only else None
+
+    def _quote_guard_block(self, sym: str,
+                           quote: Optional[dict]) -> Optional[str]:
+        """RWA 成交质量闸门:只在真实交易时段内生效(时段外已由 session gate 拦)。
+
+        三个失效面都来自同一个事实:非加密合约在底层市场休市时是**影子盘口**,
+        点差会成倍放大、永续价与指数价会脱离。开仓前用交易所公开 tickers
+        快照(与信号图同一份缓存)验一遍,缺失/过期/过宽/偏离过大一律不新开仓,
+        既有仓位与交易所保护单不受影响。
+
+        阈值全部来自 ``config/live.json`` 的 ``execution.quote_guard``;
+        ``rwa_only=true`` 时原生加密不做此判断(加密没有"底层休市"的概念)。
+        """
+        g = (self.cfg.get("execution") or {}).get("quote_guard") or {}
+        if not bool(g.get("enabled")):
+            return None
+        if bool(g.get("rwa_only", True)) and not self._is_rwa(sym):
+            return None
+        max_age = int(g.get("max_quote_age_seconds") or 30) * 1000
+        if not quote or quote.get("bid") is None or quote.get("ask") is None:
+            return "QUOTE_STALE"
+        ts = int(quote.get("ts") or 0)
+        if ts <= 0 or int(time.time() * 1000) - ts > max_age:
+            return "QUOTE_STALE"
+        bid, ask = float(quote["bid"]), float(quote["ask"])
+        if bid <= 0.0 or ask <= 0.0 or ask < bid:
+            return "QUOTE_STALE"
+        mid = (bid + ask) / 2.0
+        max_spread = float(g.get("max_spread_bps") or 0.0)
+        if max_spread > 0.0 and (ask - bid) / mid * 1e4 > max_spread:
+            return "SPREAD_WIDE"
+        max_basis = float(g.get("max_basis_bps") or 0.0)
+        index, last = quote.get("index"), quote.get("last")
+        if (max_basis > 0.0 and index and last and float(index) > 0.0
+                and abs(float(last) - float(index)) / float(index) * 1e4 > max_basis):
+            return "BASIS_WIDE"
+        return None
+
 
     def _adopt_exchange_only(self, ex_pos: list) -> None:
         """接管"交易所独有仓位"(扩展层;策略链路零改动)。

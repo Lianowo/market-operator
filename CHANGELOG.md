@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased] — 2026-11-18 — RWA 分市场交易时段(规则推导)与成交质量闸门
+
+策略链路零改动(`engine / events / level / routing / trigger / structure /
+hypothesis / position / campaign / replay / broker / capacity` 的风险、容量与
+杠杆数字全部不变)。
+
+- **分市场交易时段**:新增 `market_operator.sessions`,非加密合约按**底层市场日历**
+  判定能否新开仓 —— 美股现货 RTH、CME Globex(含每日 17:00-18:00 ET 维护)、
+  即期外汇、港股/日股/韩股/台股/印股各自时区与午休。修掉旧窗口的三处缺陷:
+  夏令时未修正(夏时 20:00-21:00 UTC 死水仍放行)、无节假日/半日市、商品与
+  指数/外汇被当成美股现货关闭。
+- **零日期、零标的**:节假日由交易所规则推导(第 n 个星期几、复活节推算法、
+  观察日平移、13:00 ET 半日市规则),对任意年份成立;标的→日历只按命名族
+  (外汇货币对形状、`HKD` 后缀、`TW` 前缀)解析,未登记标的走 `weekday_only`
+  兜底(`describe` 里标明 `source=default`)。逐标的登记写在运维覆盖文件
+  `data/calendars/overrides.json`(可选,运行数据,不随仓库变更);
+  `scripts/calendar_report.py` 列出每个标的的实际日历/来源/是否在时段内。
+  `tests/test_sessions_calendar.py` 同时锁定"生产代码与仓库配置不得出现固定
+  年月日或具体合约代码"。
+- **成交质量闸门**:`config/live.json` 的 `execution.quote_guard`(默认启用、
+  `rwa_only`)在真实时段内用交易所公开 tickers 快照拦截 `QUOTE_STALE` /
+  `SPREAD_WIDE` / `BASIS_WIDE`,计数 `quote_guard_skips`;既有仓位、交易所原生
+  止损/止盈不受影响。
+- **资金费真实结算**:`scripts/fetch_funding.py` 增加 `--source bitget`
+  (公开 `history-fund-rate`,pageNo 翻页),RWA 合约的 4h/8h 混合结算可落盘
+  进回放(`data/raw/funding/{SYM}.csv` 同一口径),不再依赖 1bp/8h 常数先验;
+  `scripts/live_cost_audit.py` 增加 Crypto vs RWA 分资产类别的 fee/funding bps。
+- **依赖**:`tzdata` 显式列入运行依赖(Windows 没有 IANA 时区库,`zoneinfo`
+  需要它才能解析 `America/New_York` 等)。
+
+
 ## [Unreleased] — 2026-11-18 — 执行回执、启动看护与外围通知(策略链路零改动)
 
 未改 `engine / events / level / routing / trigger / structure / hypothesis /

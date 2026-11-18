@@ -325,13 +325,20 @@ def main() -> int:
     start = now - days * MS_DAY
 
     fee_sched: dict[str, tuple] = {}
+    asset_class: dict[str, str] = {}
     try:
         for c in cli.contracts():
-            if c.get("symbol"):
-                fee_sched[c["symbol"]] = (c.get("takerFeeRate"),
-                                          c.get("makerFeeRate"))
+            sym_c = c.get("symbol")
+            if sym_c:
+                fee_sched[sym_c] = (c.get("takerFeeRate"),
+                                    c.get("makerFeeRate"))
+                asset_class[sym_c] = ("rwa" if str(c.get("isRwa") or "").upper() == "YES"
+                                      else "crypto")
     except Exception as e:                                     # noqa: BLE001
         print(f"[contracts] skipped: {type(e).__name__} {e}")
+
+    def cls_of(sym: str | None) -> str:
+        return asset_class.get(str(sym or ""), "unknown")
 
     try:
         fills = _parse_fills(cli.recent_fills(limit=100))
@@ -387,15 +394,42 @@ def main() -> int:
           f"-> {fb} bps/8h")
     print(f"[model] fee+slip={model_fee:.4f} USDT, funding={model_fund:.6f} USDT")
 
-    # ---- 市场资金费率(交易所公开历史)+ 账本敏感性 ----
+    # ---- 分资产类别(Crypto vs RWA):同一份成交/账单按合约 isRwa 归类 ----
+    fee_cls: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for f in fills:
+        if f["quote"] <= 0:
+            continue
+        bucket = fee_cls[cls_of(f["symbol"])]
+        bucket[0] += f["fee"]
+        bucket[1] += f["quote"]
+    for k, (fee_k, q_k) in sorted(fee_cls.items()):
+        bps_k = fee_k / q_k * 10_000 if q_k else 0.0
+        sched_k = sorted({round(float(v[0]) * 10_000, 2) for s, v in fee_sched.items()
+                          if cls_of(s) == k and v and v[0] is not None})
+        print(f"[fees:{k}] notional={q_k:.2f} fee={fee_k:.6f} "
+              f"weighted={bps_k:.2f}bps/side sched_taker={sched_k}")
+    hn_cls: dict[str, float] = defaultdict(float)
+    for r in rts:
+        hn_cls[cls_of(r.get("symbol"))] += float(r["notional"]) * float(r["hours"])
+    fund_cls: dict[str, float] = defaultdict(float)
+    for b in funding_bills:
+        try:
+            fund_cls[cls_of(b.get("symbol"))] += float(b.get("amount") or 0)
+        except (TypeError, ValueError):
+            pass
+    for k in sorted(set(hn_cls) | set(fund_cls)):
+        hn_k, fund_k = hn_cls.get(k, 0.0), fund_cls.get(k, 0.0)
+        bps_k = fund_k / (hn_k / 8) * 10_000 if hn_k > 0 else 0.0
+        print(f"[fund:{k}] sum={fund_k:+.6f} notional_hours={hn_k:.2f} -> {bps_k:+.3f} bps/8h")
+
     ledger_path = (paths.resolve_existing("reports") / "tf_trigger_exp"
                    / "abcd_20261022" / "trades_a0__full__1.csv")
     ledger = _ledger_sensitivity(ledger_path) if ledger_path.exists() else {}
     if ledger:
         print("[ledger] " + json.dumps(ledger, ensure_ascii=False))
 
-    syms: list[str] = []
-    if ledger_path.exists():
+    syms: list[str] = sorted({str(f["symbol"]) for f in fills if f.get("symbol")})
+    if not syms and ledger_path.exists():
         import csv as _csv
         with ledger_path.open(encoding="utf-8") as fh:
             seen: set[str] = set()
