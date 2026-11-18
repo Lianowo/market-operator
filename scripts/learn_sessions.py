@@ -144,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--out", default=str(OUT_PATH))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--merge", action="store_true",
+                    help="只更新本次给出的标的,其余沿用已有 assignments")
     args = ap.parse_args(argv)
 
     cli = BitgetLiveClient(None)
@@ -194,18 +196,32 @@ def main(argv: list[str] | None = None) -> int:
     if fallback:
         print(f"[learn] weekday_only={len(fallback)} e.g. {fallback[:8]}")
 
+    out = Path(args.out)
+    previous_doc: dict = {}
+    if out.exists():
+        try:
+            previous_doc = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous_doc = {}
+    diag = dict(previous_doc.get("diagnostics") or {}) if args.merge else {}
+    if args.merge:
+        assignments = {**(previous_doc.get("assignments") or {}), **assignments}
+    diag.update(results)
+
     payload = {
         "schema": 1,
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "method": "rth+asia+break_ratio",
         "params": {"days": args.days, "granularity": args.granularity},
         "assignments": assignments,
-        "diagnostics": results,
+        "diagnostics": diag,
     }
     if args.dry_run:
         print("[learn] dry-run, not written")
         return 0
-    out = Path(args.out)
+    if (previous_doc.get("assignments") or {}) == assignments:
+        print("[learn] assignments unchanged, not written")
+        return 0
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(out.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

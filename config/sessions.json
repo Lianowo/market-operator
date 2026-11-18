@@ -109,8 +109,9 @@
     "note": "数据驱动的'静默窗口'兜底:取确认棒之前、同一 UTC 星期×小时的近期历史(默认 range 中位数),若确认棒活动低于中位数的 floor_frac 就判为休市/死水。它不依赖任何日期与标的,因此自动覆盖未登记的假日、半日市、CME 每日 17:00-18:00 ET 维护、临时停盘 —— 与上面的日历互为补足:日历说'不该开'时直接拦,日历说'能开'但盘口已经死掉时由本项拦。"
   },
   "patterns": [
-    {"pattern": "^[A-Z]{3}[A-Z]{3}USDT$", "calendar": "fx",
-     "note": "外汇货币对形状(两个 ISO 货币码,如 EURUSD/USDJPY/USDBRL),不是具体合约清单。"},
+    {"pattern": "^(USD|EUR|GBP|JPY|AUD|NZD|CAD|CHF|CNH|HKD|SGD|INR|BRL|MXN|ZAR|TRY|KRW|SEK|NOK)([A-Z]{3})USDT$|^([A-Z]{3})(USD|EUR|GBP|JPY|AUD|NZD|CAD|CHF|CNH|HKD|SGD|INR|BRL|MXN|ZAR|TRY|KRW|SEK|NOK)USDT$",
+     "calendar": "fx",
+     "note": "外汇货币对形状:两端都必须是 ISO 货币码(如 EURUSD/USDJPY/USDBRL),避免把 6 字母个股代码(如 TOYOTA)误判成外汇。"},
     {"pattern": "^[A-Z0-9]+HKDUSDT$", "calendar": "hk_equity",
      "note": "港币/港股命名族(如 *HKDUSDT),不是具体合约清单。"},
     {"pattern": "^TW[A-Z0-9]+USDT$", "calendar": "tw_equity",

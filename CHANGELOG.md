@@ -37,6 +37,11 @@ hypothesis / position / campaign / replay / broker / capacity` 的风险、容�
   `rwa_only`)在真实时段内用交易所公开 tickers 快照拦截 `QUOTE_STALE` /
   `SPREAD_WIDE` / `BASIS_WIDE`,计数 `quote_guard_skips`;既有仓位、交易所原生
   止损/止盈不受影响。
+- **定时任务(自动保持最新)**:`\MarketOperator\MarketOperatorLearnSessions` 每日 06:10 跑
+  `tools\schedule\learn_sessions.cmd`(自动重算 `data/calendars/assignments.json`,内容不变则不写),
+  `\MarketOperator\MarketOperatorFunding` 每周日 07:30 跑 `tools\schedule\fetch_funding.cmd`
+  (`--source bitget --all-rwa --days 90 --incremental`,只覆盖通过 live.json 成交额门槛的 RWA,首次回填后只补尾部)。
+  两条任务与既有 `MarketOperatorLive` / `MarketOperatorStorageGC` 同目录、同约定(Start In = 仓库根)。
 - **资金费真实结算**:`scripts/fetch_funding.py` 增加 `--source bitget`
   (公开 `history-fund-rate`,pageNo 翻页),RWA 合约的 4h/8h 混合结算可落盘
   进回放(`data/raw/funding/{SYM}.csv` 同一口径),不再依赖 1bp/8h 常数先验;

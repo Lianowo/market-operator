@@ -42,7 +42,10 @@ RAW_DIR = DATA_DIR / "raw"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
 FAPI = "https://fapi.binance.com/fapi/v1/fundingRate"
 BITGET_FUNDING = "https://api.bitget.com/api/v2/mix/market/history-fund-rate"
+BITGET_CONTRACTS = "https://api.bitget.com/api/v2/mix/market/contracts"
+BITGET_TICKERS = "https://api.bitget.com/api/v2/mix/market/tickers"
 PRODUCT_TYPE = "USDT-FUTURES"
+LIVE_CONFIG = ROOT / "config" / "live.json"
 
 PAGE_LIMIT = 1000
 BITGET_PAGE_LIMIT = 100          # 交易所上限:pageSize 最大 100(实测)
@@ -148,6 +151,40 @@ def fetch_funding_bitget(symbol: str, start_ms: int, end_ms: int,
     return [x for x in out if lo <= int(x["fundingTime"]) <= hi]
 
 
+def rwa_universe(min_volume: float | None = None) -> list[str]:
+    """按 live.json 的 RWA 成交额门槛,返回当前在宇宙里的 RWA 合约(公开接口)。"""
+    if min_volume is None:
+        try:
+            uni = json.loads(LIVE_CONFIG.read_text(encoding="utf-8")).get("universe") or {}
+            min_volume = float((uni.get("rwa") or {}).get("min_usdt_volume_24h") or 0.0)
+        except (OSError, ValueError):
+            min_volume = 3_000_000.0
+    cs = requests.get(BITGET_CONTRACTS, params={"productType": PRODUCT_TYPE},
+                      timeout=20).json().get("data") or []
+    tk = requests.get(BITGET_TICKERS, params={"productType": PRODUCT_TYPE},
+                      timeout=20).json().get("data") or []
+    rwa = {str(c.get("symbol")) for c in cs
+           if str(c.get("isRwa") or "").upper() == "YES"}
+    out = []
+    for t in tk:
+        sym = t.get("symbol")
+        if sym in rwa and float(t.get("usdtVolume") or 0.0) > float(min_volume):
+            out.append(str(sym))
+    return sorted(out)
+
+
+def existing_series(path: Path) -> list[tuple[int, float]]:
+    if not path.exists():
+        return []
+    rows: list[tuple[int, float]] = []
+    for line in path.read_text(encoding="utf-8").splitlines()[1:]:
+        if not line.strip():
+            continue
+        ts, rate = line.split(",", 1)
+        rows.append((int(ts), float(rate)))
+    return rows
+
+
 def validate(series: list[tuple[int, float]]) -> list[str]:
     """连续性检查:升序、无重复、间隔为整小时(交易所偶发 4h/8h/1h 结算)。"""
     issues: list[str] = []
@@ -225,6 +262,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT")
     ap.add_argument("--source", choices=SOURCES, default="binance")
     ap.add_argument("--product-type", default=PRODUCT_TYPE)
+    ap.add_argument("--all-rwa", action="store_true",
+                    help="从公开接口取当前宇宙内的 RWA 合约(按 live.json 成交额门槛)")
+    ap.add_argument("--min-volume", type=float, default=None,
+                    help="配合 --all-rwa 的 24h USDT 名义量门槛;缺省读 config/live.json")
+    ap.add_argument("--incremental", action="store_true",
+                    help="从已有 CSV 最后一个结算点继续,只补新数据")
     ap.add_argument("--start-ts", type=int, default=None)
     ap.add_argument("--end-ts", type=int, default=None)
     ap.add_argument("--days", type=int, default=None,
@@ -235,13 +278,25 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = Path(args.out).resolve()
     records: dict = {}
-    for symbol in [s.strip() for s in args.symbols.split(",") if s.strip()]:
+    syms = (rwa_universe(args.min_volume) if args.all_rwa else
+            [s.strip() for s in args.symbols.split(",") if s.strip()])
+    print(f"[symbols] n={len(syms)} source={args.source} incremental={args.incremental}")
+    for symbol in syms:
+        prev = existing_series(out_dir / f"{symbol}.csv") if args.incremental else []
         start, end = _window(symbol, args)
+        if prev:
+            start = max(start, prev[-1][0] + 1)
+            if start >= end:
+                continue
         if args.source == "bitget":
             rows = fetch_funding_bitget(symbol, start, end, args.product_type)
         else:
             rows = fetch_funding(symbol, start, end)
         series = normalize(rows)
+        if prev:
+            merged = dict(prev)
+            merged.update(dict(series))
+            series = sorted(merged.items())
         if not series:
             print(f"[{symbol}] 无结算记录(window {start}..{end})")
             continue
