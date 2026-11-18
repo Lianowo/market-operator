@@ -45,6 +45,7 @@ EP_CANCEL_PLAN = "/api/v2/mix/order/cancel-plan-order"  # 计划单与 TPSL 共�
 EP_ORDERS_PENDING = "/api/v2/mix/order/orders-pending"
 EP_PLAN_PENDING = "/api/v2/mix/order/orders-plan-pending"
 EP_FILLS = "/api/v2/mix/order/fills"
+EP_ORDER_DETAIL = "/api/v2/mix/order/detail"
 
 RETRIES = 6
 RETRY_BACKOFF_S = 1.5
@@ -125,6 +126,25 @@ class BitgetLiveClient:
                     resp = self.session.request(
                         method.upper(), url, headers=headers, data=body_s,
                         timeout=TIMEOUT_S)
+                if resp.status_code == 429:
+                    retry_after = 3.0
+                    try:
+                        retry_after = float(
+                            getattr(resp, "headers", {}).get("Retry-After") or 3)
+                    except (TypeError, ValueError, AttributeError):
+                        retry_after = 3.0
+                    try:
+                        limited = resp.json()
+                        hint = limited.get("parameters") or limited.get("data") or {}
+                        if isinstance(hint, dict) and hint.get("retry_after") is not None:
+                            retry_after = float(hint["retry_after"])
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+                    last_err = BitgetError(
+                        f"bitget 429 retry_after={retry_after}")
+                    if attempt + 1 < self.max_retries:
+                        time.sleep(min(60.0, max(0.0, retry_after)))
+                    continue
                 payload = resp.json()
                 if resp.status_code == 200 and payload.get("code") == "00000":
                     return payload.get("data")
@@ -518,6 +538,17 @@ class BitgetLiveClient:
             params["symbol"] = symbol
         return self._request("GET", EP_FILLS, signed=True,
                              params=params) or []
+
+    def order_detail(self, symbol: str, order_id: str) -> dict:
+        """单笔订单详情。开仓回执优先读 `priceAvg`,成交列表还没索引时用它校正入场价。"""
+        self.require_credentials()
+        data = self._request(
+            "GET", EP_ORDER_DETAIL, signed=True,
+            params={"symbol": symbol, "productType": self.product_type,
+                    "orderId": str(order_id)})
+        if isinstance(data, list):
+            return data[0] if data else {}
+        return data or {}
 
 
 __all__ = [

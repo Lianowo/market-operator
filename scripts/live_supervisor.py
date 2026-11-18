@@ -102,6 +102,8 @@ class Supervisor:
         self.recover_max_s = float(sup.get("recover_max_seconds", 2700))
         self.poll_s = max(5.0, float(sup.get("poll_seconds", 30)))
         self.grace_s = float(sup.get("startup_grace_seconds", 180))
+        self.starting_max_s = float(sup.get("starting_max_seconds", 1200))
+        self.lock_backoff_s = float(sup.get("lock_backoff_seconds", 180))
         self.max_restarts = int(sup.get("max_restarts_per_hour", 6))
         self.gc_hours = float(sup.get("gc_hours", 24))
         self.log_max_mb = float(sup.get("log_max_mb", 32))
@@ -163,9 +165,73 @@ class Supervisor:
             log_line("alert_error", {"why": str(e)[:120]})
 
     # -- 判定 -------------------------------------------------------------
+    def _absorb_lock_busy(self) -> None:
+        """子进程因单实例锁退出(码 4)时,撤销刚才计入的重启,并退避。"""
+        marker = HB_PATH.parent / "runner_lock_busy.json"
+        try:
+            doc = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if int(doc.get("code") or 0) != 4:
+            return
+        try:
+            ts = int(doc.get("ts_ms") or 0) / 1000.0
+        except (TypeError, ValueError):
+            return
+        last = float(self.state.get("last_restart_s") or 0.0)
+        if ts + 5 < last:
+            return
+        pid = self.state.get("spawned_pid")
+        if pid and hb.process_alive(int(pid)):
+            return
+        rows = self._restarts()
+        if rows:
+            rows.pop()
+            self.state["restarts"] = rows
+        self.state["lock_backoff_until"] = time.time() + self.lock_backoff_s
+        self._save_state()
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+        log_line("lock_busy", {"backoff_s": self.lock_backoff_s})
+
+    def _ensure_tg_bot(self) -> None:
+        """Telegram 机器人掉了就拉起来。它只读,失败不影响 runner。"""
+        try:
+            from market_operator import ops
+            if ops._tg_pid(self.cfg):
+                return
+            rep = ops.start_tg_bot(self.cfg, wait_s=0, sync=True)
+            log_line("tg_bot", {"ok": bool(rep.get("ok") or rep.get("alive")),
+                                "why": str(rep.get("why") or "")[:120]})
+        except Exception as e:
+            log_line("tg_bot_error", {"why": f"{type(e).__name__}: {e}"[:160]})
+
     def judge(self) -> tuple[hb.Decision, dict, Optional[float]]:
         doc = hb.read_heartbeat(HB_PATH)
         age = hb.beat_age_seconds(doc)
+        until = float(self.state.get("lock_backoff_until") or 0.0)
+        if time.time() < until:
+            return (hb.Decision("none", "lock_backoff",
+                                "锁冲突退避中,暂不拉起"), doc, age)
+        if str(doc.get("status") or "") == "starting":
+            pid = doc.get("pid")
+            try:
+                started = int(doc.get("started_ms") or 0)
+                ts = int(doc.get("ts_ms") or 0)
+            except (TypeError, ValueError):
+                started, ts = 0, 0
+            now = hb.now_ms()
+            age_start = (now - started) / 1000.0 if started else 1e9
+            age_ts = (now - ts) / 1000.0 if ts else 1e9
+            alive = bool(pid) and hb.process_alive(int(pid))
+            if (alive and age_start <= self.starting_max_s
+                    and age_ts <= self.stale_s):
+                return (hb.Decision(
+                    "none", "starting",
+                    f"启动预热 {age_start:.0f}s / {self.starting_max_s:.0f}s"),
+                    doc, age)
         # 刚拉起还没写出心跳 → 启动宽限内不下杀手(不杀"刚起来的东西")
         spawned = float(self.state.get("spawned_at_s") or 0.0)
         if spawned and time.time() - spawned < self.grace_s:
@@ -243,6 +309,8 @@ class Supervisor:
             log_line("gc_error", {"why": f"{type(e).__name__}: {e}"})
 
     def run_once(self, *, dry: bool = False) -> hb.Decision:
+        if not dry:
+            self._absorb_lock_busy()
         decision, doc, age = self.judge()
         pid = doc.get("pid")
         # 必须先看 action:预算耗尽时 `decide()` 返回 action="give_up",而 kind 仍是
@@ -271,6 +339,8 @@ class Supervisor:
                        else "拉起失败(详见 logs/live_stderr.log)"))
         elif decision.kind == hb.LATE:
             log_line("late", {"reason": decision.reason, "pid": pid})
+        if not dry and self.allow_start:
+            self._ensure_tg_bot()
         return decision
 
     def status_text(self) -> str:

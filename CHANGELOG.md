@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] — 2026-11-18 — 执行回执、启动看护与外围通知(策略链路零改动)
+
+未改 `engine / events / level / routing / trigger / structure / hypothesis /
+position / campaign / replay / broker`,也未改 `strategy.json` 与
+`live.json` 里的风险、杠杆、容量、日亏、周期和白名单数字。
+
+- **开仓回执**:登记截止改用墙上时钟(决策时间仍是 K 线时间);优先读订单
+  `priceAvg`;`entry_settle` / `exit_settle` 写入 `state.json`。
+- **启动心跳**:预热期间写 `status=starting`。看护在 `starting_max_seconds`
+  内不杀不拉。锁冲突(退出码 4)退回一次重启预算并退避。
+- **新开仓必须有交易所止损**:`execution.require_exchange_protection=true`。
+  新仓第一笔止损若是 43023,记 `protection_unavailable` 并市价离场。启动前已有、
+  没有该标记的仓位仍走本地止损。
+- **通知**:公开信号去掉建议仓位/杠杆,展示信号类型和处置;图上只标价格带。
+  运营命令增加 frame / watches / protection / capacity / gates / universe / notify。
+- **Bitget HTTP 429** 在重试之间按 `Retry-After` 等待,最后一次不再睡。
+- **CI** 推送到 `main` 也会跑测试。代理探活脚本只写日志。
+
 ## [Unreleased] — 2026-11-18 — 非Crypto(RWA) 与 Crypto 同口径 3M 成交额门槛
 
 本轮只改宇宙筛选口径,策略链路(`engine / events / level / routing / trigger /

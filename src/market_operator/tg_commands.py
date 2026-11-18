@@ -152,6 +152,7 @@ class CommandSpec:
 PUBLIC_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("start", "订阅说明与快捷命令"),
     CommandSpec("help", "查看公开命令列表"),
+    CommandSpec("frame", "当前信号周期:1d导航 / 4h结构 / 1h扳机"),
     CommandSpec("symbols", "当前观察标的"),
     CommandSpec("ping", "机器人在线检查"),
     CommandSpec("id", "显示当前 chat id"),
@@ -162,7 +163,14 @@ OPS_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("help", "查看运营命令列表"),
     CommandSpec("status", "进程/心跳/权益/持仓概览"),
     CommandSpec("positions", "本地与交易所持仓对账"),
-    CommandSpec("orders", "在挂委托与保护性止损"),
+    CommandSpec("orders", "在挂委托、关注与保护止损"),
+    CommandSpec("watches", "尚未下单的价格关注"),
+    CommandSpec("protection", "有仓无止损或防线不一致"),
+    CommandSpec("capacity", "容量上限与持仓笔数"),
+    CommandSpec("gates", "闸门跳过计数"),
+    CommandSpec("frame", "决策周期与扳机周期"),
+    CommandSpec("universe", "最近一次宇宙筛选"),
+    CommandSpec("notify", "信号发送失败与漏发"),
     CommandSpec("system", "版本/布局/运行时长/计数器"),
     CommandSpec("host", "主机 CPU/内存/磁盘"),
     CommandSpec("disk", "磁盘与各类目录占用"),
@@ -363,7 +371,8 @@ def _symbols_text(cfg: dict, secrets: dict, *, ops_role: bool) -> str:
     else:
         lines.append("⭐ 全市场无差别动态扫描(无固定核心标的绑定)")
     if ops_role:
-        lines.append(f"🌐 选币上限 {uni.get('max_symbols', '?')} 个")
+        if uni.get("max_symbols") is not None:
+            lines.append(f"🌐 选币上限 {uni.get('max_symbols')} 个")
         crypto_min = (uni.get("crypto") or {}).get(
             "min_usdt_volume_24h", uni.get("min_usdt_volume_24h"))
         rwa_min = (uni.get("rwa") or {}).get("min_usdt_volume_24h", crypto_min)
@@ -376,9 +385,44 @@ def _symbols_text(cfg: dict, secrets: dict, *, ops_role: bool) -> str:
                 f"📈 24h 成交额门槛 Crypto > {_fmt_num(crypto_min, 0)} USDT"
                 f" · 非Crypto(RWA) > {_fmt_num(rwa_min, 0)} USDT"
             )
-        lines.append(f"🔁 刷新 {uni.get('refresh_minutes', '?')} 分钟")
+        mult = (uni.get("rwa") or {}).get("capacity_multiplier")
+        if mult is not None:
+            lines.append(f"📉 非加密容量系数 {mult}")
+        refresh_s = (cfg.get("loop") or {}).get("universe_refresh_seconds")
+        if refresh_s:
+            lines.append(f"🔁 宇宙刷新 {int(int(refresh_s) / 60)} 分钟")
+        elif uni.get("refresh_minutes") is not None:
+            lines.append(f"🔁 刷新 {uni.get('refresh_minutes')} 分钟")
         lines.append(f"🧮 产品线 {uni.get('product_type', '?')}")
     return "\n".join(lines)
+
+
+def _seconds_label(seconds: int) -> str:
+    table = {900: "15m", 1800: "30m", 3600: "1h", 7200: "2h",
+             14400: "4h", 43200: "12h", 86400: "1d"}
+    if int(seconds) in table:
+        return table[int(seconds)]
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return str(seconds)
+
+
+def _frame_line(cfg: dict) -> str:
+    cog = (cfg or {}).get("cognition") or {}
+    tfs = list(cog.get("tf_list") or [])
+    trig = cog.get("trigger_tf_by_htf") or {}
+    parts = []
+    for tf in tfs:
+        sub = trig.get(tf) if tf in trig else trig.get(str(tf))
+        if sub is None and tf in trig:
+            parts.append(f"{tf} 导航")
+        elif sub is None:
+            parts.append(str(tf))
+        else:
+            parts.append(f"{tf}→{_seconds_label(int(sub))}")
+    return "⏱️ 级联 " + (" · ".join(parts) if parts else "未配置")
 
 
 
@@ -432,10 +476,9 @@ def cmd_symbols(ctx: CommandContext, args: list[str]) -> str:
     return _symbols_text(ctx.cfg, ctx.secrets, ops_role=ctx.role == "ops")
 
 
-def _pos_rows(cfg: dict) -> list[dict]:
+def _heartbeat_pos_rows(cfg: dict) -> list[dict]:
     beat = ops.read_heartbeat(cfg)
-    # 心跳里的 `positions` 是**数量**(int),逐笔明细在 `positions_detail`;
-    # 直接迭代 `positions` 会在有仓位时抛 TypeError(2026-10-24 修复)。
+    # 心跳里的 `positions` 是**数量**(int),逐笔明细在 `positions_detail`。
     detail = beat.get("positions_detail")
     if detail is None and isinstance(beat.get("positions"), list):
         detail = beat["positions"]
@@ -449,7 +492,22 @@ def _pos_rows(cfg: dict) -> list[dict]:
                      "mark": p.get("mark"), "invalid": p.get("invalid"),
                      "stop": p.get("stop") or p.get("stop_id"),
                      "tf": p.get("tf")})
-    return rows or ops.local_positions(cfg)
+    return rows
+
+
+def _pos_rows(cfg: dict) -> list[dict]:
+    """账本入场价在 state.json。心跳明细没有 entry,只用来补标记价。"""
+    local = ops.local_positions(cfg)
+    if local:
+        by_sym = {r.get("symbol"): r for r in _heartbeat_pos_rows(cfg)}
+        for row in local:
+            hb_row = by_sym.get(row.get("symbol")) or {}
+            if row.get("mark") is None and hb_row.get("mark") is not None:
+                row["mark"] = hb_row.get("mark")
+            if row.get("stop") is None and hb_row.get("stop") is not None:
+                row["stop"] = hb_row.get("stop")
+        return local
+    return _heartbeat_pos_rows(cfg) or ops.local_positions(cfg)
 
 
 def cmd_status(ctx: CommandContext, args: list[str]) -> str:
@@ -468,6 +526,12 @@ def cmd_status(ctx: CommandContext, args: list[str]) -> str:
     if eq is not None:
         lines.append(f"💰 权益 {_fmt_num(eq, 2)} USDT")
     lines.append("🛡️ 熔断 " + ("已触发" if breaker.get("tripped") else "正常"))
+    lines.append(_frame_line(ctx.cfg))
+    lines.append(f"💓 状态 {snap['runner'].get('status') or '?'}")
+    tg = snap.get("tg_bot") or {}
+    lines.append("🤖 机器人 " + ("在线" if tg.get("alive") else "未运行"))
+    if snap.get("watches"):
+        lines.append(f"👁️ 关注 {snap.get('watches')} · 入场 {snap.get('entry_orders', 0)}")
     sup = snap.get("supervisor") or {}
     lines.append(f"🖥️ 看护 {'pid ' + str(sup.get('pid')) if sup.get('alive') else '未运行'}"
                  f" · 本小时可重启 {sup.get('restarts_left', '?')}")
@@ -519,7 +583,12 @@ def cmd_orders(ctx: CommandContext, args: list[str]) -> str:
     if not intents:
         lines.append("📭 无在挂委托")
     for it in intents[:20]:
-        label = "入场" if it.get("role") == "entry" else "管理"
+        if it.get("watch_entry"):
+            label = "关注"
+        elif it.get("role") == "entry":
+            label = "入场"
+        else:
+            label = "管理"
         kind = "限价" if it.get("kind") == "limit" else "市价"
         row = (f"· {_arrow(it.get('direction'))} {it.get('symbol')} "
                f"· {label}{kind} · {_fmt_num(it.get('qty'))}")
@@ -654,14 +723,125 @@ def cmd_logs(ctx: CommandContext, args: list[str]) -> str:
             f"────────\n{text or '(空)'}")
 
 
+def cmd_frame(ctx: CommandContext, args: list[str]) -> str:
+    cog = (ctx.cfg or {}).get("cognition") or {}
+    lines = ["🧭 信号口径", _frame_line(ctx.cfg),
+             "1d 白名单为空时日线只导航,不开仓。"]
+    raw = cog.get("trigger_tf_by_htf") or {}
+    if "1d" in raw and raw.get("1d") is None:
+        lines.append("当前 1d 没有下级扳机。")
+    if ctx.role == "ops":
+        lines.append("原始 K 线缓存粒度 "
+                     + str(cog.get("granularity") or "未写"))
+    return "\n".join(lines)
+
+
+def cmd_capacity(ctx: CommandContext, args: list[str]) -> str:
+    risk = (ctx.cfg or {}).get("risk") or {}
+    uni = (ctx.cfg or {}).get("universe") or {}
+    mix = ops.position_mix(ctx.cfg)
+    caps = risk.get("tf_cap_by_tf") or {}
+    cap_txt = " · ".join(f"{k} {float(v):.0%}" for k, v in caps.items()) or "—"
+    lines = [
+        "📊 容量(配置,不重算准入)",
+        f"组合上限 {float(risk.get('portfolio_cap_frac') or 0):.0%}"
+        f" · 同向上限 {float(risk.get('directional_cap_frac') or 0):.0%}",
+        f"周期上限 {cap_txt}",
+        f"非加密系数 {(uni.get('rwa') or {}).get('capacity_multiplier', '—')}",
+        f"持仓 {mix['n']} · 多 {mix['long']} · 空 {mix['short']} · 非加密 {mix['rwa']}",
+    ]
+    if mix["by_tf"]:
+        lines.append("周期笔数 " + " · ".join(
+            f"{k} {v}" for k, v in sorted(mix["by_tf"].items())))
+    if mix.get("equity") is not None:
+        lines.append(f"权益 {_fmt_num(mix.get('equity'), 2)}")
+    return "\n".join(lines)
+
+
+def cmd_gates(ctx: CommandContext, args: list[str]) -> str:
+    labels = {
+        "tf_cap_skips": "周期容量", "cap_skips": "容量跳过",
+        "rwa_session_skips": "非加密休市", "manage_only_skips": "只管理出场",
+        "min_notional_skips": "最小下单", "rate_skips": "频率",
+        "breaker_blocks": "当日熔断", "signal_notice_errors": "信号发送失败",
+        "adopted": "接管", "gap_recoveries": "缺口补做",
+        "unprotected_stop_exits": "保护失效离场",
+        "protection_unavailable": "挂不上止损",
+        "entry_settle_miss": "开仓回执缺失", "exit_settle_miss": "离场回执缺失",
+        "stop_errors": "止损错误", "stop_local_mode": "本地止损",
+    }
+    counts = ops.gate_counters(ctx.cfg)
+    lines = ["🚦 闸门计数"]
+    for key, label in labels.items():
+        lines.append(f"· {label} {counts.get(key, 0)}")
+    return "\n".join(lines)
+
+
+def cmd_watches(ctx: CommandContext, args: list[str]) -> str:
+    rep = ops.local_orders(ctx.cfg)
+    rows = [it for it in (rep.get("intents") or []) if it.get("watch_entry")]
+    lines = [f"👁️ 价格关注 {len(rows)}"]
+    if not rows:
+        lines.append("📭 没有关注中的标的")
+    for it in rows[:20]:
+        lines.append(
+            f"· {_arrow(it.get('direction'))} {it.get('symbol')}"
+            f" · {it.get('tf') or '—'}"
+            f" · 触发 {_fmt_num(it.get('limit_price'))}"
+            f" · 失效 {_fmt_num(it.get('invalid'))}")
+        lines.append(f"  到期 {_fmt_ms(it.get('expiry_ms'))}")
+    return "\n".join(lines)
+
+
+def cmd_protection(ctx: CommandContext, args: list[str]) -> str:
+    rep = ops.protection_report(ctx.cfg)
+    lines = [f"🛡️ 保护 · 仓 {rep['n_pos']} · 止损记录 {rep['n_stops']}"]
+    missing, mismatch = rep["missing"], rep["mismatch"]
+    lines.append("✅ 本地保护记录齐全" if not missing and not mismatch
+                 else f"⚠️ 缺记录 {len(missing)} · 价不一致 {len(mismatch)}")
+    for sym in missing[:15]:
+        lines.append(f"· 无止损记录 {sym}")
+    for sym in mismatch[:15]:
+        lines.append(f"· 防线不一致 {sym}")
+    return "\n".join(lines)
+
+
+def cmd_notify(ctx: CommandContext, args: list[str]) -> str:
+    rep = ops.notify_tail(ctx.cfg)
+    lines = [f"📣 信号发送失败 {rep['signal_notice_errors']}"]
+    missed = rep.get("missed") or []
+    if not missed:
+        lines.append("📭 没有漏发记录")
+    else:
+        lines.append(f"漏发末 {len(missed)} 条")
+        for row in missed:
+            lines.append(str(row)[:180])
+    return "\n".join(lines)
+
+
+def cmd_universe(ctx: CommandContext, args: list[str]) -> str:
+    row = ops.latest_universe(ctx.cfg)
+    if not row:
+        return "🌐 尚未落宇宙日志"
+    head = row.get("head") or []
+    names = " · ".join(str(s) for s in list(head)[:8])
+    lines = [f"🌐 宇宙 {row.get('n', '?')} 个"]
+    if names:
+        lines.append(names)
+    return "\n".join(lines)
+
+
 HANDLERS: dict[str, dict[str, Callable[[CommandContext, list[str]], str]]] = {
     "public": {
-        "start": cmd_start, "help": cmd_help, "symbols": cmd_symbols,
-        "ping": cmd_ping, "id": cmd_id,
+        "start": cmd_start, "help": cmd_help, "frame": cmd_frame,
+        "symbols": cmd_symbols, "ping": cmd_ping, "id": cmd_id,
     },
     "ops": {
         "start": cmd_start, "help": cmd_help, "status": cmd_status,
         "positions": cmd_positions, "orders": cmd_orders,
+        "watches": cmd_watches, "protection": cmd_protection,
+        "capacity": cmd_capacity, "gates": cmd_gates, "frame": cmd_frame,
+        "universe": cmd_universe, "notify": cmd_notify,
         "system": cmd_system, "host": cmd_host,
         "disk": cmd_disk, "doctor": cmd_doctor, "logs": cmd_logs,
         "symbols": cmd_symbols, "id": cmd_id,

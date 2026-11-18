@@ -75,7 +75,7 @@ from market_operator.engine import (                             # noqa: E402
     select_cognition_route_events,
 )
 from market_operator.heartbeat import (                          # noqa: E402
-    SCHEMA as HB_SCHEMA, HeartbeatGuard, SingletonLock, iso_utc)
+    SCHEMA as HB_SCHEMA, HeartbeatGuard, SingletonLock, iso_utc, write_atomic)
 from market_operator.hypothesis import StructureView, entry_contract_error, entry_cost_error, execution_target  # noqa: E402
 from market_operator.position import (                          # noqa: E402
     Position, PositionManager, opp_lock_step)
@@ -737,7 +737,12 @@ class LiveRunner:
                 f"(仅允许 bar|15m|realtime)")
         self._price_seen: dict[str, int] = {}
         self._price_last: dict[str, int] = {}
+        # 预热期间心跳 status=starting。看护认这个状态,不把「还在装战役」当成卡死。
+        self._booting = True
+        self._boot_beat_at = 0.0
+        self._touch_boot_heartbeat()
         self._load_state()
+        self._booting = False
         # 启动即落一次心跳:看护立刻看到新 pid + 新 started_ms,不会把上一具
         # 尸体留下的旧 loop_ts_ms 误判成"卡死"并对新进程动手。
         try:
@@ -843,6 +848,11 @@ class LiveRunner:
         self._leverage_done = set(st.get("leverage_done") or [])
         self.leverage_by_sym = dict(st.get("leverage_by_sym") or {})
         self.counters.update(st.get("counters", {}))
+        for key in ("entry_settle", "exit_settle"):
+            raw = st.get(key) or {}
+            if isinstance(raw, dict):
+                setattr(self, f"_{key}", {
+                    str(k): v for k, v in raw.items() if isinstance(v, dict)})
         b = st.get("breaker", {})
         self.breaker.day = b.get("day")
         self.breaker.start_equity = b.get("start_equity")
@@ -879,12 +889,14 @@ class LiveRunner:
             if bars:
                 self._gap_bars[sym] = [tuple(b) for b in bars]
         if saved_camps:
+            self._touch_boot_heartbeat()
             want = int(self.cog_cfg["warmup_trigger_bars"])
             prefetched = self._prefetch_bars_parallel(
                 list(saved_camps.keys()), want,
                 seed_by_sym={sym: saved.get("trig_bars")
                              for sym, saved in saved_camps.items()})
             for sym, saved in saved_camps.items():
+                self._touch_boot_heartbeat()
                 try:
                     bars2h = prefetched.get(sym) or []
                     saved_bars = saved.get("trig_bars") or []
@@ -991,6 +1003,22 @@ class LiveRunner:
         """兼容入口:心跳文档的 JSON 文本(落盘用)。"""
         return json.dumps(self.heartbeat_doc(now_ms), ensure_ascii=False)
 
+    def _touch_boot_heartbeat(self) -> None:
+        """预热中刷新 status=starting,最多每 10 秒一次。"""
+        if not getattr(self, "_booting", False):
+            return
+        now = time.time()
+        if now - float(getattr(self, "_boot_beat_at", 0.0) or 0.0) < 10.0:
+            return
+        self._boot_beat_at = now
+        try:
+            self._write_json_atomic(
+                self.heartbeat_path,
+                json.dumps(self.heartbeat_doc(
+                    int(now * 1000), status="starting"), ensure_ascii=False))
+        except Exception:
+            pass
+
     def _write_json_atomic(self, path: Path, payload: str) -> None:
         """同目录临时文件 + `os.replace` 原子落盘(读者永远看到完整文件)。
 
@@ -1071,6 +1099,8 @@ class LiveRunner:
             "mode": self.mode, "equity": self.equity,
             "positions": self.positions, "open_intents": self.open_intents,
             "stops": self.stops, "counters": self.counters,
+            "entry_settle": self._entry_settle,
+            "exit_settle": self._exit_settle,
             "leverage_done": sorted(self._leverage_done),
             "leverage_by_sym": self.leverage_by_sym,
             "gap_started_ms": self._gap_started_ms,
@@ -1238,6 +1268,7 @@ class LiveRunner:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(_fetch_one, sym): sym for sym in symbols}
             for fut in as_completed(futs):
+                self._touch_boot_heartbeat()
                 sym = futs[fut]
                 try:
                     out[sym] = fut.result()
@@ -2647,7 +2678,7 @@ class LiveRunner:
                     tf_label=cs.tf_label,
                     direction=pos_pm.direction,
                     entry_price=float(pos_dict["entry"]),
-                    price_label="参考价(子周期收盘)",
+                    price_label=f"参考价({self._bar_tf_label(int(getattr(cs, 'trigger_tf_seconds', 0) or 0))}收盘)",
                     stop_price=float(pos_pm.invalid),
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo"),
@@ -2711,7 +2742,7 @@ class LiveRunner:
                     tf_label=cs.tf_label,
                     direction=pos_pm.direction,
                     entry_price=(float(pos_dict["entry"]) if pos_dict else None),
-                    price_label="参考价(认知帧收盘)",
+                    price_label=f"参考价({cs.tf_label}收盘)",
                     stop_price=float(pos_pm.invalid),
                     target_price=pos_pm.target_1,
                     box_lo=pos_dict.get("box_lo") if pos_dict else None,
@@ -2870,13 +2901,30 @@ class LiveRunner:
 
     @staticmethod
     def _box_bounds(zone_lo, zone_hi, box_opposite):
-        """平衡箱体上下沿:事件区间 + 对侧近缘的极值;区间缺失则整体不画。"""
+        """原子水平位带。`box_opposite` 保留参数以兼容旧调用,不再把带加宽成平衡箱。"""
+        del box_opposite
         if zone_lo is None or zone_hi is None:
             return None, None
-        pts = [float(zone_lo), float(zone_hi)]
-        if box_opposite is not None:
-            pts.append(float(box_opposite))
-        return min(pts), max(pts)
+        lo, hi = float(zone_lo), float(zone_hi)
+        return (lo, hi) if hi >= lo else (hi, lo)
+
+    @staticmethod
+    def _bar_tf_label(seconds: int) -> str:
+        for name, sec in TF_SECONDS_MAP.items():
+            if int(sec) == int(seconds):
+                return name
+        seconds = int(seconds or 0)
+        if seconds >= 86400 and seconds % 86400 == 0:
+            return f"{seconds // 86400}d"
+        if seconds >= 3600 and seconds % 3600 == 0:
+            return f"{seconds // 3600}h"
+        if seconds >= 60 and seconds % 60 == 0:
+            return f"{seconds // 60}m"
+        return f"{seconds}s" if seconds else ""
+
+    def _require_exchange_protection(self) -> bool:
+        return bool((self.cfg.get("execution") or {}).get(
+            "require_exchange_protection"))
 
     @staticmethod
     def _resolve_box_start_ts(cs: CampaignState, meta: Optional[dict]) -> Optional[int]:
@@ -3285,17 +3333,21 @@ class LiveRunner:
             if (equity > 0.0 and planned_lev > 0 and sig_notional > 0.0)
             else None
         )
+        bar_tf = self._bar_tf_label(int(period_s or 0))
         self._notify_signal(
             (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
             size_note="降档触发" if mic else "本周期触发",
             exec_status=self._signal_status_text(block, tf_label=cs.tf_label,
                                                 kind=d.kind, watch_entry=is_watch),
-            symbol=sym, tf_label=cs.tf_label, event_id=hyp.event_id,
+            symbol=sym, tf_label=cs.tf_label, bar_tf=bar_tf,
+            event_id=hyp.event_id,
             side=side, route=d.route,
             ref_price=entry_ref, invalid=invalid, target_1=hyp.target_1,
             regime=regime, bars=chart_bars, box_lo=box_lo, box_hi=box_hi,
             zone_lo=zone_lo, zone_hi=zone_hi,
             zone_touches=d.meta.get("zone_touches"),
+            level_kind=d.meta.get("level_kind"),
+            level_role=d.meta.get("level_role"),
             pivots=chart_pivots, atr=getattr(view, "atr", None),
             decision_ts=confirm_ts, watch_details=watch_details,
             price_context={**d.meta, "box_start_ts": box_start_ts,
@@ -3330,6 +3382,8 @@ class LiveRunner:
                   "edge_mult": edge_mult,
                   "box_lo": box_lo, "box_hi": box_hi,
                   "box_start_ts": box_start_ts,
+                  "level_kind": d.meta.get("level_kind"),
+                  "level_role": d.meta.get("level_role"),
                   "bounded_entry": bool(d.meta.get("bounded_entry")),
                   "entry_min_rr": float(d.meta.get("entry_min_rr", 0.0)),
                   "inner_edge": d.meta.get("inner_edge"),
@@ -3389,7 +3443,18 @@ class LiveRunner:
                                                 side_fallback_price=entry_ref,
                                                 now_ms=t)
             except BitgetError as e:
-                if d.kind != "limit" and "40786" in str(e):
+                if self._require_exchange_protection() and "43023" in str(e):
+                    intent["status"] = "error"
+                    self.counters["protection_unavailable"] = \
+                        self.counters.get("protection_unavailable", 0) + 1
+                    self._journal("protection_unavailable", {
+                        "oid": oid, "symbol": sym, "event": hyp.event_id,
+                        "why": str(e)[:160]})
+                    self.tg.send_alert(
+                        f"{sym} 开仓被拒(无法挂交易所止损):{str(e)[:100]}"
+                        f" → 本笔不开仓")
+                    self._api_note(e)
+                elif d.kind != "limit" and "40786" in str(e):
                     # 40786 = 重复的 clientOid:说明该笔市价单已在交易所落地成交,
                     # 按已成交建仓入账,绝不能标为 error 后被 _adopt_exchange_only 当异己仓覆盖止损!
                     self._journal("order_idempotent_recover", {
@@ -3431,17 +3496,20 @@ class LiveRunner:
             self.tg.send_alert(f"{it['symbol']} 开仓参考价穿越失效位,人工核查")
             it["status"] = "void"
             return
-        it["status"], it["fill_price"], it["fill_ts"] = "filled", price, now_ms
+        # `now_ms` 是决策 K 线时间,常常早于真实下单数小时。持仓 opened_ts 继续用它
+        # (持仓管理按 bar 对齐)。回执窗口只用墙上时钟,否则登记时截止时间已经过期。
+        wall_ms = int(time.time() * 1000)
+        it["status"], it["fill_price"], it["fill_ts"] = "filled", price, wall_ms
         it["ref_px"] = price
         it["fill_price_source"] = "ref"
-        self._register_position(it["symbol"], it, price, now_ms)
+        self._register_position(it["symbol"], it, price, int(now_ms))
         if self.mode == "live" and it.get("exchange_order_id"):
             self._entry_settle[it["symbol"]] = {
                 "oid": it["oid"], "order_id": str(it["exchange_order_id"]),
                 "event_id": str(it.get("event_id")),
                 "ref_px": price, "direction": int(it["direction"]),
-                "submitted_ms": int(now_ms),
-                "deadline_ms": int(now_ms) + 180_000}
+                "submitted_ms": wall_ms,
+                "deadline_ms": wall_ms + 180_000}
 
     def _notify_watch(self, it: dict, status: str, reason: str) -> None:
         """Best-effort presentation only; never mutate intent/trading state."""
@@ -3625,6 +3693,11 @@ class LiveRunner:
             "structural_target": it.get("structural_target", it["target_1"]),
             "box_lo": it.get("box_lo"), "box_hi": it.get("box_hi"),
             "box_start_ts": it.get("box_start_ts"),
+            "level_kind": it.get("level_kind"),
+            "level_role": it.get("level_role"),
+            "is_rwa": self._is_rwa(sym),
+            "protection_required": bool(
+                origin == "strategy" and self._require_exchange_protection()),
             "opened_ts": ts, "mark": price,
             "entry_invalid": float(it["invalid"]),
             "entry_qty": float(it["qty"]),
@@ -4254,6 +4327,8 @@ class LiveRunner:
             # 本地止损模式:交易所拒绝为小仓位挂 TPSL(43023)时退化为本地裁决。
             # 语义:保护只能缺席「交易所单」,不能缺席「风险」。每轮用标记价与本
             # 地防线比较,越过即市价离场(与 stop_missing_breached 同一条纪律)。
+            if cur is not None and cur.get("mode") == "flattening":
+                continue
             if cur is not None and cur.get("mode") == "local":
                 mark = float(pos.get("mark") or 0.0)
                 breached = mark > 0.0 and (
@@ -4382,9 +4457,40 @@ class LiveRunner:
                                              "qty": stop_qty,
                                              "why": why[:160]})
                 if _stop_requires_local(why):
+                    first_place = cur is None or not cur.get("order_id")
+                    if (pos.get("protection_required") and first_place
+                            and self._require_exchange_protection()):
+                        pos["protection_required"] = False
+                        self.stops[sym] = {
+                            "trigger": want, "qty": stop_qty,
+                            "order_id": "", "mode": "flattening"}
+                        self.counters["protection_unavailable"] = \
+                            self.counters.get("protection_unavailable", 0) + 1
+                        self._journal("protection_unavailable", {
+                            "symbol": sym, "trigger": want, "qty": stop_qty,
+                            "why": why[:160]})
+                        self.tg.send_alert(
+                            f"{sym} 新开仓无法挂交易所止损({why[:80]})"
+                            f" → 本笔立即平仓,不保留无交易所保护的新仓")
+                        try:
+                            self._arm_close_intent(
+                                sym, pos, stop_qty, "market", None,
+                                "PROTECTION_UNAVAILABLE", int(now_ms),
+                                role="exit", force=True)
+                        except Exception as close_err:
+                            self.stops[sym] = {
+                                "trigger": want, "qty": stop_qty,
+                                "order_id": "", "mode": "local"}
+                            self.counters["stop_local_mode"] = \
+                                self.counters.get("stop_local_mode", 0) + 1
+                            self.tg.send_alert(
+                                f"{sym} 无法挂交易所止损且立即平仓失败"
+                                f"({type(close_err).__name__}) → 退回本地止损")
+                        continue
                     # 仓位太小/交易所不支持 TPSL:切成**本地止损监控**,绝不再
                     # 丢记录(见 `_STOP_TOO_SMALL_MARKS` 注释)。错误只记一次,
                     # 之后本模式不再尝试下交易所单 ⇒ 不刷 API 错误计数。
+                    # 启动前已存在的仓位没有 protection_required,仍走这条兜底。
                     self.stops[sym] = {"trigger": want, "qty": stop_qty,
                                        "order_id": "", "mode": "local"}
                     if not cur or cur.get("mode") != "local":
@@ -4719,6 +4825,35 @@ class LiveRunner:
         oid = str(order_id or "")
         if not oid:
             return None
+        detail_fn = getattr(self.client, "order_detail", None)
+        if callable(detail_fn):
+            try:
+                detail = detail_fn(sym, oid) or {}
+            except BitgetError:
+                detail = {}
+            if isinstance(detail, dict):
+                try:
+                    px = float(detail.get("priceAvg") or detail.get("price") or 0)
+                    qty = float(detail.get("baseVolume") or detail.get("size")
+                                or detail.get("fillSize") or 0)
+                except (TypeError, ValueError):
+                    px, qty = 0.0, 0.0
+                state = str(detail.get("state") or detail.get("status") or "").lower()
+                if (px > 0 and qty > 0
+                        and state not in ("live", "new", "canceled", "cancelled")):
+                    ts = None
+                    for key in ("uTime", "cTime", "fillTime"):
+                        raw = detail.get(key)
+                        if raw is None:
+                            continue
+                        try:
+                            ts = int(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if ts < 10_000_000_000:
+                            ts *= 1000
+                        break
+                    return px, ts, qty
         try:
             res = self.client.recent_fills(sym, limit=100)
         except BitgetError:
@@ -5329,6 +5464,28 @@ def load_contracts_live(client, symbols: Optional[list] = None) -> dict:
     return out, raw
 
 
+def write_starting_heartbeat(path: Path, *, mode: str = "live") -> None:
+    """配置读完、战役预热之前落一笔 status=starting,避免看护把冷启动当成心跳缺失。"""
+    now = int(time.time() * 1000)
+    doc = {
+        "schema": HB_SCHEMA,
+        "ts_ms": now,
+        "started_ms": now,
+        "loop_ts_ms": now,
+        "step_started_ms": 0,
+        "step_count": 0,
+        "saved_at_utc": iso_utc(now),
+        "pid": os.getpid(),
+        "mode": mode,
+        "status": "starting",
+        "positions": 0,
+        "stops": 0,
+        "armed": 0,
+        "positions_detail": [],
+    }
+    write_atomic(Path(path), json.dumps(doc, ensure_ascii=False))
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(prog="live_runner")
     ap.add_argument("--mode", required=True, choices=("live", "paper"),
@@ -5353,9 +5510,26 @@ def main(argv=None) -> None:
         lock_path = paths.runtime_dir() / "live" / "runner.lock"
         runner_lock = SingletonLock(lock_path)
         if not runner_lock.acquire():
+            marker = paths.runtime_dir() / "live" / "runner_lock_busy.json"
+            try:
+                write_atomic(marker, json.dumps({
+                    "code": 4,
+                    "ts_ms": int(time.time() * 1000),
+                    "pid": os.getpid(),
+                    "why": "lock_busy",
+                }, ensure_ascii=False))
+            except OSError:
+                pass
             print(f"[live_runner] 已有實盤實例持有單實例鎖({lock_path}),本進程退出",
                   flush=True)
-            return
+            raise SystemExit(4)
+        hb_rel = (cfg.get("loop") or {}).get("heartbeat_path")
+        boot_hb = (paths.resolve(str(hb_rel)) if hb_rel
+                   else paths.runtime_dir() / "live" / "heartbeat.json")
+        try:
+            write_starting_heartbeat(boot_hb, mode=args.mode)
+        except OSError:
+            pass
     cred_src = cfg.get("credentials_source")
     cred_path = paths.resolve_existing(cred_src) if cred_src else None
     if cred_path is not None and not cred_path.exists():

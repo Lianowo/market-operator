@@ -2,6 +2,7 @@ name: CI (audit branch)
 on:
   push:
     branches:
+      - main
       - 'audit/**'
       - 'fix/trade-lifecycle-semantic-20261019'
       - 'feat/area-centric-opportunity-v2-20261019'

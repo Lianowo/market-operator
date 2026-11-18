@@ -769,7 +769,9 @@ def status_snapshot(cfg: dict) -> dict:
         "positions": len(state.get("positions") or {}),
         "stops": len(state.get("stops") or {}),
         "equity": state.get("equity", doc.get("equity")),
-        "open_intents": len(state.get("open_intents") or {}),
+        "open_intents": _armed_intent_count(state),
+        "watches": _armed_intent_count(state, watch=True),
+        "entry_orders": _armed_intent_count(state, entry=True),
         "counters": {k: counters.get(k, 0) for k in
                      ("signals", "orders_placed", "fills", "exits",
                       "reconcile_alerts", "order_errors", "api_halt_skips")},
@@ -779,6 +781,25 @@ def status_snapshot(cfg: dict) -> dict:
         "disk": paths.disk_usage(),
         "usage": paths.category_usage(),
     }
+
+
+def _armed_rows(state: dict) -> list[dict]:
+    rows = []
+    for it in (state.get("open_intents") or {}).values():
+        if isinstance(it, dict) and it.get("status") == "armed":
+            rows.append(it)
+    return rows
+
+
+def _armed_intent_count(state: dict, *, watch: bool = False,
+                        entry: bool = False) -> int:
+    rows = _armed_rows(state)
+    if watch:
+        return sum(1 for it in rows if it.get("watch_entry"))
+    if entry:
+        return sum(1 for it in rows
+                   if it.get("role") == "entry" and not it.get("watch_entry"))
+    return len(rows)
 
 
 def _restarts_left(cfg: dict) -> Optional[int]:
@@ -1040,6 +1061,11 @@ def local_orders(cfg: dict) -> dict:
             "limit_price": it.get("limit_price"),
             "expiry_ms": it.get("expiry_ts"),
             "exchange_order_id": it.get("exchange_order_id"),
+            "watch_entry": bool(it.get("watch_entry")),
+            "tf": it.get("tf_label"),
+            "invalid": it.get("invalid"),
+            "leverage": it.get("leverage"),
+            "event_id": it.get("event_id"),
         })
     intents.sort(key=lambda r: (str(r["symbol"]), str(r["role"])))
     stops: list[dict] = []
@@ -1050,6 +1076,96 @@ def local_orders(cfg: dict) -> dict:
                       "qty": st.get("qty"), "order_id": st.get("order_id")})
     stops.sort(key=lambda r: str(r["symbol"]))
     return {"at_utc": utc_now_iso(), "intents": intents, "stops": stops}
+
+
+_GATE_KEYS = (
+    "tf_cap_skips", "cap_skips", "rwa_session_skips", "manage_only_skips",
+    "min_notional_skips", "rate_skips", "breaker_blocks",
+    "signal_notice_errors", "adopted", "gap_recoveries",
+    "unprotected_stop_exits", "protection_unavailable",
+    "entry_settle_miss", "exit_settle_miss", "stop_errors", "stop_local_mode",
+)
+
+
+def gate_counters(cfg: dict) -> dict:
+    counters = read_state(cfg).get("counters") or {}
+    return {k: int(counters.get(k) or 0) for k in _GATE_KEYS}
+
+
+def position_mix(cfg: dict) -> dict:
+    state = read_state(cfg)
+    by_tf: dict[str, int] = {}
+    long_n = short_n = rwa_n = 0
+    for pos in (state.get("positions") or {}).values():
+        if not isinstance(pos, dict):
+            continue
+        tf = str(pos.get("tf_label") or "?")
+        by_tf[tf] = by_tf.get(tf, 0) + 1
+        d = int(pos.get("direction") or 0)
+        if d > 0:
+            long_n += 1
+        elif d < 0:
+            short_n += 1
+        if pos.get("is_rwa"):
+            rwa_n += 1
+    return {"n": long_n + short_n, "by_tf": by_tf, "long": long_n,
+            "short": short_n, "rwa": rwa_n, "equity": state.get("equity")}
+
+
+def protection_report(cfg: dict) -> dict:
+    state = read_state(cfg)
+    positions = state.get("positions") or {}
+    stops = state.get("stops") or {}
+    missing, mismatch = [], []
+    for sym, pos in positions.items():
+        if not isinstance(pos, dict):
+            continue
+        st = stops.get(sym)
+        if not isinstance(st, dict) or not (st.get("order_id") or st.get("mode")):
+            missing.append(str(sym))
+            continue
+        try:
+            if abs(float(st.get("trigger")) - float(pos.get("invalid"))) > 1e-6:
+                mismatch.append(str(sym))
+        except (TypeError, ValueError):
+            mismatch.append(str(sym))
+    return {"missing": missing, "mismatch": mismatch,
+            "n_pos": len(positions), "n_stops": len(stops)}
+
+
+def notify_tail(cfg: dict, n: int = 8) -> dict:
+    counters = read_state(cfg).get("counters") or {}
+    path = paths.runtime_dir() / "live" / "tg_missed.jsonl"
+    rows: list[str] = []
+    try:
+        if path.exists():
+            rows = path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+    except OSError:
+        rows = []
+    return {"signal_notice_errors": int(counters.get("signal_notice_errors") or 0),
+            "missed": rows}
+
+
+def latest_universe(cfg: dict) -> dict:
+    root = paths.log_dir()
+    if not root.exists():
+        return {}
+    files = sorted(root.glob("live_*.jsonl"))
+    if not files:
+        return {}
+    try:
+        raw = files[-1].read_bytes()[-200_000:]
+    except OSError:
+        return {}
+    last: dict = {}
+    for line in raw.decode("utf-8", "replace").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("kind") == "universe":
+            last = row
+    return last
 
 
 def position_mismatches(local: list[dict], exchange: list[dict]) -> list[str]:

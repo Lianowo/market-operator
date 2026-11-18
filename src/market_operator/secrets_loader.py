@@ -1,8 +1,10 @@
 """实盘凭证装载(实盘接入件;v20/lifecycle)。
 
 纪律(任务书硬性安全):
-- 默认路径 C:\\Users\\EDY\\.edge-engine\\secrets.env,env 变量
-  EDGE_SECRETS_PATH 可覆写;程序运行时自读 —— 永不打印、永不入日志、永不
+- 每个键:进程环境变量 > 文件 > 配置里的 credentials。文件选择:显式 path;
+  否则用 EDGE_SECRETS_PATH。两者都没有时,仓库 config/secrets.env 覆盖默认路径
+  C:\\Users\\EDY\\.edge-engine\\secrets.env 的同名键。默认路径不改。换机器时
+  设置 EDGE_SECRETS_PATH。程序运行时自读 —— 永不打印、永不入日志、永不
   写 response/账本/回复;
 - dotenv 式简析:KEY=VALUE 行(支持单/双引号、`export ` 前缀、`#` 注释、
   值内 `#` 不截断 —— passphrase/token 可能含该字符);

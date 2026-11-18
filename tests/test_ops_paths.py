@@ -262,6 +262,7 @@ def test_positions_rows_read_detail_not_count(monkeypatch):
                                  "qty": 0.5, "entry": 100.0},
                                 {"symbol": "ETHUSDT", "direction": 1,
                                  "qty": 1.0, "entry": 2.0}]}
+    monkeypatch.setattr(tg_commands.ops, "local_positions", lambda cfg: [])
     monkeypatch.setattr(tg_commands.ops, "read_heartbeat", lambda cfg: doc)
     rows = tg_commands._pos_rows({})
     assert [r["symbol"] for r in rows] == ["BTCUSDT", "ETHUSDT"]
@@ -1048,6 +1049,33 @@ def test_git_update_fast_forward_only_and_reports_behind(tmp_path, monkeypatch):
     chk = ops.git_update(check=True, install=False, timeout=60)
     assert chk["ok"] is True and chk["behind"] == 1
     assert (work / "a.txt").read_text(encoding="utf-8") == "v2"
+
+
+def test_status_counts_only_armed_orders(home):
+    lp = ops.live_paths({})
+    lp["state"].parent.mkdir(parents=True, exist_ok=True)
+    lp["state"].write_text(json.dumps({
+        "open_intents": {
+            "a": {"status": "armed", "role": "entry", "watch_entry": True},
+            "b": {"status": "armed", "role": "entry"},
+            "c": {"status": "filled", "role": "entry"},
+        }
+    }), encoding="utf-8")
+    snap = ops.status_snapshot({})
+    assert snap["open_intents"] == 2
+    assert snap["watches"] == 1
+    assert snap["entry_orders"] == 1
+
+
+def test_ops_menu_has_read_only_frame_and_gates():
+    names = {s.name for s in tg_commands.OPS_SPECS}
+    public = {s.name for s in tg_commands.PUBLIC_SPECS}
+    for cmd in ("frame", "capacity", "gates", "watches", "protection",
+                "notify", "universe"):
+        assert cmd in names
+        assert tg_commands.HANDLERS["ops"][cmd]
+    assert "frame" in public
+    assert "gates" not in public and "positions" not in public
 
 
 

@@ -579,3 +579,42 @@ def test_heartbeat_counts_placeless_response_as_error():
     assert out["errors"] == 1 and out["placed"] == 0
     assert runner.stops == {}
 
+
+def test_supervisor_starting_within_window_does_not_restart(sup, monkeypatch):
+    now = hb.now_ms()
+    _write_hb(supv.HB_PATH, status="starting", pid=4242,
+              started_ms=now - 600_000, loop_ts_ms=now - 600_000,
+              ts_ms=now - 5_000)
+    monkeypatch.setattr(supv.hb, "process_alive", lambda pid: int(pid) == 4242)
+    decision, _, _ = sup.judge()
+    assert decision.action == "none"
+    assert decision.kind == "starting"
+
+
+def test_supervisor_starting_past_max_is_stalled(sup, monkeypatch):
+    now = hb.now_ms()
+    _write_hb(supv.HB_PATH, status="starting", pid=4242,
+              started_ms=now - 1_500_000, loop_ts_ms=now - 1_500_000,
+              ts_ms=now - 1_000)
+    monkeypatch.setattr(supv.hb, "process_alive", lambda pid: True)
+    decision, _, _ = sup.judge()
+    assert decision.kind == hb.STALLED
+    assert decision.action == "restart"
+
+
+def test_lock_busy_rolls_back_restart_and_backs_off(sup, monkeypatch):
+    sup.state["restarts"] = [time.time()]
+    sup.state["last_restart_s"] = time.time()
+    sup.state["spawned_pid"] = 999999
+    marker = supv.HB_PATH.parent / "runner_lock_busy.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps(
+        {"code": 4, "ts_ms": int(time.time() * 1000)}), encoding="utf-8")
+    monkeypatch.setattr(supv.hb, "process_alive", lambda pid: False)
+    sup._absorb_lock_busy()
+    assert sup.restarts_left() == sup.max_restarts
+    assert time.time() < float(sup.state["lock_backoff_until"])
+    decision, _, _ = sup.judge()
+    assert decision.kind == "lock_backoff"
+    assert decision.action == "none"
+

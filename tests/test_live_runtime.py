@@ -1905,8 +1905,8 @@ def test_signal_broadcast_survives_portfolio_cap(tmp_path):
     assert len(tg.signals) == 1
     sig = tg.signals[0]
     assert "组合容量已满" in sig["exec_status"]
-    # 结构事实随信号一起出:箱体=区间+对侧近缘的极值,触边次数原样透传
-    assert sig["box_lo"] == pytest.approx(97.0)
+    # 原子水平位带只取区间本身,不再用对侧近缘把带加宽。
+    assert sig["box_lo"] == pytest.approx(99.0)
     assert sig["box_hi"] == pytest.approx(101.0)
     assert sig["zone_lo"] == pytest.approx(99.0)
     assert sig["zone_touches"] == 3
@@ -2011,7 +2011,8 @@ def test_signal_broadcast_kwargs_match_notifier_signature(tmp_path):
     assert data["chat_id"] == "C1"
     body = data.get("caption") or data.get("text") or ""
     assert "交易信号: BTCUSDT" in body and "参考入场: 100" in body
-    assert "系统执行" not in body and "组合容量已满" not in body
+    assert "🧭 处置:" in body and "组合容量已满" in body
+    assert "系统执行" not in body
     assert "平衡箱体" not in body and "事件区间" not in body
 
 
@@ -2091,7 +2092,9 @@ def test_watch_notice_failure_cannot_prevent_expiry(tmp_path):
     assert r.tg.errors == 1
 
 
-def test_live_order_and_bookkeeping_identical_with_broken_notifier(tmp_path):
+def test_live_order_and_bookkeeping_identical_with_broken_notifier(tmp_path, monkeypatch):
+    monkeypatch.setattr(lr.time, "time", lambda: 1_700_000_000.0)
+
     class Boom(_FakeTG):
         def send_signal(self, *args, **kwargs):
             raise RuntimeError("signal failed")
@@ -2271,5 +2274,52 @@ def test_universe_tick_marks_held_out_of_universe_symbols_manage_only(tmp_path, 
     assert r._universe_symbols == {"BTCUSDT"}
     assert r._manage_only == {"GRVTUSDT"}
     assert r._manage_only_block("BTCUSDT") is None
+
+
+def test_entry_settle_window_uses_wall_clock_not_bar_open(tmp_path, monkeypatch):
+    """K 线开盘时间早于下单 1 小时时,回执截止仍是墙上时钟 + 180 秒。"""
+    wall = 1_700_003_600_000
+    bar_open = wall - 3_600_000
+    monkeypatch.setattr(lr.time, "time", lambda: wall / 1000.0)
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    intent = {"kind": "market", "symbol": "BTCUSDT", "direction": 1,
+              "invalid": 90.0, "oid": "E1", "event_id": "EV1", "route": "t",
+              "exchange_order_id": "M1", "target_1": 120.0, "qty": 1.0,
+              "tf_label": "4h"}
+    r._live_entry_filled(intent, side_fallback_price=100.0, now_ms=bar_open)
+    rec = r._entry_settle["BTCUSDT"]
+    assert rec["submitted_ms"] == wall
+    assert rec["deadline_ms"] == wall + 180_000
+    assert r.positions["BTCUSDT"]["opened_ts"] == bar_open
+
+
+def test_entry_settle_prefers_order_detail_avg(tmp_path):
+    now = int(time.time() * 1000)
+    client = _FillClient(fills=[{
+        "symbol": "BTCUSDT", "orderId": "M1", "price": "50", "size": "9",
+        "cTime": str(now)}])
+
+    def order_detail(symbol, order_id):
+        return {"priceAvg": "101.25", "baseVolume": "2", "state": "filled",
+                "uTime": str(now)}
+
+    client.order_detail = order_detail
+    r = _runner(tmp_path, client, _FakeTG())
+    r.positions["BTCUSDT"] = _pos(entry=100.0, invalid=95.0, direction=1)
+    r._entry_settle["BTCUSDT"] = _entry_rec()
+    r._settle_entries(now)
+    assert r.positions["BTCUSDT"]["entry"] == pytest.approx(101.25)
+
+
+def test_settle_queues_reload_from_state(tmp_path):
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    r._entry_settle["BTCUSDT"] = _entry_rec()
+    r._exit_settle["ETHUSDT"] = {"oid": "X", "deadline_ms": 5, "ref_px": 1.0,
+                                 "direction": 1, "qty": 1.0, "entry": 1.0,
+                                 "why": "x"}
+    r._save_state()
+    r2 = _runner(tmp_path, _FakeClient(), _FakeTG())
+    assert r2._entry_settle["BTCUSDT"]["oid"] == "E1"
+    assert r2._exit_settle["ETHUSDT"]["oid"] == "X"
 
 

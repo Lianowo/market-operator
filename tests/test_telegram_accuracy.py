@@ -148,10 +148,12 @@ def test_signal_broadcasts_amt_structural_pattern_and_source_kind():
     assert "🎯 参考入场: 2500" in body
     assert "🛡️ 止损防守: 2450" in body
     assert "🏁 目标参考: 2650 (R:R 3.00)" in body
-    assert "📊 建议仓位:" in body and "%" in body
-    assert "⚖️ 建议杠杆:" in body and "x" in body
-    for secret in ("箱沿拒绝", "R3_TRAP", "BOX_EDGE", "TRANSITION", "REJECT",
-                   "平衡箱体", "事件区间", "系统执行", "周期容量已满", "降档触发"):
+    assert "📌 信号类型: 刺穿拒绝" in body
+    assert "🧭 处置:" in body and "周期容量已满" in body
+    assert "建议仓位" not in body and "建议杠杆" not in body
+    for secret in ("箱沿拒绝", "R3_TRAP", "BOX_EDGE", "TRANSITION",
+                   "LEVEL_REJECTED", "平衡箱体", "事件区间", "系统执行",
+                   "降档触发"):
         assert secret not in body
 
     # 验证 96 根 K 线与平衡区起点锚定渲染:带起点的图与全宽图不同

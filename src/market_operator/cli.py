@@ -169,6 +169,7 @@ def _print_status(snap: dict, cfg: dict) -> None:
     print(f"tg-bot  pid={tg.get('pid')} alive={tg.get('alive')}")
     eq = snap.get("equity")
     print(f"持仓={snap.get('positions')} 挂单={snap.get('open_intents')} "
+          f"关注={snap.get('watches', 0)} 入场={snap.get('entry_orders', 0)} "
           f"止损={snap.get('stops')} 权益={eq}")
     c = snap.get("counters") or {}
     print("计数器 " + " ".join(f"{k}={v}" for k, v in c.items()))

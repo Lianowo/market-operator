@@ -253,3 +253,32 @@ def test_signed_retry_does_not_sleep_after_last_attempt(monkeypatch):
         client._request("GET", "/api/v2/mix/account/account", signed=True)
     assert len(sleeps) == 2, f"3 次尝试只应有 2 次退避,实际 {sleeps}"
 
+
+def test_http_429_sleeps_retry_after_not_the_linear_backoff(monkeypatch):
+    import market_operator.bitget_live as bl
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(bl.time, "sleep", lambda s: sleeps.append(s))
+
+    class _Limited:
+        def __init__(self):
+            self.n = 0
+
+        def get(self, url, headers=None, timeout=None):
+            self.n += 1
+
+            class _R:
+                status_code = 429 if self.n == 1 else 200
+                headers = {"Retry-After": "4"}
+
+                def json(self_inner):
+                    if self.n == 1:
+                        return {"code": "429", "msg": "too many",
+                                "parameters": {"retry_after": 4}}
+                    return {"code": "00000", "msg": "ok", "data": {"ok": 1}}
+            return _R()
+
+    client = bl.BitgetLiveClient(SECRETS, session=_Limited(), max_retries=3)
+    assert client.recent_fills("BTCUSDT") == {"ok": 1}
+    assert sleeps == [4.0]
+

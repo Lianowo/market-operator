@@ -180,3 +180,16 @@ def test_close_rejected_no_position_clears_local_record(tmp_path):
     assert any("已按交易所为准" in a for a in tg.alerts)
     assert not any("仓位仍在" in a for a in tg.alerts)
 
+
+def test_new_entry_without_exchange_stop_is_flattened(tmp_path):
+    """新开仓挂不上交易所止损时立即平掉,不留在本地止损模式。"""
+    client, tg = _Client(), _TG()
+    r = _runner(tmp_path, client, tg)
+    pos = _pos(mark=200.0, invalid=190.0)
+    pos["protection_required"] = True
+    r.positions[SYM] = pos
+    r._manage_stops(1_700_000_000_000)
+    assert r.stops[SYM]["mode"] == "flattening"
+    assert client.market and client.market[0]["symbol"] == SYM
+    assert r.counters["protection_unavailable"] == 1
+

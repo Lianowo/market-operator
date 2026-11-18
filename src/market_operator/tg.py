@@ -179,6 +179,26 @@ def rr_multiple(direction: Optional[int], entry: Optional[float],
     return d * (tg - e) / risk
 
 
+def public_event_label(event_id: str) -> str:
+    """公开频道只用白话,不写内部事件枚举。"""
+    eid = str(event_id or "").upper()
+    if "REJECT" in eid:
+        return "刺穿拒绝"
+    if "ACCEPT" in eid or "BREAKOUT" in eid:
+        return "接受突破"
+    return ""
+
+
+def level_note_text(kind: object, role: object) -> str:
+    kinds = {"SWING": "摆动", "EQUAL": "齐平", "FLIPPED": "极性互换", "ORIGIN": "起点"}
+    roles = {"SUPPORT": "支撑", "RESISTANCE": "阻力"}
+    k = kinds.get(str(kind or "").upper(), "")
+    r = roles.get(str(role or "").upper(), "")
+    if k and r:
+        return f"{k}·{r}"
+    return k or r
+
+
 def suggest_position_and_leverage(
     entry: Optional[float],
     stop: Optional[float],
@@ -271,6 +291,7 @@ def render_bw_kline_png(
     box_start_ts: Optional[int] = None,
     box_start_index: Optional[int] = None,
     public_mode: bool = False,
+    level_note: str = "",
 ) -> Optional[bytes]:
     """用 Pillow 绘制高对比度黑白 K 线图,返回 PNG bytes(无 Pillow / 无 K 线 ⇒ None)。
 
@@ -609,8 +630,10 @@ def render_bw_kline_png(
     draw.text((left_m, 6), head, fill=(0, 0, 0), font=font_b)
     draw.text((left_m, 36), f"{ts_first} -> {ts_last}", fill=(90, 90, 90), font=font_s)
     step_txt = f"{step_min}m" if step_min else "?"
-    draw.text((left_m, 48), f"bars {n} · step {step_txt} · gaps {gaps}",
-              fill=(120, 120, 120), font=font_s)
+    foot = f"bars {n} · step {step_txt} · gaps {gaps}"
+    if level_note and not public_mode:
+        foot = f"{foot} · {level_note}"
+    draw.text((left_m, 48), foot, fill=(120, 120, 120), font=font_s)
 
     # 结构摘要(公开信号图仅展示 R:R,隐藏内部水平带/触边/ATR 参数)
     bits: list[str] = []
@@ -954,15 +977,18 @@ class TelegramNotifier:
                     decision_ts: Optional[int] = None,
                     watch_details: Optional[dict] = None,
                     price_context: Optional[dict] = None,
-                    box_start_ts: Optional[int] = None) -> bool:
+                    box_start_ts: Optional[int] = None,
+                    bar_tf: str = "",
+                    level_kind: str = "",
+                    level_role: str = "") -> bool:
         """信号广播(公开通道):面向外部使用者的精简交易信号卡。
 
         保密纪律(构建技术壁垒):
         1. 隐藏核心算法思想:不输出原语事件(ACCEPT/REJECT)、市场状态(Regime)、
            原子水平位带/事件区间数值、触边次数、结构子形态(R3_TRAP/A1_TIGHT/FLIPPED_BOX_EDGE)
            及内部 ATR 距离过滤指标;
-        2. 隐藏信号与实际开仓关系:不输出 exec_status(容量是否已满/本系统是否开仓)、
-           size_note(降档/仓位权重)与路由执行细节。
+        2. 不输出本账户的仓位比例、杠杆和权益。处置句只说明本系统是否下单,
+           不含账户数字。不输出子形态枚举与水平位种类。
         """
         long_side = side in ("long", "buy", "多")
         dir_emoji = "🟢" if long_side else "🔴"
@@ -972,30 +998,24 @@ class TelegramNotifier:
         lines = [
             f"📡 交易信号: {symbol}",
             f"⏱️ 信号周期: {tf_label or 'HTF'}",
+        ]
+        if bar_tf and bar_tf != (tf_label or ""):
+            lines.append(f"🕯️ 图上周期: {bar_tf}")
+        event_txt = public_event_label(event_id)
+        if event_txt:
+            lines.append(f"📌 信号类型: {event_txt}")
+        lines.extend([
             f"{dir_emoji} 交易方向: {dir_label}",
             f"🎯 {entry_label}: {ref_price:.8g}",
             f"🛡️ 止损防守: {invalid:.8g}",
-        ]
+        ])
         rr = rr_multiple(d_int, ref_price, invalid, target_1)
         if target_1 is not None:
             rr_txt = f" (R:R {rr:.2f})" if rr is not None else ""
             lines.append(f"🏁 目标参考: {float(target_1):.8g}{rr_txt}")
+        if exec_status:
+            lines.append(f"🧭 处置: {exec_status}")
         ctx = price_context or {}
-        sz_mult = float(ctx.get("size_mult", 1.0) or 1.0)
-        default_risk_pct = float(ctx.get("suggested_risk_pct") or (2.5 if sz_mult <= 0.5 else 5.0))
-        max_lev_ctx = int(ctx.get("max_allowed_leverage") or 20)
-        sug = suggest_position_and_leverage(
-            ref_price,
-            invalid,
-            risk_pct=default_risk_pct,
-            max_leverage=max_lev_ctx,
-            planned_leverage=ctx.get("suggested_leverage"),
-            margin_pct=ctx.get("suggested_margin_pct"),
-        )
-        if sug is not None:
-            m_pct, lev_x, r_pct = sug
-            lines.append(f"📊 建议仓位: {m_pct:.1f}% (单笔风险 {r_pct:g}%)")
-            lines.append(f"⚖️ 建议杠杆: {lev_x}x")
         if price_context is not None:
             if box_start_ts is None and ctx.get("box_start_ts") is not None:
                 try:
@@ -1024,7 +1044,7 @@ class TelegramNotifier:
         return self.send("signal", "\n".join(lines),
                          png_factory=self._signal_png_factory(
                              symbol=symbol, event_id=event_id, side=side,
-                             tf_label=tf_label, bars=bars, box_lo=box_lo,
+                             tf_label=tf_label, bar_tf=bar_tf, bars=bars, box_lo=box_lo,
                              box_hi=box_hi, ref_price=ref_price, invalid=invalid,
                              target_1=target_1, zone_lo=zone_lo, zone_hi=zone_hi,
                              zone_touches=zone_touches, pivots=pivots, atr=atr,
@@ -1038,11 +1058,16 @@ class TelegramNotifier:
             return None
         d_int = int(kw.get("direction") or 1)
         dir_tag = "LONG" if d_int > 0 else "SHORT"
+        chart_tf = str(kw.get("bar_tf") or kw["tf_label"] or "")
+        decision = str(kw.get("tf_label") or "")
+        title = f"SIGNAL {dir_tag}"
+        if chart_tf and decision and chart_tf != decision:
+            title = f"{title} {decision}"
 
         def _render() -> Optional[bytes]:
             return render_bw_kline_png(
-                bars, symbol=kw["symbol"], tf_label=kw["tf_label"],
-                title_tag=f"SIGNAL {dir_tag}",
+                bars, symbol=kw["symbol"], tf_label=chart_tf or decision,
+                title_tag=title,
                 box_lo=kw["box_lo"], box_hi=kw["box_hi"],
                 entry_price=kw["ref_price"], stop_price=kw["invalid"],
                 target_price=kw["target_1"], direction=kw["direction"],
@@ -1068,7 +1093,9 @@ class TelegramNotifier:
                   zone_hi: Optional[float] = None,
                   pivots: Optional[Sequence[tuple]] = None,
                   atr: Optional[float] = None,
-                  box_start_ts: Optional[int] = None) -> bool:
+                  box_start_ts: Optional[int] = None,
+                  level_kind: str = "",
+                  level_role: str = "") -> bool:
         """成交通知(运营通道,附黑白 K 线证据图)。
 
         `price` = **本次事件价**(成交价 / 止损推进时的参考价);
@@ -1110,7 +1137,9 @@ class TelegramNotifier:
                           .replace("BREAKOUT_ACCEPTED e1_market", "ACCEPT (突破接受) | 市价")
                           .replace("LEVEL_REJECTED e3_market", "REJECT (刺穿拒绝) | 市价")
                           .replace("breakout_accepted_market", "ACCEPT 市价")
-                          .replace("level_rejected_market", "REJECT 市价"))
+                          .replace("level_rejected_market", "REJECT 市价")
+                          .replace("v21|sub_bar_partial_exit_on_arm", "锁利减仓并移至保本")
+                          .replace("v21|sub_bar_opp_lock", "对侧锁利"))
             lines.append(f"📝 详情说明: {clean_note}")
         png_factory = None
         if bars:
@@ -1122,7 +1151,8 @@ class TelegramNotifier:
                 stop_price=stop_price,
                 target_price=target_price, direction=direction,
                 zone_lo=zone_lo, zone_hi=zone_hi, pivots=pivots, atr=atr,
-                max_bars=96, box_start_ts=box_start_ts)
+                max_bars=96, box_start_ts=box_start_ts,
+                level_note=level_note_text(level_kind, level_role))
         body = "\n".join(lines)
         if price_label.startswith("参考价"):
             body = "【持仓更新】\n" + body

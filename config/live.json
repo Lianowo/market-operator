@@ -65,6 +65,10 @@
       "note": "掉线补做:重启后把缺口内已收盘的 bar 逐根补放进 canonical 持仓管理(移动防线/对侧锁利/TP1),但绝不补开新仓。缺口内曾触及固定止损而交易所仍有仓 → stop_policy=market 立即市价离场(否则 rearm 只重挂止损并告警);TP1 该减未减 → reduce_policy=market 市价减仓(接受回撤换确定性,limit 会挂一张可能永不成交的单)。stop_check_seconds:核对保护止损计划单是否仍在交易所的周期,本地有记录而交易所没有 = 保护失效,价格已越过防线则市价离场,否则重挂。"
     }
   },
+  "execution": {
+    "require_exchange_protection": true,
+    "note": "新开仓必须能挂上交易所仓位止损。下单或首次挂止损返回 43023 时本笔不开仓(已成交则立即平掉)。启动前已存在的仓位没有 protection_required,仍允许本地止损兜底。不改变风险比例与杠杆。"
+  },
   "protection": {
     "price_clock": "realtime",
     "max_quote_age_seconds": 30,
@@ -85,6 +89,8 @@
     "recover_max_seconds": 2700,
     "max_restarts_per_hour": 6,
     "startup_grace_seconds": 180,
+    "starting_max_seconds": 1200,
+    "lock_backoff_seconds": 180,
     "gc_hours": 24,
     "log_max_mb": 32,
     "runner_argv": ["scripts/live_runner.py", "--mode", "live"],
