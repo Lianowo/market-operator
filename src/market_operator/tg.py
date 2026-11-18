@@ -673,6 +673,147 @@ def render_bw_kline_png(
     return buf.getvalue()
 
 
+def render_level_map_png(
+    symbol: str, tf_label: str, bars: list, levels: list, *,
+    regime_text: str = "", topo_text: str = "", atr: float = 0.0,
+    max_bars: int = 96, log_scale: bool = True,
+) -> Optional[bytes]:
+    """渲染指定标的在目标尺度的【待交易原子水平位全景图】(含多条支撑/阻力带与现价位置)。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+    if not bars or len(bars) < 5:
+        return None
+    sub = list(bars[-max_bars:])
+    n, last_px = len(sub), float(sub[-1][4])
+    p_max, p_min = max(float(b[2]) for b in sub), min(float(b[3]) for b in sub)
+    bar_span = max(p_max - p_min, last_px * 0.005, 1e-9)
+
+    vis_levels = []
+    for lv in levels:
+        lo_b = float(getattr(lv, "band_lo", getattr(lv, "lo", 0.0)))
+        hi_b = float(getattr(lv, "band_hi", getattr(lv, "hi", 0.0)))
+        if hi_b <= 0:
+            continue
+        vis_levels.append(lv)
+        if p_min - bar_span * 0.45 <= lo_b and hi_b <= p_max + bar_span * 0.45:
+            p_max, p_min = max(p_max, hi_b), min(p_min, lo_b)
+
+    use_log = bool(log_scale and p_min > 0 and p_max > 0)
+    if use_log:
+        log_max, log_min = math.log(p_max), math.log(p_min)
+        log_pad = max(log_max - log_min, 0.002, 1e-8) * 0.08
+        log_hi, log_lo = log_max + log_pad, log_min - log_pad
+        y_hi, y_lo = math.exp(log_hi), math.exp(log_lo)
+    else:
+        pad = max(p_max - p_min, p_max * 0.002, 1e-8) * 0.08
+        y_hi, y_lo = p_max + pad, p_min - pad
+
+    W, H = 1060, 580
+    left_m, right_m, top_m, bot_m = 62, 195, 64, 44
+    plot_w, plot_h = W - left_m - right_m, H - top_m - bot_m
+    img = Image.new("RGB", (W, H), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    def _fnt(sz: int, bold: bool = False):
+        for nm in (("msyhbd.ttc", "simhei.ttf", "arialbd.ttf") if bold else ("msyh.ttc", "simhei.ttf", "arial.ttf")):
+            try:
+                return ImageFont.truetype(nm, sz)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    font_s, font_b = _fnt(11), _fnt(15, bold=True)
+
+    def price_to_y(p: float) -> int:
+        pf = float(p)
+        frac = ((log_hi - math.log(pf)) / (log_hi - log_lo)) if (use_log and pf > 0) else ((y_hi - pf) / (y_hi - y_lo))
+        return int(round(top_m + max(0.0, min(1.0, frac)) * plot_h))
+
+    rail: list[list] = []
+
+    def hline(y: int, on: int, off: int, fill, width: int = 1, x_start: int = left_m) -> None:
+        x = max(left_m, int(x_start))
+        while x < left_m + plot_w:
+            draw.line([(x, y), (min(x + on, left_m + plot_w), y)], fill=fill, width=width)
+            x += on + off
+
+    step_x = plot_w / float(max(n, 1))
+    body_half = max(1, int(round(step_x * 0.36)))
+    res_i = sup_i = 0
+    for lv in vis_levels:
+        lo_b = float(getattr(lv, "band_lo", getattr(lv, "lo", 0.0)))
+        hi_b = float(getattr(lv, "band_hi", getattr(lv, "hi", 0.0)))
+        if hi_b < y_lo or lo_b > y_hi:
+            continue
+        is_res = "res" in str(getattr(getattr(lv, "role", None), "value", getattr(lv, "role", ""))).lower()
+        if is_res:
+            res_i += 1
+            tag_p, fill_rgb, line_rgb = f"R{res_i}", (252, 235, 235), (185, 40, 40)
+        else:
+            sup_i += 1
+            tag_p, fill_rgb, line_rgb = f"S{sup_i}", (232, 247, 236), (30, 130, 60)
+        orig_ts = int(getattr(lv, "origin_ts", 0) or 0)
+        x0_idx = next((idx_b for idx_b, b in enumerate(sub) if orig_ts > 0 and int(b[0]) >= orig_ts), 0)
+        bx0 = int(round(left_m + x0_idx * step_x))
+        y1, y2 = price_to_y(min(hi_b, y_hi)), price_to_y(max(lo_b, y_lo))
+        if y2 < y1:
+            y1, y2 = y2, y1
+        y2 = max(y1 + 2, y2)
+        draw.rectangle([bx0, y1, left_m + plot_w, y2], fill=fill_rgb)
+        hline(y1, 6, 3, line_rgb, 1, x_start=bx0)
+        hline(y2, 6, 3, line_rgb, 1, x_start=bx0)
+        k_raw = str(getattr(getattr(lv, "kind", None), "value", getattr(lv, "kind", ""))).upper()
+        k_str = "FLIP" if getattr(lv, "flipped", False) else ("ORIG" if k_raw == "ORIGIN" else ("EQL" if k_raw == "EQUAL" else "SWG"))
+        ref_e = lo_b if is_res else hi_b
+        dp = (ref_e - last_px) / last_px * 100.0 if last_px > 0 else 0.0
+        rail.append([(y1 + y2) // 2, f"{tag_p}[{k_str}] {_fmt_px(ref_e)} ({dp:+.1f}%)", line_rgb])
+
+    tick_vals = [(math.exp(log_lo + (log_hi - log_lo) * (k / 4.0)) if use_log else y_lo + (y_hi - y_lo) * (k / 4.0)) for k in range(5)]
+    t_step = abs(tick_vals[1] - tick_vals[0]) if len(tick_vals) > 1 else 0.0
+    t_dec = max(0, min(8, 2 - int(math.floor(math.log10(t_step))))) if t_step > 0 else 2
+    for pv in tick_vals:
+        yk = price_to_y(pv)
+        for x in range(left_m, left_m + plot_w, 12):
+            draw.point((x, yk), fill=(210, 210, 210))
+        draw.text((4, yk - 6), f"{pv:.{t_dec}f}", fill=(110, 110, 110), font=font_s)
+
+    for i, b in enumerate(sub):
+        o, h, l, c = float(b[1]), float(b[2]), float(b[3]), float(b[4])
+        cx = int(round(left_m + (i + 0.5) * step_x))
+        draw.line([(cx, price_to_y(h)), (cx, price_to_y(l))], fill=(30, 30, 30), width=1)
+        yo, yc = price_to_y(o), price_to_y(c)
+        tb, bb = min(yo, yc), max(min(yo, yc) + 1, max(yo, yc))
+        draw.rectangle([cx - body_half, tb, cx + body_half, bb], fill=(255, 255, 255) if c >= o else (35, 35, 35), outline=(20, 20, 20))
+
+    y_last = price_to_y(last_px)
+    hline(y_last, 3, 3, (20, 90, 200), 1)
+    rail.append([y_last, f"LAST {_fmt_px(last_px)}", (20, 90, 200)])
+    rail.sort(key=lambda r: r[0])
+    last_y = -(10**6)
+    for y, txt, fl in rail:
+        yy = min(max(int(y), last_y + 13), H - bot_m - 6)
+        draw.text((left_m + plot_w + 8, yy - 6), txt, fill=fl, font=font_s)
+        last_y = yy
+
+    draw.rectangle([left_m, top_m, left_m + plot_w, top_m + plot_h], outline=(0, 0, 0), width=2)
+    t0 = datetime.fromtimestamp(int(sub[0][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
+    t1 = datetime.fromtimestamp(int(sub[-1][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
+    draw.text((left_m, 8), f"{symbol} [{tf_label}] LEVEL MAP · LAST {_fmt_px(last_px)}", fill=(0, 0, 0), font=font_b)
+    sh = "  |  ".join(x for x in (f"{t0} -> {t1}", regime_text, topo_text, f"ATR {atr / last_px:.2%}" if (atr > 0 and last_px > 0) else "") if x)
+    draw.text((left_m, 36), sh, fill=(70, 70, 70), font=font_s)
+    for k in range(5):
+        idx = int(round((n - 1) * k / 4.0))
+        dt = datetime.fromtimestamp(int(sub[idx][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
+        x = int(left_m + (idx + 0.5) * step_x)
+        draw.text((min(max(left_m, x - 28), left_m + plot_w - 56), H - bot_m + 12), dt, fill=(90, 90, 90), font=font_s)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
 
 class NotificationGuard:
     """Runner boundary: notifier method failures cannot abort bookkeeping.
@@ -1192,5 +1333,5 @@ class TelegramNotifier:
         return self.send("alert", "\n".join(lines))
 
 
-__all__ = ["TelegramNotifier", "render_bw_kline_png", "box_position_pct",
-           "box_position_text", "rr_multiple", "split_text"]
+__all__ = ["TelegramNotifier", "render_bw_kline_png", "render_level_map_png",
+           "box_position_pct", "box_position_text", "rr_multiple", "split_text"]

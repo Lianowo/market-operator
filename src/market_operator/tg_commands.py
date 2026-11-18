@@ -67,12 +67,20 @@ class TelegramAPI:
     def call(self, method: str, params: Optional[dict] = None,
              *, timeout: Optional[float] = None) -> object:
         url = TG_API.format(token=self._token, method=method)
-        try:
-            resp = self.session.post(
-                url, json=params or {},
-                timeout=timeout if timeout is not None else self._timeout)
-        except requests.RequestException as e:
-            raise TelegramError(f"{method} 网络错误:{type(e).__name__}") from None
+        req_timeout = timeout if timeout is not None else self._timeout
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = self.session.post(url, json=params or {}, timeout=req_timeout)
+                break
+            except requests.RequestException as e:
+                try:
+                    self.session.close()
+                except Exception:
+                    pass
+                if attempt == 0:
+                    continue
+                raise TelegramError(f"{method} 网络错误:{type(e).__name__}") from None
         if resp.status_code == 429:
             retry = 3
             try:
@@ -104,6 +112,34 @@ class TelegramAPI:
                                               "allow_sending_without_reply": True}
             self.call("sendMessage", params)
             reply_to = None      # 只给首条挂引用
+
+    def send_photo(self, chat_id: str, photo_bytes: bytes, caption: str = "", *,
+                   reply_to: Optional[int] = None) -> None:
+        url = TG_API.format(token=self._token, method="sendPhoto")
+        cap = caption[:1000] if caption else ""
+        data: dict = {"chat_id": chat_id}
+        if cap:
+            data["caption"] = cap
+        if reply_to:
+            data["reply_to_message_id"] = str(reply_to)
+        for attempt in range(2):
+            try:
+                resp = self.session.post(
+                    url, data=data,
+                    files={"photo": ("levels.png", photo_bytes, "image/png")},
+                    timeout=self._timeout)
+                if resp.status_code == 200:
+                    return
+                break
+            except requests.RequestException:
+                try:
+                    self.session.close()
+                except Exception:
+                    pass
+                if attempt == 0:
+                    continue
+        if caption:
+            self.send_message(chat_id, caption, reply_to=reply_to)
 
     def get_commands(self, scope: dict, language: str = "") -> list[dict]:
         params: dict = {"scope": scope}
@@ -152,6 +188,9 @@ class CommandSpec:
 PUBLIC_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("start", "订阅说明与快捷命令"),
     CommandSpec("help", "查看公开命令列表"),
+    CommandSpec("levels", "待交易水平位与结构图: /levels BTC [1h|2h|4h|1d]"),
+    CommandSpec("scan", "临墙雷达: 扫描距待交易水平位最近的标的"),
+    CommandSpec("top", "多空强弱榜: 全市场二维失衡强弱排行"),
     CommandSpec("frame", "当前信号周期:1d导航 / 4h结构 / 1h扳机"),
     CommandSpec("symbols", "当前观察标的"),
     CommandSpec("ping", "机器人在线检查"),
@@ -161,6 +200,10 @@ PUBLIC_SPECS: tuple[CommandSpec, ...] = (
 OPS_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("start", "运营台入口"),
     CommandSpec("help", "查看运营命令列表"),
+    CommandSpec("levels", "待交易水平位与结构图: /levels BTC [1h|2h|4h|1d]"),
+    CommandSpec("scan", "临墙雷达: 扫描距待交易水平位最近的标的"),
+    CommandSpec("top", "多空强弱榜: 全市场二维失衡强弱排行"),
+    CommandSpec("risk", "复利档位与风险池: HWM水位/单笔档位/同向槽位"),
     CommandSpec("status", "进程/心跳/权益/持仓概览"),
     CommandSpec("positions", "本地与交易所持仓对账"),
     CommandSpec("orders", "在挂委托、关注与保护止损"),
@@ -831,14 +874,259 @@ def cmd_universe(ctx: CommandContext, args: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _fetch_bars_for_level_query(symbol: str, tf_label: str) -> list[tuple]:
+    """为 /levels 查询获取指定标的与尺度的 K 线(优先实时 Bitget 公开行情,离线回退本地 CSV)。"""
+    gran_map = {
+        "15m": "15m", "30m": "30m", "1h": "1H", "2h": "2H",
+        "4h": "4H", "12h": "12Hutc", "1d": "1Dutc",
+    }
+    gran = gran_map.get(tf_label.lower(), "4H")
+    try:
+        resp = requests.get(
+            "https://api.bitget.com/api/v2/mix/market/candles",
+            params={"productType": "USDT-FUTURES", "symbol": symbol, "granularity": gran, "limit": "180"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = (resp.json() or {}).get("data") or []
+            if len(data) >= 20:
+                rows = [(int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])) for r in data]
+                rows.sort(key=lambda b: b[0])
+                return rows
+    except Exception:
+        pass
+    csv_p = paths.app_home() / "data" / "raw" / f"{symbol}_{tf_label.lower()}.csv"
+    if csv_p.exists():
+        out = []
+        for ln in csv_p.read_text(encoding="utf-8").splitlines()[1:]:
+            if ln.strip():
+                p = ln.split(",")
+                if len(p) >= 6:
+                    out.append((int(p[0]), float(p[1]), float(p[2]), float(p[3]), float(p[4]), float(p[5])))
+        return out[-180:]
+    return []
+
+
+def cmd_levels(ctx: CommandContext, args: list[str]) -> str:
+    """查询任意标的在 15m/30m/1h/2h/4h/12h/1d 尺度的待交易原子水平位并直发结构配图。"""
+    from .events import EventDetector
+    from .hypothesis import StructureView
+    from .level import LevelKind, LevelRole
+    from .routing import infer_2d_barrier_topology
+    from .structure import Params
+    from .tg import render_level_map_png
+
+    valid_tfs = {"15m": 0, "30m": 0, "1h": 1, "2h": 2, "4h": 4, "12h": 12, "1d": 24}
+    sym, tf = "BTCUSDT", "4h"
+    for a in args:
+        al = a.strip().lower()
+        if al in valid_tfs:
+            tf = al
+        elif al:
+            s_up = a.strip().upper()
+            sym = s_up if s_up.endswith("USDT") else f"{s_up}USDT"
+
+    bars = _fetch_bars_for_level_query(sym, tf)
+    if len(bars) < 20:
+        return f"⚠️ 未获取到 {sym} [{tf}] 足够 K 线数据(用法: /levels BTC [1h|2h|4h|1d])。"
+
+    det = EventDetector(Params())
+    for b in (bars[:-1] if len(bars) > 35 else bars)[-160:]:
+        det.update(b)
+    s = det.structure
+    cur_px = float(bars[-1][4])
+    atr, reg, imb = float(s.atr() or 0.0), s.regime(), float(s.imbalance_strength())
+    view = StructureView(
+        regime=reg, zones=s.levels, atr=atr, pivots=s.pivots[-8:],
+        macro_imbalance=s.macro_imbalance(), tf_hours=valid_tfs.get(tf, 4), imbalance_strength=imb,
+    )
+    topo, _, _ = infer_2d_barrier_topology(cur_px, view)
+    med_prom = view.med_prominence_2d
+    active = [lv for lv in s.levels if lv.is_active]
+    res_list = sorted([lv for lv in active if lv.role is LevelRole.RESISTANCE], key=lambda lv: abs(lv.band_lo - cur_px))[:4]
+    sup_list = sorted([lv for lv in active if lv.role is LevelRole.SUPPORT], key=lambda lv: abs(cur_px - lv.band_hi))[:4]
+
+    def _lv_desc(prefix: str, lv) -> str:
+        dom = (lv.kind is LevelKind.ORIGIN) or (lv.prominence_2d > med_prom)
+        star = "★主导" if dom else "次级"
+        k_txt = (
+            f"极性互换位(FLIP·{star})" if lv.flipped
+            else ("宏观起源墙(ORIGIN★)" if lv.kind is LevelKind.ORIGIN
+                  else (f"等高池(EQUAL·{lv.touches}触·{star})" if lv.kind is LevelKind.EQUAL else f"波段位(SWING·{star})"))
+        )
+        ref_p = lv.band_lo if lv.role is LevelRole.RESISTANCE else lv.band_hi
+        dist = (ref_p - cur_px) / cur_px * 100.0 if cur_px > 0 else 0.0
+        st_txt = "🔥【已入带博弈!】" if (lv.band_lo <= cur_px <= lv.band_hi) else f"距现价 {dist:+.2f}%"
+        return (
+            f"· {prefix} {k_txt} · {st_txt}\n"
+            f"  带: [{_fmt_num(lv.band_lo, 6)} ~ {_fmt_num(lv.band_hi, 6)}] (颈 {_fmt_num(lv.neck, 6)} / 极 {_fmt_num(lv.extreme, 6)})"
+        )
+
+    lines = [
+        f"🗺️ {sym} · [{tf.upper()}] 待交易原子水平位",
+        f"💰 现价: {_fmt_num(cur_px, 6)}  |  ATR: {_fmt_num(atr, 6)} ({atr / cur_px * 100:.2f}%)" if cur_px > 0 else f"💰 现价: {_fmt_num(cur_px, 6)}",
+        f"🧭 状态: {reg.value.upper()} · 强弱分 {imb:+.2f}  |  拓扑: {topo.value.upper()}",
+        "",
+        f"🔴 上方待交易阻力带 ({len(res_list)} 条):",
+        *([_lv_desc(f"R{i}", lv) for i, lv in enumerate(res_list, 1)] or ["· 上方无近景阻力墙(净空真空区)"]),
+        "",
+        f"🟢 下方待交易支撑带 ({len(sup_list)} 条):",
+        *([_lv_desc(f"S{i}", lv) for i, lv in enumerate(sup_list, 1)] or ["· 下方无近景支撑墙(净空真空区)"]),
+    ]
+    text_out = "\n".join(lines)
+    png = render_level_map_png(
+        sym, tf.upper(), bars, res_list + sup_list,
+        regime_text=reg.value.upper(), topo_text=topo.value.upper(), atr=atr,
+    )
+    if png:
+        ctx.api.send_photo(ctx.chat_id, png, caption=text_out[:980])
+        return text_out if len(text_out) > 980 else ""
+    return text_out
+
+
+def _iter_cached_4h_structures(max_syms: int = 80) -> list[tuple[str, float, object]]:
+    """从本地 K 线缓存快速重建 4H 结构,供 /scan 与 /top 雷达使用。"""
+    import gzip
+    from .events import EventDetector
+    from .structure import Params
+
+    cdir = paths.runtime_dir() / "live" / "candles"
+    if not cdir.exists():
+        return []
+    files = sorted(cdir.glob("*_2H.json.gz"), key=lambda p: p.stat().st_mtime, reverse=True)[:max_syms]
+    out, p_cfg, step_4h = [], Params(), 4 * 3_600_000
+    for f in files:
+        sym = f.name[:-11]
+        try:
+            with gzip.open(f, "rt", encoding="utf-8") as fh:
+                raw2h = json.load(fh)
+            if len(raw2h) < 40:
+                continue
+            buckets: dict[int, list] = {}
+            for r in raw2h[-340:]:
+                buckets.setdefault(int(r[0]) // step_4h, []).append(r)
+            bars4h = [
+                (b_id * step_4h, float(g[0][1]), max(float(x[2]) for x in g),
+                 min(float(x[3]) for x in g), float(g[-1][4]), sum(float(x[5]) for x in g))
+                for b_id, g in sorted(buckets.items())
+            ]
+            if len(bars4h) < 25:
+                continue
+            det = EventDetector(p_cfg)
+            for b in bars4h[:-1][-160:]:
+                det.update(b)
+            out.append((sym, float(bars4h[-1][4]), det.structure))
+        except Exception:
+            continue
+    return out
+
+
+def cmd_scan(ctx: CommandContext, args: list[str]) -> str:
+    """全市场临墙雷达:扫描当前距离待交易支撑/阻力水平位最近的 Top 12 标的。"""
+    from .level import LevelKind, LevelRole
+
+    items = _iter_cached_4h_structures(max_syms=100)
+    if not items:
+        return "📡 本地 K 线缓存尚在预热,可直接用 `/levels BTC 4h` 查询指定标的。"
+    hits = []
+    for sym, cur_px, s in items:
+        if cur_px <= 0:
+            continue
+        active = [lv for lv in s.levels if lv.is_active]
+        if not active:
+            continue
+        best_lv, best_dist = None, 1e9
+        for lv in active:
+            if lv.band_lo <= cur_px <= lv.band_hi:
+                dist = 0.0
+            elif lv.role is LevelRole.RESISTANCE:
+                dist = abs(lv.band_lo - cur_px) / cur_px * 100.0
+            else:
+                dist = abs(cur_px - lv.band_hi) / cur_px * 100.0
+            if dist < best_dist:
+                best_dist, best_lv = dist, lv
+        if best_lv is not None:
+            hits.append((best_dist, sym, cur_px, best_lv, s.regime().value))
+    hits.sort(key=lambda x: x[0])
+    lines = ["📡 全市场 [4H] 临墙待交易雷达 (Top 12)", ""]
+    for dist, sym, px, lv, reg in hits[:12]:
+        r_tag = "🔴阻力" if lv.role is LevelRole.RESISTANCE else "🟢支撑"
+        k_tag = "FLIP" if lv.flipped else ("ORIG" if lv.kind is LevelKind.ORIGIN else ("EQL" if lv.kind is LevelKind.EQUAL else "SWG"))
+        st = "🔥入带博弈" if dist == 0.0 else f"距墙 {dist:.2f}%"
+        lines.append(f"· {sym:<10} {r_tag}[{k_tag}] · {st}\n  现价 {_fmt_num(px, 5)} | 带 [{_fmt_num(lv.band_lo, 5)}~{_fmt_num(lv.band_hi, 5)}] ({reg})")
+    lines.append("\n💡 发送 `/levels 币种 4h` (如 `/levels SOL 4h`) 获取高清水平位图。")
+    return "\n".join(lines)
+
+
+def cmd_top(ctx: CommandContext, args: list[str]) -> str:
+    """全市场多空二维失衡强弱排行榜。"""
+    items = _iter_cached_4h_structures(max_syms=100)
+    if not items:
+        return "📊 本地 K 线缓存尚在预热,请稍后再试。"
+    scored = [(float(s.imbalance_strength()), sym, px, s.regime().value) for sym, px, s in items]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    bulls = [x for x in scored if x[0] > 0][:6]
+    bears = [x for x in reversed(scored) if x[0] < 0][:6]
+    lines = ["🏆 全市场 [4H] 二维失衡强弱榜", "", "🚀 多头领涨最强 Top 6:"]
+    for sc, sym, px, reg in bulls:
+        lines.append(f"· {sym:<10} 强弱 {sc:+5.2f} · 现价 {_fmt_num(px, 5)} ({reg})")
+    lines += ["", "🌊 空头领跌最强 Top 6:"]
+    for sc, sym, px, reg in bears:
+        lines.append(f"· {sym:<10} 强弱 {sc:+5.2f} · 现价 {_fmt_num(px, 5)} ({reg})")
+    lines.append("\n💡 发送 `/levels 币种 4h` 可直接绘出该标的待交易水平位图。")
+    return "\n".join(lines)
+
+
+def cmd_risk(ctx: CommandContext, args: list[str]) -> str:
+    """查看当前阶梯复利档位、HWM 水位、总组合与同向风险池占用。"""
+    st = ops.read_state(ctx.cfg)
+    risk = ctx.cfg.get("risk") or {}
+    eq = float(st.get("equity") or 0.0)
+    tiers = risk.get("dynamic_risk_tiers") or []
+    cur_rf = float(risk.get("risk_frac") or 0.05)
+    next_tier_eq = None
+    for max_eq, rf in tiers:
+        if eq <= float(max_eq):
+            cur_rf = float(rf)
+            next_tier_eq = float(max_eq)
+            break
+    p_cap = float(risk.get("portfolio_cap_frac") or 0.48)
+    d_cap = float(risk.get("directional_cap_frac") or 0.32)
+    positions = st.get("positions") or {}
+    long_n = sum(1 for p in positions.values() if isinstance(p, dict) and int(p.get("direction") or 0) > 0)
+    short_n = sum(1 for p in positions.values() if isinstance(p, dict) and int(p.get("direction") or 0) < 0)
+    max_same_slots = int(d_cap / (cur_rf * 1.12)) if cur_rf > 0 else 0
+    max_tot_slots = int(p_cap / (cur_rf * 1.12)) if cur_rf > 0 else 0
+    lines = [
+        "🛡️ 阶梯动态复利与风险容量池 (HWM 单向降档)",
+        f"💰 当前权益: {_fmt_num(eq, 2)} USDT",
+        f"🎯 当前单笔风险率: {cur_rf * 100:.2f}% (每笔可承受止损 ≈ {_fmt_num(eq * cur_rf, 2)} USDT)",
+        f"📈 下一降档门槛: {'≤ ' + _fmt_num(next_tier_eq, 0) + ' USDT' if next_tier_eq else '已达最高档'}",
+        f"📦 总组合容量上限: {p_cap * 100:.0f}% (约 {max_tot_slots} 个标准槽位 · 当前在持 {len(positions)} 笔)",
+        f"🧭 同向净风险上限: {d_cap * 100:.0f}% (同向最多约 {max_same_slots} 笔 · 当前多 {long_n} / 空 {short_n})",
+        "📊 阶梯档位表: " + " -> ".join(f"≤{int(m)}U:{r*100:g}%" for m, r in tiers),
+    ]
+    return "\n".join(lines)
+
+
+ALIASES: dict[str, str] = {
+    "map": "levels",
+    "chart": "levels",
+    "radar": "scan",
+    "rank": "top",
+    "pos": "positions",
+}
+
 HANDLERS: dict[str, dict[str, Callable[[CommandContext, list[str]], str]]] = {
     "public": {
-        "start": cmd_start, "help": cmd_help, "frame": cmd_frame,
+        "start": cmd_start, "help": cmd_help, "levels": cmd_levels,
+        "scan": cmd_scan, "top": cmd_top, "frame": cmd_frame,
         "symbols": cmd_symbols, "ping": cmd_ping, "id": cmd_id,
     },
     "ops": {
-        "start": cmd_start, "help": cmd_help, "status": cmd_status,
-        "positions": cmd_positions, "orders": cmd_orders,
+        "start": cmd_start, "help": cmd_help, "levels": cmd_levels,
+        "scan": cmd_scan, "top": cmd_top, "risk": cmd_risk,
+        "status": cmd_status, "positions": cmd_positions, "orders": cmd_orders,
         "watches": cmd_watches, "protection": cmd_protection,
         "capacity": cmd_capacity, "gates": cmd_gates, "frame": cmd_frame,
         "universe": cmd_universe, "notify": cmd_notify,
@@ -1080,13 +1368,14 @@ def _save_offsets(path: Path, offsets: dict) -> None:
 def _dispatch(ctx: CommandContext, name: str, args: list[str]) -> Optional[str]:
     if name == "id":                              # 配置期也需要拿到 chat id
         return cmd_id(ctx, args)
+    canonical = ALIASES.get(name, name)
     allowed_names = {s.name for s in SPECS[ctx.role]}
-    if name not in allowed_names:
+    if canonical not in allowed_names:
         other = "ops" if ctx.role == "public" else "public"
-        if name in {s.name for s in SPECS[other]}:
+        if canonical in {s.name for s in SPECS[other]}:
             return "⛔ 该命令不属于此机器人。"
         return f"❓ 未知命令 /{name}\n发送 /help 查看可用命令。"
-    fn = HANDLERS.get(ctx.role, {}).get(name)
+    fn = HANDLERS.get(ctx.role, {}).get(canonical)
     if fn is None:
         return "❓ 命令未实现。"
     return fn(ctx, args)

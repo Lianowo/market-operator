@@ -161,6 +161,11 @@ class BitgetLiveClient:
                     break
             except (requests.RequestException, ValueError) as e:
                 last_err = e
+                if isinstance(e, requests.RequestException):
+                    try:
+                        self.session.close()
+                    except Exception:
+                        pass
             if attempt + 1 < self.max_retries:
                 time.sleep(RETRY_BACKOFF_S * (attempt + 1))
         self.api_errors += 1

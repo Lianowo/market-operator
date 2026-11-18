@@ -450,9 +450,11 @@ class Canvas2DLevelScanner:
         gap = abs(p1 - p2)
         if gap < 2.0 * self._px_unit:
             return False
+        if gap >= 3.0 * self._px_unit:
+            return True
         mid_g = 0.5 * (p1 + p2)
         mid_occ = float(np.mean((L <= mid_g) & (H >= mid_g)))
-        return gap >= 3.0 * self._px_unit or mid_occ <= self._med_tpo
+        return mid_occ <= self._med_tpo
 
     def _project_active_levels(
         self,
