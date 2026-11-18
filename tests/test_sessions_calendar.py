@@ -51,6 +51,10 @@ def _open(sym: str, ts: int) -> bool:
     return S.in_session(S.calendar_for(sym, CFG, overrides=OVR), ts, CFG, overrides=OVR)
 
 
+def _in(calendar: str, ts: int) -> bool:
+    return S.in_session(calendar, ts, CFG)
+
+
 @pytest.mark.parametrize("year", [2026, 2027, 2028])
 def test_us_equity_rules_match_official_calendar(year):
     closed, early = S.us_equity_dates(year)
@@ -69,48 +73,48 @@ def test_us_equity_rules_extend_beyond_known_years():
 
 def test_us_equity_dst_boundary():
     # 2026-07-01 夏令时:16:00 ET = 20:00 UTC
-    assert _open("NVDAUSDT", _ts(2026, 7, 1, 19, 30)) is True
-    assert _open("NVDAUSDT", _ts(2026, 7, 1, 20, 30)) is False
+    assert _in("us_equity", _ts(2026, 7, 1, 19, 30)) is True
+    assert _in("us_equity", _ts(2026, 7, 1, 20, 30)) is False
     # 冬令时:16:00 ET = 21:00 UTC
-    assert _open("NVDAUSDT", _ts(2026, 11, 18, 20, 30)) is True
-    assert _open("NVDAUSDT", _ts(2026, 11, 18, 21, 30)) is False
+    assert _in("us_equity", _ts(2026, 11, 18, 20, 30)) is True
+    assert _in("us_equity", _ts(2026, 11, 18, 21, 30)) is False
 
 
 def test_us_equity_holiday_and_half_day():
-    assert _open("NVDAUSDT", _ts(2026, 11, 26, 15, 0)) is False        # 感恩节
-    assert _open("NVDAUSDT", _ts(2026, 11, 27, 17, 30)) is True        # 半日市 12:30 ET
-    assert _open("NVDAUSDT", _ts(2026, 11, 27, 18, 30)) is False       # 13:30 ET 已收
-    assert _open("NVDAUSDT", _ts(2027, 12, 24, 15, 0)) is False        # 2027 圣诞观察日
+    assert _in("us_equity", _ts(2026, 11, 26, 15, 0)) is False        # 感恩节
+    assert _in("us_equity", _ts(2026, 11, 27, 17, 30)) is True        # 半日市 12:30 ET
+    assert _in("us_equity", _ts(2026, 11, 27, 18, 30)) is False       # 13:30 ET 已收
+    assert _in("us_equity", _ts(2027, 12, 24, 15, 0)) is False        # 2027 圣诞观察日
 
 
 def test_futures_globex_skeleton_and_daily_break():
-    assert _open("XAUUSDT", _ts(2026, 11, 22, 22, 30)) is False        # 周日 17:30 ET 未开
-    assert _open("XAUUSDT", _ts(2026, 11, 22, 23, 30)) is True         # 周日 18:30 ET 已开
-    assert _open("XAUUSDT", _ts(2026, 11, 18, 22, 30)) is False        # 每日 17:00-18:00 ET 维护
-    assert _open("XAUUSDT", _ts(2026, 11, 20, 21, 0)) is True          # 周五 16:00 ET
-    assert _open("XAUUSDT", _ts(2026, 11, 20, 22, 30)) is False         # 周五 17:30 ET 已收
+    assert _in("metal_futures", _ts(2026, 11, 22, 22, 30)) is False    # 周日 17:30 ET 未开
+    assert _in("metal_futures", _ts(2026, 11, 22, 23, 30)) is True     # 周日 18:30 ET 已开
+    assert _in("metal_futures", _ts(2026, 11, 18, 22, 30)) is False    # 每日 17:00-18:00 ET 维护
+    assert _in("metal_futures", _ts(2026, 11, 20, 21, 0)) is True      # 周五 16:00 ET
+    assert _in("metal_futures", _ts(2026, 11, 20, 22, 30)) is False    # 周五 17:30 ET 已收
 
 
 def test_fx_is_sunday_open_and_friday_close():
-    assert _open("EURUSDUSDT", _ts(2026, 11, 22, 22, 30)) is True
-    assert _open("EURUSDUSDT", _ts(2026, 11, 20, 21, 0)) is True
-    assert _open("EURUSDUSDT", _ts(2026, 11, 20, 22, 0)) is False
+    assert _in("fx", _ts(2026, 11, 22, 22, 30)) is True
+    assert _in("fx", _ts(2026, 11, 20, 21, 0)) is True
+    assert _in("fx", _ts(2026, 11, 20, 22, 0)) is False
 
 
-def test_naming_family_and_lunch_breaks():
-    # *HKD 命名族 → 港交所(含午休)
-    assert _open("TENCENTHKDUSDT", _ts(2026, 11, 18, 3, 30)) is True
-    assert _open("TENCENTHKDUSDT", _ts(2026, 11, 18, 4, 0)) is False
-    assert _open("TENCENTHKDUSDT", _ts(2026, 11, 18, 5, 0)) is True
-    assert _open("TENCENTHKDUSDT", _ts(2026, 11, 18, 8, 0)) is False
-    # TW 命名族 → 台交所
-    assert _open("TWTSMUSDT", _ts(2026, 11, 18, 3, 0)) is True
-    assert _open("TWTSMUSDT", _ts(2026, 11, 18, 5, 30)) is False
-    # 覆盖文件登记的日/韩个股
-    assert _open("TOYOTAUSDT", _ts(2026, 11, 18, 2, 0)) is True
-    assert _open("TOYOTAUSDT", _ts(2026, 11, 18, 3, 0)) is False
-    assert _open("SAMSUNGUSDT", _ts(2026, 11, 18, 2, 0)) is True
-    assert _open("SAMSUNGUSDT", _ts(2026, 11, 18, 7, 0)) is False
+def test_asia_calendar_windows():
+    # 港交所(含午休)
+    assert _in("hk_equity", _ts(2026, 11, 18, 3, 30)) is True
+    assert _in("hk_equity", _ts(2026, 11, 18, 4, 0)) is False
+    assert _in("hk_equity", _ts(2026, 11, 18, 5, 0)) is True
+    assert _in("hk_equity", _ts(2026, 11, 18, 8, 0)) is False
+    # 台交所
+    assert _in("tw_equity", _ts(2026, 11, 18, 3, 0)) is True
+    assert _in("tw_equity", _ts(2026, 11, 18, 5, 30)) is False
+    # 东证(午休) / 韩交所
+    assert _in("jp_equity", _ts(2026, 11, 18, 2, 0)) is True
+    assert _in("jp_equity", _ts(2026, 11, 18, 3, 0)) is False
+    assert _in("kr_equity", _ts(2026, 11, 18, 2, 0)) is True
+    assert _in("kr_equity", _ts(2026, 11, 18, 7, 0)) is False
 
 
 def test_unassigned_symbols_fall_back_to_weekday_only():
@@ -124,7 +128,6 @@ def test_unassigned_symbols_fall_back_to_weekday_only():
 
 
 def test_24x7_tokens_and_crypto_are_never_gated():
-    assert _open("PAXGUSDT", _ts(2026, 11, 22, 10, 0)) is True
     assert rwa_session_entry_block(False, _ts(2026, 11, 22, 10, 0),
                                    symbol="BTCUSDT") is None
 
@@ -148,31 +151,46 @@ def test_overrides_can_close_a_day_without_touching_code():
     assert _open("NVDAUSDT", _ts(2026, 12, 28, 15, 0)) is True
 
 
-def test_learned_assignments_and_resolution_priority():
-    """优先级:运维覆盖 > 命名族 > 自动推断 > 兜底。"""
+def test_resolution_priority_override_pattern_learned_default():
+    """优先级:运维覆盖 > 命名族 > 自动推断(需显式开启) > 兜底。"""
     learned = {"NVDAUSDT": "us_equity", "EURUSDUSDT": "weekday_only",
                "TENCENTUSDT": "asia_equity"}
-    ovr_learn_only = {"assignments": {}}
-    assert S.calendar_for("NVDAUSDT", CFG, overrides=ovr_learn_only,
+    cfg = dict(CFG, learned_assignments=True,
+               patterns=[{"pattern": "^[A-Z]{3}[A-Z]{3}USDT$", "calendar": "fx"}])
+    ovr_empty = {"assignments": {}}
+    assert S.calendar_for("NVDAUSDT", cfg, overrides=ovr_empty,
                           assignments=learned) == "us_equity"
-    row = S.describe("NVDAUSDT", cfg=CFG, overrides=ovr_learn_only,
+    row = S.describe("NVDAUSDT", cfg=cfg, overrides=ovr_empty,
                      assignments=learned)
     assert row["source"] == "learned"
     # 命名族规则优先于自动推断
-    assert S.calendar_for("EURUSDUSDT", CFG, overrides=ovr_learn_only,
+    assert S.calendar_for("EURUSDUSDT", cfg, overrides=ovr_empty,
                           assignments=learned) == "fx"
-    assert S.describe("EURUSDUSDT", cfg=CFG, overrides=ovr_learn_only,
+    assert S.describe("EURUSDUSDT", cfg=cfg, overrides=ovr_empty,
                       assignments=learned)["source"] == "pattern"
     # 运维显式覆盖优先于一切
     ovr = {"assignments": {"NVDAUSDT": "asia_equity"}}
-    assert S.describe("NVDAUSDT", cfg=CFG, overrides=ovr,
+    assert S.describe("NVDAUSDT", cfg=cfg, overrides=ovr,
                       assignments=learned)["source"] == "override"
+    # 生产口径(learned_assignments 关闭)⇒ 自动推断不生效
+    assert S.describe("NVDAUSDT", cfg=CFG, overrides=ovr_empty,
+                      assignments=learned)["calendar"] == "weekday_only"
 
 
 def test_asia_equity_calendar_window():
     assert S.in_session("asia_equity", _ts(2026, 11, 18, 3, 0), CFG) is True
     assert S.in_session("asia_equity", _ts(2026, 11, 18, 11, 0), CFG) is False
     assert S.in_session("asia_equity", _ts(2026, 11, 21, 3, 0), CFG) is False
+
+
+def test_rwa_symbols_are_all_weekday_only_now():
+    """生产口径:非加密一律工作日可交易、周末关闭(不再按市场细分)。"""
+    for sym in ("NVDAUSDT", "XAUUSDT", "PAXGUSDT", "TENCENTHKDUSDT", "EURUSDUSDT"):
+        assert S.calendar_for(sym, CFG, overrides={}) == "weekday_only"
+    assert _in("weekday_only", _ts(2026, 11, 22, 10, 0)) is False      # 周六
+    assert _in("weekday_only", _ts(2026, 11, 18, 3, 0)) is True        # 周三
+    assert rwa_session_entry_block(False, _ts(2026, 11, 22, 10, 0),
+                                   symbol="BTCUSDT") is None
 
 
 def test_quiet_window_blocks_collapsed_activity():

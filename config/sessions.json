@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "note": "非加密(RWA)合约的交易时段日历形状(只有结构:时区/开收盘/跨午夜会话/假日规则族)。这里刻意不放任何具体日期与具体合约代码:节假日由 market_operator.sessions 按交易所规则推导(第 n 个星期几、复活节、观察日平移、半日市规则),可无限延伸;标的→日历只按命名族规则解析,新上架合约用运维覆盖文件 data/calendars/overrides.json 登记,不用改代码或改本文件。",
+  "note": "非加密(RWA)合约的交易时段日历形状(只有结构:时区/开收盘/跨午夜会话/假日规则族)。这里刻意不放任何具体日期与具体合约代码:节假日由 market_operator.sessions 按交易所规则推导(第 n 个星期几、复活节、观察日平移、半日市规则),可无限延伸;标的→日历只按命名族规则解析,新上架合约用运维覆盖文件 data/calendars/overrides.json 登记,不用改代码或改本文件。 当前生产口径:所有非加密合约一律工作日可交易、周末关闭(不使用命名族/自动分派);需要按市场细分时再打开 learned_assignments 或重新加入 patterns。",
   "rwa_default_calendar": "weekday_only",
   "rwa_default_note": "未登记标的只按'工作日可交易、周末关闭'兜底(不假装知道它属于哪个市场)。运维用 /sessions 运营命令或 scripts/calendar_report.py 查看每个标的的实际日历与来源,把商品/指数/个股补进 data/calendars/overrides.json。",
   "calendars": {
@@ -18,7 +18,17 @@
       "holiday_rules": "us_equity",
       "early_close_time": "13:00",
       "windows": [
-        {"weekdays": [1, 2, 3, 4, 5], "open": "09:30", "close": "16:00"}
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:30",
+          "close": "16:00"
+        }
       ],
       "note": "美股现货核心时段 09:30-16:00 ET。假日与 13:00 ET 半日市由规则推导(NYSE/Nasdaq 规则族),夏令时由 IANA 时区自动处理(收盘 21:00 UTC 冬 / 20:00 UTC 夏)。"
     },
@@ -26,35 +36,95 @@
       "tz": "America/New_York",
       "holiday_rules": "none",
       "early_close_time": "13:00",
-      "daily_session": {"start_weekdays": [7, 1, 2, 3, 4], "open": "18:00", "close": "17:00"},
+      "daily_session": {
+        "start_weekdays": [
+          7,
+          1,
+          2,
+          3,
+          4
+        ],
+        "open": "18:00",
+        "close": "17:00"
+      },
       "note": "CME Globex 骨架:周日 18:00 ET 开 → 周五 17:00 ET 收,每日 17:00-18:00 ET 维护休市。只有骨架与维护窗口在这里;具体品种的假日/提早收盘属于运行数据,写 data/calendars/overrides.json。"
     },
     "metal_futures": {
       "tz": "America/New_York",
       "holiday_rules": "none",
       "early_close_time": "13:00",
-      "daily_session": {"start_weekdays": [7, 1, 2, 3, 4], "open": "18:00", "close": "17:00"},
+      "daily_session": {
+        "start_weekdays": [
+          7,
+          1,
+          2,
+          3,
+          4
+        ],
+        "open": "18:00",
+        "close": "17:00"
+      },
       "note": "COMEX/NYMEX 贵金属与铜:Globex 骨架 + 每日 17:00-18:00 ET 休市。"
     },
     "energy_futures": {
       "tz": "America/New_York",
       "holiday_rules": "none",
       "early_close_time": "13:00",
-      "daily_session": {"start_weekdays": [7, 1, 2, 3, 4], "open": "18:00", "close": "17:00"},
+      "daily_session": {
+        "start_weekdays": [
+          7,
+          1,
+          2,
+          3,
+          4
+        ],
+        "open": "18:00",
+        "close": "17:00"
+      },
       "note": "NYMEX 原油/布油/天然气:Globex 骨架 + 每日 17:00-18:00 ET 休市。"
     },
     "fx": {
       "tz": "America/New_York",
       "holiday_rules": "none",
-      "daily_session": {"start_weekdays": [7, 1, 2, 3, 4], "open": "17:00", "close": "17:00"},
+      "daily_session": {
+        "start_weekdays": [
+          7,
+          1,
+          2,
+          3,
+          4
+        ],
+        "open": "17:00",
+        "close": "17:00"
+      },
       "note": "即期外汇:周日 17:00 ET 开 → 周五 17:00 ET 收,无日内休市。"
     },
     "hk_equity": {
       "tz": "Asia/Hong_Kong",
       "holiday_rules": "none",
       "windows": [
-        {"weekdays": [1, 2, 3, 4, 5], "open": "09:30", "close": "12:00"},
-        {"weekdays": [1, 2, 3, 4, 5], "open": "13:00", "close": "16:00"}
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:30",
+          "close": "12:00"
+        },
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "13:00",
+          "close": "16:00"
+        }
       ],
       "note": "港交所现货 09:30-12:00 / 13:00-16:00 HKT。本地假日不在代码里:需要时写 overrides.closed。"
     },
@@ -62,33 +132,101 @@
       "tz": "Asia/Tokyo",
       "holiday_rules": "none",
       "windows": [
-        {"weekdays": [1, 2, 3, 4, 5], "open": "09:00", "close": "11:30"},
-        {"weekdays": [1, 2, 3, 4, 5], "open": "12:30", "close": "15:30"}
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:00",
+          "close": "11:30"
+        },
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "12:30",
+          "close": "15:30"
+        }
       ],
       "note": "东证现货 09:00-11:30 / 12:30-15:30 JST(2024-11 起收盘延长至 15:30)。"
     },
     "kr_equity": {
       "tz": "Asia/Seoul",
       "holiday_rules": "none",
-      "windows": [{"weekdays": [1, 2, 3, 4, 5], "open": "09:00", "close": "15:30"}],
+      "windows": [
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:00",
+          "close": "15:30"
+        }
+      ],
       "note": "韩国交易所现货 09:00-15:30 KST(无午休)。"
     },
     "tw_equity": {
       "tz": "Asia/Taipei",
       "holiday_rules": "none",
-      "windows": [{"weekdays": [1, 2, 3, 4, 5], "open": "09:00", "close": "13:30"}],
+      "windows": [
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:00",
+          "close": "13:30"
+        }
+      ],
       "note": "台交所现货 09:00-13:30 CST(无午休)。"
     },
     "in_equity": {
       "tz": "Asia/Kolkata",
       "holiday_rules": "none",
-      "windows": [{"weekdays": [1, 2, 3, 4, 5], "open": "09:15", "close": "15:30"}],
+      "windows": [
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:15",
+          "close": "15:30"
+        }
+      ],
       "note": "印度 NSE/BSE 现货 09:15-15:30 IST。"
     },
     "asia_equity": {
       "tz": "UTC",
       "holiday_rules": "none",
-      "windows": [{"weekdays": [1, 2, 3, 4, 5], "open": "00:00", "close": "10:00"}],
+      "windows": [
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "00:00",
+          "close": "10:00"
+        }
+      ],
       "note": "亚洲现货的粗口径(港/日/韩/台/印的共同交易区):工作日 00:00-10:00 UTC。由 scripts/learn_sessions.py 在测到亚洲时段活动显著集中时自动分配;要更细的港/日/韩/台/印窗口时再用运维覆盖。"
     },
     "asia_index_futures": {
@@ -108,13 +246,6 @@
     "floor_frac": 0.35,
     "note": "数据驱动的'静默窗口'兜底:取确认棒之前、同一 UTC 星期×小时的近期历史(默认 range 中位数),若确认棒活动低于中位数的 floor_frac 就判为休市/死水。它不依赖任何日期与标的,因此自动覆盖未登记的假日、半日市、CME 每日 17:00-18:00 ET 维护、临时停盘 —— 与上面的日历互为补足:日历说'不该开'时直接拦,日历说'能开'但盘口已经死掉时由本项拦。"
   },
-  "patterns": [
-    {"pattern": "^(USD|EUR|GBP|JPY|AUD|NZD|CAD|CHF|CNH|HKD|SGD|INR|BRL|MXN|ZAR|TRY|KRW|SEK|NOK)([A-Z]{3})USDT$|^([A-Z]{3})(USD|EUR|GBP|JPY|AUD|NZD|CAD|CHF|CNH|HKD|SGD|INR|BRL|MXN|ZAR|TRY|KRW|SEK|NOK)USDT$",
-     "calendar": "fx",
-     "note": "外汇货币对形状:两端都必须是 ISO 货币码(如 EURUSD/USDJPY/USDBRL),避免把 6 字母个股代码(如 TOYOTA)误判成外汇。"},
-    {"pattern": "^[A-Z0-9]+HKDUSDT$", "calendar": "hk_equity",
-     "note": "港币/港股命名族(如 *HKDUSDT),不是具体合约清单。"},
-    {"pattern": "^TW[A-Z0-9]+USDT$", "calendar": "tw_equity",
-     "note": "台股命名族(如 TWTSMUSDT/TWDELTAUSDT),不是具体合约清单。"}
-  ]
+  "patterns": [],
+  "learned_assignments": false
 }

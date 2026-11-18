@@ -37,6 +37,12 @@ hypothesis / position / campaign / replay / broker / capacity` 的风险、容�
   `rwa_only`)在真实时段内用交易所公开 tickers 快照拦截 `QUOTE_STALE` /
   `SPREAD_WIDE` / `BASIS_WIDE`,计数 `quote_guard_skips`;既有仓位、交易所原生
   止损/止盈不受影响。
+- **生产口径收敛为"工作日可交易"**:`config/sessions.json` 的 `rwa_default_calendar=weekday_only`,
+  `patterns=[]`、`learned_assignments=false` —— 所有非加密合约一律**周一至周五可开仓、周末关闭**,
+  不再按美股/商品/指数/外汇细分;`learn_sessions.py` 与命名族规则保留为可选工具,
+  需要细分时把 `learned_assignments` 打开或重新加入 `patterns` 即可。
+  每日学习任务已从计划任务中移除(`mo tasks` 现在只注册 看护/存储/资金费 三条)。
+
 - **修复"占位条被当成死水"导致 RWA 信号全灭**:触发子周期(30m/15m)偶发被写成
   `volume=0` 且一字,而 `_fetch_trigger_bars` 只追加新 ts、从不覆盖旧 ts,毒条
   永久留在缓存里 → 死水闸门把正常时段判成休市。现在回看 64 根做 UPSERT 覆盖,

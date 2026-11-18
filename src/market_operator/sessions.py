@@ -310,10 +310,11 @@ def _resolve(symbol: Optional[str], cfg: Mapping[str, Any],
             pattern, cal = rule.get("pattern"), rule.get("calendar")
             if pattern and cal in cals and re.fullmatch(str(pattern), root):
                 return str(cal), "pattern"
-        learned = (assignments if assignments is not None
-                   else _load_assignments()).get(root)
-        if learned in cals:
-            return str(learned), "learned"
+        learned = ((assignments if assignments is not None
+                   else _load_assignments())
+                   if bool(cfg.get("learned_assignments")) else {})
+        if root and learned.get(root) in cals:
+            return str(learned[root]), "learned"
     fallback = cfg.get("rwa_default_calendar") or DEFAULT_RWA
     return (str(fallback), "default") if fallback in cals else (LEGACY, "default")
 

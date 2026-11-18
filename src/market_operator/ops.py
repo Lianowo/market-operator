@@ -922,8 +922,6 @@ def register_tasks(cfg: dict) -> dict:
          "live_supervisor.cmd"),
         ("MarketOperatorStorageGC", ("/SC", "DAILY", "/ST", "04:10"),
          "storage_gc.cmd"),
-        ("MarketOperatorLearnSessions", ("/SC", "DAILY", "/ST", "06:10"),
-         "learn_sessions.cmd"),
         ("MarketOperatorFunding", ("/SC", "WEEKLY", "/D", "SUN", "/ST", "07:30"),
          "fetch_funding.cmd"),
     )
