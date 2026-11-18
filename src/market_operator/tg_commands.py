@@ -189,7 +189,7 @@ class CommandSpec:
 PUBLIC_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("start", "订阅说明与快捷命令"),
     CommandSpec("help", "查看公开命令列表"),
-    CommandSpec("levels", "待交易水平位与结构图: /levels BTC [1h|2h|4h|1d]"),
+    CommandSpec("levels", "待交易水平位与结构图: /levels 币种 周期"),
     CommandSpec("scan", "临墙雷达: 扫描距待交易水平位最近的标的"),
     CommandSpec("top", "多空强弱榜: 全市场二维失衡强弱排行"),
     CommandSpec("frame", "当前信号周期:1d导航 / 4h结构 / 1h扳机"),
@@ -201,7 +201,7 @@ PUBLIC_SPECS: tuple[CommandSpec, ...] = (
 OPS_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("start", "运营台入口"),
     CommandSpec("help", "查看运营命令列表"),
-    CommandSpec("levels", "待交易水平位与结构图: /levels BTC [1h|2h|4h|1d]"),
+    CommandSpec("levels", "待交易水平位与结构图: /levels 币种 周期"),
     CommandSpec("scan", "临墙雷达: 扫描距待交易水平位最近的标的"),
     CommandSpec("top", "多空强弱榜: 全市场二维失衡强弱排行"),
     CommandSpec("risk", "复利档位与风险池: HWM水位/单笔档位/同向槽位"),
@@ -954,7 +954,7 @@ def _suggest_symbols(sym: str, known: set[str], limit: int = 6) -> list[str]:
     if not stem:
         return []
     import difflib
-    # 只在"代号主干"上算相似度:否则所有 XUSDT 共有 `USDT` 尾巴会把 BTCUSDT 也判成近似。
+    # 只在"代号主干"上算相似度:否则所有合约共有的 `USDT` 尾巴会把无关标的也判成近似。
     stems = {(s[:-4] if s.endswith("USDT") else s): s for s in known}
     close = difflib.get_close_matches(stem, sorted(stems), n=limit, cutoff=0.6)
     if close:
