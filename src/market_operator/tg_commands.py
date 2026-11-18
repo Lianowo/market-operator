@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -907,6 +908,95 @@ def _fetch_bars_for_level_query(symbol: str, tf_label: str) -> list[tuple]:
     return []
 
 
+LEVELS_TFS: tuple[str, ...] = ("15m", "30m", "1h", "2h", "4h", "12h", "1d")
+#: 常见俗名 → Bitget 代号主干(仅收录已在交易所核实存在的)。
+SYMBOL_ALIASES: dict[str, str] = {"GOLD": "XAU", "SILVER": "XAG"}
+LEVELS_TF_HOURS: dict[str, int] = {
+    "15m": 0, "30m": 0, "1h": 1, "2h": 2, "4h": 4, "12h": 12, "1d": 24,
+}
+CONTRACTS_URL = "https://api.bitget.com/api/v2/mix/market/contracts"
+SYMBOL_CACHE_TTL_S = 900
+#: 进程内缓存(命令可能被连点:避免每次读盘/拉 685KB 合约全量)。
+_symbols_memo: dict = {"ts": 0.0, "symbols": []}
+
+
+def _split_symbol_tf(token: str) -> tuple[str, Optional[str]]:
+    """把 `XAU[1h]` / `XAU(1h)` / `XAU/1h` / `XAU,1h` / `XAU:1h` / `XAU1h` 拆成 (符号, 周期)。
+
+    用户真实输入里周期常被塞在符号同一格里(2026-11-18 实测 `/levels XAU[1h]`),
+    修前整串被当成币种名,拼出 `XAU[1H]USDT` 后再报"数据不足" —— 这不是行情问题,
+    是把周期当成了代号的一部分。
+    """
+    raw = str(token).strip()
+    m = re.match(
+        r"^([^\[\]\(\)\{\},/:|]+)\s*[\[\(\{,/:|]\s*(15m|30m|1h|2h|4h|12h|1d)\s*[\]\)\}]?\s*$",
+        raw, re.I,
+    )
+    if m:
+        return m.group(1), m.group(2).lower()
+    m2 = re.match(r"^(.{2,}?)(15m|30m|1h|2h|4h|12h|1d)$", raw, re.I)
+    if m2 and not m2.group(1).upper().endswith("USDT"):
+        return m2.group(1), m2.group(2).lower()
+    return raw, None
+
+
+def _parse_levels_args(args: list[str]) -> tuple[str, str]:
+    """解析 `/levels` 参数 → (已补 USDT 的符号, 周期)。周期默认 4h。"""
+    sym_parts: list[str] = []
+    tf = "4h"
+    for raw in args:
+        for piece in re.split(r"[\s,;]+", str(raw)):
+            if not piece:
+                continue
+            if piece.lower() in LEVELS_TFS:      # `/levels XAU 1h` 的独立周期词
+                tf = piece.lower()
+                continue
+            head, t = _split_symbol_tf(piece)
+            if t:
+                tf = t
+            if head and head.strip():
+                sym_parts.append(head.strip())
+    base = "".join(sym_parts).upper().replace("-", "").replace("_", "")
+    if not base:
+        base = "BTC"
+    sym = base if base.endswith("USDT") else f"{base}USDT"
+    return sym, tf
+
+
+def _bitget_usdt_symbols(ttl_s: float = SYMBOL_CACHE_TTL_S) -> set[str]:
+    """Bitget USDT 本位合约代号集合(带 TTL 磁盘缓存:685KB 全量只在首次拉一次)。"""
+    if _symbols_memo["symbols"] and time.time() - _symbols_memo["ts"] < ttl_s:
+        return set(_symbols_memo["symbols"])
+    cache = paths.runtime_dir() / "live" / "bitget_usdt_symbols.json"
+    try:
+        doc = json.loads(cache.read_text(encoding="utf-8"))
+        if float(doc.get("ts") or 0.0) and time.time() - float(doc["ts"]) < ttl_s:
+            syms = doc.get("symbols")
+            if isinstance(syms, list) and syms:
+                _symbols_memo.update({"ts": float(doc["ts"]),
+                                      "symbols": [str(s) for s in syms]})
+                return set(_symbols_memo["symbols"])
+    except (OSError, ValueError):
+        pass
+    try:
+        resp = requests.get(CONTRACTS_URL,
+                            params={"productType": "USDT-FUTURES"},
+                            timeout=15)
+        data = (resp.json() or {}).get("data") or []
+        syms = sorted({str(c.get("symbol")) for c in data if c.get("symbol")})
+    except Exception:
+        return set()
+    if syms:
+        _symbols_memo.update({"ts": time.time(), "symbols": list(syms)})
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            hb.write_atomic(cache, json.dumps(
+                {"ts": time.time(), "symbols": syms}, ensure_ascii=False))
+        except Exception:
+            pass
+    return set(syms)
+
+
 def cmd_levels(ctx: CommandContext, args: list[str]) -> str:
     """查询任意标的在 15m/30m/1h/2h/4h/12h/1d 尺度的待交易原子水平位并直发结构配图。"""
     from .events import EventDetector
@@ -917,18 +1007,28 @@ def cmd_levels(ctx: CommandContext, args: list[str]) -> str:
     from .tg import render_level_map_png
 
     valid_tfs = {"15m": 0, "30m": 0, "1h": 1, "2h": 2, "4h": 4, "12h": 12, "1d": 24}
-    sym, tf = "BTCUSDT", "4h"
-    for a in args:
-        al = a.strip().lower()
-        if al in valid_tfs:
-            tf = al
-        elif al:
-            s_up = a.strip().upper()
-            sym = s_up if s_up.endswith("USDT") else f"{s_up}USDT"
+    sym, tf = _parse_levels_args(args)
+    known = _bitget_usdt_symbols()
+    if known and sym not in known:
+        stem = sym[:-4] if sym.endswith("USDT") else sym
+        probe = SYMBOL_ALIASES.get(stem, stem)
+        cands = [s for s in sorted(known) if probe and s.startswith(probe)][:8]
+        if not cands:                     # 前缀没有再看包含(FOXAUSDT 这类噪音排后面)
+            cands = [s for s in sorted(known) if probe and probe in s][:8]
+        if len(cands) == 1:
+            sym = cands[0]
+        elif cands:
+            return (f"⚠️ Bitget 没有 `{sym}`。你可能想查:\n"
+                    + "\n".join(f"· `/levels {c} {tf}`" for c in cands))
+        else:
+            return (f"⚠️ Bitget USDT 合约列表里没有 `{sym}`(共 {len(known)} 个)。\n"
+                    "用法: `/levels BTC [1h|2h|4h|1d]` 或 `/levels BTC[4h]`。")
 
     bars = _fetch_bars_for_level_query(sym, tf)
     if len(bars) < 20:
-        return f"⚠️ 未获取到 {sym} [{tf}] 足够 K 线数据(用法: /levels BTC [1h|2h|4h|1d])。"
+        return (f"⚠️ 未获取到 {sym} [{tf}] 足够 K 线数据"
+                f"(需要 ≥20 根,实得 {len(bars)})。\n"
+                f"用法: `/levels BTC [{ '|'.join(LEVELS_TFS) }]` 或 `/levels BTC[{tf}]`。")
 
     det = EventDetector(Params())
     for b in (bars[:-1] if len(bars) > 35 else bars)[-160:]:
@@ -938,7 +1038,8 @@ def cmd_levels(ctx: CommandContext, args: list[str]) -> str:
     atr, reg, imb = float(s.atr() or 0.0), s.regime(), float(s.imbalance_strength())
     view = StructureView(
         regime=reg, zones=s.levels, atr=atr, pivots=s.pivots[-8:],
-        macro_imbalance=s.macro_imbalance(), tf_hours=valid_tfs.get(tf, 4), imbalance_strength=imb,
+        macro_imbalance=s.macro_imbalance(), tf_hours=LEVELS_TF_HOURS.get(tf, 4),
+        imbalance_strength=imb,
     )
     topo, _, _ = infer_2d_barrier_topology(cur_px, view)
     med_prom = view.med_prominence_2d

@@ -766,6 +766,45 @@ def test_tg_sync_dry_run_lists_global_scopes_without_writing(monkeypatch):
     assert row["current"]["default"] == []
 
 
+def test_tg_levels_parses_bracket_suffix_and_separate_tf():
+    """2026-11-18 现场:`/levels XAU[1h]` 被当成币种 `XAU[1H]USDT` 后报"数据不足"。
+
+    周期既可能用 `/levels XAU 1h` 写,也可能塞进同一格(`XAU[1h]` / `XAU(1h)` /
+    `XAU/1h` / `XAU1h`)。解析必须把周期从代号里剥出来,而不是拼进代号。
+    """
+    for raw, want in (
+        ("XAU[1h]", ("XAUUSDT", "1h")),
+        ("XAUUSDT[1h]", ("XAUUSDT", "1h")),
+        ("xau[1h]", ("XAUUSDT", "1h")),
+        ("XAU(4H)", ("XAUUSDT", "4h")),
+        ("XAU/1d", ("XAUUSDT", "1d")),
+        ("XAU1h", ("XAUUSDT", "1h")),
+        ("XAU 1h", ("XAUUSDT", "1h")),
+        ("1h XAU", ("XAUUSDT", "1h")),
+        ("XAU:2h", ("XAUUSDT", "2h")),
+        ("BTC", ("BTCUSDT", "4h")),
+        ("eth 4H", ("ETHUSDT", "4h")),
+        ("SOL[15m]", ("SOLUSDT", "15m")),
+    ):
+        assert tg_commands._parse_levels_args(raw.split()) == want, raw
+
+
+def test_tg_levels_unknown_symbol_suggests_close_matches():
+    """不存在的手写代号不能只说"数据不足":给出同前缀的真实代号,并支持 GOLD→XAU 俗名。"""
+    api = _FakeTgAPI()
+    ctx = tg_commands.CommandContext(role="ops", chat_id="111", cfg={},
+                                     secrets={}, api=api)
+    known = {"XAUUSDT", "XAUTUSDT", "FOXAUSDT", "BTCUSDT"}
+    tg_commands._symbols_memo["ts"] = time.time()
+    tg_commands._symbols_memo["symbols"] = sorted(known)
+    reply = tg_commands.cmd_levels(ctx, ["GOLD[4h]"])
+    assert "GOLDUSDT" in reply and reply.startswith("⚠️")
+    assert "XAUUSDT" in reply and "FOXAUSDT" not in reply.split("XAUUSDT")[0]
+    reply2 = tg_commands.cmd_levels(ctx, ["NOPE[1h]"])
+    assert "NOPEUSDT" in reply2 and str(len(known)) in reply2
+    tg_commands._symbols_memo.update({"ts": 0.0, "symbols": []})
+
+
 def test_tg_sync_purges_chat_admin_scope_for_group_chats(monkeypatch):
     """群/超级群(负 chat id)才有 chat_administrators scope —— 必须清,否则群管看到残留菜单。"""
     api = _FakeTgAPI()
