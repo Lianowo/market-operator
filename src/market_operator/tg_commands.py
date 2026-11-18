@@ -909,15 +909,57 @@ def _fetch_bars_for_level_query(symbol: str, tf_label: str) -> list[tuple]:
 
 
 LEVELS_TFS: tuple[str, ...] = ("15m", "30m", "1h", "2h", "4h", "12h", "1d")
-#: 常见俗名 → Bitget 代号主干(仅收录已在交易所核实存在的)。
-SYMBOL_ALIASES: dict[str, str] = {"GOLD": "XAU", "SILVER": "XAG"}
 LEVELS_TF_HOURS: dict[str, int] = {
     "15m": 0, "30m": 0, "1h": 1, "2h": 2, "4h": 4, "12h": 12, "1d": 24,
 }
 CONTRACTS_URL = "https://api.bitget.com/api/v2/mix/market/contracts"
+TICKERS_URL = "https://api.bitget.com/api/v2/mix/market/tickers"
 SYMBOL_CACHE_TTL_S = 900
 #: 进程内缓存(命令可能被连点:避免每次读盘/拉 685KB 合约全量)。
 _symbols_memo: dict = {"ts": 0.0, "symbols": []}
+
+
+def _default_levels_symbol(cfg: dict) -> str:
+    """无参数时的默认标的 —— 全部取自**部署事实**,代码里不写死任何标的。
+
+    优先级:
+    1. `config/live.json` 的 `symbols_core` 中第一个在交易所真实存在的合约;
+    2. 交易所 24h 成交额最高的 USDT 合约(动态,跟随"当前最活跃");
+    3. 合约列表首项(仍来自交易所,仅最后兜底)。
+    """
+    known = _bitget_usdt_symbols()
+    for raw in (cfg or {}).get("symbols_core") or []:
+        sym = str(raw).strip().upper()
+        if sym and (not known or sym in known or not sym.endswith("USDT")):
+            return sym if sym.endswith("USDT") else f"{sym}USDT"
+    try:
+        resp = requests.get(TICKERS_URL,
+                            params={"productType": "USDT-FUTURES"}, timeout=10)
+        rows = (resp.json() or {}).get("data") or []
+        best = max(rows, key=lambda r: float(r.get("usdtVolume") or 0.0),
+                   default=None)
+        if best and best.get("symbol"):
+            return str(best["symbol"])
+    except Exception:
+        pass
+    return sorted(known)[0] if known else ""
+
+
+def _suggest_symbols(sym: str, known: set[str], limit: int = 6) -> list[str]:
+    """拼错/简写时的候选 —— 只按**交易所真实代号**做前缀与近似匹配,不含手写别名。"""
+    stem = sym[:-4] if sym.endswith("USDT") else sym
+    prefix = [s for s in sorted(known) if stem and s.startswith(stem)]
+    if prefix:
+        return prefix[:limit]
+    if not stem:
+        return []
+    import difflib
+    # 只在"代号主干"上算相似度:否则所有 XUSDT 共有 `USDT` 尾巴会把 BTCUSDT 也判成近似。
+    stems = {(s[:-4] if s.endswith("USDT") else s): s for s in known}
+    close = difflib.get_close_matches(stem, sorted(stems), n=limit, cutoff=0.6)
+    if close:
+        return [stems[c] for c in close]
+    return [s for s in sorted(known) if stem in s][:limit]
 
 
 def _split_symbol_tf(token: str) -> tuple[str, Optional[str]]:
@@ -941,7 +983,7 @@ def _split_symbol_tf(token: str) -> tuple[str, Optional[str]]:
 
 
 def _parse_levels_args(args: list[str]) -> tuple[str, str]:
-    """解析 `/levels` 参数 → (已补 USDT 的符号, 周期)。周期默认 4h。"""
+    """解析 `/levels` 参数 → (原始代号主干(空串=未指定), 周期)。周期默认 4h。"""
     sym_parts: list[str] = []
     tf = "4h"
     for raw in args:
@@ -957,10 +999,7 @@ def _parse_levels_args(args: list[str]) -> tuple[str, str]:
             if head and head.strip():
                 sym_parts.append(head.strip())
     base = "".join(sym_parts).upper().replace("-", "").replace("_", "")
-    if not base:
-        base = "BTC"
-    sym = base if base.endswith("USDT") else f"{base}USDT"
-    return sym, tf
+    return base, tf
 
 
 def _bitget_usdt_symbols(ttl_s: float = SYMBOL_CACHE_TTL_S) -> set[str]:
@@ -1006,29 +1045,31 @@ def cmd_levels(ctx: CommandContext, args: list[str]) -> str:
     from .structure import Params
     from .tg import render_level_map_png
 
-    valid_tfs = {"15m": 0, "30m": 0, "1h": 1, "2h": 2, "4h": 4, "12h": 12, "1d": 24}
-    sym, tf = _parse_levels_args(args)
+    base, tf = _parse_levels_args(args)
     known = _bitget_usdt_symbols()
+    sym = base if base.endswith("USDT") else (f"{base}USDT" if base else "")
+    if not sym:
+        sym = _default_levels_symbol(ctx.cfg)      # 未指定 → 部署事实里的默认标的
+    usage = "用法: `/levels <币种> [%s]`,如 `/levels %s[%s]`。" % (
+        "|".join(LEVELS_TFS), (sym[:-4] or "<币种>") if sym else "<币种>", tf)
+
     if known and sym not in known:
-        stem = sym[:-4] if sym.endswith("USDT") else sym
-        probe = SYMBOL_ALIASES.get(stem, stem)
-        cands = [s for s in sorted(known) if probe and s.startswith(probe)][:8]
-        if not cands:                     # 前缀没有再看包含(FOXAUSDT 这类噪音排后面)
-            cands = [s for s in sorted(known) if probe and probe in s][:8]
+        cands = _suggest_symbols(sym, known)
         if len(cands) == 1:
             sym = cands[0]
         elif cands:
-            return (f"⚠️ Bitget 没有 `{sym}`。你可能想查:\n"
+            return (f"⚠️ 交易所没有 `{sym}`。你可能想查:\n"
                     + "\n".join(f"· `/levels {c} {tf}`" for c in cands))
         else:
-            return (f"⚠️ Bitget USDT 合约列表里没有 `{sym}`(共 {len(known)} 个)。\n"
-                    "用法: `/levels BTC [1h|2h|4h|1d]` 或 `/levels BTC[4h]`。")
+            return (f"⚠️ 币种 `{sym}` 不在交易所 USDT 合约列表里(共 {len(known)} 个)。\n"
+                    + usage)
+    if not sym:
+        return "⚠️ 无法确定默认标的(交易所合约列表不可达)。\n" + usage
 
     bars = _fetch_bars_for_level_query(sym, tf)
     if len(bars) < 20:
         return (f"⚠️ 未获取到 {sym} [{tf}] 足够 K 线数据"
-                f"(需要 ≥20 根,实得 {len(bars)})。\n"
-                f"用法: `/levels BTC [{ '|'.join(LEVELS_TFS) }]` 或 `/levels BTC[{tf}]`。")
+                f"(需要 ≥20 根,实得 {len(bars)})。\n" + usage)
 
     det = EventDetector(Params())
     for b in (bars[:-1] if len(bars) > 35 else bars)[-160:]:

@@ -770,39 +770,61 @@ def test_tg_levels_parses_bracket_suffix_and_separate_tf():
     """2026-11-18 现场:`/levels XAU[1h]` 被当成币种 `XAU[1H]USDT` 后报"数据不足"。
 
     周期既可能用 `/levels XAU 1h` 写,也可能塞进同一格(`XAU[1h]` / `XAU(1h)` /
-    `XAU/1h` / `XAU1h`)。解析必须把周期从代号里剥出来,而不是拼进代号。
+    `XAU/1h` / `XAU1h`),大小写与是否带 USDT 都必须识别。解析只返回**裸代号主干**
+    (补 USDT 与默认标的属于部署事实,不在解析里写死)。
     """
     for raw, want in (
-        ("XAU[1h]", ("XAUUSDT", "1h")),
+        ("XAU[1h]", ("XAU", "1h")),
         ("XAUUSDT[1h]", ("XAUUSDT", "1h")),
-        ("xau[1h]", ("XAUUSDT", "1h")),
-        ("XAU(4H)", ("XAUUSDT", "4h")),
-        ("XAU/1d", ("XAUUSDT", "1d")),
-        ("XAU1h", ("XAUUSDT", "1h")),
-        ("XAU 1h", ("XAUUSDT", "1h")),
-        ("1h XAU", ("XAUUSDT", "1h")),
-        ("XAU:2h", ("XAUUSDT", "2h")),
-        ("BTC", ("BTCUSDT", "4h")),
-        ("eth 4H", ("ETHUSDT", "4h")),
-        ("SOL[15m]", ("SOLUSDT", "15m")),
+        ("xau[1h]", ("XAU", "1h")),
+        ("xauusdT[1h]", ("XAUUSDT", "1h")),
+        ("XAU(4H)", ("XAU", "4h")),
+        ("XAU/1d", ("XAU", "1d")),
+        ("XAU1h", ("XAU", "1h")),
+        ("XAU 1h", ("XAU", "1h")),
+        ("xau 1h", ("XAU", "1h")),
+        ("xauusdt 1h", ("XAUUSDT", "1h")),
+        ("1h XAU", ("XAU", "1h")),
+        ("XAU:2h", ("XAU", "2h")),
+        ("BTC", ("BTC", "4h")),
+        ("eth 4H", ("ETH", "4h")),
+        ("SOL[15m]", ("SOL", "15m")),
     ):
         assert tg_commands._parse_levels_args(raw.split()) == want, raw
+    assert tg_commands._parse_levels_args([]) == ("", "4h")
 
 
-def test_tg_levels_unknown_symbol_suggests_close_matches():
-    """不存在的手写代号不能只说"数据不足":给出同前缀的真实代号,并支持 GOLD→XAU 俗名。"""
+def test_tg_levels_symbol_suggestions_come_from_exchange_data_only():
+    """候选只能来自交易所真实代号:代码里不许有 GOLD→XAU 之类的固定别名表。"""
+    import inspect
+    assert not hasattr(tg_commands, "SYMBOL_ALIASES")
+    src = inspect.getsource(tg_commands._default_levels_symbol)
+    assert "BTC" not in src and "XAU" not in src      # 默认标的不写死
+
+    known = {"BTCUSDT", "XAUUSDT", "XAUTUSDT", "FOXAUSDT", "NOPE1USDT"}
+    assert tg_commands._suggest_symbols("XAUSDT", known)[:2] == \
+        ["XAUTUSDT", "XAUUSDT"] or "XAUUSDT" in tg_commands._suggest_symbols(
+            "XAUSDT", known)
+    assert "FOXAUSDT" not in tg_commands._suggest_symbols("XAUSDT", known)[:2]
+    assert tg_commands._suggest_symbols("ZZZUSDT", known) == []
+
+
+def test_tg_levels_default_symbol_follows_deploy_config():
+    """不带标的时用 `symbols_core`(部署事实),取不到才动态回退;代码零硬编码。"""
+    assert tg_commands._default_levels_symbol(
+        {"symbols_core": ["XAUUSDT"]}) == "XAUUSDT"
+    assert tg_commands._default_levels_symbol(
+        {"symbols_core": ["xau"]}) == "XAUUSDT"
+
+
+def test_tg_levels_unknown_symbol_reports_exchange_contract_count(monkeypatch):
     api = _FakeTgAPI()
     ctx = tg_commands.CommandContext(role="ops", chat_id="111", cfg={},
                                      secrets={}, api=api)
-    known = {"XAUUSDT", "XAUTUSDT", "FOXAUSDT", "BTCUSDT"}
-    tg_commands._symbols_memo["ts"] = time.time()
-    tg_commands._symbols_memo["symbols"] = sorted(known)
-    reply = tg_commands.cmd_levels(ctx, ["GOLD[4h]"])
-    assert "GOLDUSDT" in reply and reply.startswith("⚠️")
-    assert "XAUUSDT" in reply and "FOXAUSDT" not in reply.split("XAUUSDT")[0]
-    reply2 = tg_commands.cmd_levels(ctx, ["NOPE[1h]"])
-    assert "NOPEUSDT" in reply2 and str(len(known)) in reply2
-    tg_commands._symbols_memo.update({"ts": 0.0, "symbols": []})
+    known = {"BTCUSDT", "XAUUSDT"}
+    monkeypatch.setattr(tg_commands, "_bitget_usdt_symbols", lambda *a, **k: known)
+    reply = tg_commands.cmd_levels(ctx, ["NOPE[1h]"])
+    assert "NOPEUSDT" in reply and str(len(known)) in reply
 
 
 def test_tg_sync_purges_chat_admin_scope_for_group_chats(monkeypatch):
