@@ -2945,17 +2945,18 @@ class LiveRunner:
 
     @staticmethod
     def _signal_chart_bars(cs: CampaignState, mic: bool):
-        """信号图取哪个帧,并说明该帧是否为认知帧。
+        """信号图用认知帧(4h/1d),不用原始 30m 触发缓存。
 
-        pivot 的 `known_index` 是认知帧坐标:只有画认知帧时下标才对得上,
-        画触发帧时若硬标就会整体错位(标注错位比不标更有害)。
+        触发帧是 30m 下载,策略内部再聚合成 1h。直接拿末 96 根 30m 去画,
+        标题仍写 4h,两天的细 K 会被止损到目标的价差压成一粒粒十字。
+        pivot 下标也只对认知帧有效。`mic` 只说明这笔信号由扳机确认,
+        不改变图上的 K 线周期。
         """
-        if mic and cs.trig_bars:
-            return cs.trig_bars[-96:], False
-        cog = cs.cog_bars[-96:]
+        del mic
+        cog = list(cs.cog_bars[-96:]) if cs.cog_bars else []
         if cog:
             return cog, True
-        return cs.trig_bars[-96:], False
+        return list(cs.trig_bars[-96:]) if cs.trig_bars else [], False
 
     @staticmethod
     def _chart_pivots(pivots) -> list:
@@ -3333,7 +3334,8 @@ class LiveRunner:
             if (equity > 0.0 and planned_lev > 0 and sig_notional > 0.0)
             else None
         )
-        bar_tf = self._bar_tf_label(int(period_s or 0))
+        bar_tf = (str(cs.tf_label or "") if on_cog
+                  else self._bar_tf_label(self._base_step_seconds(chart_bars)))
         self._notify_signal(
             (sym, cs.tf_label, hyp.event_id, t, hyp.direction, d.route),
             size_note="降档触发" if mic else "本周期触发",

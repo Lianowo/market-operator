@@ -1849,6 +1849,20 @@ def _campaign(symbol="BTCUSDT", tf_label="12h"):
                                  trig_bars=list(bars), cog_bars=list(bars))
 
 
+def test_signal_chart_uses_structure_bars_not_raw_trigger(tmp_path):
+    """4h 信号图画认知 K 线。30m 触发缓存只供内部聚合,画出来是一粒粒十字。"""
+    r = _runner(tmp_path, _FakeClient(), _FakeTG())
+    cog = [(i * 14_400_000, 100.0, 102.0, 99.0, 101.0, 1.0) for i in range(8)]
+    trig = [(i * 1_800_000, 100.0, 100.2, 99.9, 100.1, 1.0) for i in range(80)]
+    cs = types.SimpleNamespace(
+        cog_bars=cog, trig_bars=trig, tf_label="4h",
+        obs_tf_seconds=14400, trigger_tf_seconds=3600)
+    bars, on_cog = r._signal_chart_bars(cs, True)
+    assert on_cog is True
+    assert [b[0] for b in bars] == [b[0] for b in cog]
+    assert int(bars[1][0] - bars[0][0]) == 14_400_000
+
+
 def test_bounded_market_rechecks_quote_and_preserves_close_time(tmp_path):
     client, tg = _FakeClient(), _SignalTG()
     client.tickers = lambda: [{"symbol": "BTCUSDT", "lastPr": "111",
