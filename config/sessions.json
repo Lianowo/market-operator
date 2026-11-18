@@ -85,6 +85,12 @@
       "windows": [{"weekdays": [1, 2, 3, 4, 5], "open": "09:15", "close": "15:30"}],
       "note": "印度 NSE/BSE 现货 09:15-15:30 IST。"
     },
+    "asia_equity": {
+      "tz": "UTC",
+      "holiday_rules": "none",
+      "windows": [{"weekdays": [1, 2, 3, 4, 5], "open": "00:00", "close": "10:00"}],
+      "note": "亚洲现货的粗口径(港/日/韩/台/印的共同交易区):工作日 00:00-10:00 UTC。由 scripts/learn_sessions.py 在测到亚洲时段活动显著集中时自动分配;要更细的港/日/韩/台/印窗口时再用运维覆盖。"
+    },
     "asia_index_futures": {
       "tz": "Asia/Tokyo",
       "weekday_only": true,
@@ -94,6 +100,13 @@
       "legacy_weekend": true,
       "note": "改动前的旧口径(周五 21:00 UTC ~ 周日 22:00 UTC),仅作回滚开关;不随夏令时调整。"
     }
+  },
+  "quiet_window": {
+    "enabled": true,
+    "metric": "range",
+    "min_samples": 5,
+    "floor_frac": 0.35,
+    "note": "数据驱动的'静默窗口'兜底:取确认棒之前、同一 UTC 星期×小时的近期历史(默认 range 中位数),若确认棒活动低于中位数的 floor_frac 就判为休市/死水。它不依赖任何日期与标的,因此自动覆盖未登记的假日、半日市、CME 每日 17:00-18:00 ET 维护、临时停盘 —— 与上面的日历互为补足:日历说'不该开'时直接拦,日历说'能开'但盘口已经死掉时由本项拦。"
   },
   "patterns": [
     {"pattern": "^[A-Z]{3}[A-Z]{3}USDT$", "calendar": "fx",

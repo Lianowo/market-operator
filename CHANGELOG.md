@@ -19,6 +19,20 @@ hypothesis / position / campaign / replay / broker / capacity` 的风险、容�
   `scripts/calendar_report.py` 列出每个标的的实际日历/来源/是否在时段内。
   `tests/test_sessions_calendar.py` 同时锁定"生产代码与仓库配置不得出现固定
   年月日或具体合约代码"。
+- **非加密时段自动分派(不再人工维护)**:新增 `scripts/learn_sessions.py`,用每个合约
+  自己的 1H 活动分布测 ``rth / asia / break_ratio`` 三个特征,只在**证据显著**时给
+  精确日历(亚洲现货集中在 00:00-10:00 UTC 的自动判为 `asia_equity`;美股 RTH 需要
+  ``rth>=0.40`` 才收紧),其余一律落 `weekday_only`,结果写
+  `data/calendars/assignments.json`(运行数据、可随时重算)。优先级:
+  运维覆盖 `overrides.json` > 命名族规则 > 自动推断 > 兜底。
+  实测结论:交易所接口**没有**交易时段字段,且这些 RWA 永续在工作日几乎 24h 都有
+  真实活动(美股/黄金的亚洲时段活动占比 0.3 左右),因此"按成交额选窗口"不可靠;
+  自动分派只在可复现、方向安全的地方收紧。
+- **静默窗口兜底(自动覆盖假日/半日市/每日维护)**:`sessions.quiet_window` 用确认棒
+  之前同一 UTC(星期×小时)的活动中位数做比较,活动塌到 ``floor_frac``(默认 35%)
+  以下即判死水,返回既有的 `RWA_INACTIVE_SESSION`。回放(`campaign`)与实盘
+  (`live_runner`)传入各自**决策前**的 bar 序列,因果性与前缀不变性不变。
+
 - **成交质量闸门**:`config/live.json` 的 `execution.quote_guard`(默认启用、
   `rwa_only`)在真实时段内用交易所公开 tickers 快照拦截 `QUOTE_STALE` /
   `SPREAD_WIDE` / `BASIS_WIDE`,计数 `quote_guard_skips`;既有仓位、交易所原生

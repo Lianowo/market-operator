@@ -148,6 +148,48 @@ def test_overrides_can_close_a_day_without_touching_code():
     assert _open("NVDAUSDT", _ts(2026, 12, 28, 15, 0)) is True
 
 
+def test_learned_assignments_and_resolution_priority():
+    """优先级:运维覆盖 > 命名族 > 自动推断 > 兜底。"""
+    learned = {"NVDAUSDT": "us_equity", "EURUSDUSDT": "weekday_only",
+               "TENCENTUSDT": "asia_equity"}
+    ovr_learn_only = {"assignments": {}}
+    assert S.calendar_for("NVDAUSDT", CFG, overrides=ovr_learn_only,
+                          assignments=learned) == "us_equity"
+    row = S.describe("NVDAUSDT", cfg=CFG, overrides=ovr_learn_only,
+                     assignments=learned)
+    assert row["source"] == "learned"
+    # 命名族规则优先于自动推断
+    assert S.calendar_for("EURUSDUSDT", CFG, overrides=ovr_learn_only,
+                          assignments=learned) == "fx"
+    assert S.describe("EURUSDUSDT", cfg=CFG, overrides=ovr_learn_only,
+                      assignments=learned)["source"] == "pattern"
+    # 运维显式覆盖优先于一切
+    ovr = {"assignments": {"NVDAUSDT": "asia_equity"}}
+    assert S.describe("NVDAUSDT", cfg=CFG, overrides=ovr,
+                      assignments=learned)["source"] == "override"
+
+
+def test_asia_equity_calendar_window():
+    assert S.in_session("asia_equity", _ts(2026, 11, 18, 3, 0), CFG) is True
+    assert S.in_session("asia_equity", _ts(2026, 11, 18, 11, 0), CFG) is False
+    assert S.in_session("asia_equity", _ts(2026, 11, 21, 3, 0), CFG) is False
+
+
+def test_quiet_window_blocks_collapsed_activity():
+    """同一(星期×小时)的近期活动塌陷 ⇒ 死水(自动覆盖假日/半日市/每日维护)。"""
+    ts = _ts(2026, 11, 18, 15, 0)                    # 周三 15:00 UTC
+    hist = [(ts - k * 7 * 86_400_000, 1.0, 1.1, 0.9, 1.0, 10.0) for k in range(1, 7)]
+    quiet = (ts, 1.0, 1.01, 0.99, 1.0, 10.0)           # range 仅为平常的 ~20%
+    normal = (ts, 1.0, 1.1, 0.9, 1.0, 10.0)
+    assert S.block_reason(True, "ZZZUSDT", ts, quiet, history=hist,
+                          cfg=CFG, overrides=OVR) == "RWA_INACTIVE_SESSION"
+    assert S.block_reason(True, "ZZZUSDT", ts, normal, history=hist,
+                          cfg=CFG, overrides=OVR) is None
+    # 样本不足 ⇒ 不猜
+    assert S.block_reason(True, "ZZZUSDT", ts, quiet, history=hist[:2],
+                          cfg=CFG, overrides=OVR) is None
+
+
 def test_config_validation_fails_closed():
     with pytest.raises(ValueError):
         S._validate({"calendars": {"x": {"always_open": True, "weekday_only": True}}})

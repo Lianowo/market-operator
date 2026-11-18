@@ -3201,8 +3201,12 @@ class LiveRunner:
         block: Optional[str] = entry_cost_error(hyp.direction, fitted_entry, invalid, d.meta)
         if block is None:
             eval_bar = trigger_bar if trigger_bar is not None else (cs.trig_bars[-1] if mic and cs.trig_bars else (cs.cog_bars[-1] if cs.cog_bars else None))
+            hist = None
+            if eval_bar is not None:
+                hist = [b for b in (cs.trig_bars or ())[-400:]
+                        if len(b) >= 6 and int(b[0]) < int(eval_bar[0])]
             block = rwa_session_entry_block(self._is_rwa(sym), int(confirm_ts), eval_bar,
-                                           symbol=sym)
+                                           symbol=sym, history=hist)
         if block is None:
             block = self._manage_only_block(sym)
         if block is None and self.mode == "live":

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 from datetime import date, datetime, time as _time, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -45,6 +46,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config" / "sessions.json"
 OVERRIDES_PATH = ROOT / "data" / "calendars" / "overrides.json"
+ASSIGNMENTS_PATH = ROOT / "data" / "calendars" / "assignments.json"
 
 CLOSED = "RWA_MARKET_CLOSED"
 INACTIVE = "RWA_INACTIVE_SESSION"
@@ -55,6 +57,7 @@ US_EQUITY_RULES = "us_equity"
 DAY_S = 86_400
 _CONFIG_CACHE: tuple[Any, Optional[Mapping[str, Any]]] = (None, None)
 _OVER_CACHE: tuple[Any, Optional[Mapping[str, Any]]] = (None, None)
+_ASSIGN_CACHE: tuple[Any, Optional[Mapping[str, Any]]] = (None, None)
 
 _LEGACY_FALLBACK: Mapping[str, Any] = {
     "calendars": {LEGACY: {"legacy_weekend": True}},
@@ -155,6 +158,30 @@ def _rule_dates(rules: str, year: int) -> tuple[frozenset[date], frozenset[date]
     if rules == US_EQUITY_RULES:
         return us_equity_dates(year)
     return frozenset(), frozenset()
+
+
+def _load_assignments(path: str | Path | None = None) -> Mapping[str, str]:
+    """自动推断的标的→日历表(``data/calendars/assignments.json``)。
+
+    由 ``scripts/learn_sessions.py`` 用每个合约**自己的成交分布**测量生成:
+    交易所不提供"这只属于美股/COMEX/港交所"的字段,人工逐条登记不可持续,
+    所以按"窗口内成交额占比 - 窗口占工作日比例"(share - coverage) 自动选日历。
+    本文件是运行数据,可随时重算;优先级低于运维显式覆盖与命名族规则。
+    """
+    global _ASSIGN_CACHE
+    p = Path(path) if path is not None else ASSIGNMENTS_PATH
+    if not p.exists():
+        return {}
+    stat = p.stat()
+    key = (str(p), stat.st_mtime_ns, stat.st_size)
+    if _ASSIGN_CACHE[0] == key and _ASSIGN_CACHE[1] is not None:
+        return _ASSIGN_CACHE[1]
+    data = json.loads(p.read_text(encoding="utf-8"))
+    items = data.get("assignments") if isinstance(data, Mapping) else None
+    if not isinstance(items, Mapping):
+        raise ValueError("assignments.json: assignments 必须是 {symbol: calendar}")
+    _ASSIGN_CACHE = (key, dict(items))
+    return _ASSIGN_CACHE[1]
 
 
 def _load_overrides(path: str | Path | None = None) -> Mapping[str, Any]:
@@ -270,8 +297,9 @@ def root_symbol(symbol: Optional[str]) -> Optional[str]:
 
 
 def _resolve(symbol: Optional[str], cfg: Mapping[str, Any],
-             overrides: Mapping[str, Any]) -> tuple[str, str]:
-    """(日历名, 来源)。来源 ∈ override / pattern / default,供运维补齐未登记标的。"""
+             overrides: Mapping[str, Any],
+             assignments: Mapping[str, str] | None = None) -> tuple[str, str]:
+    """(日历名, 来源)。来源 ∈ override / pattern / learned / default。"""
     cals = cfg.get("calendars") or {}
     root = root_symbol(symbol)
     if root:
@@ -282,16 +310,22 @@ def _resolve(symbol: Optional[str], cfg: Mapping[str, Any],
             pattern, cal = rule.get("pattern"), rule.get("calendar")
             if pattern and cal in cals and re.fullmatch(str(pattern), root):
                 return str(cal), "pattern"
+        learned = (assignments if assignments is not None
+                   else _load_assignments()).get(root)
+        if learned in cals:
+            return str(learned), "learned"
     fallback = cfg.get("rwa_default_calendar") or DEFAULT_RWA
     return (str(fallback), "default") if fallback in cals else (LEGACY, "default")
 
 
 def calendar_for(symbol: Optional[str],
                  cfg: Mapping[str, Any] | None = None, *,
-                 overrides: Mapping[str, Any] | None = None) -> str:
+                 overrides: Mapping[str, Any] | None = None,
+                 assignments: Mapping[str, str] | None = None) -> str:
     c = cfg or load_config()
-    return _resolve(symbol, c, overrides if overrides is not None
-                    else _load_overrides())[0]
+    return _resolve(symbol, c,
+                    overrides if overrides is not None else _load_overrides(),
+                    assignments)[0]
 
 
 def _calendar_dates(cal_name: str, cal: Mapping[str, Any], year: int,
@@ -388,13 +422,56 @@ def in_session(calendar: str, ts_ms: int,
     return _in_intraday(cal, local, closed, early)
 
 
+def _activity(bar: Sequence[float], metric: str) -> float:
+    """单根 bar 的活动量(range 优先;range 为 0 时退回成交量,避免一字棒误伤)。"""
+    rng = max(0.0, float(bar[2]) - float(bar[3]))
+    if metric == "volume":
+        return max(0.0, float(bar[5]))
+    return rng if rng > 0.0 else max(0.0, float(bar[5]))
+
+
+def _bucket(ts_ms: int) -> tuple[int, int]:
+    """UTC(星期, 小时);只用 UTC 是为了可复现,不引入任何本地日历假设。"""
+    dt = datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=timezone.utc)
+    return dt.weekday(), dt.hour
+
+
+def _quiet_block(bar: Sequence[float],
+                 history: Optional[Sequence[Sequence[float]]],
+                 cfg: Mapping[str, Any]) -> Optional[str]:
+    """静默窗口:确认棒活动 < 同(星期×小时)近期中位数的 floor_frac ⇒ 死水。
+
+    不依赖日期与标的:未登记假日、半日市、CME 每日维护、临时停盘都会在这里
+    表现为"同一时段的活动突然塌掉"。样本不足或中位数为 0 时不判定(不猜)。
+    """
+    qw = cfg.get("quiet_window") or {}
+    if not bool(qw.get("enabled", True)) or not history or len(bar) < 6:
+        return None
+    metric = str(qw.get("metric") or "range")
+    cur_ts, cur = int(bar[0]), _activity(bar, metric)
+    key = _bucket(cur_ts)
+    samples = [_activity(b, metric) for b in history
+               if len(b) >= 6 and int(b[0]) < cur_ts and _bucket(int(b[0])) == key]
+    if len(samples) < int(qw.get("min_samples") or 5):
+        return None
+    med = statistics.median(samples)
+    if med <= 0.0:
+        return None
+    return INACTIVE if cur < float(qw.get("floor_frac") or 0.35) * med else None
+
+
 def block_reason(is_rwa: bool, symbol: Optional[str], ts_ms: int,
                  bar: Optional[Sequence[float]] = None, *,
+                 history: Optional[Sequence[Sequence[float]]] = None,
                  cfg: Mapping[str, Any] | None = None,
-                 overrides: Mapping[str, Any] | None = None) -> Optional[str]:
+                 overrides: Mapping[str, Any] | None = None,
+                 assignments: Mapping[str, str] | None = None) -> Optional[str]:
     """执行闸门:返回 ``RWA_MARKET_CLOSED`` / ``RWA_INACTIVE_SESSION`` / ``None``。
 
-    判定顺序与原实现一致:先看确认棒是否零成交/一字静止(死水盘),再看日历。
+    判定顺序:① 确认棒零成交/一字静止 ⇒ ``INACTIVE``;② 不在该标的日历时段
+    (含假日/半日市/每日维护)⇒ ``CLOSED``;③ 日历可交易但同(星期×小时)的近期
+    活动塌到中位数的 ``floor_frac`` 以下 ⇒ ``INACTIVE``(静默窗口)。
+    ``history`` 必须是**决策时刻之前**的该标的 bar(调用方保证因果性)。
     原生加密(is_rwa=False)恒放行 — 既有仓位的交易所保护单不受本函数影响。
     """
     if not is_rwa:
@@ -404,14 +481,21 @@ def block_reason(is_rwa: bool, symbol: Optional[str], ts_ms: int,
             return INACTIVE
     c = cfg or load_config()
     ov = overrides if overrides is not None else _load_overrides()
-    cal = _resolve(symbol, c, ov)[0]
-    return None if in_session(cal, int(ts_ms), c, overrides=ov) else CLOSED
+    cal = _resolve(symbol, c, ov, assignments)[0]
+    if not in_session(cal, int(ts_ms), c, overrides=ov):
+        return CLOSED
+    if bar is not None:
+        quiet = _quiet_block(bar, history, c)
+        if quiet is not None:
+            return quiet
+    return None
 
 
 def describe(symbol: Optional[str], ts_ms: Optional[int] = None, *,
              is_rwa: Optional[bool] = None,
              cfg: Mapping[str, Any] | None = None,
-             overrides: Mapping[str, Any] | None = None) -> dict:
+             overrides: Mapping[str, Any] | None = None,
+             assignments: Mapping[str, str] | None = None) -> dict:
     """运维诊断:标的解析到的日历、来源、当前是否在时段内(不改变任何判定)。"""
     import time as _time_mod
     ts = int(ts_ms if ts_ms is not None else _time_mod.time() * 1000)
@@ -420,7 +504,7 @@ def describe(symbol: Optional[str], ts_ms: Optional[int] = None, *,
                 "source": "crypto", "in_session": True, "ts": ts}
     c = cfg or load_config()
     ov = overrides if overrides is not None else _load_overrides()
-    cal, source = _resolve(symbol, c, ov)
+    cal, source = _resolve(symbol, c, ov, assignments)
     return {"symbol": root_symbol(symbol), "calendar": cal, "source": source,
             "in_session": in_session(cal, ts, c, overrides=ov), "ts": ts}
 

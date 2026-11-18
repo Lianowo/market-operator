@@ -164,6 +164,7 @@ def rwa_session_entry_block(
     bar: Optional[Sequence[float]] = None,
     *,
     symbol: Optional[str] = None,
+    history: Optional[Sequence[Sequence[float]]] = None,
 ) -> Optional[str]:
     """非加密合约"能否新开仓"的执行闸门(回放与实盘共用,策略语义零参与)。
 
@@ -178,6 +179,7 @@ def rwa_session_entry_block(
       (覆盖临时停盘与未登记的本地假日);
     - 不在该标的日历时段内 ⇒ ``RWA_MARKET_CLOSED``。
     """
-    return sessions.block_reason(is_rwa, symbol, confirm_ts_ms, bar)
+    return sessions.block_reason(is_rwa, symbol, confirm_ts_ms, bar,
+                                 history=history)
 
 

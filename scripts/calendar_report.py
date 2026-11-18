@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from pathlib import Path
 
 from market_operator import sessions
 from market_operator.bitget_live import BitgetLiveClient
@@ -37,14 +38,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--unassigned", action="store_true",
                     help="只输出 source=default(尚未登记)的标的")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--emit-assignments", metavar="CALENDAR", default=None,
+                    help="按给定日历批量生成 overrides.json 的 assignments 载荷"
+                         "(配合 --unassigned 只处理未登记标的)")
+    ap.add_argument("--out", default=None,
+                    help="把 JSON 结果写到该文件(UTF-8,避免 PowerShell 重定向成 UTF-16)")
     args = ap.parse_args(argv)
 
     syms = _rwa_symbols(args.symbols)
     rows = [sessions.describe(s) for s in syms]
     if args.unassigned:
         rows = [r for r in rows if r["source"] == "default"]
-    if args.json:
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    if args.emit_assignments:
+        payload: object = {"assignments": {r["symbol"]: args.emit_assignments
+                                           for r in rows}}
+    else:
+        payload = rows
+    if args.json or args.emit_assignments:
+        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"[out] n={len(rows)} -> {args.out}")
+        else:
+            print(text)
         return 0
     counts = Counter((r["calendar"], r["source"]) for r in rows)
     print(f"[rwa] n={len(rows)}  calendar/source=" +
