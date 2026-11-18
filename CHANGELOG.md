@@ -43,7 +43,7 @@ hypothesis / position / campaign / replay / broker / capacity` 的风险、容�
   并在闸门侧增加兜底:占位条存在时用**同窗口有成交的认知条**做活跃度判定,
   计数 `gate_bar_fallbacks` 并记 `gate_bar_fallback` 日志。
 
-:`data/calendars/assignments.json` 改为**不入库**(`.gitignore`),
+- **运行态与代码分离**:`data/calendars/assignments.json` 改为**不入库**(`.gitignore`),
   由每日任务在目标机器本地生成;缺失时 `sessions` 回退 `weekday_only`(安全方向),
   不需要人工准备。`data/calendars/overrides.json` 同理(可选的强制覆盖)。
 - **无缝换机**:`mo bootstrap` 现在会自动注册/刷新 4 条计划任务
