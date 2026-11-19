@@ -199,6 +199,29 @@ class PositionManager:
         self.positions[symbol] = pos
         return pos
 
+    def retag_entry(self, symbol: str, fill_px: float) -> bool:
+        """实盘成交回执校正:按交易所成交均价回写 entry 与 R 基准。
+
+        防线 ``invalid`` 不动(结构事实不因滑点放宽);只重置 ``_entry0`` /
+        ``_init_risk`` 与稀疏极值 ``_best``,避免 mfe_r 与锁利预算沿用参考价。
+        成交价已越过防线或仓位已不在时不校正。
+        """
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return False
+        px = float(fill_px)
+        if px <= 0.0 or pos.direction * (px - pos.invalid) <= 0.0:
+            return False
+        risk = abs(px - float(pos.invalid))
+        if risk <= 0.0:
+            return False
+        pos.entry = px
+        pos._entry0 = px
+        pos._init_risk = risk
+        if pos._best is None or pos.direction * (pos._best - px) < 0.0:
+            pos._best = px
+        return True
+
     def _tighten(self, pos: Position, cand_stop: float, ref_px: float, tag: str) -> None:
         d = pos.direction
         better = (cand_stop > pos.invalid) if d > 0 else (cand_stop < pos.invalid)
