@@ -19,16 +19,23 @@
   "funding_source": "history",
   "slippage_by_symbol": {},
   "dev_frac": 0.7,
-  "tf_list": ["4h", "1d"],
+  "tf_list": [
+    "1h",
+    "4h",
+    "1d"
+  ],
   "trigger_tf_by_htf": {
     "4h": 3600,
-    "1d": null
+    "1d": null,
+    "1h": 900
   },
   "portfolio_cap_frac": 0.12,
   "directional_cap_frac": 0.06,
   "capacity_mode": "cash_net_admission",
   "tf_cap_by_tf": {
-    "4h": 0.12
+    "1h": 0.12,
+    "4h": 0.12,
+    "1d": 0.12
   },
   "router_params": {
     "min_rr": 2.0,
@@ -39,9 +46,22 @@
   "router_params_by_tf": {
     "1d": {
       "whitelist": []
+    },
+    "1h": {
+      "whitelist": [
+        [
+          "REJECT",
+          -1
+        ],
+        [
+          "REJECT",
+          1
+        ]
+      ]
     }
   },
   "arm_config": {
+    "allow_add": true,
     "breakeven_on_reduce": true,
     "partial_exit_enabled": false,
     "accept_reenter_level_exit": true,
@@ -61,20 +81,41 @@
       "1d": 0.24
     },
     "dynamic_risk_tiers": [
-      [15000.0, 0.05],
-      [100000.0, 0.042],
-      [300000.0, 0.035],
-      [1000000000.0, 0.025]
+      [
+        15000.0,
+        0.05
+      ],
+      [
+        100000.0,
+        0.042
+      ],
+      [
+        300000.0,
+        0.035
+      ],
+      [
+        1000000000.0,
+        0.025
+      ]
     ]
   },
   "whitelist": [
-    ["ACCEPT", -1],
-    ["ACCEPT", 1],
-    ["REJECT", -1],
-    ["REJECT", 1]
+    [
+      "ACCEPT",
+      -1
+    ],
+    [
+      "ACCEPT",
+      1
+    ],
+    [
+      "REJECT",
+      -1
+    ],
+    [
+      "REJECT",
+      1
+    ]
   ],
   "n_fill": 12
 }
-
-
-

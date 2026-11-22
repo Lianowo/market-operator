@@ -22,10 +22,22 @@
   "risk": {
     "risk_frac": 0.05,
     "dynamic_risk_tiers": [
-      [15000.0, 0.05],
-      [100000.0, 0.042],
-      [300000.0, 0.035],
-      [1000000000.0, 0.025]
+      [
+        15000.0,
+        0.05
+      ],
+      [
+        100000.0,
+        0.042
+      ],
+      [
+        300000.0,
+        0.035
+      ],
+      [
+        1000000000.0,
+        0.025
+      ]
     ],
     "leverage_cap": 20,
     "portfolio_cap_frac": 0.48,
@@ -102,7 +114,11 @@
     "lock_backoff_seconds": 180,
     "gc_hours": 24,
     "log_max_mb": 32,
-    "runner_argv": ["scripts/live_runner.py", "--mode", "live"],
+    "runner_argv": [
+      "scripts/live_runner.py",
+      "--mode",
+      "live"
+    ],
     "note": "跨平台看护(scripts/live_supervisor.py):只读 runtime/live/heartbeat.json 判定缺失/正常/迟到/补做中/卡死→终止+拉起。ok_seconds=正常阈值;stale_seconds=迟到上限(超过即卡死);recover_max_seconds=掉线补做允许的最长静默;max_restarts_per_hour=重启预算(超出只告警,交人工);gc_hours=顺带执行存储治理的间隔(0=不执行)。"
   },
   "universe": {
@@ -121,10 +137,15 @@
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
-    "tf_list": ["4h", "1d"],
+    "tf_list": [
+      "1h",
+      "4h",
+      "1d"
+    ],
     "trigger_tf_by_htf": {
       "4h": 3600,
-      "1d": null
+      "1d": null,
+      "1h": 900
     },
     "main_tf_label": "1d",
     "obs_tf_seconds": 86400,

@@ -277,6 +277,7 @@ class _AcctPosition:
     last_funding_ts: int = 0   # 上次计提时刻
     invalid: Optional[float] = None  # 当前结构失效位置;组合风险预算的真实输入
     decision_ts: int = 0       # OPEN 决策 bar 标签(保护性止损的因果锚,< fill ts)
+    adds_done: int = 0         # 已执行顺势金字塔加仓次数(严控上限 <= 1)
 
 
 def _normalize_funding_table(table: Optional[dict]) -> Optional[dict]:
@@ -1154,6 +1155,32 @@ class Broker:
         cap_qty = self._available_entry_notional(equity) / price
         # 加仓与建仓共用同一预算。admission_full_cost 复现现行口径(仅在配置了
         # 账户池时钳制,且只按账户池);full_cost / stop_risk 让周期池同样生效。
+        if po.meta.get("role") == "pyramid_add":
+            d = pos.direction
+            if d * (price - pos.entry) <= 0.0:
+                return self._skip_row(po, ts, "ADD_NO_PROFIT", "pyramid fill not in profit", price=price)
+            if pos.invalid is None or d * (price - pos.invalid) <= 0.0:
+                return self._skip_row(po, ts, "BAD_INVALID", "pyramid fill beyond protective stop", price=price)
+            capital = self.risk_capital()
+            risk_u = d * (price - pos.invalid)
+            cap_qty = min(
+                self._available_entry_notional(equity) / price,
+                self.qty_within_risk_budget(capital, price, risk_u, sym, d),
+            )
+            qty = floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
+            if qty < spec.size_min or qty * price < spec.min_trade_usdt:
+                return self._skip_row(po, ts, "MIN_SIZE", "pyramid add below min size or budget", price=price)
+            if self.directional_blocked(d, price, pos.invalid, sym, moment=capacity.FILL, qty=qty):
+                return self._skip_row(po, ts, "DIRECTIONAL_CAP", "pyramid add exceeds directional cap", price=price)
+            fee = qty * price * self.taker_fee
+            self.cash -= fee
+            pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
+            pos.qty += qty
+            pos.adds_done += 1
+            self.last_mark[sym] = price
+            return self._row(po, ts, sym, side, "ADD", qty, price, o, fee,
+                             0.0, 0.0, pos.trade_id, meta=dict(po.meta))
+
         if self.risk_budget.mode == capacity.ADMISSION_FULL_COST:
             constrained = self.portfolio_stop_risk_frac is not None
             scope = None

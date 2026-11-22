@@ -309,9 +309,21 @@ class LevelAuctionEngine:
                     if is_sup
                     else (h >= lv.neck and pc < lv.neck and ph <= lv.extreme)
                 )
-                if lv.departed and approached:
+                fast_sweep = (
+                    not lv.flipped
+                    and lv.kind is not LevelKind.FLIPPED
+                    and lv.departed
+                    and (
+                        (is_sup and pc >= lv.extreme and l < lv.extreme and c > lv.neck and c > o and c > 0.5 * (h + l))
+                        or (is_res and pc <= lv.extreme and h > lv.extreme and c < lv.neck and c < o and c < 0.5 * (h + l))
+                    )
+                )
+                if lv.departed and (approached or fast_sweep):
                     swept_now = (l < lv.extreme) if is_sup else (h > lv.extreme)
-                    anchor_init = (ph if (swept_now and c > ph) else h) if is_sup else (pl if (swept_now and c < pl) else l)
+                    if fast_sweep:
+                        anchor_init = 0.5 * (h + l)
+                    else:
+                        anchor_init = (ph if (swept_now and c > ph) else h) if is_sup else (pl if (swept_now and c < pl) else l)
                     ep = RejectionEpisode(
                         level=lv.clone(),
                         opened_index=bar_index,
@@ -325,7 +337,11 @@ class LevelAuctionEngine:
                 if is_sup:
                     if l <= ep.extreme_px:
                         ep.extreme_px, ep.extreme_index = l, bar_index
-                        ep.anchor_px = h
+                        ep.anchor_px = (
+                            0.5 * (h + l)
+                            if (not lv.flipped and lv.kind is not LevelKind.FLIPPED and pc >= lv.extreme and l < lv.extreme and c > lv.neck and c > o and c > 0.5 * (h + l))
+                            else h
+                        )
                     elif c <= o and h < ep.anchor_px:
                         ep.anchor_px = h
                     if l < lv.extreme:
@@ -333,7 +349,11 @@ class LevelAuctionEngine:
                 else:
                     if h >= ep.extreme_px:
                         ep.extreme_px, ep.extreme_index = h, bar_index
-                        ep.anchor_px = l
+                        ep.anchor_px = (
+                            0.5 * (h + l)
+                            if (not lv.flipped and lv.kind is not LevelKind.FLIPPED and pc <= lv.extreme and h > lv.extreme and c < lv.neck and c < o and c < 0.5 * (h + l))
+                            else l
+                        )
                     elif c >= o and l > ep.anchor_px:
                         ep.anchor_px = l
                     if h > lv.extreme:
@@ -408,6 +428,91 @@ class LevelAuctionEngine:
                     self.fired_episode_keys.discard(fkey)
 
 
+def origin_choch_events(
+    transitions: Sequence[tuple[str, Optional[Level], Optional[Level]]],
+    *,
+    ts: int,
+    known_index: int,
+    high: float,
+    low: float,
+) -> list[MarketEvent]:
+    """从 ``FLIPPED`` 结构转移中派生 ORIGIN CHoCH 事件(唯一判定入口)。
+
+    4H 认知收盘(``EventDetector.update``)与触发周期的增量状态维护共用此函数,
+    任一侧都不得另写第二套判定。时钟参数显式传入而非从 bar/structure 推断,
+    让调用方自己决定 ``ts``/``known_index`` 的来源,避免把认知周期语义偷渡进
+    触发周期。
+
+    语义与抽取前逐字等价:仅当 ``trans == "FLIPPED"`` 且转移前 Level 的 kind
+    为 ``ORIGIN`` 才发事件;方向取转移前角色的反侧(原 RESISTANCE ⇒ +1,
+    原 SUPPORT ⇒ -1);``ex`` 取当前 bar 对应方向的极值。
+    """
+    emitted: list[MarketEvent] = []
+    for trans, _lv_after, lv_before in transitions:
+        if trans != "FLIPPED" or lv_before is None or lv_before.kind is not LevelKind.ORIGIN:
+            continue
+        direction = 1 if lv_before.role is LevelRole.RESISTANCE else -1
+        emitted.append(MarketEvent(
+            id=STRUCTURE_BROKEN,
+            direction=direction,
+            ts=ts,
+            known_index=known_index,
+            attrs={
+                "zone": lv_before.clone(),
+                "level": lv_before.clone(),
+                "ref": float(lv_before.extreme),
+                "ex": float(high if direction > 0 else low),
+                "sub_kind": "ORIGIN_CHOCH",
+            },
+        ))
+    return emitted
+
+
+def dominant_choch_events(
+    active_levels: Sequence[Level],
+    *,
+    prev_close: float,
+    bar: tuple[int, float, float, float, float, float],
+    known_index: int,
+) -> list[MarketEvent]:
+    """触发细周期收盘反向击穿冻结高周期主导水平位外沿时派生级联 CHoCH 事件(唯一判定入口)。
+
+    仅对主导二维水平位(``ORIGIN`` / ``EQUAL`` 或 ``prominence_2d > med_prominence_2d``)生效,
+    严格要求前一根触发收盘仍在防线优势侧而当根收盘实质越过外沿 ``band_lo`` / ``band_hi``。
+    """
+    active = [lv for lv in active_levels if lv.is_active]
+    if not active:
+        return []
+    proms = sorted(float(lv.prominence_2d) for lv in active)
+    med_prom = proms[len(proms) // 2]
+    ts, _o, h, l, c, _v = bar
+    pc = float(prev_close)
+    emitted: list[MarketEvent] = []
+    for lv in active:
+        is_dom = lv.kind in (LevelKind.ORIGIN, LevelKind.EQUAL) or float(lv.prominence_2d) > med_prom
+        if not is_dom:
+            continue
+        broke_dn = lv.role is LevelRole.SUPPORT and pc >= lv.band_lo and c < lv.band_lo
+        broke_up = lv.role is LevelRole.RESISTANCE and pc <= lv.band_hi and c > lv.band_hi
+        if not (broke_dn or broke_up):
+            continue
+        direction = -1 if broke_dn else 1
+        emitted.append(MarketEvent(
+            id=STRUCTURE_BROKEN,
+            direction=direction,
+            ts=int(ts),
+            known_index=int(known_index),
+            attrs={
+                "zone": lv.clone(),
+                "level": lv.clone(),
+                "ref": float(lv.band_lo if broke_dn else lv.band_hi),
+                "ex": float(h if direction > 0 else l),
+                "sub_kind": "ORIGIN_CHOCH" if lv.kind is LevelKind.ORIGIN else "DOMINANT_CHOCH",
+            },
+        ))
+    return emitted
+
+
 class EventDetector:
     """认知周期价格拍卖事件检测器。"""
 
@@ -445,22 +550,13 @@ class EventDetector:
                     if not (alv.origin_index == klv.origin_index and alv.role is klv.role)
                 ]
 
-        for trans, _lv_after, lv_before in self.structure.last_transitions:
-            if trans == "FLIPPED" and lv_before is not None and lv_before.kind is LevelKind.ORIGIN:
-                direction = 1 if lv_before.role is LevelRole.RESISTANCE else -1
-                emitted.append(MarketEvent(
-                    id=STRUCTURE_BROKEN,
-                    direction=direction,
-                    ts=b[0],
-                    known_index=t,
-                    attrs={
-                        "zone": lv_before.clone(),
-                        "level": lv_before.clone(),
-                        "ref": float(lv_before.extreme),
-                        "ex": float(b[2] if direction > 0 else b[3]),
-                        "sub_kind": "ORIGIN_CHOCH",
-                    },
-                ))
+        emitted.extend(origin_choch_events(
+            self.structure.last_transitions,
+            ts=b[0],
+            known_index=t,
+            high=b[2],
+            low=b[3],
+        ))
         return emitted
 
 

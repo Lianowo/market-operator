@@ -257,6 +257,52 @@ class PositionManager:
             ts=int(ts),
         )
 
+    def on_trigger_bar(
+        self,
+        symbol: str,
+        bar: Sequence[float],
+        new_events: Sequence[MarketEvent] = (),
+        *,
+        tf_label: str = "",
+    ) -> list[OrderIntent]:
+        """触发细周期收盘级联证伪防守(回放 _mic_trigger_step 与实盘 _advance 唯一共享实现):
+        1. 突破单在触发周期收盘重新跌回/升回高周期水平位背侧(``reenter_invalid_px``) ⇒ 假突破快速离场;
+        2. 触发周期收盘反向击穿高周期主导水平位(``STRUCTURE_BROKEN``) ⇒ 级联结构破坏离场;
+        3. 对侧拒绝(``LEVEL_REJECTED``) 若为 1h->15m 短线，则快出;
+        不递增认知 K 线计数 ``bars_held``,不提前触发波段移动止损或细周期反向拒绝,保护大波段右尾。
+        """
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return []
+        ts, _o, h, l, c, _v = _bar_parts(bar)
+        if int(ts) < int(pos.opened_ts):
+            return []
+        d = pos.direction
+        if pos._best is None:
+            pos._best = h if d > 0 else l
+        else:
+            pos._best = max(pos._best, h) if d > 0 else min(pos._best, l)
+
+        if (
+            self.accept_reenter_level_exit
+            and pos.event_id == BREAKOUT_ACCEPTED
+            and pos.reenter_invalid_px is not None
+        ):
+            re_px = pos.reenter_invalid_px
+            if (d > 0 and c < re_px) or (d < 0 and c > re_px):
+                pos.log.append(f"EXIT_LTF_FAILED_BREAKOUT|close={c:.8g} reentered={re_px:.8g}")
+                return [self._exit(pos, ts, c, "FAILED_BREAKOUT_REENTRY", f"ltf_close={c:.8g} level_back={re_px:.8g}")]
+
+        for ev in new_events:
+            if int(ev.direction) == -d:
+                if ev.id == STRUCTURE_BROKEN:
+                    pos.log.append(f"EXIT_LTF_CHOCH|dir={ev.direction} sub={ev.attrs.get('sub_kind', '')}")
+                    return [self._exit(pos, ts, c, "CHOCH_ORIGIN_BROKEN", f"ltf_ts={ts}")]
+                if ev.id == LEVEL_REJECTED and tf_label == "1h":
+                    pos.log.append(f"EXIT_LTF_OPPOSING_REJECT|dir={ev.direction} close={c:.8g}")
+                    return [self._exit(pos, ts, c, "LTF_OPPOSING_REJECT", f"ltf_ts={ts}")]
+        return []
+
     def on_bar(
         self,
         symbol: str,

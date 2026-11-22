@@ -338,21 +338,23 @@ def build_frames(market: MarketData, settings: ScenarioSettings,
             trigger_seconds = settings.trigger_seconds_by_timeframe.get(tf)
             trigger_cognition = None
             if trigger_seconds is not None:
-                eff_trig = trigger_seconds
-                if eff_trig not in avail_trig:
-                    eff_trig, _ = resolve_trigger_tf(
-                        obs_seconds,
-                        tf_map={obs_seconds: trigger_seconds},
-                        available=tuple(avail_trig.keys()),
+                cands_ltf = [a for a in avail_trig if a < obs_seconds and obs_seconds % a == 0]
+                if cands_ltf:
+                    eff_trig = trigger_seconds
+                    if eff_trig not in avail_trig:
+                        eff_trig, _ = resolve_trigger_tf(
+                            obs_seconds,
+                            tf_map={obs_seconds: trigger_seconds},
+                            available=tuple(avail_trig.keys()),
+                        )
+                    trigger_cognition = prepare_mic_cognition(
+                        market.cognition[(symbol, tf)],
+                        avail_trig[eff_trig],
+                        settings.structure,
+                        symbol,
+                        obs_tf_seconds=obs_seconds,
+                        trigger_tf_seconds=eff_trig,
                     )
-                trigger_cognition = prepare_mic_cognition(
-                    market.cognition[(symbol, tf)],
-                    avail_trig[eff_trig],
-                    settings.structure,
-                    symbol,
-                    obs_tf_seconds=obs_seconds,
-                    trigger_tf_seconds=eff_trig,
-                )
             sym_exec_sec = (
                 execution_seconds
                 if execution_seconds in avail_trig

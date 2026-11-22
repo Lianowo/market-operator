@@ -371,6 +371,9 @@ class MarketRouter:
                 ):
                     self._inc("rejected_market_breadth")
                     continue
+                if view.tf_hours == 1 and float(getattr(view, "dollar_volume", 0.0)) < median_dollar_volume:
+                    self._inc("rejected_low_liquidity")
+                    continue
 
             hyp = build_hypothesis(ev, view, ref_price=c, htf_views=htf_views, min_rr=self.params.min_rr)
             if hyp is None:

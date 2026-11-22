@@ -25,6 +25,7 @@ from .structure import Params, Regime
 class ExecutionConfig:
     """持仓管理与细粒度推进配置(回放与实盘唯一共享定义)。"""
 
+    allow_add: bool = False
     breakeven_on_reduce: bool = True
     partial_exit_enabled: bool = True
     accept_reenter_level_exit: bool = True
@@ -100,6 +101,7 @@ def build_position_manager(params: Params, arm: ExecutionConfig) -> PositionMana
     """回放与实盘共用的唯一持仓管理器构造器。"""
     return PositionManager(
         params,
+        allow_add=arm.allow_add,
         breakeven_on_reduce=arm.breakeven_on_reduce,
         partial_exit_enabled=arm.partial_exit_enabled,
         accept_reenter_level_exit=arm.accept_reenter_level_exit,

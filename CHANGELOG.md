@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] — 2026-11-22 — 级联证伪防守、单棒极速清扫、1h->15m 龙头短线与风控金字塔加仓
+
+经 40 标的 × 2 年全量历史（真实资金费结算 + 双边滑点 + 1.5x 高压成本）第一性原理消融与样本外验证，合入四项零魔法常数结构机制（回放 `campaign.py` 与实盘 `scripts/live_runner.py` 完全同源）：
+
+- **单棒极速清扫收回 (`events.py`)**：补齐主导原子水平位单根 K 线刺穿 `extreme` 后收回 `neck` 并站上本棒几何中点 `0.5*(H+L)` 的 `SWEEP_TRAP` 快速确认分支，消除次棒追高盲区。
+- **细周期级联证伪防守 (`events.py` / `trigger.py` / `position.py`)**：新增 `dominant_choch_events()` 与 `PositionManager.on_trigger_bar()`，将突破单重回水平位背侧（`FAILED_BREAKOUT_REENTRY`）与反向击穿冻结高周期主导水平位（`DOMINANT_CHOCH`）下放至触发细周期收盘实时执行；波段移动止损（`SWING_TRAIL`）保留在认知周期以保护波段右尾。
+- **核心高流动性标的 `1h->15m` 短线拒绝快进快出 (`routing.py` / `position.py` / `config/*`)**：启用 `1h->15m` 专做 `REJECT`，由横截面内生 `dollar_volume` P90 龙头分位线自动筛选核心高流动性标的，并配 `15m` 反向 `LEVEL_REJECTED` 对侧快出（`LTF_OPPOSING_REJECT`）；`1d` 保持专职战略导航与日线大墙拦截（`whitelist=[]`）。
+- **风控金字塔顺势浮盈加仓 (`engine.py` / `broker.py` / `campaign.py` / `scripts/live_runner.py`)**：启用 `allow_add=true`（单仓最多加仓 1 次、`0.5x` 倒金字塔定仓上限）：仅当同向浮盈在途且新独立结构信号的 `invalid` 台阶已越过首仓成本价时解锁，按原始结构防线全距核定风险预算并严守全部组合/周期/同向容量上限。40 标的实盘复利回放 `full_1x` 净利由 `+24,434` 提升至 `+47,863`（最大回撤下降 `2.76pp`，`1.5x` 成本净利由 `+10,205` 提升至 `+21,610`，去 Top10 翻正）。
+
+
 ## [Unreleased] — 2026-11-18 — RWA 分市场交易时段(规则推导)与成交质量闸门
 
 策略链路零改动(`engine / events / level / routing / trigger / structure /

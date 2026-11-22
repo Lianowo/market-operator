@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 
 import pandas as pd
 
-from .events import LevelAuctionEngine, MarketEvent
+from .events import LevelAuctionEngine, MarketEvent, dominant_choch_events
 from .hypothesis import StructureView
 from .level import Level
 from .structure import MarketStructure, Params, Pivot, Regime, _bar_parts
@@ -147,7 +147,7 @@ class MicTracker:
         if not self.frozen_levels or self.frozen_cog_index < 0:
             return []
         # 水平位本身属于高周期结构:其极值外侧防扫损呼吸垫必须匹配该水平位所属认知周期的波动量级!
-        return self._auction.step(
+        emitted = self._auction.step(
             bar_index=idx,
             bar=b,
             prev_bar=prev_bar,
@@ -157,6 +157,14 @@ class MicTracker:
             k_bm=self.params.k_bm,
             known_index_override=self.frozen_cog_index,
         )
+        if prev_bar is not None:
+            emitted.extend(dominant_choch_events(
+                self.frozen_levels,
+                prev_close=prev_bar[4],
+                bar=b,
+                known_index=self.frozen_cog_index,
+            ))
+        return emitted
 
 
 @dataclass

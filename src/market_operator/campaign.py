@@ -630,6 +630,8 @@ def _apply_open_rows(st: _CampaignState, broker: Broker, key: str, ts: int,
             counters["opens_filled"] += 1
             if m.get("entry_mode") == "virtual_limit":
                 _increment_counter(counters, "virtual_entry_fills")
+        elif k == "ADD":
+            _increment_counter(counters, "adds_filled")
         elif k == "REDUCE":
             # TIMEOUT_TO_TAKER 市价转换(非 deferred 语义:pos_mgr 已在决策时
             # 按 §8.2 立即记账,此处仅同步 broker 侧 stop)
@@ -693,9 +695,10 @@ def _tf_hours_of_key(key: str) -> int:
     return int(TF_HOURS.get(tf, 0)) if tf else 0
 
 
-def _symbol_position_open(broker, key: str) -> bool:
-    """多时间尺度仓位升格互斥:
-    - 若同标的已有【同周期或更高周期】持仓 ⇒ 阻塞当前低周期(大级别趋势在途,小周期不添乱);
+def _symbol_position_open(broker, key: str, *, allow_add: bool = False) -> bool:
+    """多时间尺度仓位升格与金字塔加仓协调:
+    - 若同标的已有【更高周期】持仓 ⇒ 阻塞当前低周期(大级别趋势在途,小周期不添乱);
+    - 若同标的已有【同周期】持仓 ⇒ 默认阻塞;当启用 ``allow_add`` 且加仓未达上限(<1)时解锁顺势加仓评估;
     - 若同标的仅有【更低周期】持仓,而当前更高周期确认信号 ⇒ 允许通行并在下单时触发仓位升格(SCALE_PROMOTED)!
     """
     my_h = _tf_hours_of_key(key)
@@ -703,8 +706,20 @@ def _symbol_position_open(broker, key: str) -> bool:
         fn = getattr(broker, "symbol_has_position", None)
         return bool(fn(key)) if fn is not None else (broker.position_of(key) is not None)
     root = capacity.symbol_root(key)
-    for k_open in getattr(broker, "positions", ()):
-        if capacity.symbol_root(k_open) == root and _tf_hours_of_key(k_open) >= my_h:
+    positions = getattr(broker, "positions", {})
+    for k_open in positions:
+        if capacity.symbol_root(k_open) != root:
+            continue
+        open_h = _tf_hours_of_key(k_open)
+        if open_h > my_h:
+            return True
+        if open_h == my_h:
+            if allow_add and k_open == key:
+                pos_self = broker.position_of(key)
+                pend = getattr(broker, "pending", {}) or {}
+                busy = any(po.intent.kind in (OrderKind.ADD, OrderKind.EXIT) for po in pend.get(key, ()))
+                if pos_self is not None and int(getattr(pos_self, "adds_done", 0)) < 1 and not busy:
+                    continue
             return True
     return False
 
@@ -757,7 +772,9 @@ def _portfolio_breadth_at(
     med_dv = 0.0
     if dvs:
         dvs.sort()
-        med_dv = float(dvs[len(dvs) // 2])
+        # 供 1h->15m 短线核心高流动性准入使用:横截面 Top 10%(P90)成交额龙头分位线(小样本 <8 时取中位数)
+        q_idx = (len(dvs) * 9) // 10 if len(dvs) >= 8 else (len(dvs) // 2)
+        med_dv = float(dvs[min(q_idx, len(dvs) - 1)])
     if len(regs) < 4:
         return 0.0, len(regs), med_dv
     up = sum(1 for r in regs if r.value == "trend_up")
@@ -837,12 +854,26 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
         _apply_resting_rows(st, broker, key, ts,
                             broker.on_15m_bar(key, ts, _o, _h, _l, c, mic_only=True),
                             counters, claim_events)
+    # ③' 触发细周期级联证伪防守(持仓管理全程有效,不受段内 OPEN 窗口限制)
+    pos_mgr = getattr(st, "pos_mgr", None)
+    new_events = mic.events_by.get(a)
+    if pos_mgr is not None and broker.position_of(key) is not None:
+        pend = getattr(broker, "pending", None) or {}
+        exiting = any(po.intent.kind is OrderKind.EXIT for po in pend.get(key, ()))
+        if not exiting:
+            trig_mgmt = pos_mgr.on_trigger_bar(sym, mic.bars[a], new_events or (), tf_label=st.frame.tf_label)
+            if trig_mgmt:
+                close_m = int(_ts) + mic.trigger_tf_seconds * 1000
+                _apply_mgmt(
+                    st, broker, trig_mgmt, int(_ts) if execution_only else ts,
+                    counters, n_fill,
+                    known_at=close_m if execution_only else None,
+                )
     # ⑤' mic 路由(段内才启用 OPEN;白名单/闸门在 router 内部)
     i = mic.cog_index_of[a]
     lo, hi = bounds["lo"], bounds["hi"]
     if not (lo <= i < hi):
         return
-    new_events = mic.events_by.get(a)
     if not new_events:
         return
     _count_go(counters, new_events, go_set, mic=True)
@@ -865,9 +896,10 @@ def _mic_trigger_step(st: _CampaignState, broker: Broker, a: int, ts: int,
                                    history=mic.bars[max(0, a - 250):a]) is not None:
             counters["rwa_session_skips"] = counters.get("rwa_session_skips", 0) + 1
             continue
+        allow_add = bool(getattr(pos_mgr, "allow_add", False))
         decisions.extend(st.router.on_bar(
             sym, routing_bar, routing_index, mic.views.get(a), mic.atrs[a], events,
-            position_open=_symbol_position_open(broker, key),
+            position_open=_symbol_position_open(broker, key, allow_add=allow_add),
             entry_resting=_symbol_entry_resting(broker, key),
             htf_views=htf_views,
             market_breadth=m_breadth,
@@ -1043,7 +1075,7 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
     if not (lo <= i < hi):
         return
     route_events = select_cognition_route_events(
-        new_events, has_trigger_tracker=(f.mic is not None)
+        new_events, has_trigger_tracker=(f.mic is not None or f.tf_hours == 1)
     )
     if not route_events:
         return
@@ -1056,17 +1088,18 @@ def _cognition_step(st: _CampaignState, broker: Broker, i: int,
             history=cog.bars[max(0, i - 250):i]) is not None:
         counters["rwa_session_skips"] = counters.get("rwa_session_skips", 0) + 1
         return
+    allow_add = bool(getattr(st.pos_mgr, "allow_add", False))
     htf_views = _htf_views_for(st, states, close_moment_cog)
     if htf_views:
         decisions = st.router.on_bar(
             sym, bar, i, cog.views.get(i), atr, route_events,
-            position_open=_symbol_position_open(broker, key),
+            position_open=_symbol_position_open(broker, key, allow_add=allow_add),
             entry_resting=_symbol_entry_resting(broker, key),
             htf_views=htf_views)
     else:
         decisions = st.router.on_bar(
             sym, bar, i, cog.views.get(i), atr, route_events,
-            position_open=_symbol_position_open(broker, key),
+            position_open=_symbol_position_open(broker, key, allow_add=allow_add),
             entry_resting=_symbol_entry_resting(broker, key))
     fill_after = t + f.tf_hours * MS_1H - f.ms_exec     # 决策 bar 最末细 bar
     extra = {"execution_step_ms": f.ms_exec,
@@ -1109,9 +1142,64 @@ def _submit_decisions(st: _CampaignState, broker: Broker, decisions: list,
             continue
         if d.kind not in ("market", "limit"):
             raise RuntimeError(f"unknown route decision {d.kind}")
-        # 单标的跨周期协调:同周期或更高周期已在仓则让路;若仅有更低周期在仓,则结清低周期仓位完成【仓位升格(SCALE_PROMOTED)】!
-        if _symbol_position_open(broker, key) or _symbol_entry_resting(broker, key):
+        allow_add = bool(getattr(getattr(st, "pos_mgr", None), "allow_add", False))
+        # 单标的跨周期协调:同周期或更高周期已在仓则让路(除非同周期满足风控金字塔加仓);若仅有更低周期在仓则升格!
+        if _symbol_position_open(broker, key, allow_add=allow_add) or _symbol_entry_resting(broker, key):
             counters["symbol_slot_skips"] = counters.get("symbol_slot_skips", 0) + 1
+            continue
+        pos_existing = broker.position_of(key) if allow_add and hasattr(broker, "position_of") else None
+        if pos_existing is not None:
+            dr = int(pos_existing.direction)
+            ref_px = float(d.intent.ref_price)
+            sig_inv = float(d.hyp.invalid)
+            if (
+                d.kind != "market"
+                or int(getattr(pos_existing, "adds_done", 0)) >= 1
+                or int(d.hyp.direction) != dr
+                or pos_existing.invalid is None
+                or dr * (ref_px - pos_existing.entry) <= 0.0
+                or dr * (sig_inv - pos_existing.entry) < 0.0
+                or dr * (ref_px - pos_existing.invalid) <= 0.0
+            ):
+                counters["pyramid_gate_skips"] = counters.get("pyramid_gate_skips", 0) + 1
+                continue
+            equity = broker.equity_mtm()
+            capital = broker.risk_capital()
+            tq = min(
+                0.5 * pos_existing.open_qty,
+                broker.qty_for_entry(
+                    capital, ref_px, pos_existing.invalid, key,
+                    size_mult=0.5, notional_equity=equity, direction=dr,
+                ),
+            )
+            spec = broker.contracts[key]
+            qs = floor_step(tq, spec.size_step, spec.size_place)
+            if (
+                qs < spec.size_min
+                or qs * ref_px < spec.min_trade_usdt
+                or broker.directional_blocked(dr, ref_px, pos_existing.invalid, key, moment=capacity.DECISION, qty=qs)
+            ):
+                counters["pyramid_cap_skips"] = counters.get("pyramid_cap_skips", 0) + 1
+                continue
+            add_intent = OrderIntent(
+                kind=OrderKind.ADD,
+                symbol=key,
+                qty_frac=qs / pos_existing.open_qty,
+                reason=f"PYRAMID_ADD|{d.hyp.event_id}",
+                ref_price=ref_px,
+                ts=int(t),
+            )
+            pm_pos = st.pos_mgr.positions.get(st.frame.symbol) if getattr(st, "pos_mgr", None) is not None else None
+            broker.submit(
+                add_intent,
+                decision_ts=int(t),
+                direction=dr,
+                invalid=pos_existing.invalid,
+                target_1=(pm_pos.target_1 if pm_pos is not None else d.hyp.target_1),
+                event_id=d.hyp.event_id,
+                meta={**(extra_meta or {}), "role": "pyramid_add"},
+            )
+            _increment_counter(counters, "pyramid_add_intents")
             continue
         my_h = int(getattr(st.frame, "tf_hours", 0) or _tf_hours_of_key(key))
         root_sym = capacity.symbol_root(key)

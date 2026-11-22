@@ -1352,9 +1352,17 @@ class LiveRunner:
         # 优化:按周期裁剪所需 2H 窗口(每个周期仅需 warmup_cog_bars 根自身认知 bar,
         # BalanceDetector 最大窗口 144 <= 160;新币满 min_cog_bars(60根)即可自适应准入)
         warmup_cog = max(min_cog_bars, int(self.cog_cfg.get("warmup_cog_bars", 160)))
-        need_2h = min(len(bars2h), (warmup_cog + 2) * scale_2h)
-        slice_2h = bars2h[-need_2h:]
-        cog_bars = aggregate_tf(slice_2h, obs_s)
+        if obs_s < base_s:
+            if use_trig is bars2h:
+                return None
+            trig_step = self._base_step_seconds(use_trig, gran=sub_gran)
+            scale_sub = max(1, obs_s // trig_step)
+            slice_sub = use_trig[-min(len(use_trig), (warmup_cog + 2) * scale_sub):]
+            cog_bars = aggregate_tf(slice_sub, obs_s)
+        else:
+            need_2h = min(len(bars2h), (warmup_cog + 2) * scale_2h)
+            slice_2h = bars2h[-need_2h:]
+            cog_bars = aggregate_tf(slice_2h, obs_s)
         if len(cog_bars) > warmup_cog:
             cog_bars = cog_bars[-warmup_cog:]
         if len(cog_bars) < min_cog_bars:
@@ -1387,24 +1395,25 @@ class LiveRunner:
         want = int(self.cog_cfg["warmup_trigger_bars"])
         if bars2h is None:
             bars2h = self._fetch_trigger_bars(symbol, want)
-        bars_30m: Optional[list] = None
+        bars_sub: Optional[list] = None
         trig_map = self.cog_cfg.get("trigger_tf_by_htf") or {}
+        sub_gran, sub_sec = self._sub_gran_and_seconds()
         if (
             self.mode == "live"
             and hasattr(self.client, "history_candles")
             and any(int(trig_map.get(tf) or 7200) < 7200 for tf in (self.cog_cfg.get("tf_list") or ()))
         ):
-            sub_want = max(520, (self._min_cog_bars_for_tf() + 5) * 8)
-            cand_30m = self._fetch_trigger_bars(symbol, sub_want, gran="30m")
-            if self._base_step_seconds(cand_30m, gran="30m") == 1800 and len(cand_30m) >= self._min_cog_bars_for_tf() * 4:
-                bars_30m = cand_30m
+            sub_want = max(680, (self._min_cog_bars_for_tf() + 5) * 8)
+            cand_sub = self._fetch_trigger_bars(symbol, sub_want, gran=sub_gran)
+            if self._base_step_seconds(cand_sub, gran=sub_gran) == sub_sec and len(cand_sub) >= self._min_cog_bars_for_tf() * 4:
+                bars_sub = cand_sub
         main_tf = str(self.cog_cfg.get("main_tf_label") or "12h")
         tf_list = list(self.cog_cfg.get("tf_list") or [main_tf])
         built: dict[str, CampaignState] = {}
         for tf in tf_list:
             sub_trig = (
-                bars_30m
-                if (bars_30m is not None and int(trig_map.get(tf) or 7200) < 7200)
+                bars_sub
+                if (bars_sub is not None and int(trig_map.get(tf) or 7200) < 7200)
                 else None
             )
             cs_tf = self._build_campaign(symbol, tf, bars2h=bars2h, trig_bars=sub_trig, quiet_if_short=True)
@@ -1442,7 +1451,7 @@ class LiveRunner:
             (
                 sc.trig_bars
                 for (s2, _tf), sc in self.extra_campaigns.items()
-                if s2 == symbol and self._base_step_seconds(sc.trig_bars) == 1800
+                if s2 == symbol and self._base_step_seconds(sc.trig_bars) in (900, 1800)
             ),
             None,
         )
@@ -2242,6 +2251,17 @@ class LiveRunner:
                              else aggregate_bucket(cs.trig_bars[-trig_scale:],
                                                    bar[0] + base_ms - trig_ms))
                     emitted = cs.tracker.update(t_bar)
+                    pm_inst = getattr(cs, "pm", None)
+                    pos_pm = pm_inst.positions.get(cs.symbol) if pm_inst is not None else None
+                    pos_dict = self.positions.get(cs.symbol)
+                    if (
+                        pm_inst is not None
+                        and pos_pm is not None
+                        and pos_dict is not None
+                        and pos_dict.get("tf_label", cs.tf_label) == cs.tf_label
+                    ):
+                        for intent in pm_inst.on_trigger_bar(cs.symbol, t_bar, emitted or (), tf_label=cs.tf_label):
+                            self._exec_mgmt(cs, intent, t_bar)
                     if emitted:
                         view = cs.tracker.current_view(tf_hours=int(obs_ms // 3_600_000))
                         self._route_step(cs, cs.tracker.frozen_atr, emitted, view, mic=True, trig_bar=t_bar)
@@ -2763,7 +2783,7 @@ class LiveRunner:
                 self._exec_mgmt(cs, intent, cog_bar)
         if emitted:
             route_events = select_cognition_route_events(
-                emitted, has_trigger_tracker=(cs.tracker is not None)
+                emitted, has_trigger_tracker=(cs.tracker is not None or int(cs.obs_tf_seconds) == 3600)
             )
             if route_events:
                 view = StructureView(
@@ -2824,7 +2844,11 @@ class LiveRunner:
         ]
         peer_regs = [c_item.detector.structure.regime() for c_item in peer_cs]
         peer_dvs = sorted(c_item.detector.structure.dollar_volume() for c_item in peer_cs)
-        med_dv = float(peer_dvs[len(peer_dvs) // 2]) if peer_dvs else 0.0
+        if peer_dvs:
+            q_idx = (len(peer_dvs) * 9) // 10 if len(peer_dvs) >= 8 else (len(peer_dvs) // 2)
+            med_dv = float(peer_dvs[min(q_idx, len(peer_dvs) - 1)])
+        else:
+            med_dv = 0.0
         n_univ = len(peer_regs)
         m_breadth = (
             float(sum(1 for r in peer_regs if r.value == "trend_up") - sum(1 for r in peer_regs if r.value == "trend_down")) / float(n_univ)
@@ -2835,7 +2859,19 @@ class LiveRunner:
             TF_SECONDS_MAP.get(str(existing_pos.get("tf_label") or ""), 0)
             if existing_pos is not None else 0
         )
-        blocked_by_same_or_htf = existing_pos is not None and existing_tf_s >= int(cs.obs_tf_seconds)
+        allow_add = bool(getattr(getattr(cs, "pm", None), "allow_add", False))
+        can_pyramid = (
+            allow_add
+            and existing_pos is not None
+            and existing_tf_s == int(cs.obs_tf_seconds)
+            and int(existing_pos.get("adds_done") or 0) < 1
+            and not self._entry_resting(sym)
+        )
+        blocked_by_same_or_htf = (
+            existing_pos is not None
+            and existing_tf_s >= int(cs.obs_tf_seconds)
+            and not can_pyramid
+        )
         decisions = cs.router.on_bar(
             sym, bar, len(bars) - 1, view, atr, events,
             position_open=blocked_by_same_or_htf,
@@ -2859,9 +2895,34 @@ class LiveRunner:
                         "symbol": sym, "ts": int(bar[0]),
                         "event": getattr(d.hyp, "event_id", None)})
                     continue
-                # 实盘仓位升格(Scale Promotion):若同标的持有更小周期的旧仓位,先平仓落袋再无缝开立更高周期新仓位!
                 cur_pos = self.positions.get(sym)
-                if cur_pos is not None and TF_SECONDS_MAP.get(str(cur_pos.get("tf_label") or ""), 0) < int(cs.obs_tf_seconds):
+                cur_tf_s = (
+                    TF_SECONDS_MAP.get(str(cur_pos.get("tf_label") or ""), 0)
+                    if cur_pos is not None else 0
+                )
+                # 同周期风控金字塔浮盈加仓(P5: 结构台阶越过成本价 + 0.5x 倒金字塔定仓 + 维持原防线与目标):
+                if cur_pos is not None and cur_tf_s == int(cs.obs_tf_seconds):
+                    dr_p = int(cur_pos["direction"])
+                    ref_p = float(d.intent.ref_price) if d.kind == "market" else float(d.limit_price)
+                    sig_inv = float(d.hyp.invalid)
+                    base_en = float(cur_pos["entry"])
+                    base_inv = float(cur_pos["invalid"])
+                    if (
+                        not allow_add
+                        or d.kind != "market"
+                        or int(cur_pos.get("adds_done") or 0) >= 1
+                        or int(d.hyp.direction) != dr_p
+                        or dr_p * (ref_p - base_en) <= 0.0
+                        or dr_p * (sig_inv - base_en) < 0.0
+                        or dr_p * (ref_p - base_inv) <= 0.0
+                    ):
+                        self.counters["pyramid_gate_skips"] = self.counters.get("pyramid_gate_skips", 0) + 1
+                        continue
+                    d.meta["pyramid_add"] = True
+                    d.meta["base_invalid"] = base_inv
+                    d.meta["size_mult"] = min(float(d.meta.get("size_mult") or 1.0), 0.5)
+                # 实盘仓位升格(Scale Promotion):若同标的持有更小周期的旧仓位,先平仓落袋再无缝开立更高周期新仓位!
+                elif cur_pos is not None and cur_tf_s < int(cs.obs_tf_seconds):
                     low_cs = self._get_cs_for(sym, cur_pos.get("tf_label"))
                     low_pm = low_cs.pm.positions.get(sym) if low_cs is not None else None
                     if low_cs is not None and low_pm is not None:
@@ -3177,7 +3238,8 @@ class LiveRunner:
         side = "buy" if hyp.direction > 0 else "sell"
         entry_ref = float(d.limit_price) if d.kind == "limit" \
             else float(d.intent.ref_price)
-        invalid = float(hyp.invalid)
+        is_pyramid = bool(d.meta.get("pyramid_add"))
+        invalid = float(d.meta["base_invalid"]) if is_pyramid and d.meta.get("base_invalid") is not None else float(hyp.invalid)
         risk_per_unit = abs(entry_ref - invalid)
         spec = self._spec(sym)
         try:
@@ -3263,6 +3325,10 @@ class LiveRunner:
         if block is None:
             # 定仓用"风险资本"(已落袋),杠杆上限仍用交易所权益(偿付能力)
             qty = eff_rf * size_mult * capital / risk_per_unit
+            if is_pyramid and sym in self.positions:
+                base_q0 = float(self.positions[sym].get("entry_qty") or self.positions[sym].get("qty") or 0.0)
+                if base_q0 > 0.0:
+                    qty = min(qty, 0.5 * base_q0)
             # 最大允许杠杆上限 <= min(leverage_cap, maxLever)
             eff_lev = float(self._max_allowed_leverage(sym))
             qty = min(qty, eff_lev * equity / entry_ref)
@@ -3430,7 +3496,8 @@ class LiveRunner:
                   "qty": qty, "leverage": planned_lev,
                   "limit_price": entry_ref if d.kind == "limit" else None,
                   "ref_px": float(entry_ref),
-                  "invalid": float(hyp.invalid),
+                  "invalid": float(invalid),
+                  "pyramid_add": is_pyramid,
                   "target_1": hyp.target_1, "event_id": hyp.event_id,
                   "structural_target": hyp.target_1,
                   "execution_target": execution_target(d.meta, hyp.target_1),
@@ -3741,6 +3808,49 @@ class LiveRunner:
         cs = self._get_cs_for(sym, tf_lbl) or self.campaigns.get(sym)
         if cs is not None and not it.get("tf_label"):
             tf_lbl = cs.tf_label
+        prev_pos = self.positions.get(sym) if it.get("pyramid_add") else None
+        if prev_pos is not None and int(prev_pos.get("direction") or 0) == int(it["direction"]):
+            old_qty = float(prev_pos["qty"])
+            add_qty = float(it["qty"])
+            tot_qty = old_qty + add_qty
+            avg_entry = (old_qty * float(prev_pos["entry"]) + add_qty * float(price)) / tot_qty if tot_qty > 0.0 else float(price)
+            prev_pos["qty"] = tot_qty
+            prev_pos["entry"] = avg_entry
+            prev_pos["mark"] = float(price)
+            prev_pos["adds_done"] = int(prev_pos.get("adds_done") or 0) + 1
+            if prev_pos.get("target_order") and self.mode == "live" and self.price_clock == "realtime":
+                t_ord = prev_pos.pop("target_order", None)
+                if t_ord and t_ord.get("order_id"):
+                    try:
+                        self.client.cancel_tpsl_order(sym, t_ord["order_id"])
+                    except BitgetError:
+                        pass
+                prev_pos["target_generation"] = int(prev_pos.get("target_generation", 0)) + 1
+                if cs is not None and sym in cs.pm.positions:
+                    cs.pm.positions[sym].pending_reduce = False
+            self._touch_campaigns()
+            if self.mode == "live" and self.price_clock == "realtime":
+                self._manage_stops(ts)
+                self._manage_targets(ts)
+            self.counters["pyramid_adds"] = self.counters.get("pyramid_adds", 0) + 1
+            chart_bars = (cs.trig_bars[-96:] if (cs and it.get("mic") and cs.trig_bars)
+                          else (cs.cog_bars[-96:] if (cs and cs.cog_bars) else None))
+            self.tg.send_fill(
+                sym, f"顺势加仓({self.mode})", add_qty, price,
+                note=f"PYRAMID_ADD {it['event_id']} · 总仓 {tot_qty:.6g} · 均价 {avg_entry:.6g}",
+                tf_label=tf_lbl, direction=it["direction"],
+                entry_price=avg_entry, stop_price=float(prev_pos["invalid"]),
+                target_price=prev_pos.get("target_1"),
+                box_lo=prev_pos.get("box_lo"), box_hi=prev_pos.get("box_hi"),
+                box_start_ts=prev_pos.get("box_start_ts"),
+                bars=chart_bars)
+            self._journal("pyramid_add_fill", {
+                "oid": it["oid"], "symbol": sym, "add_qty": add_qty, "total_qty": tot_qty,
+                "fill_px": float(price), "avg_entry": avg_entry,
+                "invalid": float(prev_pos["invalid"]), "direction": int(it["direction"]),
+                "tf_label": tf_lbl, "ts": int(ts), "event_id": it["event_id"], "mode": self.mode,
+            })
+            return
         self.positions[sym] = {
             "symbol": sym, "tf_label": tf_lbl, "direction": it["direction"],
             "qty": it["qty"], "entry": price, "invalid": it["invalid"],
