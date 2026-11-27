@@ -20,37 +20,42 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field, fields, replace
+import sys as _sys
+from collections.abc import Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from types import MappingProxyType
+from typing import Any
+
+import pandas as pd
 
 from . import aggregate, capacity, data as datafeed
-from .engine import ExecutionConfig, load_strategy_bundle, parse_execution_config
-from .replay import prepare_cognition
 from .broker import ContractSpec
-from .campaign import build_campaign_frame, run_campaigns
-from .structure import Params
+from .campaign import CampaignFrame, build_campaign_frame, run_campaigns
+from .engine import ExecutionConfig, load_strategy_bundle, parse_execution_config
+from .exceptions import DataIntegrityError
+from .replay import SymbolCognition, prepare_cognition
 from .routing import RouterParams
-from .trigger import prepare_mic_cognition
+from .structure import Params
+from .trigger import MicCognition, prepare_mic_cognition, resolve_trigger_tf
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_CONFIG = REPO_ROOT / "config" / "strategy.json"
 CONTRACTS_PATH = REPO_ROOT / "data" / "contracts.json"
 
-#: 认知周期(策略在哪些正交周期的收盘上建立结构认知: 4h->1h 日内/隔日波段, 1d->4h 宏观波段)。
+#: 认知周期(默认兜底;生产以 config/strategy.json 的 tf_list 为准)。
 COGNITION_TIMEFRAMES: tuple[str, ...] = ("4h", "1d")
 
 #: 认知周期 → 触发周期(秒;None = 该周期不做降档触发,直接用自身收盘)。
-DEFAULT_TRIGGER_SECONDS: dict[str, Optional[int]] = {
+DEFAULT_TRIGGER_SECONDS: Mapping[str, int | None] = MappingProxyType({
     "1h": 900, "2h": 1800, "4h": 3600, "12h": 7200, "1d": 14400,
-}
+})
 
-#: 触发粒度(秒) → 行情粒度标签。行情层提供这五种原始/聚合粒度。
-#: 900(15m) 是 2026-10-30 为「观察尺度研究」新增:2h 区域若要按用户冻结表
-#: 用 15m 观察,装配层必须能取到 15m 原生帧。
-TRIGGER_GRANULARITY_BY_SECONDS: dict[int, str] = {
+#: 触发粒度(秒) → 行情粒度标签。
+TRIGGER_GRANULARITY_BY_SECONDS: Mapping[int, str] = MappingProxyType({
     900: "15m", 1800: "30m", 3600: "1h", 7200: "2h", 14400: "4h",
-}
+})
 
 
 #: 真实资金费率表目录(scripts/fetch_funding.py 落地,manifest 记 sha256)。
@@ -118,18 +123,18 @@ class ExecutionCosts:
     maker_fee: float
     slippage_per_side: float
     funding_per_8h: float
-    funding_rates: Optional[Mapping[str, Sequence[Sequence[float]]]] = None
-    slippage_by_symbol: Optional[Mapping[str, float]] = None
+    funding_rates: Mapping[str, Sequence[Sequence[float]]] | None = None
+    slippage_by_symbol: Mapping[str, float] | None = None
 
-    def scaled(self, multiplier: float) -> "ExecutionCosts":
+    def scaled(self, multiplier: float) -> ExecutionCosts:
         """成本压力测试:同比例放大手续费/滑点/资金费,几何不变。"""
         table = (None if self.funding_rates is None else
-                 {sym: tuple((int(ts), float(rate) * multiplier)
-                             for ts, rate in rows)
-                  for sym, rows in self.funding_rates.items()})
+                 MappingProxyType({sym: tuple((int(ts), float(rate) * multiplier)
+                                              for ts, rate in rows)
+                                   for sym, rows in self.funding_rates.items()}))
         per_sym = (None if self.slippage_by_symbol is None else
-                   {sym: float(v) * multiplier
-                    for sym, v in self.slippage_by_symbol.items()})
+                   MappingProxyType({sym: float(v) * multiplier
+                                     for sym, v in self.slippage_by_symbol.items()}))
         return replace(
             self,
             taker_fee=self.taker_fee * multiplier,
@@ -151,19 +156,24 @@ class ScenarioSettings:
     router_by_timeframe: Mapping[str, RouterParams]
     arm: ExecutionConfig
     costs: ExecutionCosts
-    trigger_seconds_by_timeframe: Mapping[str, Optional[int]]
+    trigger_seconds_by_timeframe: Mapping[str, int | None]
     tf_cap_by_timeframe: Mapping[str, float]
     portfolio_cap_frac: float
-    directional_cap_frac: Optional[float]
+    directional_cap_frac: float | None
     capacity_mode: str
     risk_frac: float
 
     leverage_cap: float
     dev_frac: float
     n_fill: int
+    factor_burst_cap_1h: int = 0
+    factor_burst_cap_4h: int = 0
+    markowitz_corr_sizing: bool = False
+    max_eff_size_mult: float | None = None
 
 
 def execution_config_from(raw: Mapping[str, Any], path: Path = PRODUCTION_CONFIG) -> ExecutionConfig:
+    _ = path
     return parse_execution_config(raw)
 
 
@@ -173,11 +183,11 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
     bundle = load_strategy_bundle(config_path)
     raw = bundle.raw
 
-    trigger = {
+    trigger = MappingProxyType({
         tf: (None if seconds is None else int(seconds))
         for tf, seconds in raw.get("trigger_tf_by_htf",
                                    DEFAULT_TRIGGER_SECONDS).items()
-    }
+    })
     funding_source = str(raw.get("funding_source", "const"))
     if funding_source == "const":
         funding_rates = None
@@ -187,8 +197,7 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
         target_syms = tuple(dict.fromkeys((*cfg_syms, *avail_syms)))
         funding_rates = load_funding_rates(target_syms)
     else:
-        raise ValueError(f"funding_source 必须是 const|history,收到 "
-                         f"{funding_source!r}")
+        raise ValueError(f"funding_source 必须是 const|history,收到 {funding_source!r}")
     return ScenarioSettings(
         raw=raw,
         structure=bundle.params,
@@ -201,21 +210,25 @@ def load_settings(config_path: Path = PRODUCTION_CONFIG) -> ScenarioSettings:
             slippage_per_side=float(raw["slippage_per_side"]),
             funding_per_8h=float(raw["funding_per_8h_per_side"]),
             funding_rates=funding_rates,
-            slippage_by_symbol=(dict(raw["slippage_by_symbol"])
+            slippage_by_symbol=(MappingProxyType(dict(raw["slippage_by_symbol"]))
                                 if raw.get("slippage_by_symbol") else None),
         ),
         trigger_seconds_by_timeframe=trigger,
-        tf_cap_by_timeframe=dict(raw.get("tf_cap_by_tf", {})),
+        tf_cap_by_timeframe=MappingProxyType(dict(raw.get("tf_cap_by_tf", {}))),
         portfolio_cap_frac=float(raw.get("portfolio_cap_frac", 0.03)),
         directional_cap_frac=(float(raw["directional_cap_frac"])
                               if "directional_cap_frac" in raw and raw["directional_cap_frac"] is not None
                               else None),
-        capacity_mode=str(raw.get("capacity_mode",
-                                  capacity.ADMISSION_FULL_COST)),
+        capacity_mode=str(raw.get("capacity_mode", capacity.ADMISSION_FULL_COST)),
         risk_frac=float(raw.get("risk_frac", 0.0075)),
         leverage_cap=float(raw.get("leverage_cap", 20.0)),
         dev_frac=float(raw.get("dev_frac", 0.7)),
         n_fill=int(raw.get("n_fill", 12)),
+        factor_burst_cap_1h=int(raw.get("factor_burst_cap_1h", 0) or 0),
+        factor_burst_cap_4h=int(raw.get("factor_burst_cap_4h", 0) or 0),
+        markowitz_corr_sizing=bool(raw.get("markowitz_corr_sizing", False)),
+        max_eff_size_mult=(float(raw["max_eff_size_mult"])
+                           if raw.get("max_eff_size_mult") is not None else None),
     )
 
 
@@ -229,16 +242,16 @@ class MarketData:
     """装载后的行情:认知帧 + 执行帧 + 触发帧(与成本无关,可跨段跨成本复用)。"""
 
     symbols: tuple[str, ...]
-    cognition: dict = field(default_factory=dict)        # (sym, tf) -> SymbolCognition
-    cognition_frame: dict = field(default_factory=dict)  # (sym, tf) -> DataFrame
-    execution_frame: dict = field(default_factory=dict)  # (sym, tf) -> DataFrame(1h)
-    trigger_frame: dict = field(default_factory=dict)    # sym -> {seconds: DataFrame}
+    cognition: dict[tuple[str, str], SymbolCognition] = field(default_factory=dict)
+    cognition_frame: dict[tuple[str, str], pd.DataFrame] = field(default_factory=dict)
+    execution_frame: dict[tuple[str, str], pd.DataFrame] = field(default_factory=dict)
+    trigger_frame: dict[str, dict[int, pd.DataFrame]] = field(default_factory=dict)
 
 
-def _trigger_frame_for(symbol: str, seconds: int):
+def _trigger_frame_for(symbol: str, seconds: int) -> pd.DataFrame:
     """触发粒度行情:1h 及以下取原始数据,以上取聚合帧(同一物理来源)。"""
     if seconds == 900:
-        return datafeed.load(symbol, "15m")      # 15m 是原生帧,不走 aggregate
+        return datafeed.load(symbol, "15m")
     if seconds == 1800:
         return datafeed.load(symbol, "30m")
     if seconds == 3600:
@@ -246,10 +259,16 @@ def _trigger_frame_for(symbol: str, seconds: int):
     return aggregate.load_tf(symbol, TRIGGER_GRANULARITY_BY_SECONDS[seconds])
 
 
-def _available_trigger_frames(symbol: str, needed_seconds: Optional[Sequence[int]] = None) -> dict:
-    """加载该标的所需的触发粒度行情(needed_seconds 指定时按需惰性加载,避免无谓读取数百万行 15m/30m CSV)。"""
-    out: dict = {}
-    targets = TRIGGER_GRANULARITY_BY_SECONDS if needed_seconds is None else sorted(set(int(s) for s in needed_seconds))
+def _available_trigger_frames(
+    symbol: str, needed_seconds: Sequence[int] | None = None
+) -> dict[int, pd.DataFrame]:
+    """加载该标的所需的触发粒度行情(needed_seconds 指定时按需惰性加载)。"""
+    out: dict[int, pd.DataFrame] = {}
+    targets = (
+        TRIGGER_GRANULARITY_BY_SECONDS
+        if needed_seconds is None
+        else sorted({int(s) for s in needed_seconds})
+    )
     for seconds in targets:
         try:
             out[seconds] = _trigger_frame_for(symbol, seconds)
@@ -259,13 +278,21 @@ def _available_trigger_frames(symbol: str, needed_seconds: Optional[Sequence[int
     return out
 
 
-def _prep_symbol_worker(args: tuple) -> tuple:
+def _prep_symbol_worker(
+    args: tuple[str, Params, tuple[str, ...], tuple[int, ...] | None, bool],
+) -> tuple[
+    str,
+    dict[int, pd.DataFrame],
+    dict[tuple[str, str], SymbolCognition],
+    dict[tuple[str, str], pd.DataFrame],
+    dict[tuple[str, str], pd.DataFrame],
+]:
     symbol, params, timeframes, needed_trigger_seconds, enable_flip_retest = args
     trig = _available_trigger_frames(symbol, needed_trigger_seconds)
     execution = trig[3600]
-    cogs = {}
-    cframes = {}
-    eframes = {}
+    cogs: dict[tuple[str, str], SymbolCognition] = {}
+    cframes: dict[tuple[str, str], pd.DataFrame] = {}
+    eframes: dict[tuple[str, str], pd.DataFrame] = {}
     for tf in timeframes:
         seconds = aggregate.TF_HOURS[tf] * 3600
         frame = trig.get(seconds)
@@ -281,22 +308,15 @@ def _prep_symbol_worker(args: tuple) -> tuple:
 def load_market_data(symbols: Sequence[str], params: Params,
                      timeframes: Sequence[str] = COGNITION_TIMEFRAMES, *,
                      enable_flip_retest: bool = True,
-                     needed_trigger_seconds: Optional[Sequence[int]] = None,
+                     needed_trigger_seconds: Sequence[int] | None = None,
                      progress: bool = True) -> MarketData:
-    """装载一个品种集所需全部行情,并把认知缓存算到 bar 粒度。
-
-    认知缓存与成本、段、路由参数无关,因此一次装载可服务多段多成本回放 ——
-    这是"同场景"可复现的物理基础:所有对照共享同一份认知对象。
-    """
-    from concurrent.futures import ProcessPoolExecutor
-
+    """装载一个品种集所需全部行情,并把认知缓存算到 bar 粒度。"""
     symbols = tuple(symbols)
     tfs = tuple(timeframes)
     needed = None if needed_trigger_seconds is None else tuple(needed_trigger_seconds)
     market = MarketData(symbols=symbols)
     tasks = [(s, params, tfs, needed, enable_flip_retest) for s in symbols]
 
-    import sys as _sys
     main_file = getattr(_sys.modules.get("__main__"), "__file__", None)
     can_mp = len(symbols) > 2 and bool(main_file) and "<stdin>" not in str(main_file)
 
@@ -316,45 +336,55 @@ def load_market_data(symbols: Sequence[str], params: Params,
     return market
 
 
+def _build_trigger_cognition(
+    market: MarketData,
+    settings: ScenarioSettings,
+    symbol: str,
+    tf: str,
+    obs_seconds: int,
+    avail_trig: Mapping[int, pd.DataFrame],
+) -> MicCognition | None:
+    trigger_seconds = settings.trigger_seconds_by_timeframe.get(tf)
+    if trigger_seconds is None:
+        return None
+    cands_ltf = [a for a in avail_trig if a < obs_seconds and obs_seconds % a == 0]
+    if not cands_ltf:
+        return None
+    eff_trig = trigger_seconds
+    if eff_trig not in avail_trig:
+        eff_trig, _ = resolve_trigger_tf(
+            obs_seconds,
+            tf_map={obs_seconds: trigger_seconds},
+            available=tuple(avail_trig.keys()),
+        )
+    return prepare_mic_cognition(
+        market.cognition[(symbol, tf)],
+        avail_trig[eff_trig],
+        settings.structure,
+        symbol,
+        obs_tf_seconds=obs_seconds,
+        trigger_tf_seconds=eff_trig,
+    )
+
+
 def build_frames(market: MarketData, settings: ScenarioSettings,
-                  timeframes: Sequence[str] = COGNITION_TIMEFRAMES, *,
-                  execution_seconds: Optional[int] = None) -> dict:
+                 timeframes: Sequence[str] = COGNITION_TIMEFRAMES, *,
+                 execution_seconds: int | None = None) -> dict[str, CampaignFrame]:
     """把 (品种 × 认知周期) 装配成战役帧;触发帧按配置降档挂载。"""
-    from .trigger import resolve_trigger_tf
     if execution_seconds is None:
-        # One portfolio execution clock, no slower than any configured signal.
-        # Missing native data must fail, never silently fall back to a leaking
-        # coarse interval whose orders can be changed halfway through.
         default_exec = 900 if ("1h" in timeframes and "1h" not in settings.trigger_seconds_by_timeframe) else 3600
         execution_seconds = min(
             [default_exec]
             + [int(settings.trigger_seconds_by_timeframe[tf])
                for tf in timeframes if settings.trigger_seconds_by_timeframe.get(tf)])
-    frames: dict = {}
+    frames: dict[str, CampaignFrame] = {}
     for symbol in market.symbols:
         avail_trig = market.trigger_frame[symbol]
         for tf in timeframes:
             obs_seconds = aggregate.TF_HOURS[tf] * 3600
-            trigger_seconds = settings.trigger_seconds_by_timeframe.get(tf)
-            trigger_cognition = None
-            if trigger_seconds is not None:
-                cands_ltf = [a for a in avail_trig if a < obs_seconds and obs_seconds % a == 0]
-                if cands_ltf:
-                    eff_trig = trigger_seconds
-                    if eff_trig not in avail_trig:
-                        eff_trig, _ = resolve_trigger_tf(
-                            obs_seconds,
-                            tf_map={obs_seconds: trigger_seconds},
-                            available=tuple(avail_trig.keys()),
-                        )
-                    trigger_cognition = prepare_mic_cognition(
-                        market.cognition[(symbol, tf)],
-                        avail_trig[eff_trig],
-                        settings.structure,
-                        symbol,
-                        obs_tf_seconds=obs_seconds,
-                        trigger_tf_seconds=eff_trig,
-                    )
+            trigger_cognition = _build_trigger_cognition(
+                market, settings, symbol, tf, obs_seconds, avail_trig
+            )
             sym_exec_sec = (
                 execution_seconds
                 if execution_seconds in avail_trig
@@ -362,24 +392,26 @@ def build_frames(market: MarketData, settings: ScenarioSettings,
             )
             frame = build_campaign_frame(
                 market.cognition[(symbol, tf)],
-                (market.execution_frame[(symbol, tf)] if execution_seconds is None
-                 else avail_trig[sym_exec_sec]),
-                tf, mic_cog=trigger_cognition, execution_seconds=sym_exec_sec)
+                avail_trig[sym_exec_sec],
+                tf,
+                mic_cog=trigger_cognition,
+                execution_seconds=sym_exec_sec,
+            )
             frames[frame.key] = frame
     return frames
 
 
 def load_contract_specs(symbols: Sequence[str],
-                        path: Path = CONTRACTS_PATH) -> dict:
+                        path: Path = CONTRACTS_PATH) -> dict[str, ContractSpec]:
     """离线合约规格(必带 sha 校验;缺失或篡改即失败,绝不静默取默认值)。"""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    specs: dict = {}
+    specs: dict[str, ContractSpec] = {}
     for symbol in symbols:
         entry = payload["entries"][symbol]
         actual = hashlib.sha256(
             json.dumps(entry["raw"], sort_keys=True).encode("utf-8")).hexdigest()
         if actual != entry["sha256"]:
-            raise RuntimeError(f"合约规格缓存 sha256 校验失败: {symbol}")
+            raise DataIntegrityError(f"合约规格缓存 sha256 校验失败: {symbol}")
         specs[symbol] = ContractSpec.from_entry(entry["raw"])
     return specs
 
@@ -394,17 +426,17 @@ class ScenarioOutcome:
     """一次回放的完整产物。指标是派生量(``summarize``),不是事实本身。"""
 
     spec: ScenarioSpec
-    trades: list
-    equity_rows: list
-    counters: dict
+    trades: list[dict[str, Any]]
+    equity_rows: list[tuple[Any, ...]]
+    counters: dict[str, Any]
     equity0: float
 
     @property
-    def in_segment_trades(self) -> list:
+    def in_segment_trades(self) -> list[dict[str, Any]]:
         return [t for t in self.trades if t.get("in_segment_open")]
 
     @property
-    def closed_trades(self) -> list:
+    def closed_trades(self) -> list[dict[str, Any]]:
         return [t for t in self.in_segment_trades if t.get("closed")]
 
 
@@ -412,16 +444,23 @@ class ScenarioRunner:
     """一次装配、多次回放。装配成本(认知)与回放成本(撮合)严格分离。"""
 
     def __init__(self, symbols: Sequence[str],
-                 config_path: Path = PRODUCTION_CONFIG, *,
-                 timeframes: Optional[Sequence[str]] = None,
+                 config_path: Path | str | None = PRODUCTION_CONFIG, *,
+                 timeframes: Sequence[str] | None = None,
                  progress: bool = True) -> None:
-        self.config_path = Path(config_path)
+        self.config_path = Path(PRODUCTION_CONFIG if config_path is None else config_path)
         self.settings = load_settings(self.config_path)
         if timeframes is None:
             cfg_tfs = self.settings.raw.get("tf_list")
             timeframes = tuple(cfg_tfs) if cfg_tfs else COGNITION_TIMEFRAMES
         self.timeframes = tuple(timeframes)
-        needed_sec = {3600, *(aggregate.TF_HOURS[tf] * 3600 for tf in self.timeframes if aggregate.TF_HOURS[tf] * 3600 in TRIGGER_GRANULARITY_BY_SECONDS)}
+        needed_sec = {
+            3600,
+            *(
+                aggregate.TF_HOURS[tf] * 3600
+                for tf in self.timeframes
+                if aggregate.TF_HOURS[tf] * 3600 in TRIGGER_GRANULARITY_BY_SECONDS
+            ),
+        }
         if "1h" in self.timeframes and "1h" not in self.settings.trigger_seconds_by_timeframe:
             needed_sec.add(900)
         for tf in self.timeframes:
@@ -436,14 +475,18 @@ class ScenarioRunner:
 
     def run(self, *, segment: str = "full", cost_multiplier: float = 1.0,
             equity0: float = 300.0,
-            router_factory: Optional[type] = None,
-            router_params: Optional[RouterParams] = None,
-            router_params_by_timeframe: Optional[Mapping[str, RouterParams]] = None,
-            tf_cap_by_timeframe: Optional[Mapping[str, float]] = None,
-            capacity_mode: Optional[str] = None,
-            directional_cap_frac: Optional[float] = None,
-            arm: Optional[ExecutionConfig] = None) -> ScenarioOutcome:
-
+            router_factory: type[Any] | None = None,
+            router_params: RouterParams | None = None,
+            router_params_by_timeframe: Mapping[str, RouterParams] | None = None,
+            tf_cap_by_timeframe: Mapping[str, float] | None = None,
+            capacity_mode: str | None = None,
+            directional_cap_frac: float | None = None,
+            portfolio_cap_frac: float | None = None,
+            risk_frac: float | None = None,
+            dynamic_risk_tiers: Sequence[Sequence[float]] | None = None,
+            symbol_stop_risk_frac: Mapping[str, float] | None = None,
+            reserve_by_tf: Mapping[str, float] | None = None,
+            arm: ExecutionConfig | None = None) -> ScenarioOutcome:
         """按场景回放。所有可替换项缺省为配置值(即"现行语义")。"""
         settings = self.settings
         costs = settings.costs.scaled(cost_multiplier)
@@ -455,7 +498,7 @@ class ScenarioRunner:
             segment=segment,
             dev_frac=settings.dev_frac,
             equity0=equity0,
-            risk_frac=settings.risk_frac,
+            risk_frac=settings.risk_frac if risk_frac is None else float(risk_frac),
             leverage_cap=settings.leverage_cap,
             taker_fee=costs.taker_fee,
             maker_fee=costs.maker_fee,
@@ -467,16 +510,23 @@ class ScenarioRunner:
             contracts=self.contracts,
             params=settings.structure,
             n_fill=settings.n_fill,
-            portfolio_cap_frac=settings.portfolio_cap_frac,
+            portfolio_cap_frac=(settings.portfolio_cap_frac
+                                if portfolio_cap_frac is None
+                                else float(portfolio_cap_frac)),
             directional_cap_frac=(settings.directional_cap_frac
                                   if directional_cap_frac is None
                                   else directional_cap_frac),
+            dynamic_risk_tiers=dynamic_risk_tiers,
+            symbol_stop_risk_frac=symbol_stop_risk_frac,
+            reserve_by_tf=reserve_by_tf,
+            factor_burst_cap_1h=settings.factor_burst_cap_1h,
+            factor_burst_cap_4h=settings.factor_burst_cap_4h,
+            markowitz_corr_sizing=settings.markowitz_corr_sizing,
+            max_eff_size_mult=settings.max_eff_size_mult,
             tf_cap_by_tf=dict(settings.tf_cap_by_timeframe
-
                               if tf_cap_by_timeframe is None
                               else tf_cap_by_timeframe),
-            capacity_mode=settings.capacity_mode if capacity_mode is None
-            else str(capacity_mode),
+            capacity_mode=settings.capacity_mode if capacity_mode is None else str(capacity_mode),
             arm=settings.arm if arm is None else arm,
             router_params=settings.router if router_params is None else router_params,
             router_params_by_tf=dict(settings.router_by_timeframe

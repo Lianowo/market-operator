@@ -8,13 +8,15 @@ No exchange, live runtime, or frozen acceptance baseline is modified.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping, Sequence
 import functools
 import hashlib
 import json
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,8 +26,9 @@ def _git(*args: str) -> bytes:
 
 
 def _fingerprint(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, ensure_ascii=False,
-                         separators=(",", ":"), allow_nan=False)
+    payload = json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -42,12 +45,15 @@ def _run_worker(args: argparse.Namespace) -> int:
     from market_operator import scenario
 
     scenario.load_funding_rates = functools.partial(
-        scenario.load_funding_rates, directory=data.DATA_DIR / "raw" / "funding")
+        scenario.load_funding_rates, directory=data.DATA_DIR / "raw" / "funding"
+    )
     scenario.load_contract_specs = functools.partial(
-        scenario.load_contract_specs, path=data.DATA_DIR / "contracts.json")
+        scenario.load_contract_specs, path=data.DATA_DIR / "contracts.json"
+    )
     runner = scenario.ScenarioRunner(
-        tuple(args.symbols.split(",")), config_path=args.config, progress=False)
-    results = {}
+        tuple(args.symbols.split(",")), config_path=args.config, progress=False
+    )
+    results: dict[str, dict[str, Any]] = {}
     for segment in args.segments.split(","):
         for cost in map(float, args.costs.split(",")):
             outcome = runner.run(segment=segment, cost_multiplier=cost)
@@ -63,7 +69,33 @@ def _run_worker(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
+def _export_commit_tree(commit: str, target_root: Path) -> Path:
+    file_list = _git(
+        "ls-tree", "-r", "--name-only", commit, "src/market_operator", "config/strategy.json"
+    ).decode().splitlines()
+    for name in file_list:
+        target = target_root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_git("show", f"{commit}:{name}"))
+    return target_root / "config" / "strategy.json"
+
+
+def _compare_scenarios(
+    reference: Mapping[str, Mapping[str, Any]],
+    current: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    return {
+        key: {
+            field: {"reference": reference[key][field], "current": current[key][field]}
+            for field in reference[key]
+            if reference[key][field] != current[key][field]
+        }
+        for key in reference
+        if reference[key] != current[key]
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref", default="HEAD")
     parser.add_argument("--symbols", default="BTCUSDT,DOGEUSDT,ETHUSDT,SOLUSDT")
@@ -72,44 +104,50 @@ def main() -> int:
     parser.add_argument("--source", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--config", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.source is not None:
         return _run_worker(args)
 
     commit = _git("rev-parse", "--verify", f"{args.ref}^{{commit}}").decode().strip()
     with tempfile.TemporaryDirectory(prefix="market-operator-parity-") as directory:
         baseline = Path(directory)
-        paths = _git("ls-tree", "-r", "--name-only", commit,
-                     "src/market_operator", "config/strategy.json").decode().splitlines()
-        for name in paths:
-            target = baseline / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(_git("show", f"{commit}:{name}"))
-        config = baseline / "config" / "strategy.json"
+        config = _export_commit_tree(commit, baseline)
         current_config = ROOT / "config" / "strategy.json"
         if json.loads(config.read_text(encoding="utf-8")) != json.loads(
-                current_config.read_text(encoding="utf-8")):
+            current_config.read_text(encoding="utf-8")
+        ):
             raise ValueError("Strategy configuration differs from the reference commit")
-        outputs = []
+        outputs: list[dict[str, Any]] = []
         for label, source in (("baseline", baseline / "src"), ("current", ROOT / "src")):
             output = baseline / f"{label}.json"
             subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()),
-                 "--source", str(source), "--config", str(config),
-                 "--output", str(output), "--symbols", args.symbols,
-                 "--segments", args.segments, "--costs", args.costs],
-                cwd=ROOT, check=True)
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--source", str(source),
+                    "--config", str(config),
+                    "--output", str(output),
+                    "--symbols", args.symbols,
+                    "--segments", args.segments,
+                    "--costs", args.costs,
+                ],
+                cwd=ROOT,
+                check=True,
+            )
             outputs.append(json.loads(output.read_text(encoding="utf-8")))
         reference, current = outputs
-        differences = {
-            key: {field: {"reference": reference[key][field], "current": current[key][field]}
-                  for field in reference[key] if reference[key][field] != current[key][field]}
-            for key in reference if reference[key] != current[key]
-        }
-        print(json.dumps({"commit": commit, "differences": differences,
-                          "scenarios": current}, indent=2))
-        print("[FAIL] Strategy outputs differ" if differences else
-              "[PASS] Trades, equity and counters exactly match the reference commit")
+        differences = _compare_scenarios(reference, current)
+        print(
+            json.dumps(
+                {"commit": commit, "differences": differences, "scenarios": current},
+                indent=2,
+            )
+        )
+        print(
+            "[FAIL] Strategy outputs differ"
+            if differences
+            else "[PASS] Trades, equity and counters exactly match the reference commit"
+        )
         return int(bool(differences))
 
 

@@ -18,8 +18,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Any
 
 from .broker import OrderIntent, OrderKind
 from .events import BREAKOUT_ACCEPTED, LEVEL_REJECTED, MarketEvent, STRUCTURE_BROKEN
@@ -39,7 +40,7 @@ class LockStepResult:
 
     action: str                     # "off" | "hold" | "tighten" | "exit"
     armed: bool
-    stop_px: Optional[float] = None
+    stop_px: float | None = None
     budget: float = 0.0
     drawdown: float = 0.0
     reason: str = ""
@@ -51,13 +52,13 @@ def opp_lock_step(
     entry: float,
     target: float,
     frac: float,
-    peak: Optional[float],
+    peak: float | None,
     high: float,
     low: float,
     close: float,
     ref_px: float,
     armed: bool,
-    budget_override: Optional[float] = None,
+    budget_override: float | None = None,
 ) -> LockStepResult:
     """纯几何峰值回撤棘轮(仅当配置显式启用 frac != 0 时生效;frac == 0 时走纯保本+波段跟踪)。"""
     d = int(direction)
@@ -102,7 +103,7 @@ class Position:
     direction: int
     entry: float
     invalid: float
-    target_1: Optional[float]
+    target_1: float | None
     event_id: str
     opened_ts: int
     opened_index: int
@@ -113,12 +114,12 @@ class Position:
     armed: bool = False
     lock_off_logged: bool = False
     bars_held: int = 0
-    reenter_invalid_px: Optional[float] = None
-    claim_id: Optional[tuple] = None
-    claim_completed_ts: Optional[int] = None
-    claim_migrated_ts: Optional[int] = None
+    reenter_invalid_px: float | None = None
+    claim_id: tuple[Any, ...] | None = None
+    claim_completed_ts: int | None = None
+    claim_migrated_ts: int | None = None
     log: list[str] = field(default_factory=list)
-    _best: Optional[float] = None
+    _best: float | None = None
     _entry0: float = 0.0
     _init_risk: float = 0.0
 
@@ -128,15 +129,16 @@ class PositionManager:
 
     def __init__(
         self,
-        params: Optional[Params] = None,
+        params: Params | None = None,
         *,
         allow_add: bool = False,
         time_stop: bool = False,
         breakeven_on_reduce: bool = True,
         partial_exit_enabled: bool = False,
         accept_reenter_level_exit: bool = True,
-        accept_reenter_box_exit: Optional[bool] = None,
+        accept_reenter_box_exit: bool | None = None,
         reject_opp_lock_frac: float = 0.0,
+        ltf_opposing_reject_exit: bool = False,
     ) -> None:
         self.p = params or Params()
         self.allow_add = bool(allow_add)
@@ -149,7 +151,27 @@ class PositionManager:
             else bool(accept_reenter_level_exit)
         )
         self.reject_opp_lock_frac = float(reject_opp_lock_frac)
+        self.ltf_opposing_reject_exit = bool(ltf_opposing_reject_exit)
         self.positions: dict[str, Position] = {}
+
+    def sync_qty(self, symbol: str, qty: float) -> None:
+        """Synchronize tracked contract quantity from exchange/broker state."""
+        pos = self.positions.get(symbol)
+        if pos is not None:
+            pos.qty = float(qty)
+
+    def drop_position(self, symbol: str) -> Position | None:
+        """Remove and return a closed position from the manager."""
+        return self.positions.pop(symbol, None)
+
+    def restore_position(self, pos: Position) -> None:
+        """Register a hydrated Position snapshot (used by state recovery / rebuild)."""
+        self.positions[pos.symbol] = pos
+
+    def resolve_lock_frac(self, _pos: Position, _atr: float = 0.0) -> float:
+        return float(self.reject_opp_lock_frac)
+
+    _resolve_lock_frac = resolve_lock_frac
 
     def confirm_reduce(self, symbol: str, filled_frac: float) -> None:
         """确认交易所侧部分止盈成交回执:增量扣减剩余比例,达半仓后置 reduced 并移保本。"""
@@ -164,22 +186,19 @@ class PositionManager:
             if self.breakeven_on_reduce:
                 pos.invalid = max(pos.invalid, pos.entry) if pos.direction > 0 else min(pos.invalid, pos.entry)
 
-    def _resolve_lock_frac(self, _pos: Position, _atr: float = 0.0) -> float:
-        return float(self.reject_opp_lock_frac)
-
     def open(
         self,
         symbol: str,
         direction: int,
         entry: float,
         invalid: float,
-        target_1: Optional[float],
+        target_1: float | None,
         event_id: str,
         opened_ts: int,
         opened_index: int,
         *,
-        reenter_invalid_px: Optional[float] = None,
-        claim_id: Optional[tuple] = None,
+        reenter_invalid_px: float | None = None,
+        claim_id: tuple[Any, ...] | None = None,
     ) -> Position:
         pos = Position(
             symbol=symbol,
@@ -246,6 +265,8 @@ class PositionManager:
             ts=int(ts),
         )
 
+    reduce_position = _reduce
+
     def _exit(self, pos: Position, ts: int, ref_price: float, code: str, detail: str) -> OrderIntent:
         rem = 0.5 if pos.reduced else 1.0
         return OrderIntent(
@@ -298,7 +319,7 @@ class PositionManager:
                 if ev.id == STRUCTURE_BROKEN:
                     pos.log.append(f"EXIT_LTF_CHOCH|dir={ev.direction} sub={ev.attrs.get('sub_kind', '')}")
                     return [self._exit(pos, ts, c, "CHOCH_ORIGIN_BROKEN", f"ltf_ts={ts}")]
-                if ev.id == LEVEL_REJECTED and tf_label == "1h":
+                if ev.id == LEVEL_REJECTED and self.ltf_opposing_reject_exit:
                     pos.log.append(f"EXIT_LTF_OPPOSING_REJECT|dir={ev.direction} close={c:.8g}")
                     return [self._exit(pos, ts, c, "LTF_OPPOSING_REJECT", f"ltf_ts={ts}")]
         return []
@@ -412,7 +433,7 @@ class PositionManager:
         *,
         ts: int,
         price: float,
-        ref_price: Optional[float] = None,
+        ref_price: float | None = None,
         atr: float = 0.0,
     ) -> list[OrderIntent]:
         """实盘新鲜报价保护推进(与 on_bar 同源语义:触及对手方水平位减半保本 + 可选锁利棘轮)。"""

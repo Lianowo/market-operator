@@ -24,13 +24,22 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import logging
 import os
 import shutil
+import subprocess
+import sys
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any
+
+from .exceptions import LayoutError
+
+_LOG = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,6 +52,9 @@ PORTABLE_LAYOUT = "portable"
 CONFIG_REL = Path("config") / "paths.json"
 MARKER_REL = Path("var") / ".mo-layout.json"
 MIGRATION_NAME = "MIGRATION.json"
+_HASH_CHUNK_BYTES = 1 << 20
+_HEARTBEAT_FRESH_LIMIT_S = 600.0
+_GIT_LS_TIMEOUT_S = 60
 
 # 运行期类别。portable 下全部位于 <store>/<category>;legacy 下前四个沿用
 # 仓库根旧目录,其余(备份/导出/缓存/临时)始终放 `var/`,避免和源码混在一起。
@@ -54,10 +66,6 @@ _LEGACY_CATEGORIES = ("data", "logs", "runtime", "reports")
 # 研究 CSV 也有 git 跟踪文件,必须显式 --include-data;`reports/` 是研究
 # 产物(大量 git 跟踪),不参与迁移,避免把仓库变成两份。
 MIGRATE_CATEGORIES = ("logs", "runtime")
-
-
-class LayoutError(RuntimeError):
-    """布局配置非法 / 迁移前置条件不满足(错误信息直接给运维看)。"""
 
 
 def app_home() -> Path:
@@ -82,7 +90,7 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-def _normalise_layout(value: object) -> Optional[str]:
+def _normalise_layout(value: object) -> str | None:
     text = str(value or "").strip().lower()
     if text in (LEGACY_LAYOUT, "repo", "old"):
         return LEGACY_LAYOUT
@@ -239,17 +247,52 @@ def activate_legacy(*, reason: str = "manual") -> None:
     _write_json_atomic(layout_config_path(),
                        {"layout": LEGACY_LAYOUT, "reason": reason,
                         "activated_at_utc": _now_iso()})
-    try:
+    with contextlib.suppress(FileNotFoundError):
         layout_marker_path().unlink()
-    except OSError:
-        pass
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def layout_report() -> dict:
+def human_bytes(n: int | float) -> str:
+    """Format byte counts into compact human-readable units (B/KB/MB/GB/TB)."""
+    val = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(val) < 1024.0 or unit == "TB":
+            return f"{val:.1f}{unit}" if unit != "B" else f"{int(val)}B"
+        val /= 1024.0
+    return f"{val:.1f}TB"
+
+
+def soften_stdio() -> None:
+    """Configure stdout/stderr to replace unencodable characters on Windows consoles."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (AttributeError, OSError, ValueError) as exc:
+            _LOG.debug("stdio reconfigure skipped: %s", exc)
+
+
+def file_sha256(path: Path, *, chunk: int = _HASH_CHUNK_BYTES) -> str:
+    """Compute hex SHA-256 digest of a file in streaming chunks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            blob = fh.read(chunk)
+            if not blob:
+                break
+            digest.update(blob)
+    return digest.hexdigest()
+
+
+_sha256 = file_sha256  # Backward-compatible private alias
+
+
+def layout_report() -> dict[str, Any]:
     """当前布局的机器可读快照(doctor/status/package 使用)。"""
     cats = {name: str(category_root(name)) for name in CATEGORIES}
     return {
@@ -266,7 +309,8 @@ def layout_report() -> dict:
 
 
 def dir_size(path: str | Path) -> tuple[int, int]:
-    total = count = 0
+    total = 0
+    count = 0
     root = Path(path)
     if not root.exists():
         return (0, 0)
@@ -275,12 +319,12 @@ def dir_size(path: str | Path) -> tuple[int, int]:
             if p.is_file():
                 total += p.stat().st_size
                 count += 1
-        except OSError:
-            continue
+        except OSError as exc:
+            _LOG.debug("dir_size skipped %s: %s", p, exc)
     return (total, count)
 
 
-def disk_usage(path: str | Path | None = None) -> dict:
+def disk_usage(path: str | Path | None = None) -> dict[str, Any]:
     target = Path(path) if path else store_root()
     probe = target
     while not probe.exists() and probe.parent != probe:
@@ -293,8 +337,8 @@ def disk_usage(path: str | Path | None = None) -> dict:
             if usage.total else 0.0}
 
 
-def category_usage() -> dict[str, dict]:
-    out = {}
+def category_usage() -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
     for name in CATEGORIES:
         p = category_root(name)
         size, files = dir_size(p)
@@ -303,9 +347,9 @@ def category_usage() -> dict[str, dict]:
     return out
 
 
-def legacy_snapshot() -> dict:
+def legacy_snapshot() -> dict[str, dict[str, Any]]:
     home = app_home()
-    out = {}
+    out: dict[str, dict[str, Any]] = {}
     for name in _LEGACY_CATEGORIES:
         p = home / name
         size, files = dir_size(p)
@@ -314,24 +358,11 @@ def legacy_snapshot() -> dict:
     return out
 
 
-
-def _sha256(path: Path, *, chunk: int = 1 << 20) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while True:
-            blob = fh.read(chunk)
-            if not blob:
-                break
-            h.update(blob)
-    return h.hexdigest()
-
-
 def _git_tracked(home: Path) -> set[str]:
     """git 跟踪文件(相对 posix)。非 git 目录返回空集。"""
-    import subprocess
     try:
         out = subprocess.run(["git", "-C", str(home), "ls-files", "-z"],
-                             capture_output=True, timeout=60)
+                             capture_output=True, timeout=_GIT_LS_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return set()
     if out.returncode != 0:
@@ -344,15 +375,59 @@ def _prune_empty_dirs(root: Path) -> None:
         return
     for p in sorted(root.rglob("*"), key=lambda x: len(x.parts), reverse=True):
         if p.is_dir():
-            try:
+            with contextlib.suppress(OSError):
                 p.rmdir()
-            except OSError:
-                pass
+
+
+def _copy_and_verify_file(
+    src: Path, dst: Path, *, dry_run: bool
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Copy one file to ``dst`` (unless ``dry_run``) and verify SHA-256 parity."""
+    rec: dict[str, Any] = {
+        "src": str(src),
+        "dst": str(dst),
+        "size": src.stat().st_size,
+    }
+    if dry_run:
+        return rec, None
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not (dst.exists() and dst.stat().st_size == rec["size"]):
+            shutil.copy2(src, dst)
+        digest = file_sha256(dst)
+        rec["sha256"] = digest
+        if digest != file_sha256(src):
+            return None, {**rec, "why": "sha256 不一致"}
+        return rec, None
+    except OSError as exc:
+        return None, {**rec, "why": f"{type(exc).__name__}: {exc}"}
+
+
+def _remove_migrated_sources(
+    entries: list[dict[str, Any]], home: Path, tracked: set[str], cats: tuple[str, ...]
+) -> tuple[int, int]:
+    """Remove verified untracked source files after migration and prune empty dirs."""
+    deleted = 0
+    tracked_skipped = 0
+    for rec in entries:
+        src = Path(rec["src"])
+        rel = src.relative_to(home).as_posix()
+        if rel in tracked:
+            tracked_skipped += 1
+            continue
+        try:
+            src.unlink()
+            deleted += 1
+        except OSError as exc:
+            _LOG.warning("migrate cleanup skipped %s: %s", src, exc)
+    for cat in cats:
+        _prune_empty_dirs(home / cat)
+    return deleted, tracked_skipped
 
 
 def migrate_legacy(*, move: bool = False, include_data: bool = False,
                    force: bool = False, dry_run: bool = False,
-                   categories: Optional[Iterable[str]] = None) -> dict:
+                   categories: Iterable[str] | None = None) -> dict[str, Any]:
     """把旧目录复制到 `var/`,逐文件 sha256 校验通过后才激活 portable。
 
     * 默认只迁 `logs` / `runtime`;`data` 需 `include_data=True`;
@@ -377,14 +452,14 @@ def migrate_legacy(*, move: bool = False, include_data: bool = False,
     if hb_doc and not force and not dry_run:
         from . import heartbeat as hb
         age = hb.beat_age_seconds(hb_doc)
-        if age is not None and age < 600.0:
+        if age is not None and age < _HEARTBEAT_FRESH_LIMIT_S:
             raise LayoutError(
                 f"实盘心跳仍新鲜(age={age:.0f}s);先 `mo stop` 或加 --force")
 
     target_home = store_root()
     tracked = _git_tracked(home) if move else set()
-    entries: list[dict] = []
-    errors: list[dict] = []
+    entries: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
     for cat in cats:
         src_root = home / cat
         dst_root = target_home / cat
@@ -393,28 +468,22 @@ def migrate_legacy(*, move: bool = False, include_data: bool = False,
         for src in sorted(src_root.rglob("*")):
             if not src.is_file():
                 continue
-            rec = {"src": str(src),
-                   "dst": str(dst_root / src.relative_to(src_root)),
-                   "size": src.stat().st_size}
-            try:
-                if not dry_run:
-                    dst = Path(rec["dst"])
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    if not (dst.exists()
-                            and dst.stat().st_size == rec["size"]):
-                        shutil.copy2(src, dst)
-                    digest = _sha256(dst)
-                    rec["sha256"] = digest
-                    if digest != _sha256(src):
-                        errors.append({**rec, "why": "sha256 不一致"})
-                        continue
+            dst = dst_root / src.relative_to(src_root)
+            rec, err = _copy_and_verify_file(src, dst, dry_run=dry_run)
+            if err is not None:
+                errors.append(err)
+            elif rec is not None:
                 entries.append(rec)
-            except OSError as e:
-                errors.append({**rec, "why": f"{type(e).__name__}: {e}"})
 
-    result = {"dry_run": dry_run, "move": move, "categories": list(cats),
-              "target": str(target_home), "copied": len(entries),
-              "errors": errors, "tracked_skipped": 0}
+    result: dict[str, Any] = {
+        "dry_run": dry_run,
+        "move": move,
+        "categories": list(cats),
+        "target": str(target_home),
+        "copied": len(entries),
+        "errors": errors,
+        "tracked_skipped": 0,
+    }
     if errors or dry_run:
         return result
 
@@ -426,19 +495,9 @@ def migrate_legacy(*, move: bool = False, include_data: bool = False,
 
     deleted = 0
     if move:
-        for rec in entries:
-            src = Path(rec["src"])
-            rel = src.relative_to(home).as_posix()
-            if rel in tracked:
-                result["tracked_skipped"] += 1
-                continue
-            try:
-                src.unlink()
-                deleted += 1
-            except OSError:
-                pass
-        for cat in cats:
-            _prune_empty_dirs(home / cat)
+        deleted, result["tracked_skipped"] = _remove_migrated_sources(
+            entries, home, tracked, cats
+        )
 
     activate_portable(storage_root=_rel_to_home(target_home), reason="migrate")
     ensure_layout()

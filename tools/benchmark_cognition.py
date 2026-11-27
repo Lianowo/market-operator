@@ -9,28 +9,35 @@ Never starts live execution or rewrites fixtures.
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import gc
 import hashlib
 import json
 import os
+from pathlib import Path
 import platform
 import statistics
 import subprocess
 import sys
 import time
 import tracemalloc
-from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+MS_PER_HOUR = 3_600_000
 
 
-def _plain(value):
+def _plain(value: Any) -> Any:
     if dataclasses.is_dataclass(value):
         # Process-local level UID allocation is not a market fact. All structural
         # fields, order, prices and timestamps remain in the fingerprint.
-        return {f.name: _plain(getattr(value, f.name))
-                for f in dataclasses.fields(value) if f.name not in ("zone_uid", "uid")}
+        return {
+            f.name: _plain(getattr(value, f.name))
+            for f in dataclasses.fields(value)
+            if f.name not in ("zone_uid", "uid")
+        }
     if isinstance(value, dict):
         return {key: _plain(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
@@ -38,26 +45,36 @@ def _plain(value):
     return value
 
 
-def _case_labels(sizes):
+def _case_labels(sizes: Sequence[int]) -> list[str]:
     return [label for n in sizes for label in (f"dense_pivots_{n}", f"no_pivots_{n}")] + [
         "BTCUSDT_1h_level",
     ]
 
 
-def _fingerprint(outcome):
-    payload = json.dumps(_plain(outcome), sort_keys=True,
-                         separators=(",", ":"), allow_nan=False).encode()
+def _fingerprint(outcome: Any) -> str:
+    payload = json.dumps(
+        _plain(outcome), sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
-def _measure(prepare, mode, repeats, warmups):
+def _measure(
+    prepare: Callable[[], Any],
+    mode: str,
+    repeats: int,
+    warmups: int,
+) -> dict[str, Any]:
     """Only prepare is timed/traced; serialization and GC are outside both."""
     if tracemalloc.is_tracing():
         raise RuntimeError("worker must start without tracemalloc")
     for _ in range(warmups):
         outcome = prepare()
         del outcome
-    samples, cpu_samples, peaks, fingerprints = [], [], [], []
+    samples: list[float] = []
+    cpu_samples: list[float] = []
+    peaks: list[int] = []
+    fingerprints: list[str] = []
+    pivot_count = 0
     for _ in range(repeats if mode == "timing" else 1):
         gc.collect()
         if mode == "timing":
@@ -79,12 +96,16 @@ def _measure(prepare, mode, repeats, warmups):
         fingerprints.append(_fingerprint(outcome))
         pivot_count = sum(map(len, outcome.pivots_by.values()))
         del outcome
-    return {"samples_seconds": samples, "samples_cpu_seconds": cpu_samples,
-            "peaks_traced_bytes": peaks, "fingerprints": fingerprints,
-            "pivots": pivot_count}
+    return {
+        "samples_seconds": samples,
+        "samples_cpu_seconds": cpu_samples,
+        "peaks_traced_bytes": peaks,
+        "fingerprints": fingerprints,
+        "pivots": pivot_count,
+    }
 
 
-def _worker(args):
+def _worker(args: argparse.Namespace) -> dict[str, Any]:
     sys.path.insert(0, str(args.source))
     import numpy as np
     import pandas as pd
@@ -94,51 +115,71 @@ def _worker(args):
 
     if not Path(replay.__file__).resolve().is_relative_to(args.source.resolve()):
         raise RuntimeError("worker imported replay outside requested source")
-    label = args.case
+    label = str(args.case)
     if label.startswith("dense_pivots_"):
         n = int(label.rsplit("_", 1)[1])
-        idx = np.arange(n, dtype="float64")
-        wave = np.where((np.arange(n) % 4) < 2, 100.0 + 4.0 * (np.arange(n) % 2), 108.0 - 4.0 * (np.arange(n) % 2))
+        idx = np.arange(n, dtype="int64")
+        wave = np.where((idx % 4) < 2, 100.0 + 4.0 * (idx % 2), 108.0 - 4.0 * (idx % 2))
         df = pd.DataFrame({
-            "ts": np.arange(n, dtype="int64") * 3_600_000,
+            "ts": idx * MS_PER_HOUR,
             "open": wave,
             "high": wave + 2.0,
             "low": wave - 2.0,
-            "close": wave + np.where((idx.astype(int) % 4) < 2, 1.5, -1.5),
+            "close": wave + np.where((idx % 4) < 2, 1.5, -1.5),
             "volume": 1.0,
         })
         params = Params(swing_wing=1)
     elif label.startswith("no_pivots_"):
         n = int(label.rsplit("_", 1)[1])
-        df = pd.DataFrame({"ts": np.arange(n, dtype="int64") * 3_600_000,
-                           "open": 100., "high": 102., "low": 98.,
-                           "close": 100., "volume": 1.})
+        df = pd.DataFrame({
+            "ts": np.arange(n, dtype="int64") * MS_PER_HOUR,
+            "open": 100.0,
+            "high": 102.0,
+            "low": 98.0,
+            "close": 100.0,
+            "volume": 1.0,
+        })
         params = Params()
     else:
         df = pd.read_csv(ROOT / "data" / "raw" / "BTCUSDT_1h.csv")
         params = Params()
-    result = _measure(lambda: prepare_cognition(df, params, "BTCUSDT"),
-                      args.mode, args.repeats, args.warmups)
+    result = _measure(
+        lambda: prepare_cognition(df, params, "BTCUSDT"),
+        args.mode,
+        args.repeats,
+        args.warmups,
+    )
     if label.startswith("dense_pivots_") and result["pivots"] < len(df) // 6:
         raise AssertionError("dense-pivot benchmark failed to exercise pivot updates")
     if label.startswith("no_pivots_") and result["pivots"] != 0:
         raise AssertionError("zero-pivot benchmark unexpectedly has pivots")
     result["bars"] = len(df)
-    return {"environment": {"python": platform.python_version(),
-                            "platform": platform.platform(),
-                            "numpy": np.__version__, "pandas": pd.__version__,
-                            "executable": sys.executable, "pid": os.getpid(),
-                            "replay_file": str(Path(replay.__file__).resolve())},
-            "result": result}
+    return {
+        "environment": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "executable": sys.executable,
+            "pid": os.getpid(),
+            "replay_file": str(Path(replay.__file__).resolve()),
+        },
+        "result": result,
+    }
 
 
-def _stats(samples):
+def _stats(samples: Sequence[float]) -> dict[str, Any]:
     median = statistics.median(samples)
-    return {"median": median, "min": min(samples), "max": max(samples),
-            "mad": statistics.median(abs(x - median) for x in samples), "n": len(samples)}
+    return {
+        "median": median,
+        "min": min(samples),
+        "max": max(samples),
+        "mad": statistics.median(abs(x - median) for x in samples),
+        "n": len(samples),
+    }
 
 
-def _source_digest(source):
+def _source_digest(source: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(source.rglob("*.py")):
         digest.update(path.relative_to(source).as_posix().encode())
@@ -146,105 +187,182 @@ def _source_digest(source):
     return digest.hexdigest()
 
 
-def _run_worker(args, source, label, mode):
-    command = [sys.executable, str(Path(__file__).resolve()), "--source", str(source),
-               "--case", label, "--mode", mode, "--repeats", str(args.repeats),
-               "--warmups", str(args.warmups)]
-    return json.loads(subprocess.check_output(command, cwd=ROOT, text=True,
-                                             env={**os.environ, "PYTHONHASHSEED": "0"}))
+def _run_worker(
+    args: argparse.Namespace,
+    source: Path,
+    label: str,
+    mode: str,
+) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--source", str(source),
+        "--case", label,
+        "--mode", mode,
+        "--repeats", str(args.repeats),
+        "--warmups", str(args.warmups),
+    ]
+    return json.loads(
+        subprocess.check_output(
+            command, cwd=ROOT, text=True, env={**os.environ, "PYTHONHASHSEED": "0"}
+        )
+    )
 
 
-def _benchmark(args):
+def _run_benchmark_rounds(
+    args: argparse.Namespace,
+    sources: Mapping[str, Path],
+    labels: Sequence[str],
+    journal: Path | None,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for mode, rounds in (("timing", args.rounds), ("memory", 1)):
+        for round_index in range(rounds):
+            order = ["baseline", "current"]
+            if bool(round_index % 2) != args.reverse_order:
+                order.reverse()
+            _run_single_round(args, sources, labels, mode, round_index, order, records, journal)
+    return records
+
+
+def _run_single_round(
+    args: argparse.Namespace,
+    sources: Mapping[str, Path],
+    labels: Sequence[str],
+    mode: str,
+    round_index: int,
+    order: Sequence[str],
+    records: list[dict[str, Any]],
+    journal: Path | None,
+) -> None:
+    for label in labels:
+        for position, side in enumerate(order):
+            worker = _run_worker(args, sources[side], label, mode)
+            record = {
+                "mode": mode,
+                "round": round_index + 1,
+                "case": label,
+                "side": side,
+                "position": position + 1,
+                "order": "/".join(order),
+                **worker,
+            }
+            records.append(record)
+            if journal:
+                with journal.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record) + "\n")
+            print(f"{mode} round={round_index + 1} {label} {side}", file=sys.stderr, flush=True)
+
+
+def _summarize_case(
+    selected: Sequence[Mapping[str, Any]],
+    sides: Sequence[str],
+    rounds: int,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for side in sides:
+        timing = [r for r in selected if r["side"] == side and r["mode"] == "timing"]
+        memory = [r for r in selected if r["side"] == side and r["mode"] == "memory"]
+        samples = [x for r in timing for x in r["result"]["samples_seconds"]]
+        summary[side] = {
+            "samples_seconds": samples,
+            "seconds": _stats(samples),
+            "peak_traced_bytes": memory[0]["result"]["peaks_traced_bytes"][0],
+        }
+    paired: list[dict[str, Any]] = []
+    for round_index in range(1, rounds + 1):
+        pair = {
+            r["side"]: r
+            for r in selected
+            if r["mode"] == "timing" and r["round"] == round_index
+        }
+        paired.append({
+            "round": round_index,
+            "order": pair["baseline"]["order"],
+            "current_over_baseline": (
+                statistics.median(pair["current"]["result"]["samples_seconds"])
+                / statistics.median(pair["baseline"]["result"]["samples_seconds"])
+            ),
+        })
+    hashes = {x for r in selected for x in r["result"]["fingerprints"]}
+    summary.update(
+        equal=len(hashes) == 1,
+        fingerprints=sorted(hashes),
+        paired_round_ratios=paired,
+        paired_ratio_stats=_stats([p["current_over_baseline"] for p in paired]),
+        current_over_baseline=(
+            summary["current"]["seconds"]["median"] / summary["baseline"]["seconds"]["median"]
+        ),
+        peak_memory_ratio=(
+            summary["current"]["peak_traced_bytes"] / summary["baseline"]["peak_traced_bytes"]
+        ),
+    )
+    return summary
+
+
+def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
     sources = {"baseline": args.baseline_source.resolve(), "current": ROOT / "src"}
     before = {side: _source_digest(source) for side, source in sources.items()}
-    records = []
     labels = _case_labels(args.sizes)
     # Every case has fresh interpreters in AB, BA, AB, BA order. No traced
     # allocation run can precede/interfere with a timing worker in this run.
     journal = args.output.with_suffix(".samples.jsonl") if args.output else None
     if journal:
         journal.write_text("", encoding="utf-8")
-    for mode, rounds in (("timing", args.rounds), ("memory", 1)):
-        for round_index in range(rounds):
-            order = ["baseline", "current"]
-            if bool(round_index % 2) != args.reverse_order:
-                order.reverse()
-            for label in labels:
-                for position, side in enumerate(order):
-                    worker = _run_worker(args, sources[side], label, mode)
-                    record = {"mode": mode, "round": round_index + 1, "case": label,
-                              "side": side, "position": position + 1,
-                              "order": "/".join(order), **worker}
-                    records.append(record)
-                    if journal:
-                        with journal.open("a", encoding="utf-8") as stream:
-                            stream.write(json.dumps(record) + "\n")
-                    print(f"{mode} round={round_index + 1} {label} {side}",
-                          file=sys.stderr, flush=True)
+    records = _run_benchmark_rounds(args, sources, labels, journal)
     after = {side: _source_digest(source) for side, source in sources.items()}
-    results = {"schema_version": 3, "protocol": {
-        "rounds": args.rounds, "repeats_per_worker": args.repeats,
-        "warmups_per_worker": args.warmups, "reverse_order": args.reverse_order,
-        "timing": "fresh interpreter per case/side/round; alternating AB/BA; wall and CPU",
-        "memory": "separate fresh interpreters after ALL timing; one traced sample per side/case",
-        "fingerprint": "exact JSON SHA256 on every measured outcome; excludes only zone_uid",
-        "ratio_definition": "current / baseline elapsed seconds; >1 means current slower",
-        "statistical_scope": "descriptive samples/median/MAD/range; no automatic performance pass/fail",
-        "sources": {side: str(source) for side, source in sources.items()},
-        "source_sha256_before": before, "source_sha256_after": after,
-        "sources_unchanged": before == after,
-        "fixture_sha256": hashlib.sha256(
-            (ROOT / "data" / "raw" / "BTCUSDT_1h.csv").read_bytes()).hexdigest(),
-    }, "records": records, "comparison": {}}
-    for label in labels:
-        selected = [r for r in records if r["case"] == label]
-        summary = {}
-        for side in sources:
-            timing = [r for r in selected if r["side"] == side and r["mode"] == "timing"]
-            memory = [r for r in selected if r["side"] == side and r["mode"] == "memory"]
-            samples = [x for r in timing for x in r["result"]["samples_seconds"]]
-            summary[side] = {"samples_seconds": samples, "seconds": _stats(samples),
-                             "peak_traced_bytes": memory[0]["result"]["peaks_traced_bytes"][0]}
-        paired = []
-        for round_index in range(1, args.rounds + 1):
-            pair = {r["side"]: r for r in selected
-                    if r["mode"] == "timing" and r["round"] == round_index}
-            paired.append({"round": round_index, "order": pair["baseline"]["order"],
-                           "current_over_baseline": statistics.median(
-                               pair["current"]["result"]["samples_seconds"]) / statistics.median(
-                               pair["baseline"]["result"]["samples_seconds"])})
-        hashes = {x for r in selected for x in r["result"]["fingerprints"]}
-        summary.update(equal=len(hashes) == 1, fingerprints=sorted(hashes),
-                       paired_round_ratios=paired,
-                       paired_ratio_stats=_stats([p["current_over_baseline"] for p in paired]),
-                       current_over_baseline=summary["current"]["seconds"]["median"] /
-                       summary["baseline"]["seconds"]["median"],
-                       peak_memory_ratio=summary["current"]["peak_traced_bytes"] /
-                       summary["baseline"]["peak_traced_bytes"])
-        results["comparison"][label] = summary
-    return results
+    by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for rec in records:
+        by_case[str(rec["case"])].append(rec)
+    sides = tuple(sources.keys())
+    return {
+        "schema_version": 3,
+        "protocol": {
+            "rounds": args.rounds,
+            "repeats_per_worker": args.repeats,
+            "warmups_per_worker": args.warmups,
+            "reverse_order": args.reverse_order,
+            "timing": "fresh interpreter per case/side/round; alternating AB/BA; wall and CPU",
+            "memory": "separate fresh interpreters after ALL timing; one traced sample per side/case",
+            "fingerprint": "exact JSON SHA256 on every measured outcome; excludes only zone_uid",
+            "ratio_definition": "current / baseline elapsed seconds; >1 means current slower",
+            "statistical_scope": "descriptive samples/median/MAD/range; no automatic performance pass/fail",
+            "sources": {side: str(source) for side, source in sources.items()},
+            "source_sha256_before": before,
+            "source_sha256_after": after,
+            "sources_unchanged": before == after,
+            "fixture_sha256": hashlib.sha256(
+                (ROOT / "data" / "raw" / "BTCUSDT_1h.csv").read_bytes()
+            ).hexdigest(),
+        },
+        "records": records,
+        "comparison": {
+            label: _summarize_case(by_case[label], sides, args.rounds)
+            for label in labels
+        },
+    }
 
 
-def main():
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-source", type=Path)
     parser.add_argument("--source", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--case", help=argparse.SUPPRESS)
-    parser.add_argument("--mode", choices=("timing", "memory"), default="timing",
-                        help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--mode", choices=("timing", "memory"), default="timing", help=argparse.SUPPRESS
+    )
     parser.add_argument("--rounds", type=int, default=4, help="AB/BA rounds (at least 2)")
     parser.add_argument("--repeats", type=int, default=3, help="timed samples per fresh worker")
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--sizes", type=int, nargs="+", default=[8000, 32000])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--reverse-order", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.rounds < 2 or args.repeats < 1 or args.warmups < 0 or any(size < 1 for size in args.sizes):
         parser.error("rounds must be >= 2; repeats/sizes positive; warmups nonnegative")
     if args.source is not None:
         args.source = args.source.resolve()
         if args.case not in _case_labels(args.sizes):
-            # Custom synthetic sizes are encoded in --case by the parent.
             prefix, _, size = (args.case or "").rpartition("_")
             if prefix not in ("dense_pivots", "no_pivots") or not size.isdigit() or int(size) < 1:
                 parser.error("invalid worker case")
@@ -261,8 +379,10 @@ def main():
     if args.output is not None:
         args.output.write_text(payload + "\n", encoding="utf-8")
     print(payload)
-    return int(not results["protocol"]["sources_unchanged"] or
-               not all(case["equal"] for case in results["comparison"].values()))
+    return int(
+        not results["protocol"]["sources_unchanged"]
+        or not all(case["equal"] for case in results["comparison"].values())
+    )
 
 
 if __name__ == "__main__":

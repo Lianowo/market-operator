@@ -71,21 +71,26 @@ v4 增量(docs/v4-protocol.md §1-G3,执行路径细化;不改变任何既有市
 """
 
 from __future__ import annotations
-from .hypothesis import entry_contract_error
 
 import bisect
 import hashlib
 import json
 import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import requests
 
 from . import capacity
+from .exceptions import DataIntegrityError, ExchangeError
+from .hypothesis import entry_contract_error
+from .timeframes import MS_4H, MS_8H, MS_PER_HOUR
+
+MS_1H = MS_PER_HOUR
 
 
 class OrderKind(str, Enum):
@@ -100,14 +105,11 @@ class OrderIntent:
     """下单意图(与 broker 对接,字段固定)。qty_frac 为仓位名义额占权益的
     比例建议;OPEN 时为 None,由 sizing 模块决定。reason 为 "code|detail"。
     ref_price 为决策时点参考价(事件 bar 收盘;实际成交在下一 bar 开盘)。
-
-    规范家园:v1 起定义于 strategy.py;语义合并后订单意图词表固化为执行
-    边界(broker)的规范类型,全链(策略/持仓/回放引擎)统一从这里导入。
     """
 
     kind: OrderKind
     symbol: str
-    qty_frac: Optional[float]
+    qty_frac: float | None
     reason: str
     ref_price: float
     ts: object
@@ -117,8 +119,6 @@ CONTRACTS_URL = "https://api.bitget.com/api/v2/mix/market/contracts"
 PRODUCT_TYPE = "USDT-FUTURES"
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS_PATH = ROOT / "data" / "contracts.json"
-
-MS_8H = 8 * 3_600_000
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ class ContractSpec:
         return "rwa" if self.is_rwa else "crypto"
 
     @classmethod
-    def from_entry(cls, entry: dict) -> "ContractSpec":
+    def from_entry(cls, entry: Mapping[str, Any]) -> ContractSpec:
         return cls(
             symbol=str(entry["symbol"]),
             size_min=float(entry["minTradeNum"]),
@@ -155,31 +155,28 @@ class ContractSpec:
         )
 
 
-def _entry_sha(entry: dict) -> str:
+def _entry_sha(entry: Mapping[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(entry, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def fetch_contract_specs(symbols: list[str],
+def fetch_contract_specs(symbols: Sequence[str],
                          cache_path: Path = CONTRACTS_PATH,
-                         timeout: int = 20) -> tuple[dict, str]:
-    """抓 Bitget 合约规格并缓存;失败回退缓存。返回 (specs, source_desc)。
-
-    source_desc ∈ {"live", "cache"} 加说明,供报告如实声明规格近似。
-    """
+                         timeout: int = 20) -> tuple[dict[str, ContractSpec], str]:
+    """抓 Bitget 合约规格并缓存;失败回退缓存。返回 (specs, source_desc)。"""
     try:
         resp = requests.get(CONTRACTS_URL, params={"productType": PRODUCT_TYPE},
                             timeout=timeout)
         body = resp.json()
         if resp.status_code != 200 or body.get("code") != "00000":
-            raise RuntimeError(f"bitget {resp.status_code} {body.get('code')}")
+            raise ExchangeError(f"bitget {resp.status_code} {body.get('code')}")
         data = body.get("data") or []
         by_sym = {d["symbol"]: d for d in data}
         missing = [s for s in symbols if s not in by_sym]
         if missing:
-            raise RuntimeError(f"contracts missing symbols: {missing}")
-        entries = {}
-        specs = {}
+            raise DataIntegrityError(f"contracts missing symbols: {missing}")
+        entries: dict[str, Any] = {}
+        specs: dict[str, ContractSpec] = {}
         for s in symbols:
             raw = by_sym[s]
             entries[s] = {"sha256": _entry_sha(raw), "raw": raw}
@@ -193,16 +190,16 @@ def fetch_contract_specs(symbols: list[str],
         cache_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
                               encoding="utf-8")
         return specs, "live"
-    except Exception as e:  # noqa: BLE001 离线/接口异常一律回退缓存并如实标记
+    except (requests.RequestException, ExchangeError, DataIntegrityError, ValueError, KeyError, OSError) as e:
         if not cache_path.exists():
-            raise RuntimeError(
+            raise DataIntegrityError(
                 f"contracts fetch failed ({e}) and no cache at {cache_path}") from e
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
         specs = {}
         for s in symbols:
             ent = payload["entries"][s]
             if _entry_sha(ent["raw"]) != ent["sha256"]:
-                raise RuntimeError(f"contracts cache sha256 mismatch for {s}")
+                raise DataIntegrityError(f"contracts cache sha256 mismatch for {s}")
             specs[s] = ContractSpec.from_entry(ent["raw"])
         return specs, f"cache(fetch failed: {e}; cached_at={payload['fetched_at_utc']})"
 
@@ -218,48 +215,33 @@ class _Pending:
 
     intent: OrderIntent
     decision_ts: int
-    direction: Optional[int] = None      # OPEN 必填(+1/-1)
-    invalid: Optional[float] = None      # OPEN 必填(sizing 与保护性校验)
-    target_1: Optional[float] = None
-    event_id: Optional[str] = None
-    meta: dict = field(default_factory=dict)
-
-
-MS_1H = 3_600_000
+    direction: int | None = None      # OPEN 必填(+1/-1)
+    invalid: float | None = None      # OPEN 必填(sizing 与保护性校验)
+    target_1: float | None = None
+    event_id: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class RestingLimitOrder:
-    """v4 挂单(docs/v4-protocol.md §1-G3):1h 收盘武装,15m 严格穿过成交。
-
-    协议字段:direction/limit_price/armed_at_ts/expiry_ts(= armed+N_fill×1h)/maker。
-    armed_at_ts = 武装的 1h 决策 bar 标签(= decision_ts);expiry_ts = 最后
-    一根允许成交的 1h bar 标签;15m bar ts 可成交 ⇔ ts//1h·1h ∈ (armed, expiry]。
-    wait_bars = 已度过的可成交 15m bar 数(成交时 = fill_wait_bars)。
-    """
+    """限价挂单:决策收盘武装,细粒度 bar 严格穿过成交。"""
 
     direction: int                 # 挂单方向:+1 buy limit / -1 sell limit
     limit_price: float
-    armed_at_ts: int               # 武装(1h 决策)bar 标签
-    expiry_ts: int                 # armed_at_ts + n_fill×1h(最后一根允许成交的 1h bar)
-    maker: bool = True             # 挂单成交恒为 maker(如实声明)
-    # v6 增量(docs/v6-protocol.md §1,加性):认知帧 TF ≥ 2h 时,决策 TF bar 的
-    # 更细执行 bar 全部落在 [armed, armed+TF) —— 决策须早于成交 ⇒ 这些执行 bar
-    # 不可成交。fill_after_ts = 最后一个不可成交的执行 bar 标签(决策 TF bar 最
-    # 末细 bar);None ⇒ 沿用 armed_at_ts(v4/v5 行为逐位不变)。
-    fill_after_ts: Optional[int] = None
+    armed_at_ts: int               # 武装决策 bar 标签
+    expiry_ts: int                 # 最后一根允许成交的 bar 标签
+    maker: bool = True             # 挂单成交恒为 maker
+    fill_after_ts: int | None = None
     symbol: str = ""
-    role: str = "entry"            # "entry"(G3 入场)/ "reduce"(§8.2 目标减仓)
-    # entry 侧(open 成交所需,与 _Pending OPEN 字段同语义)
-    invalid: Optional[float] = None
-    target_1: Optional[float] = None
-    event_id: Optional[str] = None
-    meta: dict = field(default_factory=dict)
+    role: str = "entry"            # "entry" / "reduce"
+    invalid: float | None = None
+    target_1: float | None = None
+    event_id: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
     reason: str = ""
-    # reduce 侧(武装时对 open_qty 向 step 下取整的快照;超时转市价同数量)
-    reduce_qty: Optional[float] = None
-    qty_frac_snap: Optional[float] = None
-    wait_bars: int = 0             # 已度过的可成交 15m bar 数
+    reduce_qty: float | None = None
+    qty_frac_snap: float | None = None
+    wait_bars: int = 0
 
 
 @dataclass
@@ -275,20 +257,18 @@ class _AcctPosition:
     opened_ts: int             # OPEN 成交 bar ts
     funding_acc: float = 0.0   # 已计提未结算资金费(正数 = 成本)
     last_funding_ts: int = 0   # 上次计提时刻
-    invalid: Optional[float] = None  # 当前结构失效位置;组合风险预算的真实输入
+    invalid: float | None = None  # 当前结构失效位置;组合风险预算的真实输入
     decision_ts: int = 0       # OPEN 决策 bar 标签(保护性止损的因果锚,< fill ts)
     adds_done: int = 0         # 已执行顺势金字塔加仓次数(严控上限 <= 1)
 
 
-def _normalize_funding_table(table: Optional[dict]) -> Optional[dict]:
-    """``{sym: [(ts, rate), ...]}`` → ``{sym: (times, rates)}``(升序,供二分)。
-
-    A1 接插缝:表里缺某标的 ⇒ 该标的回落到常数近似(不静默改变口径,见
-    :meth:`Broker._accrue_funding`)。
-    """
+def _normalize_funding_table(
+    table: Mapping[str, Sequence[Sequence[float]]] | None,
+) -> dict[str, tuple[tuple[int, ...], tuple[float, ...]]] | None:
+    """``{sym: [(ts, rate), ...]}`` → ``{sym: (times, rates)}``(升序,供二分)。"""
     if not table:
         return None
-    out: dict = {}
+    out: dict[str, tuple[tuple[int, ...], tuple[float, ...]]] = {}
     for sym, rows in table.items():
         items = sorted((int(ts), float(rate)) for ts, rate in rows)
         out[str(sym)] = (tuple(ts for ts, _ in items),
@@ -297,22 +277,26 @@ def _normalize_funding_table(table: Optional[dict]) -> Optional[dict]:
 
 
 class Broker:
-    """多品种共享同一权益的模拟经纪商(合并时间轴回放,见 backtest.py)。"""
+    """多品种共享同一权益的模拟经纪商。"""
 
     def __init__(self, equity: float = 300.0, *, risk_frac: float,
                  leverage_cap: float, taker_fee: float, slippage_per_side: float,
-                 funding_per_8h: float, contracts: dict,
-                 maker_fee: Optional[float] = None,
+                 funding_per_8h: float, contracts: dict[str, ContractSpec],
+                 maker_fee: float | None = None,
                  cost_multiplier: float = 1.0, liq_frac: float = 0.9,
-                 portfolio_stop_risk_frac: Optional[float] = None,
-                 tf_stop_risk_frac_by_tf: Optional[dict] = None,
-                 dynamic_risk_tiers: Optional[list] = None,
+                 portfolio_stop_risk_frac: float | None = None,
+                 tf_stop_risk_frac_by_tf: Mapping[str, float] | None = None,
+                 dynamic_risk_tiers: Sequence[Sequence[float]] | None = None,
                  capacity_mode: str = capacity.ADMISSION_FULL_COST,
-                 funding_rates: Optional[dict] = None,
-                 slippage_by_symbol: Optional[dict] = None,
-                 symbol_stop_risk_frac: Optional[dict] = None,
-                 reserve_by_tf: Optional[dict] = None,
-                 directional_stop_risk_frac: Optional[float] = None) -> None:
+                 funding_rates: Mapping[str, Sequence[Sequence[float]]] | None = None,
+                 slippage_by_symbol: Mapping[str, float] | None = None,
+                 symbol_stop_risk_frac: Mapping[str, float] | None = None,
+                 reserve_by_tf: Mapping[str, float] | None = None,
+                 directional_stop_risk_frac: float | None = None,
+                 factor_burst_cap_1h: int = 0,
+                 factor_burst_cap_4h: int = 0,
+                 corr_size_fn: Callable[[Broker, str, int], float] | None = None,
+                 max_eff_size_mult: float | None = None) -> None:
         if cost_multiplier <= 0.0:
             raise ValueError("cost_multiplier must be positive")
         self.initial_equity = float(equity)
@@ -340,6 +324,11 @@ class Broker:
             [(float(t[0]), float(t[1])) for t in dynamic_risk_tiers]
             if dynamic_risk_tiers else None
         )
+        self.corr_size_fn = corr_size_fn
+        if max_eff_size_mult is not None and float(max_eff_size_mult) <= 0.0:
+            raise ValueError("max_eff_size_mult must be positive")
+        self.max_eff_size_mult = (float(max_eff_size_mult)
+                                  if max_eff_size_mult is not None else None)
         # 风险预算的唯一口径(见 capacity 模块):决策门与成交裁剪共用
         # B1 标的池 / B2 慢周期保留额度:缺省空 ⇒ 逐位旧行为
         self.reserve_by_tf = ({str(k): float(v) for k, v in reserve_by_tf.items()}
@@ -368,13 +357,17 @@ class Broker:
         self.n_liquidations = 0                        # 强平触发次数(报告断言 0)
         self.n_skips: dict[str, int] = {}              # reason_code → 次数
         self._seq = 0
+        self.factor_burst_cap_1h = max(0, int(factor_burst_cap_1h or 0))
+        self.factor_burst_cap_4h = max(0, int(factor_burst_cap_4h or 0))
+        self._burst_fills_1h: dict[tuple[str, int, int], int] = {}
+        self._burst_fills_4h: dict[tuple[str, int, int], int] = {}
 
     # -- 下单(决策 bar 收盘) -------------------------------------------------
 
     def submit(self, intent: OrderIntent, decision_ts: int, *,
-               direction: Optional[int] = None, invalid: Optional[float] = None,
-               target_1: Optional[float] = None, event_id: Optional[str] = None,
-               meta: Optional[dict] = None) -> None:
+               direction: int | None = None, invalid: float | None = None,
+               target_1: float | None = None, event_id: str | None = None,
+               meta: Mapping[str, Any] | None = None) -> None:
         if intent.kind is OrderKind.OPEN:
             if direction not in (+1, -1) or invalid is None:
                 raise ValueError("OPEN requires direction and invalid")
@@ -391,10 +384,10 @@ class Broker:
             return
         self.pending.setdefault(intent.symbol, []).append(po)
 
-    # -- v4 挂单(docs/v4-protocol.md §1-G3) ------------------------------------
+    # -- 挂单 -----------------------------------------------------------------
 
     def submit_limit(self, order: RestingLimitOrder) -> None:
-        """武装一只挂单(1h 决策 bar 收盘)。expiry_ts 由调用方 = armed+n_fill×1h。"""
+        """武装一只挂单(决策收盘)。expiry_ts 由调用方计算。"""
         if order.direction not in (+1, -1):
             raise ValueError("RestingLimitOrder.direction must be ±1")
         if order.expiry_ts <= order.armed_at_ts:
@@ -414,25 +407,68 @@ class Broker:
     def has_entry_limit(self, symbol: str) -> bool:
         return any(o.role == "entry" for o in self.resting.get(symbol, ()))
 
-    def on_15m_bar(self, symbol: str, ts: int, o: float, h: float, l: float,
-                   c: float, *, mic_only: bool = False) -> list[dict]:
-        """15m bar 上的挂单处理:先判超时,再判严格穿过成交(FIFO)。
+    def _handle_watch_entry_bar(
+        self,
+        symbol: str,
+        od: RestingLimitOrder,
+        ts: int,
+        o: float,
+        h: float,
+        lo: float,
+        c: float,
+        exact_window: Any,
+    ) -> dict[str, Any] | None:
+        """Evaluate watch-entry timeout, played-out cancellation, and near-touch bounce."""
+        max_wait_h = od.meta.get("max_wait_hours")
+        if not exact_window and max_wait_h is not None and (od.wait_bars + 1) > int(max_wait_h):
+            self.resting[symbol].remove(od)
+            return self._timeout(od, ts)
 
-        可成交窗口 = 本 15m bar 所属 1h bar 标签 ∈ (fill_after_ts(缺省 =
-        armed_at_ts), expiry_ts];决策 bar 自身(及其全部细 bar)不参与(因果:
-        决策须早于成交)。v6:认知 TF ≥ 2h 的战役在执行帧(1h)上调用本方法,
-        fill_after_ts 把决策 TF bar 的全部执行细 bar 排除出成交窗口。
+        prog_px = od.meta.get("prog_price")
+        max_prog = od.meta.get("max_prog_frac")
+        c0 = od.meta.get("confirm_close")
+        if prog_px is None and max_prog is not None and od.target_1 is not None and c0 is not None:
+            span_rem = abs(float(od.target_1) - float(c0))
+            if span_rem > 0.0:
+                prog_px = float(c0) + od.direction * float(max_prog) * span_rem
 
-        v10 增量(docs/v10-protocol.md §A,加性,默认逐位不变):mic_only=True
-        只处理 meta["mic"] 为真的挂单(mic 武装 ⇒ 自次一 trigger bar 可成交),
-        非 mic 挂单原样保留、不消耗 wait_bars(canonical 窗口/超时口径不变)。
-        v13 修补(docs/v13-protocol.md,级联 trigger 可粗于执行帧):mic_only
-        =False 时对称排除 mic 挂单(原样保留、不消耗 wait_bars)—— 否则中间
-        执行细 bar 会先于 mic 决策收盘消耗其窗口(级联下构成前馈;v10 15m/5m
-        trigger 恒细于执行帧,同 ts 同价,数值不变)。
-        """
-        hour_label = int(ts) - (int(ts) % MS_1H)
-        rows: list[dict] = []
+        if prog_px is not None:
+            prog_f = float(prog_px)
+            already_ran = (h >= prog_f) if od.direction > 0 else (lo <= prog_f)
+            touched_watch = (lo <= od.limit_price) if od.direction > 0 else (h >= od.limit_price)
+            if already_ran and not touched_watch:
+                self.resting[symbol].remove(od)
+                detail = (
+                    f"reached {prog_f:.8g} ({float(max_prog):.0%} to target) before pullback"
+                    if max_prog is not None and od.target_1 is not None
+                    else f"reached {prog_f:.8g} before pullback"
+                )
+                return self._admin_row(
+                    od, ts, kind="CANCEL", reason_code="MOVE_ALREADY_PLAYED_OUT", detail=detail
+                )
+
+        near_px = od.meta.get("near_price")
+        if near_px is None:
+            return None
+        exact_cross = (h > od.limit_price) if od.direction < 0 else (lo < od.limit_price)
+        near_f = float(near_px)
+        near_hit = (lo <= near_f) if od.direction > 0 else (h >= near_f)
+        bounce_ok = (c > o and c >= near_f) if od.direction > 0 else (c < o and c <= near_f)
+        if (not exact_cross) and near_hit and bounce_ok:
+            od.wait_bars += 1
+            if ts <= od.armed_at_ts:
+                raise AssertionError(f"trigger ts {ts} <= armed_at_ts {od.armed_at_ts}")
+            od.limit_price = float(c)
+            self.resting[symbol].remove(od)
+            return self._trigger_to_pending(od, ts)
+        return None
+
+    def on_15m_bar(self, symbol: str, ts: int, o: float, h: float, lo: float,
+                   c: float, *, mic_only: bool = False) -> list[dict[str, Any]]:
+        """细粒度执行 bar 上的挂单处理:先判超时,再判严格穿过成交(FIFO)。"""
+        ts_int = int(ts)
+        hour_label = ts_int - (ts_int % MS_1H)
+        rows: list[dict[str, Any]] = []
         kept: list[RestingLimitOrder] = []
         orders = self.resting.get(symbol, [])[:]
         for od in orders:
@@ -440,77 +476,33 @@ class Broker:
                 kept.append(od)
                 continue
             exact_window = od.meta.get("execution_step_ms")
-            window_label = int(ts) if exact_window else hour_label
+            window_label = ts_int if exact_window else hour_label
             if window_label > od.expiry_ts:
                 self.resting[symbol].remove(od)
-                rows.append(self._timeout(od, int(ts)))
+                rows.append(self._timeout(od, ts_int))
                 continue
-            barred = (od.fill_after_ts if od.fill_after_ts is not None
-                      else od.armed_at_ts)
-            # A bar may only execute an order that existed at its OPEN.
-            # In particular, a 30m decision must not reuse the containing
-            # hourly bar's earlier high/low when that hour finally closes.
-            if int(ts) < int(od.meta.get("execution_not_before", ts)):
+            barred = od.fill_after_ts if od.fill_after_ts is not None else od.armed_at_ts
+            if ts_int < int(od.meta.get("execution_not_before", ts_int)) or window_label <= barred:
                 kept.append(od)
                 continue
-            if window_label <= barred:
-                kept.append(od)                       # 决策 bar 覆盖区间,不可成交
-                continue
             if od.role == "entry" and od.meta.get("watch_entry"):
-                max_wait_h = od.meta.get("max_wait_hours")
-                if (not exact_window and max_wait_h is not None
-                        and (od.wait_bars + 1) > int(max_wait_h)):
-                    self.resting[symbol].remove(od)
-                    rows.append(self._timeout(od, int(ts)))
+                watch_row = self._handle_watch_entry_bar(symbol, od, ts_int, o, h, lo, c, exact_window)
+                if watch_row is not None:
+                    rows.append(watch_row)
                     continue
-                prog_px = od.meta.get("prog_price")
-                max_prog = od.meta.get("max_prog_frac")
-                c0 = od.meta.get("confirm_close")
-                if prog_px is None and max_prog is not None and od.target_1 is not None and c0 is not None:
-                    span_rem = abs(float(od.target_1) - float(c0))
-                    if span_rem > 0.0:
-                        prog_px = float(c0) + od.direction * float(max_prog) * span_rem
-                if prog_px is not None:
-                    prog_f = float(prog_px)
-                    already_ran = (h >= prog_f) if od.direction > 0 else (l <= prog_f)
-                    touched_watch = (l <= od.limit_price) if od.direction > 0 else (h >= od.limit_price)
-                    if already_ran and not touched_watch:
-                        self.resting[symbol].remove(od)
-                        detail = (f"reached {prog_f:.8g} ({float(max_prog):.0%} to target) before pullback"
-                                  if max_prog is not None and od.target_1 is not None
-                                  else f"reached {prog_f:.8g} before pullback")
-                        rows.append(self._admin_row(
-                            od, int(ts), kind="CANCEL",
-                            reason_code="MOVE_ALREADY_PLAYED_OUT",
-                            detail=detail))
-                        continue
-                near_px = od.meta.get("near_price")
-                if near_px is not None:
-                    exact_cross = (h > od.limit_price) if od.direction < 0 else (l < od.limit_price)
-                    near_f = float(near_px)
-                    near_hit = (l <= near_f) if od.direction > 0 else (h >= near_f)
-                    bounce_ok = (c > o and c >= near_f) if od.direction > 0 else (c < o and c <= near_f)
-                    if (not exact_cross) and near_hit and bounce_ok:
-                        od.wait_bars += 1
-                        if int(ts) <= od.armed_at_ts:
-                            raise AssertionError(
-                                f"trigger ts {ts} <= armed_at_ts {od.armed_at_ts}")
-                        od.limit_price = float(c)
-                        self.resting[symbol].remove(od)
-                        rows.append(self._trigger_to_pending(od, int(ts)))
-                        continue
             od.wait_bars += 1
-            cross = (h > od.limit_price) if od.direction < 0 \
-                else (l < od.limit_price)
+            cross = (h > od.limit_price) if od.direction < 0 else (lo < od.limit_price)
             if not cross:                             # 严格穿过;持平不成交
                 kept.append(od)
                 continue
-            if int(ts) <= od.armed_at_ts:             # 因果硬断言:成交晚于武装
-                raise AssertionError(
-                    f"limit fill ts {ts} <= armed_at_ts {od.armed_at_ts}")
+            if ts_int <= od.armed_at_ts:             # 因果硬断言:成交晚于武装
+                raise AssertionError(f"limit fill ts {ts_int} <= armed_at_ts {od.armed_at_ts}")
             self.resting[symbol].remove(od)
-            row = (self._fill_open_limit(od, int(ts)) if od.role == "entry"
-                   else self._fill_reduce_limit(od, int(ts)))
+            row = (
+                self._fill_open_limit(od, ts_int)
+                if od.role == "entry"
+                else self._fill_reduce_limit(od, ts_int)
+            )
             rows.append(row)
         if kept:
             self.resting[symbol] = kept
@@ -627,35 +619,26 @@ class Broker:
             raise ValueError("stop may not be loosened")
         pos.invalid = float(invalid)
 
+    def _update_peak_cash(self) -> float:
+        realized = float(self.cash)
+        hwm = max(realized, float(getattr(self, "peak_cash", realized) or realized))
+        self.peak_cash = hwm
+        return hwm
+
     def current_risk_frac(self) -> float:
         """基于历史最高已落袋本金(High-Water Mark)的单向降档阶梯动态单笔风险率;禁止回撤期逆向升档加仓。"""
         if not self.dynamic_risk_tiers:
             return self.risk_frac
-        realized = float(self.cash)
-        hwm = max(realized, float(getattr(self, "peak_cash", realized) or realized))
-        self.peak_cash = hwm
-        for max_cash, r_frac in self.dynamic_risk_tiers:
-            if hwm <= max_cash:
-                return r_frac
-        return self.dynamic_risk_tiers[-1][1]
+        return capacity.resolve_dynamic_risk_tier(
+            self._update_peak_cash(), self.dynamic_risk_tiers, self.risk_frac
+        )
 
     def risk_capital(self) -> float:
-        """可承担风险的资本 = 已落袋现金;浮盈不是本金。
-
-        两个口径必须分开,否则同一个数字会同时被当成两种东西:
-
-        - **风险资本**:亏得起多少。只有已实现现金才算。浮盈是市场暂时借给
-          你的估值,价格回吐就消失,不能拿它当"已经拥有"的钱去放大下一笔。
-        - **偿付能力**:能撑多大名义仓位。用盯市权益(含浮盈)。浮盈可以撑保证金,
-          这是事实;但它不改变"这笔钱还不是你的"。
-
-        与 ``current_risk_frac`` 同源(档位本来就按现金选),避免"用现金选档、
-        用含浮盈权益算金额"的自相矛盾。
-        """
+        """可承担风险的资本 = 已落袋现金;浮盈不是本金。"""
         return max(0.0, float(self.cash) - self.funding_accrued())
 
     # -- 风险预算:唯一口径见 capacity 模块 ---------------------------------
-    def _budget_headroom(self, equity: float, symbol: Optional[str], *,
+    def _budget_headroom(self, equity: float, symbol: str | None, *,
                          moment: str) -> tuple[float, str, float]:
         """各生效池剩余额度的最小值:``(剩余, 最紧池名, 该池上限占比)``。"""
         headroom, name, frac = capacity.budget_headroom(
@@ -672,16 +655,16 @@ class Broker:
         return headroom, name, frac
 
     def available_risk_budget(self, equity: float,
-                              symbol: Optional[str] = None) -> float:
+                              symbol: str | None = None) -> float:
         """成交时刻仍可占用的最坏情景额度;``inf`` = 未配置容量上限。"""
         return self._budget_headroom(equity, symbol, moment=capacity.FILL)[0]
 
     def _available_stop_risk(self, equity: float,
-                             symbol: Optional[str] = None) -> float:
-        """历史接缝名:冻结诊断脚本在此 monkeypatch,语义 = 成交时刻剩余预算。"""
+                             symbol: str | None = None) -> float:
+        """历史接缝名:语义 = 成交时刻剩余预算。"""
         return self.available_risk_budget(equity, symbol)
 
-    def capacity_usage(self, equity: float, symbol: Optional[str] = None, *,
+    def capacity_usage(self, equity: float, symbol: str | None = None, *,
                        moment: str = capacity.DECISION
                        ) -> tuple[float, float, float, str]:
         """``(上限占比, 已占用, 剩余, 最紧池名)``;未配置上限时剩余为 inf。"""
@@ -693,14 +676,7 @@ class Broker:
 
     def claim_headroom(self, symbol: str, direction: int, capital: float,
                        *, moment: str = "fill") -> tuple[float, str, float]:
-        """同一"标的×方向"的市场判断,共享同一份预算。
-
-        语义:周期是观察尺度,不是账户。ETH@2h/@4h/@12h/@1d 同时做空,是**同一笔**
-        对 ETH 下跌的下注被四个尺度各确认了一次,不是四份独立风险。因此它们共用
-        一份预算(取该主张所属周期的比例),而不是每个周期各拿一份。
-
-        返回 ``(剩余额度, 池名, 上限占比)``;未配置周期比例 ⇒ ``inf``(不限)。
-        """
+        """同一"标的×方向"的市场判断,共享同一份预算。"""
         tf = capacity.timeframe_of(symbol)
         frac = self.risk_budget.per_timeframe_frac.get(tf) if tf else None
         if frac is None:
@@ -713,22 +689,21 @@ class Broker:
             if capacity.symbol_root(key) != root or pos.direction != direction:
                 continue
             mk = float(self.last_mark.get(key, pos.entry))
-            if cb:
-                ref_px = min(float(pos.entry), mk) if pos.direction > 0 else max(float(pos.entry), mk)
-                dist = capacity.stop_distance(pos.direction, ref_px, pos.invalid)
-                exp = (capacity.Exposure(stop_loss=math.inf, exit_cost=0.0) if not math.isfinite(dist)
-                       else capacity.Exposure(stop_loss=pos.qty * dist,
-                                              exit_cost=pos.qty * mk * (self.taker_fee + self.slippage)))
-            else:
-                exp = capacity.position_exposure(
-                    pos.qty, pos.direction, mk,
-                    pos.invalid, taker_fee=self.taker_fee,
-                    slippage=self.slippage)
+            exp = capacity.single_position_exposure(
+                pos.qty,
+                pos.direction,
+                float(pos.entry),
+                mk,
+                pos.invalid,
+                taker_fee=self.taker_fee,
+                slippage=self.slippage,
+                cash_basis=cb,
+            )
             used += exp.measure(include_costs=include_costs)
         headroom = float(frac) * float(capital) - used
         return headroom, f"claim:{root}:{direction:+d}", float(frac)
 
-    def opposite_claim_open(self, symbol: str, direction: int) -> Optional[str]:
+    def opposite_claim_open(self, symbol: str, direction: int) -> str | None:
         """同标的是否已有反向在仓(若低周期反向仓已排队 EXIT 正在升格/反转交接,则不阻塞高周期接管)。"""
         root = capacity.symbol_root(symbol)
         for key, pos in self.positions.items():
@@ -756,8 +731,8 @@ class Broker:
 
     def qty_within_risk_budget(self, equity: float, price: float,
                                risk_per_unit: float,
-                               symbol: Optional[str] = None,
-                               direction: Optional[int] = None) -> float:
+                               symbol: str | None = None,
+                               direction: int | None = None) -> float:
         """按成交时刻口径反解数量(与决策门同一分母,故两边同解)。
 
         ``direction`` 非 None 时,额外受"同一标的×方向的主张预算"约束。
@@ -772,11 +747,11 @@ class Broker:
             taker_fee=self.taker_fee, slippage=self.slippage,
             include_costs=self.risk_budget.includes_costs(capacity.FILL))
 
-    def qty_for_entry(self, capital: float, price: float, stop: Optional[float],
-                      symbol: Optional[str] = None, *, size_mult: float = 1.0,
+    def qty_for_entry(self, capital: float, price: float, stop: float | None,
+                      symbol: str | None = None, *, size_mult: float = 1.0,
                       use_budget: bool = True,
-                      notional_equity: Optional[float] = None,
-                      direction: Optional[int] = None) -> float:
+                      notional_equity: float | None = None,
+                      direction: int | None = None) -> float:
         """统一建仓数量 = 单笔风险 ∩ 账户名义上限 (∩ 风险预算),未取整。
 
         ``capital`` 是**风险资本**(已落袋现金),决定"亏得起多少";
@@ -788,8 +763,15 @@ class Broker:
         risk_per_unit = abs(price - stop) if stop is not None else 0.0
         if risk_per_unit <= 0.0 or capital <= 0.0:
             return 0.0
+        corr_mult = 1.0
+        corr_fn = getattr(self, "corr_size_fn", None)
+        if corr_fn is not None and symbol is not None and direction is not None:
+            corr_mult = float(corr_fn(self, symbol, int(direction)))
+        eff_size_mult = capacity.cap_effective_size_multiplier(
+            size_mult, corr_mult, getattr(self, "max_eff_size_mult", None)
+        )
         solvency = float(capital) if notional_equity is None else float(notional_equity)
-        qty = min(self.current_risk_frac() * size_mult * capital / risk_per_unit,
+        qty = min(self.current_risk_frac() * eff_size_mult * capital / risk_per_unit,
                   self._available_entry_notional(solvency) / price)
         if use_budget:
             qty = min(qty, self.qty_within_risk_budget(capital, price,
@@ -798,9 +780,9 @@ class Broker:
         return max(0.0, qty)
 
     def directional_usage(self, direction: int, *, moment: str,
-                          capital: Optional[float] = None,
-                          notional_equity: Optional[float] = None,
-                          symbol: Optional[str] = None) -> float:
+                          capital: float | None = None,
+                          notional_equity: float | None = None,
+                          symbol: str | None = None) -> float:
         """同向在仓 + 活跃 OPEN/entry 意图;不维护额外预留状态。
 
         传入 ``symbol`` 时按合约原生资产类别(``crypto`` vs ``rwa``)独立计量同向相关性桶与同类别反向对冲,
@@ -809,14 +791,18 @@ class Broker:
         include_costs = self.risk_budget.includes_costs(moment)
         cb = self.risk_budget.cash_principal_basis
         ac = capacity.asset_class_of(symbol, self.contracts) if symbol is not None else None
+        active_positions = {
+            k: p for k, p in self.positions.items()
+            if not any(po.intent.kind is OrderKind.EXIT for po in self.pending.get(k, ()))
+        }
         used = capacity.outstanding_exposure(
-            self.positions, self.last_mark, direction=direction,
+            active_positions, self.last_mark, direction=direction,
             asset_class=ac, contracts=self.contracts,
             taker_fee=self.taker_fee, slippage=self.slippage,
             cash_basis=cb).measure(include_costs=include_costs)
         if self.risk_budget.net_directional_hedge:
             opp_filled = capacity.outstanding_exposure(
-                self.positions, self.last_mark, direction=-direction,
+                active_positions, self.last_mark, direction=-direction,
                 asset_class=ac, contracts=self.contracts,
                 taker_fee=self.taker_fee, slippage=self.slippage,
                 cash_basis=cb).measure(include_costs=include_costs)
@@ -846,8 +832,8 @@ class Broker:
 
     def directional_blocked(self, direction: int, price: float,
                             stop: float, symbol: str, *, moment: str,
-                            meta: Optional[dict] = None,
-                            qty: Optional[float] = None) -> bool:
+                            meta: Mapping[str, Any] | None = None,
+                            qty: float | None = None) -> bool:
         """同向上限只作整笔拒绝,绝不混入普通预算的数量裁剪。"""
         frac = self.risk_budget.directional_cap_frac
         if frac is None:
@@ -866,7 +852,37 @@ class Broker:
                                       notional_equity=equity, symbol=symbol)
         return used + delta > frac * capital + 1e-9
 
-    def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict:
+    def _factor_burst_rejection(self, sym: str, ts: int, direction: int) -> tuple[str, str] | None:
+        """Check 1h/4h per-(asset_class, direction) burst fill caps."""
+        if self.factor_burst_cap_1h <= 0 and self.factor_burst_cap_4h <= 0:
+            return None
+        ac = capacity.asset_class_of(sym, self.contracts)
+        b1 = (ac, int(ts) // MS_PER_HOUR, int(direction))
+        if self.factor_burst_cap_1h > 0 and self._burst_fills_1h.get(b1, 0) >= self.factor_burst_cap_1h:
+            return (
+                "FACTOR_BURST_CAP_1H",
+                f"1h factor leader cap ({self.factor_burst_cap_1h}) reached for {ac}:{direction:+d}",
+            )
+        b4 = (ac, int(ts) // MS_4H, int(direction))
+        if self.factor_burst_cap_4h > 0 and self._burst_fills_4h.get(b4, 0) >= self.factor_burst_cap_4h:
+            return (
+                "FACTOR_BURST_CAP_4H",
+                f"4h factor leader cap ({self.factor_burst_cap_4h}) reached for {ac}:{direction:+d}",
+            )
+        return None
+
+    def _record_factor_burst_fill(self, sym: str, ts: int, direction: int) -> None:
+        if self.factor_burst_cap_1h <= 0 and self.factor_burst_cap_4h <= 0:
+            return
+        ac = capacity.asset_class_of(sym, self.contracts)
+        if self.factor_burst_cap_1h > 0:
+            b1 = (ac, int(ts) // MS_PER_HOUR, int(direction))
+            self._burst_fills_1h[b1] = self._burst_fills_1h.get(b1, 0) + 1
+        if self.factor_burst_cap_4h > 0:
+            b4 = (ac, int(ts) // MS_4H, int(direction))
+            self._burst_fills_4h[b4] = self._burst_fills_4h.get(b4, 0) + 1
+
+    def _fill_open_limit(self, od: RestingLimitOrder, ts: int) -> dict[str, Any]:
         """入场挂单成交:limit_price 精确成交(无滑点),maker 费,sizing 同 OPEN。"""
         sym = od.symbol
         spec = self.contracts[sym]
@@ -878,30 +894,26 @@ class Broker:
         if error:
             return self._limit_skip(od, ts, error, "structure entry contract failed", ref)
         if sym in self.positions:
-            return self._limit_skip(od, ts, "DUP_POSITION",
-                                    f"position already open for {sym}", ref)
+            return self._limit_skip(od, ts, "DUP_POSITION", f"position already open for {sym}", ref)
         if d * (price - od.invalid) <= 0.0:
-            return self._limit_skip(od, ts, "BAD_INVALID",
-                                    f"limit {price} not protective vs "
-                                    f"invalid={od.invalid}", ref)
-        equity = self.equity_mtm()        # 偿付能力:含浮盈
-        capital = self.risk_capital()     # 风险资本:已落袋现金
+            return self._limit_skip(od, ts, "BAD_INVALID", f"limit {price} not protective vs invalid={od.invalid}", ref)
+        equity = self.equity_mtm()
+        capital = self.risk_capital()
         risk_per_unit = abs(price - od.invalid)
         opposite = self.opposite_claim_open(sym, d)
         if opposite is not None:
-            return self._limit_skip(od, ts, "OPPOSITE_CLAIM",
-                                    f"opposite claim already open: {opposite}", ref)
-        # v14 C5/C4:size_mult(quality tier × 1/切份数;缺省 1.0 ⇒ 逐位旧口径)
+            return self._limit_skip(od, ts, "OPPOSITE_CLAIM", f"opposite claim already open: {opposite}", ref)
         size_mult = float(od.meta.get("size_mult", 1.0) or 1.0)
-        qty = floor_step(self.qty_for_entry(capital, price, od.invalid, sym,
-                                             size_mult=size_mult,
-                                             notional_equity=equity,
-                                             direction=d),
-                          spec.size_step, spec.size_place)
-        if self.directional_blocked(d, price, od.invalid, sym,
-                                    moment=capacity.FILL, qty=qty):
-            return self._limit_skip(od, ts, "DIRECTIONAL_CAP",
-                                    "actual fill exceeds same-direction budget", ref)
+        qty = floor_step(
+            self.qty_for_entry(capital, price, od.invalid, sym, size_mult=size_mult, notional_equity=equity, direction=d),
+            spec.size_step,
+            spec.size_place,
+        )
+        if self.directional_blocked(d, price, od.invalid, sym, moment=capacity.FILL, qty=qty):
+            return self._limit_skip(od, ts, "DIRECTIONAL_CAP", "actual fill exceeds same-direction budget", ref)
+        burst_err = self._factor_burst_rejection(sym, ts, d)
+        if burst_err is not None:
+            return self._limit_skip(od, ts, burst_err[0], burst_err[1], ref)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
             return self._limit_skip(
@@ -918,6 +930,7 @@ class Broker:
                             decision_ts=int(od.armed_at_ts))
         self.positions[sym] = pos
         self.last_mark[sym] = price
+        self._record_factor_burst_fill(sym, ts, d)
         meta = dict(od.meta)
         meta.update({"invalid": od.invalid, "target_1": od.target_1,
                      "event_id": od.event_id, "risk_usdt": qty * risk_per_unit,
@@ -960,13 +973,14 @@ class Broker:
             self.cash -= pos.funding_acc
             pos.funding_acc = 0.0
         self.cash += pnl - fee
+        self._update_peak_cash()
         pos.qty -= qty
         if full:
             self.positions.pop(sym, None)
         self.last_mark[sym] = price
         meta = dict(od.meta)
         meta.update({"role": "reduce", "limit_price": od.limit_price,
-                     "fill_wait_bars": od.wait_bars})
+                     "fill_wait_bars": od.wait_bars, "full_close": bool(full)})
         row = {
             "seq": self._next_seq_row(), "ts": int(ts), "symbol": sym,
             "side": side, "kind": "LIMIT_FILL", "qty": qty, "price": price,
@@ -1043,8 +1057,8 @@ class Broker:
             self.pending.pop(symbol, None)
         return rows
 
-    def _slip_for(self, symbol: Optional[str]) -> float:
-        """该标的每边滑点(E1):分标的表 > 全局 ``slippage``。"""
+    def _slip_for(self, symbol: str | None) -> float:
+        """该标的每边滑点:分标的表 > 全局 ``slippage``。"""
         if symbol and self.slippage_by_symbol:
             root = capacity.symbol_root(symbol)
             if root in self.slippage_by_symbol:
@@ -1052,13 +1066,12 @@ class Broker:
         return self.slippage
 
     def _slipped(self, price: float, side: str,
-                 symbol: Optional[str] = None) -> float:
+                 symbol: str | None = None) -> float:
         """对成交方向不利的滑点(买入更贵,卖出更廉)。"""
         slip = self._slip_for(symbol)
-        return price * (1.0 + slip) if side == "buy" \
-            else price * (1.0 - slip)
+        return price * (1.0 + slip) if side == "buy" else price * (1.0 - slip)
 
-    def _fill_open(self, po: _Pending, ts: int, o: float) -> dict:
+    def _fill_open(self, po: _Pending, ts: int, o: float) -> dict[str, Any]:
         sym = po.intent.symbol
         spec = self.contracts[sym]
         d = po.direction
@@ -1069,40 +1082,33 @@ class Broker:
             return self._skip_row(po, ts, error, "structure entry contract failed", price=price)
 
         if sym in self.positions:
-            return self._skip_row(po, ts, "DUP_POSITION",
-                                  f"position already open for {sym}", price=price)
+            return self._skip_row(po, ts, "DUP_POSITION", f"position already open for {sym}", price=price)
         if d * (price - po.invalid) <= 0.0:
-            return self._skip_row(po, ts, "BAD_INVALID",
-                                  f"fill {price} not protective vs "
-                                  f"invalid={po.invalid}", price=price)
+            return self._skip_row(po, ts, "BAD_INVALID", f"fill {price} not protective vs invalid={po.invalid}", price=price)
 
-        equity = self.equity_mtm()        # 偿付能力:含浮盈,用于杠杆/名义上限
-        capital = self.risk_capital()     # 风险资本:只认已落袋现金
+        equity = self.equity_mtm()
+        capital = self.risk_capital()
         risk_per_unit = abs(price - po.invalid)
-        # 同一标的不能同时持两个相反主张:那等于账户付两份钱等两个相反的答案
         opposite = self.opposite_claim_open(sym, po.direction)
         if opposite is not None:
-            return self._skip_row(po, ts, "OPPOSITE_CLAIM",
-                                  f"opposite claim already open: {opposite}",
-                                  price=price)
-        # v14 C5:size_mult(quality tier;缺省 1.0 ⇒ 逐位旧口径)
+            return self._skip_row(po, ts, "OPPOSITE_CLAIM", f"opposite claim already open: {opposite}", price=price)
         size_mult = float(po.meta.get("size_mult", 1.0) or 1.0)
-        qty = floor_step(self.qty_for_entry(capital, price, po.invalid, sym,
-                                             size_mult=size_mult,
-                                             notional_equity=equity,
-                                             direction=po.direction),
-                          spec.size_step, spec.size_place)
-        if self.directional_blocked(d, price, po.invalid, sym,
-                                    moment=capacity.FILL, qty=qty):
-            return self._skip_row(po, ts, "DIRECTIONAL_CAP",
-                                  "actual fill exceeds same-direction budget", price=price)
+        qty = floor_step(
+            self.qty_for_entry(capital, price, po.invalid, sym, size_mult=size_mult, notional_equity=equity, direction=po.direction),
+            spec.size_step,
+            spec.size_place,
+        )
+        if self.directional_blocked(d, price, po.invalid, sym, moment=capacity.FILL, qty=qty):
+            return self._skip_row(po, ts, "DIRECTIONAL_CAP", "actual fill exceeds same-direction budget", price=price)
+        burst_err = self._factor_burst_rejection(sym, ts, d)
+        if burst_err is not None:
+            return self._skip_row(po, ts, burst_err[0], burst_err[1], price=price)
         notional = qty * price
         if qty < spec.size_min or notional < spec.min_trade_usdt:
-            return self._skip_row(po, ts, "MIN_SIZE",
-                                  f"qty={qty} < size_min={spec.size_min} or "
-                                  f"notional={notional:.4f} < "
-                                  f"min_trade_usdt={spec.min_trade_usdt}",
-                                  price=price)
+            return self._skip_row(
+                po, ts, "MIN_SIZE",
+                f"qty={qty} < size_min={spec.size_min} or notional={notional:.4f} < min_trade_usdt={spec.min_trade_usdt}",
+                price=price)
 
         fee = notional * self.taker_fee
         self.cash -= fee
@@ -1114,6 +1120,7 @@ class Broker:
                             decision_ts=po.decision_ts)
         self.positions[sym] = pos
         self.last_mark[sym] = price
+        self._record_factor_burst_fill(sym, ts, d)
         meta = dict(po.meta)
         meta.update({"invalid": po.invalid, "target_1": po.target_1,
                      "event_id": po.event_id, "risk_usdt": qty * risk_per_unit})
@@ -1141,46 +1148,50 @@ class Broker:
                                full=(qty >= pos.qty or
                                      po.intent.kind is OrderKind.EXIT))
 
-    def _fill_add(self, po: _Pending, ts: int, o: float) -> dict:
+    def _fill_pyramid_add(
+        self, po: _Pending, pos: _AcctPosition, ts: int, o: float, price: float, side: str, requested: float, equity: float
+    ) -> dict[str, Any]:
+        sym = po.intent.symbol
+        spec = self.contracts[sym]
+        d = pos.direction
+        if d * (price - pos.entry) <= 0.0:
+            return self._skip_row(po, ts, "ADD_NO_PROFIT", "pyramid fill not in profit", price=price)
+        if pos.invalid is None or d * (price - pos.invalid) <= 0.0:
+            return self._skip_row(po, ts, "BAD_INVALID", "pyramid fill beyond protective stop", price=price)
+        capital = self.risk_capital()
+        risk_u = d * (price - pos.invalid)
+        cap_qty = min(
+            self._available_entry_notional(equity) / price,
+            self.qty_within_risk_budget(capital, price, risk_u, sym, d),
+        )
+        qty = floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
+        if qty < spec.size_min or qty * price < spec.min_trade_usdt:
+            return self._skip_row(po, ts, "MIN_SIZE", "pyramid add below min size or budget", price=price)
+        if self.directional_blocked(d, price, pos.invalid, sym, moment=capacity.FILL, qty=qty):
+            return self._skip_row(po, ts, "DIRECTIONAL_CAP", "pyramid add exceeds directional cap", price=price)
+        fee = qty * price * self.taker_fee
+        self.cash -= fee
+        pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
+        pos.qty += qty
+        pos.adds_done += 1
+        self.last_mark[sym] = price
+        return self._row(po, ts, sym, side, "ADD", qty, price, o, fee,
+                         0.0, 0.0, pos.trade_id, meta=dict(po.meta))
+
+    def _fill_add(self, po: _Pending, ts: int, o: float) -> dict[str, Any]:
         sym = po.intent.symbol
         pos = self.positions.get(sym)
         if pos is None:
-            return self._skip_row(po, ts, "NO_POSITION",
-                                  f"no open position for {sym}")
+            return self._skip_row(po, ts, "NO_POSITION", f"no open position for {sym}")
         side = "buy" if pos.direction > 0 else "sell"
         price = self._slipped(o, side, sym)
         spec = self.contracts[sym]
         requested = (po.intent.qty_frac or 0.0) * pos.open_qty
         equity = self.equity_mtm()
-        cap_qty = self._available_entry_notional(equity) / price
-        # 加仓与建仓共用同一预算。admission_full_cost 复现现行口径(仅在配置了
-        # 账户池时钳制,且只按账户池);full_cost / stop_risk 让周期池同样生效。
         if po.meta.get("role") == "pyramid_add":
-            d = pos.direction
-            if d * (price - pos.entry) <= 0.0:
-                return self._skip_row(po, ts, "ADD_NO_PROFIT", "pyramid fill not in profit", price=price)
-            if pos.invalid is None or d * (price - pos.invalid) <= 0.0:
-                return self._skip_row(po, ts, "BAD_INVALID", "pyramid fill beyond protective stop", price=price)
-            capital = self.risk_capital()
-            risk_u = d * (price - pos.invalid)
-            cap_qty = min(
-                self._available_entry_notional(equity) / price,
-                self.qty_within_risk_budget(capital, price, risk_u, sym, d),
-            )
-            qty = floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
-            if qty < spec.size_min or qty * price < spec.min_trade_usdt:
-                return self._skip_row(po, ts, "MIN_SIZE", "pyramid add below min size or budget", price=price)
-            if self.directional_blocked(d, price, pos.invalid, sym, moment=capacity.FILL, qty=qty):
-                return self._skip_row(po, ts, "DIRECTIONAL_CAP", "pyramid add exceeds directional cap", price=price)
-            fee = qty * price * self.taker_fee
-            self.cash -= fee
-            pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
-            pos.qty += qty
-            pos.adds_done += 1
-            self.last_mark[sym] = price
-            return self._row(po, ts, sym, side, "ADD", qty, price, o, fee,
-                             0.0, 0.0, pos.trade_id, meta=dict(po.meta))
+            return self._fill_pyramid_add(po, pos, ts, o, price, side, requested, equity)
 
+        cap_qty = self._available_entry_notional(equity) / price
         if self.risk_budget.mode == capacity.ADMISSION_FULL_COST:
             constrained = self.portfolio_stop_risk_frac is not None
             scope = None
@@ -1191,35 +1202,27 @@ class Broker:
             if pos.invalid is None or pos.direction * (price - pos.invalid) <= 0:
                 return self._skip_row(po, ts, "BAD_INVALID", "add without protective stop")
             risk_per_unit = pos.direction * (price - pos.invalid)
-            cap_qty = min(cap_qty, self.qty_within_risk_budget(
-                equity, price, risk_per_unit, scope))
-
+            cap_qty = min(cap_qty, self.qty_within_risk_budget(equity, price, risk_per_unit, scope))
 
         qty = floor_step(min(requested, cap_qty), spec.size_step, spec.size_place)
         if qty < spec.size_min or qty * price < spec.min_trade_usdt:
-            return self._skip_row(po, ts, "MIN_SIZE",
-                                  "add exceeds portfolio gross-leverage budget "
-                                  "or exchange minimum")
+            return self._skip_row(
+                po, ts, "MIN_SIZE", "add exceeds portfolio gross-leverage budget or exchange minimum"
+            )
         new_invalid = pos.invalid
         if po.meta.get("role") == "deferred_add":
             candidate = po.meta.get("add_invalid")
             if candidate is None or new_invalid is None:
-                return self._skip_row(po, ts, "BAD_INVALID",
-                                      "deferred add missing structural stop")
+                return self._skip_row(po, ts, "BAD_INVALID", "deferred add missing structural stop")
             candidate = float(candidate)
-            new_invalid = (min(new_invalid, candidate) if pos.direction < 0
-                           else max(new_invalid, candidate))
+            new_invalid = min(new_invalid, candidate) if pos.direction < 0 else max(new_invalid, candidate)
             if pos.direction * (price - new_invalid) <= 0.0:
-                return self._skip_row(po, ts, "BAD_INVALID",
-                                      "actual add fill beyond protective stop")
-            # Decision-time approval is not sufficient: gap/slippage can turn
-            # the real fill into a risk-increasing addition. Reject at fill.
+                return self._skip_row(po, ts, "BAD_INVALID", "actual add fill beyond protective stop")
             before = pos.direction * (pos.entry - pos.invalid) * pos.qty
             after = (pos.direction * (pos.entry - new_invalid) * pos.qty
                      + pos.direction * (price - new_invalid) * qty)
             if after > before + 1e-9:
-                return self._skip_row(po, ts, "ADD_RISK",
-                                      "actual fill violates risk-neutral add")
+                return self._skip_row(po, ts, "ADD_RISK", "actual fill violates risk-neutral add")
         fee = qty * price * self.taker_fee
         self.cash -= fee
         pos.entry = (pos.qty * pos.entry + qty * price) / (pos.qty + qty)
@@ -1245,6 +1248,7 @@ class Broker:
             self.cash -= pos.funding_acc
             pos.funding_acc = 0.0
         self.cash += pnl - fee
+        self._update_peak_cash()
         pos.qty -= qty
         if full:
             self.positions.pop(sym, None)
@@ -1255,7 +1259,7 @@ class Broker:
                          funding_delta, pnl, pos.trade_id, meta=dict(po.meta))
 
     def execute_protective_stop(self, symbol: str, ts: int, open_price: float,
-                                high: float, low: float) -> Optional[dict]:
+                                high: float, low: float) -> dict[str, Any] | None:
         """15m native stop-market: actually close, not 1h close-only invalidation.
 
         Stop is live immediately after a confirmed entry fill. The stop fill
@@ -1372,7 +1376,7 @@ class Broker:
         """realized_cash + Σ未实现盈亏 − Σ已计提未结算资金费。"""
         return self.cash + self.unrealized() - self.funding_accrued()
 
-    def position_of(self, symbol: str) -> Optional[_AcctPosition]:
+    def position_of(self, symbol: str) -> _AcctPosition | None:
         return self.positions.get(symbol)
 
     # -- 账本 -----------------------------------------------------------------
@@ -1384,8 +1388,8 @@ class Broker:
     def _row(self, po: _Pending, ts: int, sym: str, side: str, kind: str,
              qty: float, price: float, open_price: float, fee: float,
              funding_delta: float, realized_pnl: float, trade_id: str,
-             used_leverage: Optional[float] = None, meta: Optional[dict] = None,
-             reason_code: Optional[str] = None) -> dict:
+             used_leverage: float | None = None, meta: dict[str, Any] | None = None,
+             reason_code: str | None = None) -> dict[str, Any]:
         row = {
             "seq": self._next_seq_row(), "ts": int(ts), "symbol": sym,
             "side": side, "kind": kind, "qty": qty, "price": price,
@@ -1400,7 +1404,7 @@ class Broker:
         return row
 
     def _skip_row(self, po: _Pending, ts: int, code: str, detail: str,
-                  price: Optional[float] = None, qty: float = 0.0) -> dict:
+                  price: float | None = None, qty: float = 0.0) -> dict[str, Any]:
         self.n_skips[code] = self.n_skips.get(code, 0) + 1
         return {
             "seq": self._next_seq_row(), "ts": int(ts),

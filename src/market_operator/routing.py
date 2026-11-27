@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from types import MappingProxyType
+from typing import Any
 
 from .broker import OrderIntent, OrderKind
 from .events import (
@@ -33,16 +35,15 @@ from .hypothesis import (
     StructureView,
     build_hypothesis,
     entry_contract_error,
-    entry_cost_error,
 )
-from .level import Level, LevelKind, LevelRole, LevelSide, nearest_opposing_level
+from .level import Level, LevelKind, LevelRole, LevelSide
 from .structure import BarrierTopology, Regime, _bar_parts
 
 
 def infer_2d_barrier_topology(
     cur_price: float,
     view: StructureView,
-    probe_price: Optional[float] = None,
+    probe_price: float | None = None,
 ) -> tuple[BarrierTopology, Level | None, Level | None]:
     """零参数二维势垒包络与失衡状态机。"""
     dominant_levels = [
@@ -63,44 +64,63 @@ def infer_2d_barrier_topology(
     nearest_sup = max(supports, key=lambda x: x.band_hi) if supports else None
     nearest_res = min(resistances, key=lambda x: x.band_lo) if resistances else None
 
-    # 1. 若显式传入试探极值(如高周期墙面对决校验)且打入主导势垒结构带 [band_lo, band_hi] 内，进入墙面对决态
     if probe_price is not None:
         px_lo, px_hi = min(cur_price, probe_price), max(cur_price, probe_price)
         for lv in dominant_levels:
             if lv.band_lo <= px_hi and px_lo <= lv.band_hi:
                 return BarrierTopology.BARRIER_CONTEST, nearest_sup, nearest_res
 
-    # 2. 净空失衡推进态：本周期处于单边失衡推进
     if view.regime is Regime.TREND_UP:
         return BarrierTopology.IMBALANCE_UP, nearest_sup, nearest_res
     if view.regime is Regime.TREND_DOWN:
         return BarrierTopology.IMBALANCE_DOWN, nearest_sup, nearest_res
 
-    # 3. 若价格当前正处于任意主导势垒的结构带 [band_lo, band_hi] 内，进入墙面对决态
     for lv in dominant_levels:
         if lv.band_lo <= cur_price <= lv.band_hi:
             return BarrierTopology.BARRIER_CONTEST, nearest_sup, nearest_res
 
-    # 4. 结构包络域（支持双向水平位本位博弈）
     return BarrierTopology.ENCLOSED_BALANCE, nearest_sup, nearest_res
+
+
+def blocked_by_market_breadth(
+    direction: int, own_regime: Regime, breadth: float, n_universe: int
+) -> bool:
+    """系统性风暴保护(纯粹过半数原则 Majority > 50%,零小数魔法常数)。"""
+    if n_universe < 4:
+        return False
+    if direction > 0 and own_regime is Regime.TREND_UP:
+        return False
+    if direction < 0 and own_regime is Regime.TREND_DOWN:
+        return False
+    if direction > 0 and breadth < -0.5:
+        return True
+    if direction < 0 and breadth > 0.5:
+        return True
+    return False
+
 
 ROUTE_BREAKOUT_ACCEPTED = "breakout_accepted_market"
 ROUTE_LEVEL_REJECTED = "level_rejected_market"
 ROUTE_BREAKOUT_ACCEPTED_LIMIT = "breakout_accepted_limit"
 ROUTE_LEVEL_REJECTED_LIMIT = "level_rejected_limit"
 
-WHITELIST_DEFAULT = frozenset({
+WHITELIST_DEFAULT: frozenset[tuple[str, int]] = frozenset({
     (BREAKOUT_ACCEPTED, -1),
     (BREAKOUT_ACCEPTED, +1),
     (LEVEL_REJECTED, -1),
     (LEVEL_REJECTED, +1),
 })
 
-SIGNAL_COUNTERS = {
+SIGNAL_COUNTERS: Mapping[str, str] = MappingProxyType({
     BREAKOUT_ACCEPTED: "breakout_accepted_signals",
     LEVEL_REJECTED: "level_rejected_signals",
     STRUCTURE_BROKEN: "structure_broken_signals",
-}
+})
+
+_THIRD = 1.0 / 3.0
+_TWO_THIRDS = 2.0 / 3.0
+_MIN_BREADTH_UNIVERSE = 4
+_CONVICTION_MAX_PTS = 6
 
 
 @dataclass(frozen=True)
@@ -110,12 +130,13 @@ class RouterParams:
     k_bm: float = 0.15
     min_rr: float = 2.0
     htf_wall_check: bool = True
-    cost_per_side: float = 0.0008
-    max_cost_frac: Optional[float] = 0.12
-    whitelist: frozenset = WHITELIST_DEFAULT
+    cost_per_side: float | None = 0.0
+    max_cost_frac: float | None = 0.12
+    conviction_sizing: bool = False
+    whitelist: frozenset[tuple[str, int]] = WHITELIST_DEFAULT
 
     @property
-    def _normalized_whitelist(self) -> frozenset:
+    def _normalized_whitelist(self) -> frozenset[tuple[str, int]]:
         return frozenset((canonical_event_id(eid), int(d)) for eid, d in self.whitelist)
 
 
@@ -125,15 +146,15 @@ class RouteDecision:
 
     kind: str                       # "market" | "limit" | "cancel_entry"
     route: str = ""
-    intent: Optional[OrderIntent] = None
-    hyp: Optional[Hypothesis] = None
-    limit_price: Optional[float] = None
-    meta: dict = field(default_factory=dict)
+    intent: OrderIntent | None = None
+    hyp: Hypothesis | None = None
+    limit_price: float | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
-def _level_provenance(ev: MarketEvent, view: StructureView) -> dict:
-    lv: Optional[Level] = ev.attrs.get("level") or ev.attrs.get("zone")
-    prov: dict = {
+def _level_provenance(ev: MarketEvent, view: StructureView) -> dict[str, Any]:
+    lv: Level | None = ev.attrs.get("level") or ev.attrs.get("zone")
+    prov: dict[str, Any] = {
         "event_extreme": ev.attrs.get("ex"),
         "event_sub_kind": ev.attrs.get("sub_kind"),
         "sub_kind": ev.attrs.get("sub_kind"),
@@ -165,13 +186,64 @@ def _level_provenance(ev: MarketEvent, view: StructureView) -> dict:
     return prov
 
 
+def _is_backed_by_htf_wall(
+    hv: StructureView, direction: int, px: float, ev_ex: float
+) -> bool:
+    want_role = LevelSide.RESISTANCE if direction < 0 else LevelSide.SUPPORT
+    for hlv in hv.active_levels:
+        if hlv.side is not want_role:
+            continue
+        if direction < 0 and ev_ex >= hlv.band_lo and px <= hlv.band_hi:
+            return True
+        if direction > 0 and ev_ex <= hlv.band_hi and px >= hlv.band_lo:
+            return True
+    return False
+
+
+def _is_htf_naked_against(
+    eid: str,
+    direction: int,
+    px: float,
+    ev_ex: float,
+    htf_views: Sequence[StructureView] | None,
+) -> bool:
+    """检查高周期是否处于无墙保护的反向单边失衡真空中(防逆大势接飞刀)。"""
+    if not htf_views:
+        return False
+    for hv in htf_views:
+        backed = eid == LEVEL_REJECTED and _is_backed_by_htf_wall(hv, direction, px, ev_ex)
+        if backed:
+            continue
+        h_topo, _, _ = infer_2d_barrier_topology(px, hv)
+        if direction > 0 and h_topo == BarrierTopology.IMBALANCE_DOWN:
+            return True
+        if direction < 0 and h_topo == BarrierTopology.IMBALANCE_UP:
+            return True
+    return False
+
+
+def _is_strong_sweep_bar(
+    direction: int, o: float, h: float, lo: float, c: float, view: StructureView
+) -> bool:
+    rng_bar = max(h - lo, 1e-12)
+    wick_def_bar = ((min(o, c) - lo) / rng_bar) if direction > 0 else ((h - max(o, c)) / rng_bar)
+    q75_raw_bar = getattr(view, "bar_range_q75_rel", None)
+    trig_park_bar = float(getattr(view, "trig_park_ratio", 1.0))
+    return bool(
+        wick_def_bar >= _THIRD
+        and q75_raw_bar is not None
+        and float(q75_raw_bar) >= 1.0
+        and trig_park_bar >= 1.0
+    )
+
+
 class MarketRouter:
     """基于【原子水平位 Level】的价格拍卖路由器。"""
 
-    def __init__(self, params: Optional[RouterParams] = None) -> None:
+    def __init__(self, params: RouterParams | None = None) -> None:
         self.params = params or RouterParams()
         self.counters: dict[str, int] = {}
-        self._consumed_claims: dict[tuple, Level] = {}
+        self._consumed_claims: dict[tuple[Any, ...], Level] = {}
         self._normalized_whitelist = frozenset(
             (canonical_event_id(eid), int(d)) for eid, d in self.params.whitelist
         )
@@ -179,15 +251,15 @@ class MarketRouter:
     def _inc(self, key: str, n: int = 1) -> None:
         self.counters[key] = self.counters.get(key, 0) + n
 
-    def _release_departed_claims(self, h: float, l: float, active_levels: Sequence[Level]) -> None:
-        active_uids = {(lv.uid, lv.flip_count) for lv in active_levels if lv.is_active}
+    def _release_departed_claims(self, h: float, lo: float, active_levels: Sequence[Level]) -> None:
+        active_anchors = {(lv.origin_index, lv.flip_count) for lv in active_levels if lv.is_active}
         for cid, lv in list(self._consumed_claims.items()):
-            ukey = tuple(cid[0])
-            if ukey not in active_uids:
+            akey = tuple(cid[0])
+            if akey not in active_anchors:
                 self._consumed_claims.pop(cid, None)
                 continue
             w = max(lv.band_hi - lv.band_lo, abs(lv.extreme) * 1e-5)
-            if lv.role is LevelRole.SUPPORT and l > lv.band_hi + 3.0 * w:
+            if lv.role is LevelRole.SUPPORT and lo > lv.band_hi + 3.0 * w:
                 self._consumed_claims.pop(cid, None)
             elif lv.role is LevelRole.RESISTANCE and h < lv.band_lo - 3.0 * w:
                 self._consumed_claims.pop(cid, None)
@@ -196,10 +268,12 @@ class MarketRouter:
         self,
         ev: MarketEvent,
         view: StructureView,
-        htf_views: Optional[Sequence[StructureView]] = None,
-        cur_price: Optional[float] = None,
+        htf_views: Sequence[StructureView] | None = None,
+        cur_price: float | None = None,
+        *,
+        strong_sweep_bar: bool = False,
     ) -> bool:
-        lv: Optional[Level] = ev.level
+        lv: Level | None = ev.level
         if lv is None:
             return False
         eid = canonical_event_id(ev.id)
@@ -216,49 +290,17 @@ class MarketRouter:
         )
         ev_ex = float(ev.attrs.get("ex") or px)
         topo, _, _ = infer_2d_barrier_topology(px, view)
-
-        # 检查高周期(1D)是否处于无墙保护的反向单边失衡真空中（防真接飞刀）
-        htf_naked_against = False
-        if htf_views:
-            want_role = LevelSide.RESISTANCE if d < 0 else LevelSide.SUPPORT
-            for hv in htf_views:
-                backed_by_htf_wall = False
-                if eid == LEVEL_REJECTED:
-                    for hlv in hv.active_levels:
-                        if hlv.side is want_role:
-                            if (d < 0 and ev_ex >= hlv.band_lo and px <= hlv.band_hi) or (
-                                d > 0 and ev_ex <= hlv.band_hi and px >= hlv.band_lo
-                            ):
-                                backed_by_htf_wall = True
-                                break
-                h_topo, _, _ = infer_2d_barrier_topology(px, hv)
-                if d > 0 and h_topo == BarrierTopology.IMBALANCE_DOWN and not backed_by_htf_wall:
-                    htf_naked_against = True
-                elif d < 0 and h_topo == BarrierTopology.IMBALANCE_UP and not backed_by_htf_wall:
-                    htf_naked_against = True
+        htf_naked_against = _is_htf_naked_against(eid, d, px, ev_ex, htf_views)
 
         if eid == LEVEL_REJECTED:
-            if lv.kind is LevelKind.FLIPPED:
+            swept = bool(ev.attrs.get("swept"))
+            if swept and is_dominant_2d and not lv.flipped and strong_sweep_bar and not htf_naked_against:
+                return True
+            if (swept and not is_dominant_rej) or htf_naked_against or lv.flipped:
                 return False
-            if view.regime is Regime.TREND_DOWN and lv.kind is not LevelKind.ORIGIN:
-                return False
-            if bool(ev.attrs.get("swept")) and not is_dominant_rej:
-                return False
-            if htf_naked_against:
-                return False
-            # 首次极性互换位(untested_flip)：专用于失衡突破后的顺势回踩确认，且须具备真实二维突出度
-            if lv.flipped:
-                if not is_dominant_rej:
-                    return False
-                if d > 0 and topo == BarrierTopology.IMBALANCE_UP:
-                    return True
-                if d < 0 and topo == BarrierTopology.IMBALANCE_DOWN:
-                    return True
-                return False
-            # 本周期非反向单边失衡扩张：包络域允许所有未清扫失格拒绝，顺势失衡允许主导水平位拒绝
-            if d > 0 and topo == BarrierTopology.IMBALANCE_DOWN:
-                return False
-            if d < 0 and topo == BarrierTopology.IMBALANCE_UP:
+            if (d > 0 and topo == BarrierTopology.IMBALANCE_DOWN) or (
+                d < 0 and topo == BarrierTopology.IMBALANCE_UP
+            ):
                 return False
             if topo in (BarrierTopology.IMBALANCE_UP, BarrierTopology.IMBALANCE_DOWN) or view.regime in (
                 Regime.TREND_UP,
@@ -270,7 +312,6 @@ class MarketRouter:
         if eid == BREAKOUT_ACCEPTED:
             if lv.kind is LevelKind.FLIPPED or lv.flipped:
                 return False
-            # 顺势二维显著势垒突破：统一允许具备 is_dominant_2d 的结构位，禁止逆高周期大势突破
             if not is_dominant_2d or htf_naked_against:
                 return False
             if d > 0 and topo != BarrierTopology.IMBALANCE_UP:
@@ -281,6 +322,24 @@ class MarketRouter:
 
         return False
 
+    def _htf_view_blocks_wall(
+        self, hv: StructureView, direction: int, entry_ref: float, risk: float
+    ) -> bool:
+        h_topo, _, _ = infer_2d_barrier_topology(entry_ref, hv)
+        with_htf_imbalance = (
+            (direction > 0 and (h_topo == BarrierTopology.IMBALANCE_UP or hv.regime == Regime.TREND_UP))
+            or (direction < 0 and (h_topo == BarrierTopology.IMBALANCE_DOWN or hv.regime == Regime.TREND_DOWN))
+        )
+        req = risk if with_htf_imbalance else (self.params.min_rr * risk)
+        for h_lv in hv.active_levels:
+            if direction > 0 and h_lv.side == LevelSide.RESISTANCE and h_lv.band_lo > entry_ref:
+                if (h_lv.band_lo - entry_ref) < req:
+                    return True
+            elif direction < 0 and h_lv.side == LevelSide.SUPPORT and h_lv.band_hi < entry_ref:
+                if (entry_ref - h_lv.band_hi) < req:
+                    return True
+        return False
+
     def _blocked_by_htf_macro(
         self,
         view: StructureView,
@@ -289,39 +348,146 @@ class MarketRouter:
         entry_ref: float,
         risk: float,
         htf_views: Sequence[StructureView],
-    ) -> Optional[str]:
+    ) -> str | None:
+        _ = (view, ev)
         if not self.params.htf_wall_check or not htf_views or risk <= 0.0:
             return None
         for hv in htf_views:
-            h_topo, _, _ = infer_2d_barrier_topology(entry_ref, hv)
-            # trend_weak_wall：当交易方向与高周期净空失衡一致，或高周期已进入突破顺势段时，
-            # 前方高周期 SWING/EQUAL 墙视为顺势磁吸目标，仅保留 1.0R 基本防撞墙校验
-            with_htf_imbalance = (
-                (direction > 0 and h_topo == BarrierTopology.IMBALANCE_UP)
-                or (direction < 0 and h_topo == BarrierTopology.IMBALANCE_DOWN)
-                or (direction > 0 and hv.regime == Regime.TREND_UP)
-                or (direction > 0 and hv.regime == Regime.TREND_DOWN and False)
-                or (direction < 0 and hv.regime == Regime.TREND_DOWN)
-            )
-            for h_lv in hv.active_levels:
-                if direction > 0 and h_lv.side == LevelSide.RESISTANCE and h_lv.band_lo > entry_ref:
-                    room = h_lv.band_lo - entry_ref
-                    req = risk if with_htf_imbalance else (self.params.min_rr * risk)
-                    if room < req:
-                        return "htf_wall"
-                elif direction < 0 and h_lv.side == LevelSide.SUPPORT and h_lv.band_hi < entry_ref:
-                    room = entry_ref - h_lv.band_hi
-                    req = risk if with_htf_imbalance else (self.params.min_rr * risk)
-                    if room < req:
-                        return "htf_wall"
+            if self._htf_view_blocks_wall(hv, direction, entry_ref, risk):
+                return "htf_wall"
         return None
+
+    def _evaluate_conviction(
+        self,
+        *,
+        eid: str,
+        direction: int,
+        o: float,
+        h: float,
+        lo: float,
+        c: float,
+        view: StructureView,
+        ev: MarketEvent,
+        universe_size: int,
+        excess_ret_48h: float,
+        excess_ret_120h: float,
+    ) -> tuple[float, int | None, float | None, str | None]:
+        """Compute priority score and optional 6-point pure-OHLC conviction multiplier."""
+        rs_priority = float(direction) * float(getattr(view, "imbalance_strength", 0.0))
+        if not self.params.conviction_sizing:
+            return rs_priority, None, None, None
+
+        cog_vr4 = float(getattr(view, "cog_vr4", 1.0))
+        trig_vr4 = float(getattr(view, "trig_vr4", 1.0))
+        cog_park_ratio = float(getattr(view, "cog_park_ratio", 1.0))
+        cog_er_norm_raw = getattr(view, "cog_er_norm", None)
+        cog_er_norm = (
+            float(cog_er_norm_raw)
+            if cog_er_norm_raw is not None
+            else float(getattr(view, "cog_er20", 0.0)) * math.sqrt(20.0)
+        )
+        trig_park_ratio = float(getattr(view, "trig_park_ratio", 1.0))
+        bar_range_rel = float(getattr(view, "bar_range_rel", 1.0))
+        bar_range_q75_raw = getattr(view, "bar_range_q75_rel", None)
+
+        rng = max(h - lo, 1e-12)
+        body_eff = abs(c - o) / rng
+        wick_def = ((min(o, c) - lo) / rng) if direction > 0 else ((h - max(o, c)) / rng)
+        sub_kind = str(ev.attrs.get("sub_kind") or "")
+        r48_dir = direction * float(excess_ret_48h)
+        r120_dir = direction * float(excess_ret_120h)
+        er_dir = direction * cog_er_norm
+
+        if eid == BREAKOUT_ACCEPTED and cog_park_ratio < 1.0 and er_dir > 1.0:
+            return rs_priority, None, None, "rejected_dead_vol_exhausted"
+
+        vol_wake = (cog_park_ratio >= 1.0) if eid == BREAKOUT_ACCEPTED else (trig_park_ratio >= 1.0)
+        bar_q75_hit = (
+            (float(bar_range_q75_raw) >= 1.0)
+            if bar_range_q75_raw is not None
+            else (bar_range_rel >= 1.5)
+        )
+        fresh_phase = (er_dir <= 1.0) if eid == BREAKOUT_ACCEPTED else bar_q75_hit
+        phase_pts = int(vol_wake) + int(fresh_phase)
+
+        if eid == BREAKOUT_ACCEPTED:
+            rs_priority = (cog_vr4 - 1.0) + (1.0 - trig_vr4) + 2.0 * r48_dir + 0.8 * phase_pts
+        else:
+            rs_priority = (
+                (cog_vr4 - 1.0)
+                - 2.0 * r48_dir
+                + (1.0 if sub_kind in ("SWEEP_TRAP", "FLIP_RETEST") else 0.0)
+                + 0.8 * phase_pts
+            )
+
+        base_pts = 1 if cog_vr4 >= 1.0 else 0
+        if eid == BREAKOUT_ACCEPTED:
+            base_pts += int(trig_vr4 < 1.0)
+            base_pts += int(body_eff <= _TWO_THIRDS)
+            base_pts += int(universe_size < _MIN_BREADTH_UNIVERSE or r48_dir > 0.0)
+        else:
+            base_pts += int(wick_def >= _THIRD)
+            base_pts += int(body_eff <= _TWO_THIRDS and wick_def > 0.0)
+            base_pts += int(
+                (universe_size >= _MIN_BREADTH_UNIVERSE and r120_dir < 0.0)
+                or sub_kind in ("SWEEP_TRAP", "FLIP_RETEST")
+            )
+
+        if base_pts == 0:
+            return rs_priority, None, None, "rejected_zero_conviction"
+        pts = min(_CONVICTION_MAX_PTS, max(1, base_pts + phase_pts))
+        conviction_mult = 0.5 + (float(pts) - 1.0) / 5.0
+        return rs_priority, pts, conviction_mult, None
+
+    def _build_decision_meta(
+        self,
+        *,
+        ev: MarketEvent,
+        eid: str,
+        hyp: Hypothesis,
+        view: StructureView,
+        ts: int,
+        c: float,
+        rs_priority: float,
+        conviction_pts: int | None,
+        conviction_mult: float | None,
+    ) -> dict[str, Any]:
+        raw_target = float(hyp.target_1)
+        eff_cost = float(self.params.cost_per_side if self.params.cost_per_side is not None else 0.0)
+        meta: dict[str, Any] = {
+            **_level_provenance(ev, view),
+            "event_id": eid,
+            "direction": int(hyp.direction),
+            "regime": view.regime.value,
+            "invalid": float(hyp.invalid),
+            "target_1": raw_target,
+            "structural_target": raw_target,
+            "execution_target": raw_target,
+            "target_source": hyp.target_source,
+            "r_mult": hyp.r_mult,
+            "priority_score": rs_priority,
+            "imbalance_strength": float(getattr(view, "imbalance_strength", 0.0)),
+            "cog_vr4": float(getattr(view, "cog_vr4", 1.0)),
+            "trig_vr4": float(getattr(view, "trig_vr4", 1.0)),
+            "bounded_entry": True,
+            "entry_min_rr": float(self.params.min_rr),
+            "cost_per_side": eff_cost,
+            "claim_confirmed_ts": int(ts),
+            "claim_confirmed_price": float(c),
+        }
+        if conviction_pts is not None and conviction_mult is not None:
+            meta["conviction_score"] = conviction_pts
+            meta["size_mult"] = conviction_mult
+        if self.params.max_cost_frac is not None:
+            meta["max_cost_frac"] = float(self.params.max_cost_frac)
+        return meta
 
     def on_bar(
         self,
         symbol: str,
         bar: Sequence[float],
         bar_index: int,
-        view: Optional[StructureView],
+        view: StructureView | None,
         atr: float,
         events: Sequence[MarketEvent],
         *,
@@ -331,11 +497,14 @@ class MarketRouter:
         market_breadth: float = 0.0,
         universe_size: int = 1,
         median_dollar_volume: float = 0.0,
+        excess_ret_48h: float = 0.0,
+        excess_ret_120h: float = 0.0,
     ) -> list[RouteDecision]:
+        _ = (bar_index, atr, median_dollar_volume)
         if view is None:
             return []
-        ts, _o, h, l, c, _v = _bar_parts(bar)
-        self._release_departed_claims(h, l, view.zones)
+        ts, o, h, lo, c, _v = _bar_parts(bar)
+        self._release_departed_claims(h, lo, view.zones)
         decisions: list[RouteDecision] = []
 
         for ev in events:
@@ -349,31 +518,27 @@ class MarketRouter:
                 self._inc("skipped_position_open")
                 continue
 
-            lv: Optional[Level] = ev.attrs.get("level") or ev.attrs.get("zone")
+            lv: Level | None = ev.attrs.get("level") or ev.attrs.get("zone")
             if lv is not None and lv.claim_id in self._consumed_claims:
                 self._inc("skipped_duplicate_claim")
                 continue
 
-            if not self._auction_aligned(ev, view, htf_views=htf_views, cur_price=c):
+            strong_sweep = _is_strong_sweep_bar(int(ev.direction), o, h, lo, c, view)
+            if not self._auction_aligned(ev, view, htf_views=htf_views, cur_price=c, strong_sweep_bar=strong_sweep):
                 self._inc("rejected_counter_trend")
                 continue
 
-            # 突破确认棒二分控场公理(零魔法常数):多头确认收盘须站上本棒几何中点 0.5*(h+l),空头须收于中点之下,拒绝冲高回落/探底回升衰竭棒!
             if eid == BREAKOUT_ACCEPTED:
-                bar_mid = 0.5 * (h + l)
+                bar_mid = 0.5 * (h + lo)
                 if (int(ev.direction) > 0 and c < bar_mid) or (int(ev.direction) < 0 and c > bar_mid):
                     self._inc("rejected_weak_breakout_close")
                     continue
 
-            if universe_size >= 4:
-                if (int(ev.direction) > 0 and market_breadth < -0.5) or (
-                    int(ev.direction) < 0 and market_breadth > 0.5
-                ):
-                    self._inc("rejected_market_breadth")
-                    continue
-                if view.tf_hours == 1 and float(getattr(view, "dollar_volume", 0.0)) < median_dollar_volume:
-                    self._inc("rejected_low_liquidity")
-                    continue
+            if universe_size >= _MIN_BREADTH_UNIVERSE and blocked_by_market_breadth(
+                int(ev.direction), view.regime, market_breadth, universe_size
+            ):
+                self._inc("rejected_market_breadth")
+                continue
 
             hyp = build_hypothesis(ev, view, ref_price=c, htf_views=htf_views, min_rr=self.params.min_rr)
             if hyp is None:
@@ -386,47 +551,48 @@ class MarketRouter:
                 self._inc(f"rejected_{htf_block}")
                 continue
 
-            raw_target = float(hyp.target_1)
-            exec_tgt = raw_target
-            rs_priority = float(getattr(view, "dollar_volume", 0.0))
+            rs_priority, conv_pts, conv_mult, conv_err = self._evaluate_conviction(
+                eid=eid,
+                direction=int(hyp.direction),
+                o=o,
+                h=h,
+                lo=lo,
+                c=c,
+                view=view,
+                ev=ev,
+                universe_size=universe_size,
+                excess_ret_48h=excess_ret_48h,
+                excess_ret_120h=excess_ret_120h,
+            )
+            if conv_err is not None:
+                self._inc(conv_err)
+                continue
 
-            meta = {
-                **_level_provenance(ev, view),
-                "event_id": eid,
-                "direction": int(hyp.direction),
-                "regime": view.regime.value,
-                "invalid": float(hyp.invalid),
-                "target_1": exec_tgt,
-                "structural_target": raw_target,
-                "execution_target": exec_tgt,
-                "target_source": hyp.target_source,
-                "r_mult": hyp.r_mult,
-                "priority_score": rs_priority,
-                "imbalance_strength": float(getattr(view, "imbalance_strength", 0.0)),
-                "bounded_entry": True,
-                "entry_min_rr": float(self.params.min_rr),
-                "cost_per_side": float(self.params.cost_per_side),
-                "claim_confirmed_ts": int(ts),
-                "claim_confirmed_price": float(c),
-            }
-            if self.params.max_cost_frac is not None:
-                meta["max_cost_frac"] = float(self.params.max_cost_frac)
-
-            err = entry_contract_error(hyp.direction, c, hyp.invalid, raw_target, meta)
+            meta = self._build_decision_meta(
+                ev=ev,
+                eid=eid,
+                hyp=hyp,
+                view=view,
+                ts=ts,
+                c=c,
+                rs_priority=rs_priority,
+                conviction_pts=conv_pts,
+                conviction_mult=conv_mult,
+            )
+            err = entry_contract_error(hyp.direction, c, hyp.invalid, float(hyp.target_1), meta)
             if err is not None:
                 self._inc(f"rejected_{err.lower()}")
                 continue
 
             if entry_resting:
-                if eid == BREAKOUT_ACCEPTED:
-                    decisions.append(RouteDecision(
-                        kind="cancel_entry",
-                        meta={"reason": "breakout_accepted_supersedes_resting"},
-                    ))
-                    entry_resting = False
-                else:
+                if eid != BREAKOUT_ACCEPTED:
                     self._inc("skipped_entry_resting")
                     continue
+                decisions.append(RouteDecision(
+                    kind="cancel_entry",
+                    meta={"reason": "breakout_accepted_supersedes_resting"},
+                ))
+                entry_resting = False
 
             route_name = ROUTE_BREAKOUT_ACCEPTED if eid == BREAKOUT_ACCEPTED else ROUTE_LEVEL_REJECTED
             meta["route"] = route_name

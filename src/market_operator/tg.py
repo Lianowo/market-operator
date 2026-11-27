@@ -20,17 +20,31 @@
 
 from __future__ import annotations
 
-import io
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 import json
-import math
+import logging
+from pathlib import Path
 import queue
 import threading
 import time
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Callable, Optional, Sequence
+from types import MappingProxyType
+from typing import Any
+import urllib.request
 
 import requests
+
+from .charts import (
+    bar_gap_stats as _bar_gap_stats,
+    box_position_pct,
+    box_position_text,
+    render_bw_kline_png,
+    render_level_map_png,
+    rr_multiple,
+)
+from .exceptions import NotificationError
+
+_LOG = logging.getLogger(__name__)
 
 API = "https://api.telegram.org/bot{token}/sendMessage"
 API_PHOTO = "https://api.telegram.org/bot{token}/sendPhoto"
@@ -41,75 +55,57 @@ MAX_LEN = 4000                   # Telegram 单条 4096;留出标签前缀余量
 MAX_CAPTION_LEN = 1024
 RATE_LIMIT_WAIT_MAX_S = 60.0     # 429 的 retry_after 上限:再长也不傻等
 
-_KIND_TAG = {"signal": "信号", "fill": "成交", "daily": "日结", "alert": "告警",
-             "watch": "关注状态"}
+_KIND_TAG: Mapping[str, str] = MappingProxyType({
+    "signal": "信号",
+    "fill": "成交",
+    "daily": "日结",
+    "alert": "告警",
+    "watch": "关注状态",
+})
 
 CHANNEL_SIGNAL = "signal"      # 公开广播:只发信号
 CHANNEL_OPS = "ops"            # 私有运营:成交/日结/告警
 
 # 唯一分流事实:消息类型 → 通道。新增消息类型必须在这里显式登记,
 # 不做"默认落到信号通道"的隐式回退(公开频道绝不能收到运营信息)。
-_KIND_CHANNEL = {
+_KIND_CHANNEL: Mapping[str, str] = MappingProxyType({
     "signal": CHANNEL_SIGNAL,
     "fill": CHANNEL_OPS,
     "daily": CHANNEL_OPS,
     "alert": CHANNEL_OPS,
     "watch": CHANNEL_OPS,
-}
+})
 
-_EVENT_DISPLAY = {
-    "BREAKOUT_ACCEPTED": "ACCEPT (突破接受)",
-    "ACCEPT": "ACCEPT (突破接受)",
-    "LEVEL_REJECTED": "REJECT (边界拒绝)",
-    "REJECT": "REJECT (边界拒绝)",
-}
+_WATCH_REASONS: Mapping[str, str] = MappingProxyType({
+    "WATCH_INNER_EDGE_HIT": "价格命中关注内沿",
+    "WATCH_NEAR_BOUNCE": "近价区触及后企稳确认",
+    "N_fill_expiry": "等待期限已过",
+    "position_exit": "持仓离场，关联关注作废",
+})
 
-_ROUTE_DISPLAY = {
-    "breakout_accepted_market": "ACCEPT 市价",
-    "level_rejected_market": "REJECT 市价",
-    "accept_market": "ACCEPT 市价",
-    "reject_market": "REJECT 市价",
-    "breakout_accepted_limit": "ACCEPT 限价意图",
-    "level_rejected_limit": "REJECT 限价意图",
-    "e1_market": "ACCEPT 市价",
-    "e3_market": "REJECT 市价",
-}
-
-
-def format_event_display(event_id: str) -> str:
-    return _EVENT_DISPLAY.get(str(event_id).strip(), str(event_id))
-
-
-def format_route_display(route: str) -> str:
-    r = str(route).strip()
-    if r in _ROUTE_DISPLAY:
-        return _ROUTE_DISPLAY[r]
-    return r.replace("breakout_accepted_market", "ACCEPT 市价").replace("level_rejected_market", "REJECT 市价")
-
-
-def _fmt_px(value: float) -> str:
-    """价格紧凑显示:8 位有效数字,0.000012345 这类小币价不会被挤成科学计数法。"""
-    return f"{float(value):.8g}"
+_FILL_NOTE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("BREAKOUT_ACCEPTED e1_market", "ACCEPT (突破接受) | 市价"),
+    ("LEVEL_REJECTED e3_market", "REJECT (刺穿拒绝) | 市价"),
+    ("breakout_accepted_market", "ACCEPT 市价"),
+    ("level_rejected_market", "REJECT 市价"),
+    ("v21|sub_bar_partial_exit_on_arm", "锁利减仓并移至保本"),
+    ("v21|sub_bar_opp_lock", "对侧锁利"),
+)
 
 
 def split_text(text: str, limit: int = MAX_LEN) -> list[str]:
-    """按行切分长文本(单行超长才硬切),保证每条不超过 `limit`。
-
-    修前 `send()` 直接 `…[截断]` 掉 4000 字符以后的全部内容,告警细节与关注
-    条件会被静默丢掉;Telegram 单条上限 4096,这里默认 4000 留标签前缀余量。
-    与 `tg_commands` 回复层共用同一套切分规则(那边上限 3900)。
-    """
+    """按行切分长文本(单行超长才硬切),保证每条不超过 ``limit``。"""
     out: list[str] = []
     buf = ""
     for line in str(text).splitlines():
-        while len(line) > limit:                 # 极长单行:硬切
+        while len(line) > limit:
             if buf:
                 out.append(buf)
                 buf = ""
             out.append(line[:limit])
             line = line[limit:]
         if len(buf) + len(line) + 1 > limit:
-            if buf:                              # 空 buf 不能切成空消息(Telegram 400)
+            if buf:
                 out.append(buf)
             buf = line
         else:
@@ -119,64 +115,27 @@ def split_text(text: str, limit: int = MAX_LEN) -> list[str]:
     return out or [""]
 
 
-def _retry_after_seconds(payload: object) -> Optional[float]:
-    """从 Telegram 429 响应取 `parameters.retry_after`(秒);缺失/坏值 ⇒ None。"""
+def _retry_after_seconds(payload: object) -> float | None:
+    """从 Telegram 429 响应取 ``parameters.retry_after`` (秒);缺失/坏值 ⇒ None。"""
+    if not isinstance(payload, Mapping):
+        return None
+    params = payload.get("parameters")
+    if not isinstance(params, Mapping):
+        return None
     try:
-        params = (payload or {}).get("parameters") or {}     # type: ignore[union-attr]
-        after = float(params.get("retry_after"))
-    except (AttributeError, TypeError, ValueError):
+        after = float(params.get("retry_after"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
         return None
     if after <= 0.0:
         return None
     return min(after, RATE_LIMIT_WAIT_MAX_S)
 
 
-def _retry_delay(attempt: int, retry_after: Optional[float]) -> float:
+def _retry_delay(attempt: int, retry_after: float | None) -> float:
     """429 优先按服务端 retry_after;其余按线性退避。"""
     if retry_after is not None:
         return max(0.0, float(retry_after))
     return RETRY_BACKOFF_S * (attempt + 1)
-
-
-def box_position_pct(price: Optional[float], box_lo: Optional[float],
-                     box_hi: Optional[float]) -> Optional[float]:
-    """价格在水平带内的相对位置(0=下沿,1=上沿);缺边/带退化 ⇒ None。
-
-    纯展示量,不参与任何交易判定,故允许落在带外(返回 <0 或 >1 的原值)。
-    """
-    try:
-        px, lo, hi = float(price), float(box_lo), float(box_hi)
-    except (TypeError, ValueError):
-        return None
-    if hi <= lo:
-        return None
-    return (px - lo) / (hi - lo)
-
-
-def box_position_text(price: Optional[float], box_lo: Optional[float],
-                      box_hi: Optional[float]) -> str:
-    """带内位置的人读短语(百分比 + 靠上/靠下/居中),缺失时返回空串。"""
-    pct = box_position_pct(price, box_lo, box_hi)
-    if pct is None:
-        return ""
-    tone = "靠上沿" if pct >= 0.66 else ("靠下沿" if pct <= 0.34 else "居中")
-    return f"{pct:.0%} · {tone}"
-
-
-def rr_multiple(direction: Optional[int], entry: Optional[float],
-                stop: Optional[float], target: Optional[float]) -> Optional[float]:
-    """按交易方向算 R:R(风险距离无效 ⇒ None);无方向时退化为距离比。"""
-    try:
-        e, s, tg = float(entry), float(stop), float(target)
-    except (TypeError, ValueError):
-        return None
-    risk = abs(e - s)
-    if risk <= 0.0:
-        return None
-    if direction is None:
-        return abs(tg - e) / risk
-    d = 1 if float(direction) > 0 else -1
-    return d * (tg - e) / risk
 
 
 def public_event_label(event_id: str) -> str:
@@ -199,683 +158,62 @@ def level_note_text(kind: object, role: object) -> str:
     return k or r
 
 
-def suggest_position_and_leverage(
-    entry: Optional[float],
-    stop: Optional[float],
-    *,
-    risk_pct: float = 5.0,
-    max_leverage: int = 20,
-    planned_leverage: Optional[int] = None,
-    margin_pct: Optional[float] = None,
-) -> Optional[tuple[float, int, float]]:
-    """根据入场价、止损价与单笔风险占比计算阅读者友好的 (建议保证金仓位占比%, 建议杠杆x, 单笔止损风险%)。
-
-    返回 ``(margin_pct, leverage_x, risk_pct)``;若入场/止损价无效则返回 ``None``。
-    """
-    try:
-        e, s = float(entry), float(stop)
-        r_pct = float(risk_pct)
-        max_lev = max(1, int(max_leverage))
-    except (TypeError, ValueError):
-        return None
-    if e <= 0.0 or s <= 0.0 or abs(e - s) <= 0.0 or r_pct <= 0.0:
-        return None
-    stop_dist_frac = abs(e - s) / e
-    notional_frac = (r_pct / 100.0) / stop_dist_frac
-    # 保证金预算:按单笔风险占组合总风险容量(50%)的份额分配 80% 可用保证金(限制在 5%~25% 区间),
-    # 同时确保逐仓强平距离留有充足安全垫(止损幅度不超过保证金的 75%,即 lev <= 0.75 / stop_dist_frac)
-    safe_iso_lev = max(1, int(0.75 / stop_dist_frac))
-    eff_cap_lev = max(1, min(max_lev, safe_iso_lev))
-    if planned_leverage is not None and int(planned_leverage) >= 1:
-        lev = max(1, min(eff_cap_lev, int(planned_leverage)))
-    else:
-        planned_margin_frac = min(0.25, max(0.05, ((r_pct / 100.0) / 0.50) * 0.80))
-        req_lev = int(math.ceil(notional_frac / planned_margin_frac))
-        lev = max(1, min(eff_cap_lev, req_lev))
-    if margin_pct is not None and float(margin_pct) > 0.0:
-        m_pct = min(100.0, float(margin_pct))
-    else:
-        capped_notional_frac = min(notional_frac, float(lev) * 0.25)
-        m_pct = (capped_notional_frac / float(lev)) * 100.0
-        r_pct = capped_notional_frac * stop_dist_frac * 100.0
-    return (round(m_pct, 1), int(lev), round(r_pct, 2))
-
-
-
-def _bar_gap_stats(bars: Sequence[tuple]) -> tuple[int, int, int]:
-    """Return (n, median step minutes, gap count) for a chart window.
-
-    A gap is a consecutive timestamp jump >1.5x the median step.  This keeps
-    the label usable when the caller passes a finer frame (e.g. 30m trigger
-    bars with a 2h tf label) and does not turn ordinary candle spacing into a
-    false "missing bar" claim.
-    """
-    n = len(bars)
-    if n < 2:
-        return n, 0, 0
-    diffs: list[float] = []
-    for prev, cur in zip(bars, bars[1:]):
-        try:
-            diff = (int(cur[0]) - int(prev[0])) / 60000.0
-        except (TypeError, ValueError, IndexError):
-            return n, 0, 0
-        if diff > 0:
-            diffs.append(diff)
-    if not diffs:
-        return n, 0, 0
-    med = sorted(diffs)[len(diffs) // 2]
-    gaps = sum(1 for diff in diffs if diff > med * 1.5 + 1e-9)
-    return n, int(round(med)), gaps
-
-
-def render_bw_kline_png(
-    bars: Sequence[tuple],
-    *,
-    symbol: str = "",
-    tf_label: str = "",
-    title_tag: str = "",
-    box_lo: Optional[float] = None,
-    box_hi: Optional[float] = None,
-    entry_price: Optional[float] = None,
-    stop_price: Optional[float] = None,
-    target_price: Optional[float] = None,
-    mark_index: Optional[int] = None,
-    direction: Optional[int] = None,
-    zone_lo: Optional[float] = None,
-    zone_hi: Optional[float] = None,
-    zone_touches: Optional[int] = None,
-    pivots: Optional[Sequence[tuple]] = None,
-    atr: Optional[float] = None,
-    max_bars: int = 96,
-    log_scale: bool = True,
-    box_start_ts: Optional[int] = None,
-    box_start_index: Optional[int] = None,
-    public_mode: bool = False,
-    level_note: str = "",
-) -> Optional[bytes]:
-    """用 Pillow 绘制高对比度黑白 K 线图,返回 PNG bytes(无 Pillow / 无 K 线 ⇒ None)。
-
-    图上叠加的结构事实与策略决策同源,不做二次推断:
-
-    - 原子水平位带 `box_lo/box_hi`(参数名沿用旧口径):浅灰带 + 上下沿粗虚线
-      + 右栏 `BAND HI/LO`(公开图只写 `UPPER/LOWER`);
-    - 事件区间 `zone_lo/zone_hi`(`zone_touches` 为触边次数):斜线填充 + 细虚线
-      + 右栏 `ZONE HI/LO` —— 回答"这次触发发生在水平带的哪一段";
-    - `±R` 标尺:以 `entry_price`/`stop_price` 定义 1R,顺方向画出 `+1R/+2R/+3R`;
-    - `pivots`:`[(下标, 价格, "high"|"low")]`,三角标记 + 最近两个价位标签,
-      下标越界/缺失只画到窗口末根,不猜位置;
-    - `atr`/`zone_touches` 只进表头摘要,不改变坐标轴。
-
-    远端 pivot(超出 K 线窗口 30% 振幅)不纳入纵轴,否则最近几十根会被压成
-    一条线。默认对数坐标,不同价格级别都能看清水平带厚度。
-    """
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:
-        return None
-    if not bars:
-        return None
-    sub = list(bars[-max_bars:])
-    n, step_min, gaps = _bar_gap_stats(sub)
-    if n == 0:
-        return None
-
-    def _num(value) -> Optional[float]:
-        try:
-            f = float(value)
-        except (TypeError, ValueError):
-            return None
-        return f if math.isfinite(f) and f > 0 else None
-
-    box_lo, box_hi = _num(box_lo), _num(box_hi)
-    if box_lo is not None and box_hi is not None and box_hi < box_lo:
-        box_lo, box_hi = box_hi, box_lo
-    zone_lo, zone_hi = _num(zone_lo), _num(zone_hi)
-    if zone_lo is not None and zone_hi is not None and zone_hi < zone_lo:
-        zone_lo, zone_hi = zone_hi, zone_lo
-    entry_price = _num(entry_price)
-    stop_price = _num(stop_price)
-    target_price = _num(target_price)
-    atr = _num(atr)
-
-    piv: list[tuple[Optional[int], float, str]] = []
-    for item in (pivots or ()):
-        try:
-            raw_idx, raw_price, raw_kind = item[0], item[1], item[2]
-        except (TypeError, IndexError):
-            continue
-        price = _num(raw_price)
-        if price is None:
-            continue
-        piv.append((raw_idx if isinstance(raw_idx, int) else None,
-                    price, str(raw_kind).lower()))
-
-    highs = [float(b[2]) for b in sub]
-    lows = [float(b[3]) for b in sub]
-    p_max, p_min = max(highs), min(lows)
-    for lvl in (box_lo, box_hi, entry_price, stop_price, target_price,
-                zone_lo, zone_hi):
-        if lvl is not None:
-            p_max = max(p_max, lvl)
-            p_min = min(p_min, lvl)
-
-    bar_span = max(p_max - p_min, p_max * 0.002, 1e-9)
-    near_piv = [p for p in piv
-                if p_min - bar_span * 0.3 <= p[1] <= p_max + bar_span * 0.3]
-    for _idx, price, _kind in near_piv:
-        p_max = max(p_max, price)
-        p_min = min(p_min, price)
-
-    use_log = bool(log_scale and p_min > 0 and p_max > 0)
-    if use_log:
-        log_max, log_min = math.log(p_max), math.log(p_min)
-        log_span = max(log_max - log_min, 0.002, 1e-8)
-        log_pad = log_span * 0.08
-        log_hi, log_lo = log_max + log_pad, log_min - log_pad
-        y_hi, y_lo = math.exp(log_hi), math.exp(log_lo)
-    else:
-        span = max(p_max - p_min, p_max * 0.002, 1e-8)
-        pad = span * 0.08
-        y_hi, y_lo = p_max + pad, p_min - pad
-
-    W, H = 1000, 560
-    left_m, right_m, top_m, bot_m = 58, 156, 62, 44
-    plot_w, plot_h = W - left_m - right_m, H - top_m - bot_m
-
-    img = Image.new("RGB", (W, H), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    def _load_font(size: int, bold: bool = False):
-        """优先中文字体(图上有中文摘要),再退 ASCII 字体;返回 (font, cjk_ok)。"""
-        names = (("msyhbd.ttc", "simhei.ttf", "arialbd.ttf") if bold
-                 else ("msyh.ttc", "simhei.ttf", "arial.ttf"))
-        for name in names:
-            try:
-                return ImageFont.truetype(name, size), name != "arial.ttf" and name != "arialbd.ttf"
-            except Exception:
-                continue
-        return ImageFont.load_default(), False
-
-    font_s, cjk_s = _load_font(11)
-    font, _cjk = _load_font(13)
-    font_b, cjk_b = _load_font(15, bold=True)
-    cjk_ok = bool(cjk_s or cjk_b)
-
-    def text_w(txt: str, fnt) -> float:
-        try:
-            return float(draw.textlength(txt, font=fnt))
-        except Exception:
-            return float(len(txt) * 6)
-
-    def price_to_y(p: float) -> int:
-        pf = float(p)
-        if use_log and pf > 0:
-            frac = (log_hi - math.log(pf)) / (log_hi - log_lo)
-        else:
-            frac = (y_hi - pf) / (y_hi - y_lo)
-        return int(round(top_m + max(0.0, min(1.0, frac)) * plot_h))
-
-    # 右侧标签栏:所有水平线/水平带/区间先登记,统一避让后再画 ——
-    # 修前每条线各自把文字压在图上,价位接近时标签互相盖住。
-    rail: list[list] = []
-
-    def rail_add(y: float, text: str, fill=(0, 0, 0)) -> None:
-        rail.append([int(y), str(text), fill])
-
-    def rail_flush() -> None:
-        rail.sort(key=lambda r: r[0])
-        last = -10 ** 6
-        for y, text, fill in rail:
-            yy = min(max(int(y), last + 12), H - bot_m - 6)
-            draw.text((left_m + plot_w + 8, yy - 6), text, fill=fill, font=font_s)
-            last = yy
-
-    def hline(y: int, on: int, off: int, fill, width: int = 1,
-              x_start: int = left_m) -> None:
-        x = max(left_m, int(x_start))
-        while x < left_m + plot_w:
-            draw.line([(x, y), (min(x + on, left_m + plot_w), y)],
-                      fill=fill, width=width)
-            x += on + off
-
-    def vline(x: int, y_top: int, y_bot: int, on: int, off: int,
-              fill, width: int = 1) -> None:
-        y = min(y_top, y_bot)
-        y_end = max(y_top, y_bot)
-        while y < y_end:
-            draw.line([(x, y), (x, min(y + on, y_end))],
-                      fill=fill, width=width)
-            y += on + off
-
-    step_x = plot_w / max(n, 1)
-
-    # 定位平衡区在当前绘图窗口 sub 内的起始 K 线下标
-    b_start_idx = 0
-    if box_start_index is not None:
-        try:
-            b_start_idx = max(0, min(n - 1, int(box_start_index)))
-        except (TypeError, ValueError):
-            b_start_idx = 0
-    elif box_start_ts is not None:
-        try:
-            ts_target = int(box_start_ts)
-            for idx_b, b_item in enumerate(sub):
-                if int(b_item[0]) >= ts_target:
-                    b_start_idx = idx_b
-                    break
-            else:
-                b_start_idx = max(0, n - 1)
-        except (TypeError, ValueError):
-            b_start_idx = 0
-    elif box_lo is not None and box_hi is not None and box_hi > box_lo and n > 12:
-        # 未显式传 box_start_ts 时,回溯最近一段连续驻留水平带内的起点
-        for idx_b in range(n - 1, -1, -1):
-            bh, bl = float(sub[idx_b][2]), float(sub[idx_b][3])
-            if bh < box_lo or bl > box_hi:
-                b_start_idx = min(n - 1, idx_b + 1)
-                break
-
-    box_x0 = int(round(left_m + b_start_idx * step_x)) if b_start_idx > 0 else left_m
-
-    # 原子水平位带/关键结构区:从真实计算起点 box_x0 开始绘制浅灰带 + 上下沿粗虚线 + 左边界竖线
-    if box_lo is not None and box_hi is not None and box_hi > box_lo:
-        y1, y2 = price_to_y(box_hi), price_to_y(box_lo)
-        if y2 > y1:
-            draw.rectangle([box_x0, y1, left_m + plot_w, y2], fill=(240, 240, 240))
-            if b_start_idx > 0:
-                vline(box_x0, y1, y2, 5, 3, (90, 90, 90), 2)
-        hline(y1, 8, 4, (0, 0, 0), 2, x_start=box_x0)
-        hline(y2, 8, 4, (0, 0, 0), 2, x_start=box_x0)
-        hi_tag = "UPPER" if public_mode else "BAND HI"
-        lo_tag = "LOWER" if public_mode else "BAND LO"
-        rail_add(y1, f"{hi_tag} {_fmt_px(box_hi)}")
-        rail_add(y2, f"{lo_tag} {_fmt_px(box_lo)}")
-
-    # 事件区间:公开信号图隐藏内部触发带与触边次数,仅内部运营图绘制
-    if not public_mode and zone_lo is not None and zone_hi is not None and zone_hi >= zone_lo:
-        yz1, yz2 = price_to_y(zone_hi), price_to_y(zone_lo)
-        if yz2 - yz1 >= 2:
-            x = box_x0
-            while x < left_m + plot_w:
-                draw.line([(x, yz2), (min(x + 6, left_m + plot_w), yz1)],
-                          fill=(198, 198, 198), width=1)
-                x += 9
-        hline(yz1, 3, 3, (70, 70, 70), x_start=box_x0)
-        hline(yz2, 3, 3, (70, 70, 70), x_start=box_x0)
-        touch_txt = ""
-        if zone_touches:
-            n_touch = int(zone_touches)
-            touch_txt = (f" · {n_touch}触" if cjk_ok
-                         else f" · {n_touch} touch")
-        rail_add(yz1, f"ZONE HI {_fmt_px(zone_hi)}{touch_txt}", (70, 70, 70))
-        rail_add(yz2, f"ZONE LO {_fmt_px(zone_lo)}", (70, 70, 70))
-
-    # 网格(对数等分)+ 左轴刻度
-    tick_vals = [
-        (math.exp(log_lo + (log_hi - log_lo) * (k / 4.0)) if use_log
-         else y_lo + (y_hi - y_lo) * (k / 4.0))
-        for k in range(5)
-    ]
-    # 同一张图的刻度必须同精度:修前用 `.6g`,113.503 与 98.1832 混排,相邻
-    # 刻度的有效位不同,读者会误以为刻度不等距。按刻度间距定小数位。
-    tick_step = abs(tick_vals[1] - tick_vals[0]) if len(tick_vals) > 1 else 0.0
-    tick_dec = (max(0, min(8, 2 - int(math.floor(math.log10(tick_step)))))
-                if tick_step > 0 else 2)
-    for p_val in tick_vals:
-        yk = price_to_y(p_val)
-        for x in range(left_m, left_m + plot_w, 12):
-            draw.point((x, yk), fill=(206, 206, 206))
-        draw.text((4, yk - 6), f"{p_val:.{tick_dec}f}",
-                  fill=(110, 110, 110), font=font_s)
-
-    # ±R 标尺:以 entry/stop 定义 1R,顺方向画出 +1R/+2R/+3R
-    d_int = 0
-    if direction is not None:
-        try:
-            d_int = 1 if float(direction) > 0 else (-1 if float(direction) < 0 else 0)
-        except (TypeError, ValueError):
-            d_int = 0
-    if entry_price is not None and stop_price is not None and d_int:
-        r_unit = abs(entry_price - stop_price)
-        if r_unit > 0:
-            for k in (1, 2, 3):
-                lvl = entry_price + d_int * k * r_unit
-                if not (y_lo <= lvl <= y_hi):
-                    continue
-                yk = price_to_y(lvl)
-                hline(yk, 2, 5, (160, 160, 160))
-                rail_add(yk, f"+{k}R {_fmt_px(lvl)}", (140, 140, 140))
-
-    def _draw_level(px: Optional[float], label: str, dash: int = 4,
-                    width: int = 1, color=(0, 0, 0)) -> None:
-        if px is None or px <= 0:
-            return
-        yy = price_to_y(px)
-        hline(yy, dash, max(2, dash - 1), color, width)
-        rail_add(yy, f"{label} {_fmt_px(px)}", color)
-
-    _draw_level(entry_price, "ENTRY", dash=7, width=2)
-    _draw_level(stop_price, "STOP", dash=3, width=2)
-    _draw_level(target_price, "TARGET", dash=5, width=2, color=(40, 40, 40))
-
-    step_x = plot_w / max(n, 1)
-    # Wider bodies and a light-grey up candle keep every 24/96-bar slot visible
-    # on a white background; the old 68% white-on-white body read as a blank gap.
-    body_w = max(3, int(step_x * 0.86))
-    for idx, b in enumerate(sub):
-        _ts, o, h, lo, c = float(b[0]), float(b[1]), float(b[2]), float(b[3]), float(b[4])
-        cx = int(round(left_m + (idx + 0.5) * step_x))
-        yh, yl, yo, yc = price_to_y(h), price_to_y(lo), price_to_y(o), price_to_y(c)
-        draw.line([(cx, yh), (cx, yl)], fill=(0, 0, 0), width=1)
-        top_b, bot_b = min(yo, yc), max(yo, yc)
-        if bot_b - top_b < 2:
-            bot_b = top_b + 2
-        x0, x1 = cx - body_w // 2, cx + body_w // 2
-        if c >= o:
-            draw.rectangle([x0, top_b, x1, bot_b], fill=(232, 232, 232), outline=(0, 0, 0), width=1)
-        else:
-            draw.rectangle([x0, top_b, x1, bot_b], fill=(0, 0, 0), outline=(0, 0, 0), width=1)
-
-    # 结构端点:仅内部运营图绘制,公开信号图隐藏内部拐点算法坐标
-    if not public_mode:
-        labeled = 0
-        for p_idx, p_price, p_kind in reversed(near_piv):
-            if p_idx is None or not (0 <= p_idx < n):
-                continue
-            pcx = int(round(left_m + (p_idx + 0.5) * step_x))
-            py = price_to_y(p_price)
-            is_high = p_kind.startswith("h")
-            if is_high:
-                tri = [(pcx, max(top_m + 12, py - 4)),
-                       (pcx - 5, max(top_m + 4, py - 12)),
-                       (pcx + 5, max(top_m + 4, py - 12))]
-                ly = max(top_m + 2, py - 26)
-            else:
-                tri = [(pcx, min(top_m + plot_h - 12, py + 4)),
-                       (pcx - 5, min(top_m + plot_h - 4, py + 12)),
-                       (pcx + 5, min(top_m + plot_h - 4, py + 12))]
-                ly = min(top_m + plot_h - 18, py + 14)
-            draw.polygon(tri, fill=(60, 60, 60))
-            if labeled < 2:
-                label = f"P{'H' if is_high else 'L'} {_fmt_px(p_price)}"
-                w_txt = text_w(label, font_s)
-                right_lim = left_m + plot_w - w_txt - 2
-                lx = pcx + 7
-                if lx > right_lim:              # 贴近右沿:改放三角左侧,别压住最后几根 K 线
-                    lx = max(left_m + 2, pcx - w_txt - 7)
-                draw.rectangle([lx - 1, ly - 1, lx + w_txt + 1, ly + 13],
-                               fill=(255, 255, 255))     # 底衬:标注压影线时仍可读
-                draw.text((lx, ly), label, fill=(60, 60, 60), font=font_s)
-                labeled += 1
-
-    # 触发 bar 标记(若在窗口内)
-    m_idx = (n - 1) if mark_index is None else max(0, min(n - 1, mark_index))
-    mcx = int(round(left_m + (m_idx + 0.5) * step_x))
-    mb = sub[m_idx]
-    if direction is not None and direction < 0:
-        my = max(top_m + 6, price_to_y(float(mb[2])) - 14)
-        draw.polygon([(mcx, my + 8), (mcx - 5, my), (mcx + 5, my)], fill=(0, 0, 0))
-    else:
-        my = min(top_m + plot_h - 6, price_to_y(float(mb[3])) + 14)
-        draw.polygon([(mcx, my - 8), (mcx - 5, my), (mcx + 5, my)], fill=(0, 0, 0))
-
-    rail_flush()
-    draw.rectangle([left_m, top_m, left_m + plot_w, top_m + plot_h],
-                   outline=(0, 0, 0), width=2)
-
-    ts_first = datetime.fromtimestamp(int(sub[0][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
-    ts_last = datetime.fromtimestamp(int(sub[-1][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
-    scale_tag = "LOG" if use_log else "LIN"
-    head = f"{symbol} [{tf_label}] {title_tag} [{scale_tag}]".strip()
-    draw.text((left_m, 6), head, fill=(0, 0, 0), font=font_b)
-    draw.text((left_m, 36), f"{ts_first} -> {ts_last}", fill=(90, 90, 90), font=font_s)
-    step_txt = f"{step_min}m" if step_min else "?"
-    foot = f"bars {n} · step {step_txt} · gaps {gaps}"
-    if level_note and not public_mode:
-        foot = f"{foot} · {level_note}"
-    draw.text((left_m, 48), foot, fill=(120, 120, 120), font=font_s)
-
-    # 结构摘要(公开信号图仅展示 R:R,隐藏内部水平带/触边/ATR 参数)
-    bits: list[str] = []
-    rr = rr_multiple(d_int, entry_price, stop_price, target_price)
-    if rr is not None:
-        bits.append(f"R:R {rr:.2f}")
-    if not public_mode:
-        pos_txt = box_position_text(entry_price, box_lo, box_hi)
-        if atr is not None and entry_price:
-            bits.append(f"ATR {atr / entry_price:.2%}")
-        if box_lo is not None and box_hi is not None and entry_price:
-            bits.append((f"水平带跨度 {(box_hi - box_lo) / entry_price:.2%}" if cjk_ok
-                         else f"BAND span {(box_hi - box_lo) / entry_price:.2%}"))
-        if zone_touches:
-            bits.append((f"触边 {int(zone_touches)} 次" if cjk_ok
-                         else f"touch {int(zone_touches)}x"))
-        if pos_txt:
-            bits.append((f"入场带内 {pos_txt}") if cjk_ok
-                        else f"entry in band {box_position_pct(entry_price, box_lo, box_hi):.0%}")
-    if bits:
-        summary = " | ".join(bits)
-        draw.text((max(left_m, left_m + plot_w - text_w(summary, font_s)), 36),
-                  summary, fill=(50, 50, 50), font=font_s)
-
-    # 底轴时间标签(约 5 个)
-    for k in range(5):
-        idx = int(round((n - 1) * k / 4.0))
-        ts = int(sub[idx][0])
-        dt = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
-        x = int(left_m + (idx + 0.5) * step_x)
-        tw = text_w(dt, font_s)
-        draw.text((min(max(left_m, x - tw / 2), left_m + plot_w - tw),
-                   H - bot_m + 12), dt, fill=(90, 90, 90), font=font_s)
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
-
-
-def render_level_map_png(
-    symbol: str, tf_label: str, bars: list, levels: list, *,
-    regime_text: str = "", topo_text: str = "", atr: float = 0.0,
-    max_bars: int = 96, log_scale: bool = True,
-) -> Optional[bytes]:
-    """渲染指定标的在目标尺度的【待交易原子水平位全景图】(含多条支撑/阻力带与现价位置)。"""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:
-        return None
-    if not bars or len(bars) < 5:
-        return None
-    sub = list(bars[-max_bars:])
-    n, last_px = len(sub), float(sub[-1][4])
-    p_max, p_min = max(float(b[2]) for b in sub), min(float(b[3]) for b in sub)
-    bar_span = max(p_max - p_min, last_px * 0.005, 1e-9)
-
-    vis_levels = []
-    for lv in levels:
-        lo_b = float(getattr(lv, "band_lo", getattr(lv, "lo", 0.0)))
-        hi_b = float(getattr(lv, "band_hi", getattr(lv, "hi", 0.0)))
-        if hi_b <= 0:
-            continue
-        vis_levels.append(lv)
-        if p_min - bar_span * 0.45 <= lo_b and hi_b <= p_max + bar_span * 0.45:
-            p_max, p_min = max(p_max, hi_b), min(p_min, lo_b)
-
-    use_log = bool(log_scale and p_min > 0 and p_max > 0)
-    if use_log:
-        log_max, log_min = math.log(p_max), math.log(p_min)
-        log_pad = max(log_max - log_min, 0.002, 1e-8) * 0.08
-        log_hi, log_lo = log_max + log_pad, log_min - log_pad
-        y_hi, y_lo = math.exp(log_hi), math.exp(log_lo)
-    else:
-        pad = max(p_max - p_min, p_max * 0.002, 1e-8) * 0.08
-        y_hi, y_lo = p_max + pad, p_min - pad
-
-    W, H = 1060, 580
-    left_m, right_m, top_m, bot_m = 62, 195, 64, 44
-    plot_w, plot_h = W - left_m - right_m, H - top_m - bot_m
-    img = Image.new("RGB", (W, H), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    def _fnt(sz: int, bold: bool = False):
-        for nm in (("msyhbd.ttc", "simhei.ttf", "arialbd.ttf") if bold else ("msyh.ttc", "simhei.ttf", "arial.ttf")):
-            try:
-                return ImageFont.truetype(nm, sz)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-
-    font_s, font_b = _fnt(11), _fnt(15, bold=True)
-
-    def price_to_y(p: float) -> int:
-        pf = float(p)
-        frac = ((log_hi - math.log(pf)) / (log_hi - log_lo)) if (use_log and pf > 0) else ((y_hi - pf) / (y_hi - y_lo))
-        return int(round(top_m + max(0.0, min(1.0, frac)) * plot_h))
-
-    rail: list[list] = []
-
-    def hline(y: int, on: int, off: int, fill, width: int = 1, x_start: int = left_m) -> None:
-        x = max(left_m, int(x_start))
-        while x < left_m + plot_w:
-            draw.line([(x, y), (min(x + on, left_m + plot_w), y)], fill=fill, width=width)
-            x += on + off
-
-    step_x = plot_w / float(max(n, 1))
-    body_half = max(1, int(round(step_x * 0.36)))
-    res_i = sup_i = 0
-    for lv in vis_levels:
-        lo_b = float(getattr(lv, "band_lo", getattr(lv, "lo", 0.0)))
-        hi_b = float(getattr(lv, "band_hi", getattr(lv, "hi", 0.0)))
-        if hi_b < y_lo or lo_b > y_hi:
-            continue
-        is_res = "res" in str(getattr(getattr(lv, "role", None), "value", getattr(lv, "role", ""))).lower()
-        if is_res:
-            res_i += 1
-            tag_p, fill_rgb, line_rgb = f"R{res_i}", (252, 235, 235), (185, 40, 40)
-        else:
-            sup_i += 1
-            tag_p, fill_rgb, line_rgb = f"S{sup_i}", (232, 247, 236), (30, 130, 60)
-        orig_ts = int(getattr(lv, "origin_ts", 0) or 0)
-        x0_idx = next((idx_b for idx_b, b in enumerate(sub) if orig_ts > 0 and int(b[0]) >= orig_ts), 0)
-        bx0 = int(round(left_m + x0_idx * step_x))
-        y1, y2 = price_to_y(min(hi_b, y_hi)), price_to_y(max(lo_b, y_lo))
-        if y2 < y1:
-            y1, y2 = y2, y1
-        y2 = max(y1 + 2, y2)
-        draw.rectangle([bx0, y1, left_m + plot_w, y2], fill=fill_rgb)
-        hline(y1, 6, 3, line_rgb, 1, x_start=bx0)
-        hline(y2, 6, 3, line_rgb, 1, x_start=bx0)
-        k_raw = str(getattr(getattr(lv, "kind", None), "value", getattr(lv, "kind", ""))).upper()
-        k_str = "FLIP" if getattr(lv, "flipped", False) else ("ORIG" if k_raw == "ORIGIN" else ("EQL" if k_raw == "EQUAL" else "SWG"))
-        ref_e = lo_b if is_res else hi_b
-        dp = (ref_e - last_px) / last_px * 100.0 if last_px > 0 else 0.0
-        rail.append([(y1 + y2) // 2, f"{tag_p}[{k_str}] {_fmt_px(ref_e)} ({dp:+.1f}%)", line_rgb])
-
-    tick_vals = [(math.exp(log_lo + (log_hi - log_lo) * (k / 4.0)) if use_log else y_lo + (y_hi - y_lo) * (k / 4.0)) for k in range(5)]
-    t_step = abs(tick_vals[1] - tick_vals[0]) if len(tick_vals) > 1 else 0.0
-    t_dec = max(0, min(8, 2 - int(math.floor(math.log10(t_step))))) if t_step > 0 else 2
-    for pv in tick_vals:
-        yk = price_to_y(pv)
-        for x in range(left_m, left_m + plot_w, 12):
-            draw.point((x, yk), fill=(210, 210, 210))
-        draw.text((4, yk - 6), f"{pv:.{t_dec}f}", fill=(110, 110, 110), font=font_s)
-
-    for i, b in enumerate(sub):
-        o, h, l, c = float(b[1]), float(b[2]), float(b[3]), float(b[4])
-        cx = int(round(left_m + (i + 0.5) * step_x))
-        draw.line([(cx, price_to_y(h)), (cx, price_to_y(l))], fill=(30, 30, 30), width=1)
-        yo, yc = price_to_y(o), price_to_y(c)
-        tb, bb = min(yo, yc), max(min(yo, yc) + 1, max(yo, yc))
-        draw.rectangle([cx - body_half, tb, cx + body_half, bb], fill=(255, 255, 255) if c >= o else (35, 35, 35), outline=(20, 20, 20))
-
-    y_last = price_to_y(last_px)
-    hline(y_last, 3, 3, (20, 90, 200), 1)
-    rail.append([y_last, f"LAST {_fmt_px(last_px)}", (20, 90, 200)])
-    rail.sort(key=lambda r: r[0])
-    last_y = -(10**6)
-    for y, txt, fl in rail:
-        yy = min(max(int(y), last_y + 13), H - bot_m - 6)
-        draw.text((left_m + plot_w + 8, yy - 6), txt, fill=fl, font=font_s)
-        last_y = yy
-
-    draw.rectangle([left_m, top_m, left_m + plot_w, top_m + plot_h], outline=(0, 0, 0), width=2)
-    t0 = datetime.fromtimestamp(int(sub[0][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
-    t1 = datetime.fromtimestamp(int(sub[-1][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
-    draw.text((left_m, 8), f"{symbol} [{tf_label}] LEVEL MAP · LAST {_fmt_px(last_px)}", fill=(0, 0, 0), font=font_b)
-    sh = "  |  ".join(x for x in (f"{t0} -> {t1}", regime_text, topo_text, f"ATR {atr / last_px:.2%}" if (atr > 0 and last_px > 0) else "") if x)
-    draw.text((left_m, 36), sh, fill=(70, 70, 70), font=font_s)
-    for k in range(5):
-        idx = int(round((n - 1) * k / 4.0))
-        dt = datetime.fromtimestamp(int(sub[idx][0]) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M")
-        x = int(left_m + (idx + 0.5) * step_x)
-        draw.text((min(max(left_m, x - 28), left_m + plot_w - 56), H - bot_m + 12), dt, fill=(90, 90, 90), font=font_s)
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
-
-
-
 class NotificationGuard:
-    """Runner boundary: notifier method failures cannot abort bookkeeping.
+    """Runner boundary: notifier method failures cannot abort bookkeeping."""
 
-    Does not create threads or change synchronous/async transport policy. The live
-    entrypoint continues to provide an async TelegramNotifier.
-    """
-
-    def __init__(self, notifier) -> None:
+    def __init__(self, notifier: Any) -> None:
         self._notifier = notifier
         self.errors = 0
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         value = getattr(self._notifier, name)
         if not name.startswith("send") or not callable(value):
             return value
 
-        def guarded(*args, **kwargs):
+        def guarded(*args: Any, **kwargs: Any) -> Any:
             try:
                 return value(*args, **kwargs)
-            except Exception:
+            except Exception as exc:
                 self.errors += 1
+                _LOG.warning("notification guard caught %s in %s: %s", type(exc).__name__, name, exc)
                 return False
+
         return guarded
 
 
 class TelegramNotifier:
-    """双通道发信器(公开信号 Bot + 私有运营 Bot) + 黑白 K 线图同条消息发送。
+    """双通道发信器(公开信号 Bot + 私有运营 Bot) + 黑白 K 线图同条消息发送。"""
 
-    分流由 `_KIND_CHANNEL` 决定(见模块 docstring),调用方不需要、也不允许
-    手写通道开关:一张表就是唯一事实。无网络 / 未配置 / 任何异常都只记账,
-    永不 raise —— 通知链路不能反噬交易链路。
-    """
-
-    def __init__(self, secrets: Optional[dict] = None, *,
-                 session: Optional[requests.Session] = None,
-                 dropped_log: Optional[Path] = None,
-                 max_retries: int = RETRIES,
-                 async_mode: bool = False) -> None:
-        secrets = secrets or {}
-        self._token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-        self._chat_id = secrets.get("TELEGRAM_CHAT_ID", "")
-        # 运营通道:未单独配置时回退到信号机器人(宁可与信号同房间,也不静默丢
-        # 告警);是否"真的分开了"由 ops_channel_separate 如实回答。
-        # 注意:secrets_loader 已把 `TELEGRAM_TRADE_*` 回退填满,所以这里不能
-        # 用"键存在与否"判断显式配置 —— 必须比较解析后的 token/chat 是否不同。
-        self._ops_token = secrets.get("TELEGRAM_TRADE_BOT_TOKEN", "") or self._token
-        self._ops_chat_id = secrets.get("TELEGRAM_TRADE_CHAT_ID", "") or self._chat_id
+    def __init__(
+        self,
+        secrets: Mapping[str, Any] | None = None,
+        *,
+        session: requests.Session | None = None,
+        dropped_log: Path | str | None = None,
+        max_retries: int = RETRIES,
+        async_mode: bool = False,
+    ) -> None:
+        sec = secrets or {}
+        self._token = str(sec.get("TELEGRAM_BOT_TOKEN", ""))
+        self._chat_id = str(sec.get("TELEGRAM_CHAT_ID", ""))
+        self._ops_token = str(sec.get("TELEGRAM_TRADE_BOT_TOKEN", "")) or self._token
+        self._ops_chat_id = str(sec.get("TELEGRAM_TRADE_CHAT_ID", "")) or self._chat_id
         self.max_retries = int(max_retries)
+        self._lock = threading.Lock()
         self.dropped = 0
         self.sent = 0
         self.dropped_log = Path(dropped_log) if dropped_log else None
         self.session = session or requests.Session()
-        proxy = secrets.get("TELEGRAM_PROXY")
+        proxy = sec.get("TELEGRAM_PROXY")
         if not proxy and session is None:
-            import urllib.request
             sys_p = urllib.request.getproxies()
             proxy = sys_p.get("https") or sys_p.get("http")
         if proxy:
-            self.session.proxies = {"http": proxy, "https": proxy}
+            self.session.proxies = {"http": str(proxy), "https": str(proxy)}
         self.async_mode = bool(async_mode)
-        self._q: queue.Queue = queue.Queue(maxsize=256)
+        self._q: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]] | None] = (
+            queue.Queue(maxsize=256)
+        )
         if self.async_mode:
             t = threading.Thread(target=self._worker, name="tg-notifier", daemon=True)
             t.start()
@@ -892,173 +230,191 @@ class TelegramNotifier:
 
     @property
     def ops_channel_separate(self) -> bool:
-        """运营通道是否真的与信号通道分开(启动日志据此提示)。
-
-        判据是解析后的 token/chat 不同 —— 只设了一个键、另一个回退,仍然算
-        分开(比如同一 Bot 推到运维群)。
-        """
+        """运营通道是否真的与信号通道分开(启动日志据此提示)。"""
         if not (self._ops_token and self._ops_chat_id):
             return False
-        return (self._ops_token != self._token
-                or self._ops_chat_id != self._chat_id)
-
-    @property
-    def trade_configured(self) -> bool:
-        """历史别名:运营通道可用。"""
-        return self.ops_configured
+        return self._ops_token != self._token or self._ops_chat_id != self._chat_id
 
     def _worker(self) -> None:
         while True:
             item = self._q.get()
             if item is None:
+                self._q.task_done()
                 break
             try:
                 fn, args, kwargs = item
                 fn(*args, **kwargs)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_miss("worker", exc)
             finally:
                 self._q.task_done()
 
-    def _dispatch(self, fn, *args, **kwargs) -> bool:
+    def _dispatch(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
         if self.async_mode:
             try:
                 self._q.put_nowait((fn, args, kwargs))
                 return True
             except queue.Full:
-                self.dropped += 1
+                with self._lock:
+                    self.dropped += 1
                 return False
         try:
             return bool(fn(*args, **kwargs))
-        except Exception as e:
-            self._record_miss("dispatch", e)
+        except Exception as exc:
+            self._record_miss("dispatch", exc)
             return False
 
     def _log_miss(self, kind: str, err: Exception) -> None:
-        """只落漏发明细,不动计数(供"有文本兜底、不重复计一条"的路径使用)。"""
+        """只落漏发明细,不动计数。"""
         if self.dropped_log is None:
             return
         try:
             self.dropped_log.parent.mkdir(parents=True, exist_ok=True)
-            rec = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                   "kind": kind, "err": f"{type(err).__name__}: {str(err)[:160]}"}
+            rec = {
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "kind": kind,
+                "err": f"{type(err).__name__}: {str(err)[:160]}",
+            }
             with self.dropped_log.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        except OSError:
-            pass
+        except OSError as exc:
+            _LOG.debug("failed to append dropped telegram log %s: %s", self.dropped_log, exc)
 
     def _record_miss(self, kind: str, err: Exception) -> None:
-        self.dropped += 1
+        with self._lock:
+            self.dropped += 1
         self._log_miss(kind, err)
 
     def flush_dropped_report(self) -> int:
-        """连接恢复后补报一次累计漏失;成功才清零,返回本次补报的条数。
-
-        修前成功也**不清零**:同一次故障会被反复播报;而补报自身失败时
-        `_record_miss` 又 +1,漏发数越报越大。现在失败时原数保留。
-        """
-        n = self.dropped
-        if n <= 0:
-            return 0
-        self.dropped = 0
+        """连接恢复后补报一次累计漏失;成功才清零,返回本次补报的条数。"""
+        with self._lock:
+            count = self.dropped
+            if count <= 0:
+                return 0
+            self.dropped = 0
         try:
             ok = self.send_alert(
-                f"⚠️ 此前 Telegram 连接故障\n📉 累计漏发 {n} 条消息(已补报)")
-        except Exception:
+                f"⚠️ 此前 Telegram 连接故障\n📉 累计漏发 {count} 条消息(已补报)"
+            )
+        except Exception as exc:
+            _LOG.debug("flush_dropped_report alert raised: %s", exc)
             ok = False
         if not ok:
-            self.dropped = n
+            with self._lock:
+                # 减去本次补报失败自身可能多计的 1 条,保留并发新增的漏发数
+                extra = max(0, self.dropped - 1)
+                self.dropped = count + extra
             return 0
-        return n
+        return count
 
     def _maybe_report_drops(self) -> None:
-        """每成功投递一条就检查一次漏发账;0 ⇒ 不动(补报自身成功不会再套娃)。"""
-        if self.dropped > 0:
+        """每成功投递一条就检查一次漏发账;0 ⇒ 不动。"""
+        with self._lock:
+            pending = self.dropped
+        if pending > 0:
             self.flush_dropped_report()
 
-    def _post_text_chunks(self, token: str, chat_id: str, kind: str,
-                          body: str) -> bool:
-        """按 Telegram 单条上限逐条发送;任一条失败即返回 False(不再静默截断)。"""
+    def _post_with_retry(
+        self,
+        url: str,
+        *,
+        data: Mapping[str, Any],
+        files: Mapping[str, Any] | None = None,
+        label: str = "tg",
+    ) -> tuple[bool, Exception | None]:
+        last_err: Exception | None = None
+        for attempt in range(self.max_retries):
+            retry_after: float | None = None
+            try:
+                post_kwargs: dict[str, Any] = {"data": dict(data), "timeout": TIMEOUT_S}
+                if files is not None:
+                    post_kwargs["files"] = dict(files)
+                resp = self.session.post(url, **post_kwargs)
+                payload = resp.json()
+                if resp.status_code == 200 and payload.get("ok"):
+                    with self._lock:
+                        self.sent += 1
+                    return True, None
+                retry_after = _retry_after_seconds(payload)
+                last_err = NotificationError(
+                    f"{label} {resp.status_code}: {str(payload)[:160]}"
+                )
+            except Exception as exc:
+                last_err = exc
+            if attempt + 1 < self.max_retries:
+                time.sleep(_retry_delay(attempt, retry_after))
+        return False, last_err
+
+    def _post_text_chunks(self, token: str, chat_id: str, kind: str, body: str) -> bool:
+        """按 Telegram 单条上限逐条发送;任一条失败即返回 False。"""
         ok = True
         for chunk in split_text(body, MAX_LEN):
             if not self._post_text_sync(token, chat_id, kind, chunk):
                 ok = False
-        if ok:                       # 整条逻辑消息投递完成后再补报漏发账
+        if ok:
             self._maybe_report_drops()
         return ok
 
     def _post_text_sync(self, token: str, chat_id: str, kind: str, body: str) -> bool:
         if not (token and chat_id):
-            self._record_miss(kind, RuntimeError("telegram 未配置"))
+            self._record_miss(kind, NotificationError("telegram 未配置"))
             return False
-        last_err: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            retry_after: Optional[float] = None
-            try:
-                resp = self.session.post(
-                    API.format(token=token),
-                    data={"chat_id": chat_id, "text": body,
-                          "disable_web_page_preview": "true"},
-                    timeout=TIMEOUT_S)
-                payload = resp.json()
-                if resp.status_code == 200 and payload.get("ok"):
-                    self.sent += 1
-                    return True
-                retry_after = _retry_after_seconds(payload)
-                last_err = RuntimeError(
-                    f"tg {resp.status_code}: {str(payload)[:160]}")
-            except Exception as e:
-                last_err = e
-            if attempt + 1 < self.max_retries:      # 预算用尽后不再白等一轮
-                time.sleep(_retry_delay(attempt, retry_after))
-        self._record_miss(kind, last_err or RuntimeError("unknown"))
+        ok, last_err = self._post_with_retry(
+            API.format(token=token),
+            data={"chat_id": chat_id, "text": body, "disable_web_page_preview": "true"},
+            label="tg",
+        )
+        if ok:
+            return True
+        self._record_miss(kind, last_err or NotificationError("unknown"))
         return False
 
-    def _post_photo_sync(self, token: str, chat_id: str, kind: str,
-                         caption: str, png_bytes: bytes) -> bool:
+    def _post_photo_sync(
+        self,
+        token: str,
+        chat_id: str,
+        kind: str,
+        caption: str,
+        png_bytes: bytes,
+    ) -> bool:
         if not (token and chat_id):
-            self._record_miss(kind, RuntimeError("telegram 未配置"))
+            self._record_miss(kind, NotificationError("telegram 未配置"))
             return False
-        cap = (caption if len(caption) <= MAX_CAPTION_LEN
-               else caption[:MAX_CAPTION_LEN - 12] + "…[截断]")
-        last_err: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            retry_after: Optional[float] = None
-            try:
-                resp = self.session.post(
-                    API_PHOTO.format(token=token),
-                    data={"chat_id": chat_id, "caption": cap},
-                    files={"photo": ("kline.png", png_bytes, "image/png")},
-                    timeout=TIMEOUT_S)
-                payload = resp.json()
-                if resp.status_code == 200 and payload.get("ok"):
-                    self.sent += 1
-                    return True
-                retry_after = _retry_after_seconds(payload)
-                last_err = RuntimeError(
-                    f"tg photo {resp.status_code}: {str(payload)[:160]}")
-            except Exception as e:
-                last_err = e
-            if attempt + 1 < self.max_retries:
-                time.sleep(_retry_delay(attempt, retry_after))
-        # 图片失败不单独计一条(下面还有纯文本兜底);文本也失败才记一次漏发,
-        # 图片原因只进明细日志,避免同一条消息被计成两条。
+        cap = (
+            caption
+            if len(caption) <= MAX_CAPTION_LEN
+            else caption[: MAX_CAPTION_LEN - 12] + "…[截断]"
+        )
+        ok, last_err = self._post_with_retry(
+            API_PHOTO.format(token=token),
+            data={"chat_id": chat_id, "caption": cap},
+            files={"photo": ("kline.png", png_bytes, "image/png")},
+            label="tg photo",
+        )
+        if ok:
+            return True
         if self._post_text_sync(token, chat_id, kind, cap):
             return True
         if last_err is not None:
             self._log_miss(f"{kind}:photo", last_err)
         return False
 
-    def _post_photo_or_render(self, token: str, chat_id: str, kind: str,
-                              body: str, png_bytes: Optional[bytes],
-                              png_factory: Optional[Callable[[], Optional[bytes]]]) -> bool:
+    def _post_photo_or_render(
+        self,
+        token: str,
+        chat_id: str,
+        kind: str,
+        body: str,
+        png_bytes: bytes | None,
+        png_factory: Callable[[], bytes | None] | None,
+    ) -> bool:
         """先拿到图(必要时此刻才渲染)再发;渲染失败退回纯文本,不丢消息本身。"""
         png = png_bytes
         if png is None and png_factory is not None:
             try:
                 png = png_factory()
-            except Exception as e:      # 绘图异常(坏 K 线/字体)不得吞掉文字通知
-                self._record_miss("render", e)
+            except Exception as exc:
+                self._record_miss("render", exc)
                 png = None
         if png:
             if len(body) <= MAX_CAPTION_LEN:
@@ -1066,25 +422,27 @@ class TelegramNotifier:
                 if ok:
                     self._maybe_report_drops()
                 return ok
-            # Preserve watch conditions/status instead of silently chopping
-            # them off a photo caption. Both sends run on the same worker.
             text_ok = self._post_text_chunks(token, chat_id, kind, body)
-            photo_ok = self._post_photo_sync(token, chat_id, kind, "K线结构图（详见配套文字）", png)
+            photo_ok = self._post_photo_sync(
+                token, chat_id, kind, "K线结构图（详见配套文字）", png
+            )
             return text_ok and photo_ok
         return self._post_text_chunks(token, chat_id, kind, body)
 
     def channel_of(self, kind: str) -> str:
-        """消息类型 → 通道(未知类型落运营通道:宁可多给运营看,也不进公开群)。"""
+        """消息类型 → 通道(未知类型落运营通道)。"""
         return _KIND_CHANNEL.get(kind, CHANNEL_OPS)
 
-    def send(self, kind: str, text: str, *, channel: Optional[str] = None,
-             png_bytes: Optional[bytes] = None,
-             png_factory: Optional[Callable[[], Optional[bytes]]] = None) -> bool:
-        """发信(图文同条消息 + 按类型分流通道);异常完全隔离,绝不 raise。
-
-        `png_factory` 是**延迟渲染**:异步模式下渲染发生在守护线程里,实盘主循环
-        只付出一次入队成本,绘图耗时不会挤进策略决策窗口。
-        """
+    def send(
+        self,
+        kind: str,
+        text: str,
+        *,
+        channel: str | None = None,
+        png_bytes: bytes | None = None,
+        png_factory: Callable[[], bytes | None] | None = None,
+    ) -> bool:
+        """发信(图文同条消息 + 按类型分流通道);异常完全隔离,绝不 raise。"""
         chan = channel or self.channel_of(kind)
         if chan == CHANNEL_SIGNAL:
             token, chat_id = self._token, self._chat_id
@@ -1092,45 +450,49 @@ class TelegramNotifier:
             token, chat_id = self._ops_token, self._ops_chat_id
         tag = _KIND_TAG.get(kind, kind)
         prefix = "" if text.startswith("【") else f"【{tag}】\n"
-        body = prefix + text          # 长文本由 _post_text_chunks 切分,不再截断
+        body = prefix + text
         if png_bytes or png_factory is not None:
-            return self._dispatch(self._post_photo_or_render, token, chat_id,
-                                  kind, body, png_bytes, png_factory)
+            return self._dispatch(
+                self._post_photo_or_render, token, chat_id, kind, body, png_bytes, png_factory
+            )
         return self._dispatch(self._post_text_chunks, token, chat_id, kind, body)
 
     # ------------------------------------------------------------------
     # 四类模板(每行仅一条关键信息,行首配 Emoji;图文同条消息)
     # ------------------------------------------------------------------
 
-    def send_signal(self, symbol: str, event_id: str, side: str, route: str,
-                    ref_price: float, invalid: float, size_note: str = "",
-                    regime: str = "", *, tf_label: str = "",
-                    bars: Optional[Sequence[tuple]] = None,
-                    box_lo: Optional[float] = None,
-                    box_hi: Optional[float] = None,
-                    target_1: Optional[float] = None,
-                    zone_lo: Optional[float] = None,
-                    zone_hi: Optional[float] = None,
-                    zone_touches: Optional[int] = None,
-                    pivots: Optional[Sequence[tuple]] = None,
-                    atr: Optional[float] = None,
-                    exec_status: str = "",
-                    decision_ts: Optional[int] = None,
-                    watch_details: Optional[dict] = None,
-                    price_context: Optional[dict] = None,
-                    box_start_ts: Optional[int] = None,
-                    bar_tf: str = "",
-                    level_kind: str = "",
-                    level_role: str = "") -> bool:
-        """信号广播(公开通道):面向外部使用者的精简交易信号卡。
-
-        保密纪律(构建技术壁垒):
-        1. 隐藏核心算法思想:不输出原语事件(ACCEPT/REJECT)、市场状态(Regime)、
-           原子水平位带/事件区间数值、触边次数、结构子形态(R3_TRAP/A1_TIGHT/FLIPPED_BOX_EDGE)
-           及内部 ATR 距离过滤指标;
-        2. 不输出本账户的仓位比例、杠杆和权益。处置句只说明本系统是否下单,
-           不含账户数字。不输出子形态枚举与水平位种类。
-        """
+    def send_signal(
+        self,
+        symbol: str,
+        event_id: str,
+        side: str,
+        route: str,
+        ref_price: float,
+        invalid: float,
+        size_note: str = "",
+        regime: str = "",
+        *,
+        tf_label: str = "",
+        bars: Sequence[Sequence[Any]] | None = None,
+        box_lo: float | None = None,
+        box_hi: float | None = None,
+        target_1: float | None = None,
+        zone_lo: float | None = None,
+        zone_hi: float | None = None,
+        zone_touches: int | None = None,
+        pivots: Sequence[Sequence[Any]] | None = None,
+        atr: float | None = None,
+        exec_status: str = "",
+        decision_ts: int | None = None,
+        watch_details: Mapping[str, Any] | None = None,
+        price_context: Mapping[str, Any] | None = None,
+        box_start_ts: int | None = None,
+        bar_tf: str = "",
+        level_kind: str = "",
+        level_role: str = "",
+    ) -> bool:
+        """信号广播(公开通道):面向外部使用者的精简交易信号卡(隐藏内部算法细节与账户信息)。"""
+        _ = (route, size_note, regime, level_kind, level_role)
         long_side = side in ("long", "buy", "多")
         dir_emoji = "🟢" if long_side else "🔴"
         d_int = 1 if long_side else -1
@@ -1156,20 +518,20 @@ class TelegramNotifier:
             lines.append(f"🏁 目标参考: {float(target_1):.8g}{rr_txt}")
         if exec_status:
             lines.append(f"🧭 处置: {exec_status}")
-        ctx = price_context or {}
         if price_context is not None:
-            if box_start_ts is None and ctx.get("box_start_ts") is not None:
+            if box_start_ts is None and price_context.get("box_start_ts") is not None:
                 try:
-                    box_start_ts = int(ctx["box_start_ts"])
+                    box_start_ts = int(price_context["box_start_ts"])
                 except (TypeError, ValueError):
                     box_start_ts = None
-            px, stamp = ctx.get("snapshot_price"), ctx.get("snapshot_ts")
+            px, stamp = price_context.get("snapshot_price"), price_context.get("snapshot_ts")
             if px is not None and stamp is not None:
-                sampled = datetime.fromtimestamp(int(stamp) / 1000, tz=timezone.utc).strftime("%m-%d %H:%M:%S UTC")
+                sampled = datetime.fromtimestamp(int(stamp) / 1000, tz=timezone.utc).strftime(
+                    "%m-%d %H:%M:%S UTC"
+                )
                 lines.append(f"💹 实时快照: {float(px):.8g} ({sampled})")
         if watch_details:
-            for key, label in (("watch_price", "候选触发价"),
-                               ("prog_price", "观察失效价")):
+            for key, label in (("watch_price", "候选触发价"), ("prog_price", "观察失效价")):
                 value = watch_details.get(key)
                 if value is not None:
                     lines.append(f"👁️ {label}: {float(value):.8g}")
@@ -1177,22 +539,39 @@ class TelegramNotifier:
                 lines.append(f"⌛ 观察窗口: {watch_details['max_wait_hours']} 小时")
         if decision_ts:
             try:
-                stamp = datetime.fromtimestamp(
-                    int(decision_ts) / 1000.0, tz=timezone.utc).strftime("%m-%d %H:%M UTC")
-                lines.append(f"🕒 信号时间: {stamp}")
-            except (TypeError, ValueError, OSError, OverflowError):
-                pass
-        return self.send("signal", "\n".join(lines),
-                         png_factory=self._signal_png_factory(
-                             symbol=symbol, event_id=event_id, side=side,
-                             tf_label=tf_label, bar_tf=bar_tf, bars=bars, box_lo=box_lo,
-                             box_hi=box_hi, ref_price=ref_price, invalid=invalid,
-                             target_1=target_1, zone_lo=zone_lo, zone_hi=zone_hi,
-                             zone_touches=zone_touches, pivots=pivots, atr=atr,
-                             direction=d_int, box_start_ts=box_start_ts))
+                stamp_txt = datetime.fromtimestamp(
+                    int(decision_ts) / 1000.0, tz=timezone.utc
+                ).strftime("%m-%d %H:%M UTC")
+                lines.append(f"🕒 信号时间: {stamp_txt}")
+            except (TypeError, ValueError, OSError, OverflowError) as exc:
+                _LOG.debug("invalid decision_ts=%r: %s", decision_ts, exc)
+        return self.send(
+            "signal",
+            "\n".join(lines),
+            png_factory=self._signal_png_factory(
+                symbol=symbol,
+                event_id=event_id,
+                side=side,
+                tf_label=tf_label,
+                bar_tf=bar_tf,
+                bars=bars,
+                box_lo=box_lo,
+                box_hi=box_hi,
+                ref_price=ref_price,
+                invalid=invalid,
+                target_1=target_1,
+                zone_lo=zone_lo,
+                zone_hi=zone_hi,
+                zone_touches=zone_touches,
+                pivots=pivots,
+                atr=atr,
+                direction=d_int,
+                box_start_ts=box_start_ts,
+            ),
+        )
 
     @staticmethod
-    def _signal_png_factory(**kw) -> Optional[Callable[[], Optional[bytes]]]:
+    def _signal_png_factory(**kw: Any) -> Callable[[], bytes | None] | None:
         """仅当真有 K 线时才建渲染闭包(无 K 线 ⇒ None ⇒ 纯文本发送)。"""
         bars = kw.get("bars")
         if not bars:
@@ -1205,55 +584,66 @@ class TelegramNotifier:
         if chart_tf and decision and chart_tf != decision:
             title = f"{title} {decision}"
 
-        def _render() -> Optional[bytes]:
+        def _render() -> bytes | None:
             return render_bw_kline_png(
-                bars, symbol=kw["symbol"], tf_label=chart_tf or decision,
+                bars,
+                symbol=kw["symbol"],
+                tf_label=chart_tf or decision,
                 title_tag=title,
-                box_lo=kw["box_lo"], box_hi=kw["box_hi"],
-                entry_price=kw["ref_price"], stop_price=kw["invalid"],
-                target_price=kw["target_1"], direction=kw["direction"],
-                zone_lo=kw["zone_lo"], zone_hi=kw["zone_hi"],
-                zone_touches=kw["zone_touches"], pivots=kw["pivots"],
-                atr=kw["atr"], max_bars=96,
+                box_lo=kw["box_lo"],
+                box_hi=kw["box_hi"],
+                entry_price=kw["ref_price"],
+                stop_price=kw["invalid"],
+                target_price=kw["target_1"],
+                direction=kw["direction"],
+                zone_lo=kw["zone_lo"],
+                zone_hi=kw["zone_hi"],
+                zone_touches=kw["zone_touches"],
+                pivots=kw["pivots"],
+                atr=kw["atr"],
+                max_bars=96,
                 box_start_ts=kw.get("box_start_ts"),
-                public_mode=True)
+                public_mode=True,
+            )
 
         return _render
 
-    def send_fill(self, symbol: str, fill_kind: str, qty: float, price: float,
-                  pnl: Optional[float] = None, note: str = "", *,
-                  tf_label: str = "", direction: Optional[int] = None,
-                  stop_price: Optional[float] = None,
-                  target_price: Optional[float] = None,
-                  box_lo: Optional[float] = None,
-                  box_hi: Optional[float] = None,
-                  bars: Optional[Sequence[tuple]] = None,
-                  entry_price: Optional[float] = None,
-                  price_label: str = "成交价格",
-                  zone_lo: Optional[float] = None,
-                  zone_hi: Optional[float] = None,
-                  pivots: Optional[Sequence[tuple]] = None,
-                  atr: Optional[float] = None,
-                  box_start_ts: Optional[int] = None,
-                  level_kind: str = "",
-                  level_role: str = "") -> bool:
-        """成交通知(运营通道,附黑白 K 线证据图)。
-
-        `price` = **本次事件价**(成交价 / 止损推进时的参考价);
-        `entry_price` = 该仓的真实建仓均价 —— 修前图上一律用 `price` 画
-        ENTRY 线,止损推进/平仓通知会把 ENTRY 画在"本次事件价"上(例如
-        2h 收盘价 321.33 顶替建仓价 324.02),图上止损/目标相对 ENTRY 的
-        关系整个错位,读图会把"空头锁利"误读成"止损跑到止盈侧"。
-        `price_label` 供非成交类事件改写金额行文案(如"参考价")。
-        """
+    def send_fill(
+        self,
+        symbol: str,
+        fill_kind: str,
+        qty: float,
+        price: float,
+        pnl: float | None = None,
+        note: str = "",
+        *,
+        tf_label: str = "",
+        direction: int | None = None,
+        stop_price: float | None = None,
+        target_price: float | None = None,
+        box_lo: float | None = None,
+        box_hi: float | None = None,
+        bars: Sequence[Sequence[Any]] | None = None,
+        entry_price: float | None = None,
+        price_label: str = "成交价格",
+        zone_lo: float | None = None,
+        zone_hi: float | None = None,
+        pivots: Sequence[Sequence[Any]] | None = None,
+        atr: float | None = None,
+        box_start_ts: int | None = None,
+        level_kind: str = "",
+        level_role: str = "",
+    ) -> bool:
+        """成交通知(运营通道,附黑白 K 线证据图)。"""
+        is_update = price_label.startswith("参考价")
         lines = [
-            f"⚡ {'持仓更新' if price_label.startswith('参考价') else '交易执行'}: {symbol}",
+            f"⚡ {'持仓更新' if is_update else '交易执行'}: {symbol}",
             f"🏷️ 动作类型: {fill_kind}",
         ]
         if tf_label:
             lines.append(f"⏱️ 所属周期: {tf_label}")
         lines.extend([
-            f"📦 {'持仓数量' if price_label.startswith('参考价') else '成交数量'}: {qty:.8g}",
+            f"📦 {'持仓数量' if is_update else '成交数量'}: {qty:.8g}",
             f"💵 {price_label}: {price:.8g}",
         ])
         if entry_price is not None:
@@ -1267,51 +657,73 @@ class TelegramNotifier:
         if box_lo is not None and box_hi is not None:
             lines.append(f"📦 水平带: [{float(box_lo):.8g}, {float(box_hi):.8g}]")
             pos_txt = box_position_text(
-                price if entry_price is None else entry_price, box_lo, box_hi)
+                price if entry_price is None else entry_price, box_lo, box_hi
+            )
             if pos_txt:
                 lines.append(f"📍 入场带内: {pos_txt}")
         if pnl is not None:
             pnl_emoji = "💰" if pnl >= 0 else "💸"
-            lines.append(f"{pnl_emoji} 本次平仓估算盈亏: {pnl:+.2f} USDT（按当前记账口径，非整笔净收益）")
+            lines.append(
+                f"{pnl_emoji} 本次平仓估算盈亏: {pnl:+.2f} USDT（按当前记账口径，非整笔净收益）"
+            )
         if note:
-            clean_note = (str(note)
-                          .replace("BREAKOUT_ACCEPTED e1_market", "ACCEPT (突破接受) | 市价")
-                          .replace("LEVEL_REJECTED e3_market", "REJECT (刺穿拒绝) | 市价")
-                          .replace("breakout_accepted_market", "ACCEPT 市价")
-                          .replace("level_rejected_market", "REJECT 市价")
-                          .replace("v21|sub_bar_partial_exit_on_arm", "锁利减仓并移至保本")
-                          .replace("v21|sub_bar_opp_lock", "对侧锁利"))
+            clean_note = str(note)
+            for src, dst in _FILL_NOTE_REPLACEMENTS:
+                clean_note = clean_note.replace(src, dst)
             lines.append(f"📝 详情说明: {clean_note}")
-        png_factory = None
+
+        png_factory: Callable[[], bytes | None] | None = None
         if bars:
-            png_factory = lambda: render_bw_kline_png(  # noqa: E731
-                bars, symbol=symbol, tf_label=tf_label,
-                title_tag=f"TRADE {fill_kind}",
-                box_lo=box_lo, box_hi=box_hi,
-                entry_price=(price if entry_price is None else float(entry_price)),
-                stop_price=stop_price,
-                target_price=target_price, direction=direction,
-                zone_lo=zone_lo, zone_hi=zone_hi, pivots=pivots, atr=atr,
-                max_bars=96, box_start_ts=box_start_ts,
-                level_note=level_note_text(level_kind, level_role))
+            note_txt = level_note_text(level_kind, level_role)
+            ent_px = price if entry_price is None else float(entry_price)
+
+            def _render_fill() -> bytes | None:
+                return render_bw_kline_png(
+                    bars,
+                    symbol=symbol,
+                    tf_label=tf_label,
+                    title_tag=f"TRADE {fill_kind}",
+                    box_lo=box_lo,
+                    box_hi=box_hi,
+                    entry_price=ent_px,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    direction=direction,
+                    zone_lo=zone_lo,
+                    zone_hi=zone_hi,
+                    pivots=pivots,
+                    atr=atr,
+                    max_bars=96,
+                    box_start_ts=box_start_ts,
+                    level_note=note_txt,
+                )
+
+            png_factory = _render_fill
         body = "\n".join(lines)
-        if price_label.startswith("参考价"):
+        if is_update:
             body = "【持仓更新】\n" + body
         return self.send("fill", body, png_factory=png_factory)
 
     def send_watch(self, symbol: str, tf_label: str, status: str, reason: str) -> bool:
-        reason = {"WATCH_INNER_EDGE_HIT": "价格命中关注内沿",
-                  "WATCH_NEAR_BOUNCE": "近价区触及后企稳确认",
-                  "N_fill_expiry": "等待期限已过",
-                  "position_exit": "持仓离场，关联关注作废"}.get(reason, reason)
-        return self.send("watch", f"👁️ 价格关注更新: {symbol}\n"
-                         f"⏱️ 所属周期: {tf_label}\n状态: {status}\n原因: {reason}\n"
-                         "关注触发不等于成交，成交以运营通道开仓通知为准。")
+        pretty_reason = _WATCH_REASONS.get(reason, reason)
+        return self.send(
+            "watch",
+            f"👁️ 价格关注更新: {symbol}\n"
+            f"⏱️ 所属周期: {tf_label}\n状态: {status}\n原因: {pretty_reason}\n"
+            "关注触发不等于成交，成交以运营通道开仓通知为准。",
+        )
 
-    def send_daily(self, date: str, equity: float, day_pnl: float,
-                   n_signals: int, n_fills: int, n_positions: int,
-                   drawdown_frac: float) -> bool:
-        """日结走**运营通道**:账户权益/持仓数属于私有信息,绝不进公开信号群。"""
+    def send_daily(
+        self,
+        date: str,
+        equity: float,
+        day_pnl: float,
+        n_signals: int,
+        n_fills: int,
+        n_positions: int,
+        drawdown_frac: float,
+    ) -> bool:
+        """日结走运营通道:账户权益/持仓数属于私有信息,绝不进公开信号群。"""
         lines = [
             f"📅 结算日期: {date}",
             f"🏦 账户权益: {equity:.2f} USDT",
@@ -1324,14 +736,27 @@ class TelegramNotifier:
         return self.send("daily", "\n".join(lines))
 
     def send_alert(self, text: str) -> bool:
-        """告警走**运营通道**(熔断/断线/下单失败都是运营信息,不能广播)。"""
+        """告警走运营通道(熔断/断线/下单失败都是运营信息,不能广播)。"""
         lines = [
-            line if line.strip().startswith(("⚠️", "🚨", "📉", "🛡️", "❗"))
+            line
+            if line.strip().startswith(("⚠️", "🚨", "📉", "🛡️", "❗"))
             else f"🚨 {line.strip()}"
-            for line in text.splitlines() if line.strip()
+            for line in text.splitlines()
+            if line.strip()
         ]
         return self.send("alert", "\n".join(lines))
 
 
-__all__ = ["TelegramNotifier", "render_bw_kline_png", "render_level_map_png",
-           "box_position_pct", "box_position_text", "rr_multiple", "split_text"]
+__all__ = [
+    "CHANNEL_OPS",
+    "CHANNEL_SIGNAL",
+    "NotificationGuard",
+    "TelegramNotifier",
+    "_bar_gap_stats",
+    "box_position_pct",
+    "box_position_text",
+    "render_bw_kline_png",
+    "render_level_map_png",
+    "rr_multiple",
+    "split_text",
+]

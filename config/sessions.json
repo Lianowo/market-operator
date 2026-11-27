@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "note": "非加密(RWA)合约的交易时段日历形状(只有结构:时区/开收盘/跨午夜会话/假日规则族)。这里刻意不放任何具体日期与具体合约代码:节假日由 market_operator.sessions 按交易所规则推导(第 n 个星期几、复活节、观察日平移、半日市规则),可无限延伸;标的→日历只按命名族规则解析,新上架合约用运维覆盖文件 data/calendars/overrides.json 登记,不用改代码或改本文件。 当前生产口径:所有非加密合约一律工作日可交易、周末关闭(不使用命名族/自动分派);需要按市场细分时再打开 learned_assignments 或重新加入 patterns。",
+  "note": "非加密(RWA)合约的交易时段日历形状(只有结构:时区/开收盘/跨午夜会话/假日规则族)。这里刻意不放任何具体日期与具体合约代码:节假日由 market_operator.sessions 按交易所规则推导(第 n 个星期几、复活节、观察日平移、半日市规则),可无限延伸;标的→日历按『运维覆盖 > 结构命名族(HKD/FX) > 价格交叉核验权威市场分派(data/calendars/assignments.json) > weekday_only 兜底』四层解析,新上架合约由 scripts/learn_sessions.py 自动识别或写入 data/calendars/overrides.json,不用改代码或改本文件。",
   "rwa_default_calendar": "weekday_only",
-  "rwa_default_note": "未登记标的只按'工作日可交易、周末关闭'兜底(不假装知道它属于哪个市场)。运维用 /sessions 运营命令或 scripts/calendar_report.py 查看每个标的的实际日历与来源,把商品/指数/个股补进 data/calendars/overrides.json。",
+  "rwa_default_note": "未登记标的只按'工作日可交易、周末关闭'兜底(不假装知道它属于哪个市场)。运维用 scripts/calendar_report.py 查看每个标的的实际日历与来源,把商品/指数/个股补进 data/calendars/overrides.json。",
   "calendars": {
     "crypto": {
       "always_open": true,
@@ -234,6 +234,53 @@
       "weekday_only": true,
       "note": "恒指/日经/韩指等亚洲指数永续:本地工作日近乎连续,只关周末。"
     },
+    "cn_equity": {
+      "tz": "Asia/Shanghai",
+      "holiday_rules": "none",
+      "windows": [
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:30",
+          "close": "11:30"
+        },
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "13:00",
+          "close": "15:00"
+        }
+      ],
+      "note": "沪深 A 股现货 09:30-11:30 / 13:00-15:00 CST。"
+    },
+    "eu_equity": {
+      "tz": "Europe/Berlin",
+      "holiday_rules": "none",
+      "windows": [
+        {
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "open": "09:00",
+          "close": "17:30"
+        }
+      ],
+      "note": "欧洲核心股市现货(XETRA/Euronext 等)09:00-17:30 CET/CEST。"
+    },
     "legacy_weekend": {
       "legacy_weekend": true,
       "note": "改动前的旧口径(周五 21:00 UTC ~ 周日 22:00 UTC),仅作回滚开关;不随夏令时调整。"
@@ -246,6 +293,17 @@
     "floor_frac": 0.35,
     "note": "数据驱动的'静默窗口'兜底:取确认棒之前、同一 UTC 星期×小时的近期历史(默认 range 中位数),若确认棒活动低于中位数的 floor_frac 就判为休市/死水。它不依赖任何日期与标的,因此自动覆盖未登记的假日、半日市、CME 每日 17:00-18:00 ET 维护、临时停盘 —— 与上面的日历互为补足:日历说'不该开'时直接拦,日历说'能开'但盘口已经死掉时由本项拦。"
   },
-  "patterns": [],
-  "learned_assignments": false
+  "patterns": [
+    {
+      "pattern": "^[A-Z0-9]+HKDUSDT$",
+      "calendar": "hk_equity",
+      "note": "港币计价港股合约命名族"
+    },
+    {
+      "pattern": "^(EUR|GBP|AUD|NZD|USD|CAD|CHF|JPY|CNH|CNY|HKD|SGD|KRW|TWD|INR|BRL|MXN|ZAR|TRY|SEK|NOK|PLN)(EUR|GBP|AUD|NZD|USD|CAD|CHF|JPY|CNH|CNY|HKD|SGD|KRW|TWD|INR|BRL|MXN|ZAR|TRY|SEK|NOK|PLN)USDT$",
+      "calendar": "fx",
+      "note": "ISO-4217 6 字母即期外汇货币对命名族"
+    }
+  ],
+  "learned_assignments": true
 }

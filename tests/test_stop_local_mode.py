@@ -41,14 +41,18 @@ class _TG:
 
 
 class _Client:
-    """`place_stop_loss` 一律 43023;记录市价单。"""
+    """`place_stop_loss` 一律 43023(模拟名义过小的真实在仓);记录市价单。"""
 
-    def __init__(self, *, reject="43023 仓位不足，不能设置止盈或者止损"):
+    def __init__(self, *, reject="43023 仓位不足，不能设置止盈或者止损", has_position: bool = True):
         self.reject = reject
+        self.has_position = has_position
         self.market: list[dict] = []
 
     def positions(self):
-        return []
+        if not self.has_position:
+            return []
+        return [{"symbol": SYM, "direction": 1, "qty": 0.08,
+                 "entry_price": 215.32, "mark_price": 200.0}]
 
     def tpsl_orders_pending(self):
         return {"entrustedList": []}

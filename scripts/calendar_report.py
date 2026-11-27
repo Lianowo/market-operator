@@ -15,45 +15,61 @@
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
+from collections.abc import Sequence
+import json
 from pathlib import Path
+import sys
 
-from market_operator import sessions
-from market_operator.bitget_live import BitgetLiveClient
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from market_operator import sessions                                    # noqa: E402
+from market_operator.bitget_live import BitgetLiveClient                # noqa: E402
 
 
 def _rwa_symbols(symbols: str | None) -> list[str]:
     if symbols:
         return sorted({s.strip().upper() for s in symbols.split(",") if s.strip()})
-    rows = BitgetLiveClient(None).contracts()
-    return sorted({str(r.get("symbol")) for r in rows
-                   if str(r.get("isRwa") or "").upper() == "YES"})
+    return BitgetLiveClient(None).rwa_symbols()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--symbols", default=None,
-                    help="逗号分隔;缺省从交易所公开合约列表取全部 isRwa=YES")
-    ap.add_argument("--unassigned", action="store_true",
-                    help="只输出 source=default(尚未登记)的标的")
+    ap.add_argument(
+        "--symbols",
+        default=None,
+        help="逗号分隔;缺省从交易所公开合约列表取全部 isRwa=YES",
+    )
+    ap.add_argument(
+        "--unassigned",
+        action="store_true",
+        help="只输出 source=default(尚未登记)的标的",
+    )
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--emit-assignments", metavar="CALENDAR", default=None,
-                    help="按给定日历批量生成 overrides.json 的 assignments 载荷"
-                         "(配合 --unassigned 只处理未登记标的)")
-    ap.add_argument("--out", default=None,
-                    help="把 JSON 结果写到该文件(UTF-8,避免 PowerShell 重定向成 UTF-16)")
+    ap.add_argument(
+        "--emit-assignments",
+        metavar="CALENDAR",
+        default=None,
+        help="按给定日历批量生成 overrides.json 的 assignments 载荷(配合 --unassigned 只处理未登记标的)",
+    )
+    ap.add_argument(
+        "--out",
+        default=None,
+        help="把 JSON 结果写到该文件(UTF-8,避免 PowerShell 重定向成 UTF-16)",
+    )
     args = ap.parse_args(argv)
 
     syms = _rwa_symbols(args.symbols)
     rows = [sessions.describe(s) for s in syms]
     if args.unassigned:
         rows = [r for r in rows if r["source"] == "default"]
-    if args.emit_assignments:
-        payload: object = {"assignments": {r["symbol"]: args.emit_assignments
-                                           for r in rows}}
-    else:
-        payload = rows
+    payload: object = (
+        {"assignments": {r["symbol"]: args.emit_assignments for r in rows}}
+        if args.emit_assignments
+        else rows
+    )
     if args.json or args.emit_assignments:
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         if args.out:
@@ -63,14 +79,16 @@ def main(argv: list[str] | None = None) -> int:
             print(text)
         return 0
     counts = Counter((r["calendar"], r["source"]) for r in rows)
-    print(f"[rwa] n={len(rows)}  calendar/source=" +
-          ", ".join(f"{cal}:{src}={n}" for (cal, src), n in sorted(counts.items())))
+    summary = ", ".join(f"{cal}:{src}={n}" for (cal, src), n in sorted(counts.items()))
+    print(f"[rwa] n={len(rows)}  calendar/source={summary}")
     for r in rows:
         flag = "OPEN " if r["in_session"] else "CLOSED"
         print(f"  {flag} {r['symbol']:<16} {r['calendar']:<20} {r['source']}")
     if any(r["source"] == "default" for r in rows):
-        print("[hint] source=default 的标的按'工作日可交易'兜底;"
-              "需要精确时段请写入 data/calendars/overrides.json 的 assignments。")
+        print(
+            "[hint] source=default 的标的按'工作日可交易'兜底;"
+            "需要精确时段请写入 data/calendars/overrides.json 的 assignments。"
+        )
     return 0
 
 

@@ -9,7 +9,7 @@
       "市价决策:canonical 于次一执行细 bar 开盘成交;实盘于信号检测当轮(<=15s)直接下市价单",
       "限价单:GTC,武装后 n_fill=12 墙钟小时未成交即撤(canonical expiry 口径)",
       "持仓管理意图(破位/防线收紧/对侧突破锁利):canonical 以认知 bar 收盘裁决;实盘同步更新交易所计划止损单或立即市价执行",
-      "部分止盈(canonical §8.2 partial_exit):锁利武装或回吐预算耗尽时减仓 50% 并移保本;状态型触发,回放与实盘都只走市价,不在 target_1 挂可能永不成交的限价单",
+      "止盈保护(canonical §8.2):当前 partial_exit_enabled=false + reject_opp_lock_frac=1.0,触及 target_1 走整仓交易所止盈(profit_plan);启用部分止盈时则按 50% 市价减仓并移保本",
       "Telegram 双通道通知:信号 Bot 只发信号广播(公开可订阅,不含账户数据),运营 Bot 发开仓/减仓/防线推进/平仓/日结/告警(未单独配置时回退到信号 Bot 并如实告警),均附带高清黑白 K 线结构图(箱体/事件区间/±R 标尺/pivot)",
       "信号广播与容量闸门解耦:检测到事件即推送结构事实,并用 exec_status 说明本系统是否真的开仓(容量满/熔断只影响执行,不影响通知)"
     ]
@@ -20,33 +20,37 @@
     "note": "账户持仓模式(Bitget posMode)。hedge_mode:下单须带 tradeSide,side 表持仓方向(开多 buy+open / 开空 sell+open / 平多 buy+close / 平空 sell+close),杠杆逐侧设置;one_way_mode:省略 tradeSide,side 表买卖方向。启动时与交易所实测值比对,不一致即 fail-closed 拒绝启动。"
   },
   "risk": {
-    "risk_frac": 0.05,
+    "risk_frac": 0.04,
     "dynamic_risk_tiers": [
       [
         15000.0,
-        0.05
+        0.04
       ],
       [
         100000.0,
-        0.042
+        0.034
       ],
       [
         300000.0,
-        0.035
+        0.028
       ],
       [
         1000000000.0,
-        0.025
+        0.02
       ]
     ],
     "leverage_cap": 20,
-    "portfolio_cap_frac": 0.48,
-    "directional_cap_frac": 0.32,
+    "portfolio_cap_frac": 0.30,
+    "directional_cap_frac": 0.20,
+    "factor_burst_cap_1h": 1,
+    "factor_burst_cap_4h": 2,
+    "markowitz_corr_sizing": true,
+    "max_eff_size_mult": 1.5,
     "tf_cap_by_tf": {
-      "1h": 0.24,
-      "2h": 0.24,
-      "4h": 0.48,
-      "1d": 0.24
+      "1h": 0.15,
+      "2h": 0.15,
+      "4h": 0.30,
+      "1d": 0.15
     },
     "max_daily_loss_frac": 0.1,
     "edge_size_by_event_direction": {},
@@ -93,7 +97,7 @@
   "protection": {
     "price_clock": "realtime",
     "max_quote_age_seconds": 30,
-    "note": "只改实盘保护执行：开仓附带原止损，建仓立即挂原目标50%交易所触价市价止盈；新鲜报价触及目标即启用现有锁利公式并修改原止损，不等待15m。策略信号/目标/减仓比例不变。REST轮询仍可能漏峰值，固定止盈止损由交易所执行。"
+    "note": "只改实盘保护执行：开仓附带原止损，建仓立即按当前策略模式挂交易所触价市价止盈(partial_exit_enabled=false 且 reject_opp_lock_frac=1.0 时为 100% 整仓止盈，否则 50%)；实时报价推进防线并修改原止损。策略信号与结构目标不变。"
   },
   "heartbeat": {
     "enabled": true,
@@ -124,7 +128,7 @@
   "universe": {
     "enabled": true,
     "crypto": {
-      "min_usdt_volume_24h": 3000000.0,
+      "min_usdt_volume_24h": 5000000.0,
       "capacity_multiplier": 1.0
     },
     "rwa": {
@@ -133,7 +137,7 @@
       "costs_note": "实测(交易所公开 contracts 接口):422 个 RWA 合约的 taker/maker 与 Crypto 同为 0.0006/0.0002,故 risk 段的费用先验原样适用;但 fundInterval 为 4h/8h 混合,资金费**不再用 1bp/8h 常数先验**——用 `python scripts/fetch_funding.py --source bitget --symbols ... --days N` 落盘真实结算,回放自动按真实结算点计提(4h 标的自然按 4h)。滑点没有公开来源,只能用 `scripts/live_cost_audit.py` 的 `[fees:rwa]`/`[fund:rwa]` 实测加权 bps 再决定是否写入 strategy.json 的 slippage_by_symbol。"
     },
     "rwa_no_volume_filter": false,
-    "note": "非加密(RWA)与 Crypto 同口径:24h USDT 名义量严格大于 3,000,000(恰等于不入选),symbolStatus 非 normal 仍剔除;仅当 rwa_no_volume_filter=true 才豁免非加密成交量。",
+    "note": "原生加密 24h USDT 名义量严格大于 5,000,000(剔除 3M~5M 高滑点极薄山寨),非加密(RWA)严格大于 3,000,000(恰等于不入选),symbolStatus 非 normal 仍剔除;仅当 rwa_no_volume_filter=true 才豁免非加密成交量。",
     "product_type": "USDT-FUTURES"
   },
   "cognition": {
@@ -144,7 +148,7 @@
     ],
     "trigger_tf_by_htf": {
       "4h": 3600,
-      "1d": null,
+      "1d": 14400,
       "1h": 900
     },
     "main_tf_label": "1d",
@@ -153,7 +157,7 @@
     "granularity": "2H",
     "warmup_cog_bars": 160,
     "min_warmup_cog_bars": 60,
-    "warmup_trigger_bars": 1800
+    "warmup_trigger_bars": 2400
   },
   "paper": {
     "equity0": 500.0

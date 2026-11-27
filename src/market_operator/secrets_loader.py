@@ -1,6 +1,6 @@
-"""实盘凭证装载(实盘接入件;v20/lifecycle)。
+"""实盘凭证装载(实盘接入件)。
 
-纪律(任务书硬性安全):
+纪律(硬性安全):
 - 每个键:进程环境变量 > 文件 > 配置里的 credentials。文件选择:显式 path;
   否则用 EDGE_SECRETS_PATH。两者都没有时,仓库 config/secrets.env 覆盖默认路径
   C:\\Users\\EDY\\.edge-engine\\secrets.env 的同名键。默认路径不改。换机器时
@@ -12,15 +12,18 @@
 - live 模式要求 Bitget 三件 + Telegram 两件;paper/离线冒烟按需提供。
 
 键名以 secrets.env 文件实际为准(BITGET_SECRET_KEY / TELEGRAM_BOT_TOKEN),
-同时接受任务书别名(BITGET_API_SECRET / TG_BOT_TOKEN / TG_CHAT_ID)。
+同时接受兼容别名(BITGET_API_SECRET / TG_BOT_TOKEN / TG_CHAT_ID)。
 """
 
 from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping, Optional
+from types import MappingProxyType
+
+from .exceptions import CredentialsError
 
 DEFAULT_SECRETS_PATH = Path(r"C:\Users\EDY\.edge-engine\secrets.env")
 ENV_OVERRIDE = "EDGE_SECRETS_PATH"
@@ -28,7 +31,7 @@ ENV_OVERRIDE = "EDGE_SECRETS_PATH"
 _LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 
 # 键名别名(右 = 兼容名;顺序即优先序:首个存在者生效)
-_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+_KEY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "BITGET_API_KEY": ("BITGET_API_KEY",),
     "BITGET_SECRET_KEY": ("BITGET_SECRET_KEY", "BITGET_API_SECRET"),
     "BITGET_PASSPHRASE": ("BITGET_PASSPHRASE", "BITGET_API_PASSWORD"),
@@ -41,13 +44,13 @@ _KEY_ALIASES: dict[str, tuple[str, ...]] = {
     # 这两个键必须真的被装载 —— 否则 `resolve_bots()` 里的白名单分支永远为空。
     "TELEGRAM_OPS_CHAT_IDS": ("TELEGRAM_OPS_CHAT_IDS",),
     "TELEGRAM_PUBLIC_CHAT_IDS": ("TELEGRAM_PUBLIC_CHAT_IDS",),
-}
+})
 
 REQUIRED_BITGET = ("BITGET_API_KEY", "BITGET_SECRET_KEY", "BITGET_PASSPHRASE")
 REQUIRED_TELEGRAM = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
 
-def secrets_path(path: Optional[os.PathLike | str] = None) -> Path:
+def secrets_path(path: os.PathLike[str] | str | None = None) -> Path:
     """装载路径:显式参数 > EDGE_SECRETS_PATH env > 默认路径。"""
     if path is not None:
         return Path(path)
@@ -65,8 +68,7 @@ def _unquote(raw: str) -> str:
 def _load_env(path: Path) -> dict[str, str]:
     """解析 secrets.env(dotenv 式简析;返回键 → 值,值不经任何脱敏改动)。"""
     out: dict[str, str] = {}
-    for ln, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line in path.read_text(encoding="utf-8").splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
             continue
@@ -78,14 +80,14 @@ def _load_env(path: Path) -> dict[str, str]:
     return out
 
 
-class SecretsError(RuntimeError):
+class SecretsError(CredentialsError):
     """凭证缺失/路径异常(消息只含键名,绝不含值)。"""
 
 
-def load_secrets(path: Optional[os.PathLike | str] = None,
+def load_secrets(path: os.PathLike[str] | str | None = None,
                  required: tuple[str, ...] = REQUIRED_BITGET + REQUIRED_TELEGRAM,
-                 environ: Optional[Mapping[str, str]] = None,
-                 config_overrides: Optional[Mapping[str, str]] = None) -> dict:
+                 environ: Mapping[str, str] | None = None,
+                 config_overrides: Mapping[str, str] | None = None) -> dict[str, str]:
     """装载并校验凭证;返回"规格化键" → 值的映射(值原样,调用方不入日志)。
 
     优先级:
@@ -106,7 +108,7 @@ def load_secrets(path: Optional[os.PathLike | str] = None,
     resolved: dict[str, str] = {}
     missing: list[str] = []
     for canon, aliases in _KEY_ALIASES.items():
-        val: Optional[str] = None
+        val: str | None = None
         for name in aliases:
             if env.get(name):
                 val = env[name]

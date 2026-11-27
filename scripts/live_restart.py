@@ -24,10 +24,11 @@ Python 不会热加载已 import 的模块:改完 `live_runner.py` / `tg.py` 必
 from __future__ import annotations
 
 import argparse
-import json
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 import sys
 import time
-from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -40,38 +41,35 @@ RUNNER_LOG = paths.log_dir() / "live_stdout.log"
 RUNNER_ERR = paths.log_dir() / "live_stderr.log"
 
 
-def _read_hb() -> dict:
-    try:
-        return json.loads(HB_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+def _read_hb() -> dict[str, Any]:
+    return hb.read_heartbeat(HB_PATH)
 
 
-def _snapshot(doc: dict) -> str:
+def _snapshot(doc: Mapping[str, Any]) -> str:
     if not doc:
         return "心跳文件不可读(视同没在跑)"
-    return (f"pid={doc.get('pid')} mode={doc.get('mode')} "
-            f"status={doc.get('status')} steps={doc.get('step_count')} "
-            f"equity={doc.get('equity')} positions={doc.get('positions')} "
-            f"stops={doc.get('stops')} gap_bars={doc.get('gap_bars')} "
-            f"saved_at={doc.get('saved_at_utc')}")
+    return (
+        f"pid={doc.get('pid')} mode={doc.get('mode')} "
+        f"status={doc.get('status')} steps={doc.get('step_count')} "
+        f"equity={doc.get('equity')} positions={doc.get('positions')} "
+        f"stops={doc.get('stops')} gap_bars={doc.get('gap_bars')} "
+        f"saved_at={doc.get('saved_at_utc')}"
+    )
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    paths.soften_stdio()
     ap = argparse.ArgumentParser(description="实盘换进程(改完代码后的重启)")
     ap.add_argument("--mode", default="live", choices=("live", "paper"))
     ap.add_argument("--dry-run", action="store_true", help="只看快照与计划")
     ap.add_argument("--no-wait", action="store_true", help="拉起即返回,不确认心跳")
-    ap.add_argument("--wait-seconds", type=float, default=120.0,
-                    help="等待新进程写心跳的上限(默认 120s)")
-    ap.add_argument("--term-timeout", type=float, default=15.0,
-                    help="终止旧进程的宽限(默认 15s)")
+    ap.add_argument("--wait-seconds", type=float, default=120.0, help="等待新进程写心跳的上限(默认 120s)")
+    ap.add_argument("--term-timeout", type=float, default=15.0, help="终止旧进程的宽限(默认 15s)")
     args = ap.parse_args(argv)
 
     doc = _read_hb()
     old = int(doc.get("pid") or 0)
-    spawn_argv = [sys.executable, str(ROOT / "scripts" / "live_runner.py"),
-                  "--mode", args.mode]
+    spawn_argv = [sys.executable, str(ROOT / "scripts" / "live_runner.py"), "--mode", args.mode]
 
     print(f"仓库      : {paths.app_home()}")
     print(f"布局      : {paths.layout_mode()} · 心跳 {HB_PATH}")
@@ -90,14 +88,14 @@ def main(argv=None) -> int:
         while hb.process_alive(old) and time.time() - t0 < args.term_timeout + 5:
             time.sleep(0.2)
         if hb.process_alive(old):
-            print(f"[FAIL] 旧进程 {old} 仍在运行,放弃拉起(避免双开下单)",
-                  file=sys.stderr)
+            print(f"[FAIL] 旧进程 {old} 仍在运行,放弃拉起(避免双开下单)", file=sys.stderr)
             return 1
     else:
         print("旧进程不在(或心跳缺失),直接拉起")
 
-    new_pid = hb.spawn_detached(spawn_argv, cwd=paths.app_home(),
-                                stdout_path=RUNNER_LOG, stderr_path=RUNNER_ERR)
+    new_pid = hb.spawn_detached(
+        spawn_argv, cwd=paths.app_home(), stdout_path=RUNNER_LOG, stderr_path=RUNNER_ERR
+    )
     print(f"新进程 pid={new_pid}")
     if not new_pid:
         print("[FAIL] spawn 失败,详见 logs/live_stderr.log", file=sys.stderr)
@@ -106,7 +104,7 @@ def main(argv=None) -> int:
         return 0
 
     deadline = time.time() + args.wait_seconds
-    last = None
+    last: dict[str, Any] | None = None
     while time.time() < deadline:
         doc = _read_hb()
         if doc.get("pid") == new_pid:
@@ -115,8 +113,10 @@ def main(argv=None) -> int:
                 print(f"心跳确认: {_snapshot(doc)}")
                 return 0
         time.sleep(1.0)
-    print(f"[WARN] {args.wait_seconds:.0f}s 内未确认新进程心跳;"
-          f"最后一次: {_snapshot(last or _read_hb())}", file=sys.stderr)
+    print(
+        f"[WARN] {args.wait_seconds:.0f}s 内未确认新进程心跳;最后一次: {_snapshot(last or _read_hb())}",
+        file=sys.stderr,
+    )
     return 2
 
 

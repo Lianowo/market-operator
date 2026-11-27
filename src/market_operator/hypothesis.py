@@ -14,22 +14,23 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Optional, Sequence
+from typing import Any
 
 from .events import MarketEvent
 from .level import Level, nearest_opposing_level
-from .structure import Params, Pivot, PivotKind, Regime
+from .structure import Params, Pivot, Regime
 
 
-def execution_target(meta: dict, structural_target: Optional[float]) -> Optional[float]:
+def execution_target(meta: Mapping[str, Any], structural_target: float | None) -> float | None:
     """返回持仓执行管理采用的目标位(显式置 None 时不触发目标减仓)。"""
     return meta.get("execution_target", structural_target)
 
 
 def entry_cost_error(
-    direction: int, entry: float, invalid: float, meta: dict
-) -> Optional[str]:
+    direction: int, entry: float, invalid: float, meta: Mapping[str, Any]
+) -> str | None:
     """检查双边执行摩擦占单笔结构风险(1R)的比例是否超限。"""
     limit = meta.get("max_cost_frac")
     if limit is None:
@@ -59,15 +60,15 @@ def entry_contract_error(
     direction: int,
     entry: float,
     invalid: float,
-    target: Optional[float],
-    meta: dict,
+    target: float | None,
+    meta: Mapping[str, Any],
     *,
     at_execution: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """入场/成交时刻的结构契约自洽校验:
     - 决策时刻(at_execution=False):严格校验真实障碍墙净空 >= min_rr * Risk;
-    - 市价成交时刻(at_execution=True):已由确认收盘决策通过,吸收正常盘口价差与微小滑点抖动
-      (不再因多涨1分钱或 2bps 滑点变成 1.99 < 2.0 无脑拒单),仅拦截越过止损/目标、成本超标或极端跳空(< 0.75 * min_rr)。
+    - 市价成交时刻(at_execution=True):已由确认收盘决策通过,吸收正常盘口价差与微小滑点抖动,
+      仅拦截越过止损/目标、成本超标或极端跳空(< 0.75 * min_rr)。
     """
     if not meta.get("bounded_entry"):
         return entry_cost_error(direction, entry, invalid, meta)
@@ -107,6 +108,16 @@ class StructureView:
     tf_hours: int = 0
     imbalance_strength: float = 0.0
     dollar_volume: float = 0.0
+    cog_vr4: float = 1.0           # 认知周期 Lo-MacKinlay 方差比 VR(4)
+    trig_vr4: float = 1.0          # 触发周期因果方差比 VR(4)
+    vol_rel: float = 1.0           # 历史兼容字段(路由层已 100% 零成交量纯 OHLC,不再读取)
+    pre3_vol_rel: float = 1.0      # 历史兼容字段(路由层已 100% 零成交量纯 OHLC,不再读取)
+    cog_park_ratio: float = 1.0    # 认知周期多倍频程 Parkinson 波动觉醒比(中性=1.0)
+    cog_er20: float = 0.0          # 兼容字段: 单窗口 20 棒有符号路径效率比 ER
+    cog_er_norm: float | None = None          # 认知周期多倍频程布朗归一路径效率比(临界阈值=1.0)
+    trig_park_ratio: float = 1.0   # 触发前微观 Parkinson 波动觉醒比 σ_P(6) / σ_P(30)
+    bar_range_rel: float = 1.0     # 触发棒振幅 (H-L) / 过去 20 棒中位振幅
+    bar_range_q75_rel: float | None = None    # 触发棒振幅 (H-L) / 过去 20 棒上四分位 Q75(临界=1.0)
 
     @property
     def levels(self) -> tuple[Level, ...]:
@@ -129,15 +140,15 @@ class Hypothesis:
     event_id: str
     direction: int
     invalid: float
-    target_1: Optional[float]
+    target_1: float | None
     regime: Regime
     ts: int
     known_index: int
-    entry: Optional[float] = None
+    entry: float | None = None
     target_source: str = "none"    # "opposing_level" | "measured_move" | "none"
 
     @property
-    def r_mult(self) -> Optional[float]:
+    def r_mult(self) -> float | None:
         if self.entry is None or self.target_1 is None:
             return None
         risk = self.direction * (self.entry - self.invalid)
@@ -146,7 +157,7 @@ class Hypothesis:
         reward = self.direction * (self.target_1 - self.entry)
         return reward / risk
 
-    def with_entry(self, entry_price: float) -> "Hypothesis":
+    def with_entry(self, entry_price: float) -> Hypothesis:
         return replace(self, entry=float(entry_price))
 
 
@@ -154,17 +165,13 @@ def build_hypothesis(
     ev: MarketEvent,
     view: StructureView,
     ref_price: float,
-    _params: Optional[Params] = None,
+    _params: Params | None = None,
     *,
     htf_views: Sequence[StructureView] = (),
     min_rr: float = 2.0,
-) -> Optional[Hypothesis]:
-    """由价格拍卖事件与本周期结构几何构建零魔法截断的可证伪交易假设(同时间尺度拿同时间尺度利润):
-    1. 本尺度自然波段半径(AB = CD 1:1 等幅对称投射):取本周期最近已完成波段极值间的真实主推振幅 ``ab_leg``;
-    2. 若顺势前方存在同周期反向水平位 ``opp``:取真实阻力/支撑墙 ``opp.neck`` 与本尺度能量半径 ``ab_leg`` 中更近的客观终点
-       (既不人为截断在死板的 2R,也不盲目幻想跨越本尺度能量的天边历史老顶底);
-    3. 若顺势前方完全净空无阻挡(``open_air``,如创新高价格发现区):直接按本尺度 ``1:1`` 波段投射 ``ab_leg`` 定标。
-    """
+) -> Hypothesis | None:
+    """由价格拍卖事件与本周期结构几何构建零魔法截断的可证伪交易假设。"""
+    _ = (_params, htf_views)  # Retained for signature compatibility
     inv_raw = ev.attrs.get("invalid")
     if inv_raw is None:
         return None
@@ -175,7 +182,7 @@ def build_hypothesis(
     if risk <= 0.0:
         return None
 
-    ev_lv: Optional[Level] = ev.attrs.get("level") or ev.attrs.get("zone")
+    ev_lv: Level | None = ev.attrs.get("level") or ev.attrs.get("zone")
     excl_uid = ev_lv.uid if ev_lv is not None else None
 
     pivs = getattr(view, "pivots", ()) or ()

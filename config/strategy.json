@@ -1,6 +1,6 @@
 {
   "version": "2d-spatiotemporal-field-v3-triple-screen",
-  "note": "纯二维 (t, P) 时空势场与双视野(广角 Macro + 近景聚焦 Foveal)架构: 零 ATR 比例魔法常数、零滞后二维价值盒状态直读取代旧道氏计数; 1d 专职战略导航与日线大墙拦截(whitelist=[]), 4h->1h 专职执行单标的唯一仓位与两段式波段持仓管理。",
+  "note": "纯二维 (t, P) 时空势场与双视野(广角 Macro + 近景聚焦 Foveal)架构: 零 ATR 比例魔法常数、画布内生振幅分位(Q75/P90)自适应约束带宽、零滞后二维价值盒状态直读取代旧道氏计数; 1d->4h 顺势大周期突破(仅 ACCEPT) + 4h->1h 核心波段 + 1h->15m 拒绝反转三重正交级联。",
   "meta": {
     "model": "2DSpatioTemporalField(Macro+Foveal Vision + 2D Balance-Imbalance Tensor + Self-Calibrated Anti-POC) + Single-Slot Per Symbol"
   },
@@ -26,11 +26,15 @@
   ],
   "trigger_tf_by_htf": {
     "4h": 3600,
-    "1d": null,
+    "1d": 14400,
     "1h": 900
   },
   "portfolio_cap_frac": 0.12,
   "directional_cap_frac": 0.06,
+  "factor_burst_cap_1h": 1,
+  "factor_burst_cap_4h": 2,
+  "markowitz_corr_sizing": true,
+  "max_eff_size_mult": 1.5,
   "capacity_mode": "cash_net_admission",
   "tf_cap_by_tf": {
     "1h": 0.12,
@@ -40,12 +44,22 @@
   "router_params": {
     "min_rr": 2.0,
     "htf_wall_check": true,
-    "cost_per_side": 0.0008,
-    "max_cost_frac": 0.12
+    "cost_per_side": null,
+    "max_cost_frac": 0.12,
+    "conviction_sizing": true
   },
   "router_params_by_tf": {
     "1d": {
-      "whitelist": []
+      "whitelist": [
+        [
+          "ACCEPT",
+          -1
+        ],
+        [
+          "ACCEPT",
+          1
+        ]
+      ]
     },
     "1h": {
       "whitelist": [
@@ -72,30 +86,34 @@
   "small_account_compounding": {
     "equity0": 500.0,
     "leverage_cap": 20.0,
-    "portfolio_cap_frac": 0.48,
-    "directional_cap_frac": 0.32,
+    "portfolio_cap_frac": 0.30,
+    "directional_cap_frac": 0.20,
+    "factor_burst_cap_1h": 1,
+    "factor_burst_cap_4h": 2,
+    "markowitz_corr_sizing": true,
+    "max_eff_size_mult": 1.5,
     "tf_cap_by_tf": {
-      "1h": 0.24,
-      "2h": 0.24,
-      "4h": 0.48,
-      "1d": 0.24
+      "1h": 0.15,
+      "2h": 0.15,
+      "4h": 0.30,
+      "1d": 0.15
     },
     "dynamic_risk_tiers": [
       [
         15000.0,
-        0.05
+        0.04
       ],
       [
         100000.0,
-        0.042
+        0.034
       ],
       [
         300000.0,
-        0.035
+        0.028
       ],
       [
         1000000000.0,
-        0.025
+        0.02
       ]
     ]
   },

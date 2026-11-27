@@ -172,9 +172,14 @@ def test_resolution_priority_override_pattern_learned_default():
     ovr = {"assignments": {"NVDAUSDT": "asia_equity"}}
     assert S.describe("NVDAUSDT", cfg=cfg, overrides=ovr,
                       assignments=learned)["source"] == "override"
-    # 生产口径(learned_assignments 关闭)⇒ 自动推断不生效
-    assert S.describe("NVDAUSDT", cfg=CFG, overrides=ovr_empty,
+    # 显式关闭 learned_assignments 时 ⇒ 自动推断不生效
+    cfg_no_learned = dict(CFG, learned_assignments=False)
+    assert S.describe("NVDAUSDT", cfg=cfg_no_learned, overrides=ovr_empty,
                       assignments=learned)["calendar"] == "weekday_only"
+    # 默认生产配置已开启 learned_assignments ⇒ 自动推断生效
+    assert bool(CFG.get("learned_assignments")) is True
+    assert S.describe("NVDAUSDT", cfg=CFG, overrides=ovr_empty,
+                      assignments=learned)["calendar"] == "us_equity"
 
 
 def test_asia_equity_calendar_window():
@@ -183,10 +188,22 @@ def test_asia_equity_calendar_window():
     assert S.in_session("asia_equity", _ts(2026, 11, 21, 3, 0), CFG) is False
 
 
-def test_rwa_symbols_are_all_weekday_only_now():
-    """生产口径:非加密一律工作日可交易、周末关闭(不再按市场细分)。"""
-    for sym in ("NVDAUSDT", "XAUUSDT", "PAXGUSDT", "TENCENTHKDUSDT", "EURUSDUSDT"):
-        assert S.calendar_for(sym, CFG, overrides={}) == "weekday_only"
+def test_cn_and_eu_equity_calendar_windows():
+    # 沪深 A 股 09:30-11:30 / 13:00-15:00 CST (UTC+8)
+    assert _in("cn_equity", _ts(2026, 11, 18, 2, 0)) is True      # 10:00 CST
+    assert _in("cn_equity", _ts(2026, 11, 18, 4, 0)) is False     # 12:00 CST 午休
+    assert _in("cn_equity", _ts(2026, 11, 18, 5, 30)) is True     # 13:30 CST
+    assert _in("cn_equity", _ts(2026, 11, 18, 8, 0)) is False     # 16:00 CST 已收
+    # 欧股 09:00-17:30 CET (冬令时 UTC+1)
+    assert _in("eu_equity", _ts(2026, 11, 18, 9, 0)) is True      # 10:00 CET
+    assert _in("eu_equity", _ts(2026, 11, 18, 17, 0)) is False    # 18:00 CET 已收
+
+
+def test_rwa_structural_patterns_and_unassigned_fallback():
+    """生产口径:命名族(HKD/FX)即刻生效,其余经 learned_assignments 或 weekday_only 兜底。"""
+    assert S.calendar_for("TENCENTHKDUSDT", CFG, overrides={}, assignments={}) == "hk_equity"
+    assert S.calendar_for("EURUSDUSDT", CFG, overrides={}, assignments={}) == "fx"
+    assert S.calendar_for("UNKNOWNRWAUSDT", CFG, overrides={}, assignments={}) == "weekday_only"
     assert _in("weekday_only", _ts(2026, 11, 22, 10, 0)) is False      # 周六
     assert _in("weekday_only", _ts(2026, 11, 18, 3, 0)) is True        # 周三
     assert rwa_session_entry_block(False, _ts(2026, 11, 22, 10, 0),
@@ -208,6 +225,19 @@ def test_quiet_window_blocks_collapsed_activity():
                           cfg=CFG, overrides=OVR) is None
 
 
+def test_24x7_override_bypasses_all_rwa_gates():
+    """运维覆盖 mode=24x7:周末、零成交、静默窗口一律放行,等同加密。"""
+    ts = _ts(2026, 11, 22, 10, 0)                       # 周日
+    flat = (ts, 1.0, 1.0, 1.0, 1.0, 0.0)
+    hist = [(ts - k * 7 * 86_400_000, 1.0, 1.1, 0.9, 1.0, 10.0) for k in range(1, 7)]
+    ovr = {"mode": "24x7"}
+    assert S.block_reason(True, "ZZZUSDT", ts, flat,
+                          history=hist, cfg=CFG, overrides=ovr) is None
+    d = S.describe("ZZZUSDT", ts, is_rwa=True, cfg=CFG, overrides=ovr)
+    assert d["calendar"] == "crypto" and d["source"] == "override-24x7"
+    assert d["in_session"] is True
+
+
 def test_config_validation_fails_closed():
     with pytest.raises(ValueError):
         S._validate({"calendars": {"x": {"always_open": True, "weekday_only": True}}})
@@ -226,4 +256,33 @@ def test_production_code_keeps_no_hardcoded_dates_or_symbols():
         assert not re.search(r"\b20\d{2}-\d{2}-\d{2}\b", text), "不得写死年月日"
         for ticker in ("NVDAUSDT", "TSLAUSDT", "AAPLUSDT", "XAUUSDT", "CLUSDT"):
             assert ticker not in text, f"不得写死具体合约 {ticker}"
+
+
+def test_learn_sessions_price_cross_verification_prevents_ticker_collisions():
+    """价格交叉核验必须拦截同名撞车(如油价 84.5 与消费股 95+、或误用未换算外币价)。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("learn_sessions", ROOT / "scripts" / "learn_sessions.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    fx = {"USD": 1.0, "HKD": 0.128, "CNY": 0.15}
+    # 1. 原油期货 $84.5 命中 CL=F ($84.54),拒绝同名消费股 ($98.0)
+    ok_fut, diff_fut, _ = mod.price_matches_in_quote_ccy(
+        "CLUSDT", 84.54, {"regularMarketPrice": 84.50, "currency": "USD"}, fx)
+    ok_col, _, _ = mod.price_matches_in_quote_ccy(
+        "CLUSDT", 84.54, {"regularMarketPrice": 98.0, "currency": "USD"}, fx)
+    assert ok_fut is True and diff_fut < 0.01
+    assert ok_col is False
+    # 2. *USDT 合约严格按 USD 汇率换算,绝不用原始 HKD/CNY 数值硬匹配
+    ok_raw_hkd, _, _ = mod.price_matches_in_quote_ccy(
+        "SAMPLEUSDT", 66.0, {"regularMarketPrice": 66.0, "currency": "HKD"}, fx)
+    ok_conv_cny, _, _ = mod.price_matches_in_quote_ccy(
+        "SAMPLEUSDT", 64.0, {"regularMarketPrice": 425.0, "currency": "CNY"}, fx)
+    assert ok_raw_hkd is False
+    assert ok_conv_cny is True
+    # 3. 包装衍生品识别与实体名解包
+    assert mod._is_derivative_wrapper({"shortName": "Natural Gas (Derivatives) USD"}) is True
+    assert mod._is_derivative_wrapper({"shortName": "PAX Gold USD"}) is False
+    assert mod._unwrap_entity_name("Natural Gas (Derivatives) USD") == "Natural Gas"
 

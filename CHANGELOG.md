@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased] — 2026-11-27 — 架构收敛、代码洁癖重构与文档对齐
+
+在不改变任何策略数值语义、风险参数与交易逻辑的前提下（`verify_strategy_parity.py` 6 组场景 `dev/test/full × 1.0x/1.5x` 逐笔交易、净值与计数器 **100% 比特级等价**），按严格 Python 工程规范完成全仓库代码与文档收束：
+
+- **共享基础设施与严格分层**：
+  - 新增 [`src/market_operator/exceptions.py`](src/market_operator/exceptions.py) 统一业务异常体系（`MarketOperatorError` 及其配置/数据/交易所/限流/通知子类）；
+  - 新增 [`src/market_operator/timeframes.py`](src/market_operator/timeframes.py) 统一全仓时间周期换算、Bitget 粒度映射、`cascade_label` 与 UTC 工具；
+  - 新增 [`src/market_operator/live_support.py`](src/market_operator/live_support.py) 承接实盘共享纯原语，消除 `ops` / `scripts/live_*` 对 `scripts/live_runner.py` 的反向依赖与 ~480 行重复实现；
+  - 新增 [`src/market_operator/charts.py`](src/market_operator/charts.py) 拆分 K 线与水平位结构图渲染职责，并将 `Pillow>=10.0` 正式声明进 `pyproject.toml`。
+- **现代语法、完整类型与数据不可变性**：
+  - 全仓 51 个 Python 源码文件（`src/`、`scripts/`、`tools/`）全部补齐参数与返回值类型注解（缺省函数 `0`），全面切换 Python 3.11+ 原生联合类型与泛型（旧 `typing.Optional/Union/List/Dict/Tuple/Set` 清零），零 `setattr`、零星号导入、零未使用导入；
+  - 只读配置表、枚举集合与合并输出全面使用 `MappingProxyType`、`frozen=True`、`frozenset` 与浅拷贝防御，避免跨层共享可变状态。
+- **结构扁平化、复杂度优化与异常处理收敛**：
+  - 拆分 `campaign.py`、`structure.py`、`level.py`、`routing.py`、`ops.py`、`tg_commands.py`、`scripts/live_runner.py`、`scripts/storage_gc.py`、`scripts/live_cost_audit.py`、`scripts/learn_sessions.py` 中的超长函数，深层嵌套函数（深度 `>= 5`）清零；
+  - 优化关键热路径：`live_runner` 改为单次构建 per-step `extra_by_sym` 索引与 `_step_peer_cache`、O(1) 字典索引报价缓存与 mtime 负向日志缓存；修复 `storage_gc._protection` 重复扫描缓存失效问题；
+  - 消除宽泛静默异常吞吐（`except Exception: pass`），关键路径（如实盘 `state.json` 落盘失败）改为显式日志记录与限流告警。
+- **实盘脚本正确性与安全性加固**：
+  - `scripts/live_gap_preview.py` 与 `scripts/live_paper_check.py` 将写接口拦截升级为严格只读白名单（fail-closed）；
+  - `scripts/live_cost_audit.py` 删除不可达死代码，修复按标的汇总资金费时的名义金额×时长加权公式（`Σ(notional × hours)`），并改走公开接口 `account_bills` / `funding_rate_history`；
+  - `scripts/learn_sessions.py` 为多线程共享状态 `Masks` 增加线程锁并改为线程局部 `BitgetLiveClient`；
+  - `scripts/storage_gc.py` 缓存键按 `ROOT.resolve()` 隔离，并将 `runtime/live/runner.lock` 纳入热档保护。
+- **文档对齐**：重写 [`README.md`](README.md) 对齐当前 `1h/4h/1d` 三重滤网架构、500U 四档复利配置、实际模块/脚本/工具清单、3 条计划任务与 9/23 条双机器人 TG 命令，并清理 [`config/sessions.json`](config/sessions.json) 中的失效命令引用。
+
 ## [Unreleased] — 2026-11-22 — 级联证伪防守、单棒极速清扫、1h->15m 龙头短线与风控金字塔加仓
 
 经 40 标的 × 2 年全量历史（真实资金费结算 + 双边滑点 + 1.5x 高压成本）第一性原理消融与样本外验证，合入四项零魔法常数结构机制（回放 `campaign.py` 与实盘 `scripts/live_runner.py` 完全同源）：

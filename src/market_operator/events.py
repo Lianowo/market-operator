@@ -23,8 +23,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from types import MappingProxyType
+from typing import Any
 
 from .level import Level, LevelKind, LevelRole
 from .structure import MarketStructure, Params, _bar_parts
@@ -37,20 +39,23 @@ ACCEPT = BREAKOUT_ACCEPTED
 REJECT = LEVEL_REJECTED
 CONSUMED = "CONSUMED"
 
-EVENT_ALIASES = {
+EVENT_ALIASES: Mapping[str, str] = MappingProxyType({
     "ACCEPT": BREAKOUT_ACCEPTED,
     "REJECT": LEVEL_REJECTED,
     "BREAKOUT_ACCEPTED": BREAKOUT_ACCEPTED,
     "LEVEL_REJECTED": LEVEL_REJECTED,
     "STRUCTURE_BROKEN": STRUCTURE_BROKEN,
     "CONSUMED": CONSUMED,
-}
+})
 
 EVENT_IDENTIFIERS = (
     BREAKOUT_ACCEPTED,
     LEVEL_REJECTED,
     STRUCTURE_BROKEN,
 )
+
+_MAX_REJECTION_EPISODE_BARS = 12
+_OUTSIDE_CLOSE_INVALIDATION_COUNT = 2
 
 
 def canonical_event_id(event_id: object) -> str:
@@ -64,14 +69,14 @@ class MarketEvent:
     direction: int
     ts: int
     known_index: int
-    attrs: dict = field(default_factory=dict)
+    attrs: dict[str, Any] = field(default_factory=dict)
 
     @property
     def kind(self) -> str:
         return canonical_event_id(self.id)
 
     @property
-    def level(self) -> Optional[Level]:
+    def level(self) -> Level | None:
         return self.attrs.get("level") or self.attrs.get("zone")
 
     @property
@@ -105,315 +110,310 @@ class RejectionEpisode:
     outside_closes: int = 0
 
 
-@dataclass
-class BreakoutCandidate:
-    """水平位突破后的价值驻留确认观察态。"""
-
-    level_before: Level
-    direction: int
-    break_index: int
-    break_low: float
-    break_high: float
-    break_close: float
-    waited: int = 0
-
-
 class LevelAuctionEngine:
     """零魔法阈值、纯结构破坏与价值接受驱动的原子水平位拍卖引擎(认知层与触发层完全同构共用)。"""
 
+    _STALE_PRUNE_BARS = 320
+
     def __init__(self) -> None:
         self.episodes: dict[tuple[int, int], RejectionEpisode] = {}
-        self.breakouts: dict[tuple[int, int], BreakoutCandidate] = {}
         self.fired_episode_keys: set[tuple[int, int, int]] = set()
         self.fired_breakout_keys: set[tuple[int, int]] = set()
         self.broken_role_keys: set[tuple[int, int]] = set()
         self.retested_flip_keys: set[tuple[int, int]] = set()
         self.states: dict[tuple[int, int], LevelAuctionState] = {}
+        self._last_seen_bar: dict[tuple[int, int], int] = {}
 
-    def _step_breakouts(
-        self, h: float, l: float, c: float, o: float, ts: int, k_idx: int, pad: float
-    ) -> list[MarketEvent]:
-        out: list[MarketEvent] = []
-        for bkey, cand in list(self.breakouts.items()):
-            lv = cand.level_before
-            d = cand.direction
-            cand.waited += 1
-            if d > 0:
-                if c <= lv.extreme or l < lv.band_lo:
-                    self.breakouts.pop(bkey, None)
-                    continue
-                accepted = c > o and c > lv.extreme and c > cand.break_close and l >= lv.band_lo
-                if accepted and bkey not in self.fired_breakout_keys:
-                    self.fired_breakout_keys.add(bkey)
-                    self.breakouts.pop(bkey, None)
-                    inv = min(lv.band_lo, cand.break_low, l) - pad
-                    out.append(MarketEvent(
-                        id=BREAKOUT_ACCEPTED,
-                        direction=1,
-                        ts=ts,
-                        known_index=k_idx,
-                        attrs={
-                            "zone": lv.clone(),
-                            "level": lv.clone(),
-                            "ref": float(lv.extreme),
-                            "ex": float(max(cand.break_high, h)),
-                            "invalid": float(inv),
-                            "started": cand.break_index,
-                            "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
-                        },
-                    ))
-                    continue
+    def _try_emit_breakout(
+        self,
+        lkey: tuple[int, int],
+        lv: Level,
+        state: LevelAuctionState,
+        *,
+        bar_index: int,
+        k_idx: int,
+        bar: tuple[int, float, float, float, float, float],
+        prev_bar: tuple[int, float, float, float, float, float],
+        pad: float,
+    ) -> MarketEvent | None:
+        """当根夺权突破确认:须先完成墙前吸收,且当前棒实体破界吞没前一根压制极值。"""
+        if not state.absorbed_wall or lkey in self.fired_breakout_keys:
+            return None
+        ts, o, h, lo, c, _ = bar
+        _, _, ph, pl, pc, _ = prev_bar
+        is_res = lv.role is LevelRole.RESISTANCE
+
+        if is_res and pc <= lv.band_hi and c > lv.band_hi and c > o and c > ph:
+            direction = 1
+            inv = min(lv.band_lo, lo) - pad
+            probe_inv = min(lv.probe_lo, lo) - pad
+            ex_px = float(h)
+        elif (not is_res) and pc >= lv.band_lo and c < lv.band_lo and c < o and c < pl:
+            direction = -1
+            inv = max(lv.band_hi, h) + pad
+            probe_inv = max(lv.probe_hi, h) + pad
+            ex_px = float(lo)
+        else:
+            return None
+
+        self.fired_breakout_keys.add(lkey)
+        return MarketEvent(
+            id=BREAKOUT_ACCEPTED,
+            direction=direction,
+            ts=ts,
+            known_index=k_idx,
+            attrs={
+                "zone": lv.clone(),
+                "level": lv.clone(),
+                "ref": float(lv.extreme),
+                "price": float(c),
+                "ex": ex_px,
+                "invalid": float(inv),
+                "probe_invalid": float(probe_inv),
+                "started": bar_index,
+                "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
+            },
+        )
+
+    @staticmethod
+    def _update_wall_absorption(
+        state: LevelAuctionState, lv: Level, h: float, lo: float, c: float
+    ) -> None:
+        """更新蓄势吸收因果链(先探入墙带,再在墙前区间收盘吸收)。"""
+        is_res = lv.role is LevelRole.RESISTANCE
+        if (is_res and h >= lv.neck and lo <= lv.band_hi and c <= lv.band_hi) or (
+            (not is_res) and lo <= lv.neck and h >= lv.band_lo and c >= lv.band_lo
+        ):
+            state.probed_wall = True
+        if not state.probed_wall:
+            return
+        if is_res and lv.probe_lo <= c <= lv.band_hi:
+            state.absorbed_wall = True
+        elif (not is_res) and lv.band_lo <= c <= lv.probe_hi:
+            state.absorbed_wall = True
+
+    def _step_rejection_episode(
+        self,
+        lkey: tuple[int, int],
+        lv: Level,
+        *,
+        bar_index: int,
+        bar: tuple[int, float, float, float, float, float],
+        prev_bar: tuple[int, float, float, float, float, float],
+    ) -> RejectionEpisode | None:
+        """Open or update the active rejection auction episode on ``lv``."""
+        _, o, h, lo, c, _ = bar
+        _, _, ph, pl, pc, _ = prev_bar
+        is_sup = lv.role is LevelRole.SUPPORT
+        ep = self.episodes.get(lkey)
+
+        if ep is None:
+            if (is_sup and pc < lv.extreme) or ((not is_sup) and pc > lv.extreme):
+                self.broken_role_keys.add(lkey)
+                return None
+            approached = (
+                (lo <= lv.neck and pc > lv.neck and pl >= lv.extreme)
+                if is_sup
+                else (h >= lv.neck and pc < lv.neck and ph <= lv.extreme)
+            )
+            fast_sweep = (
+                not lv.flipped
+                and lv.kind is not LevelKind.FLIPPED
+                and lv.departed
+                and (
+                    (is_sup and pc >= lv.extreme and lo < lv.extreme and c > lv.neck and c > o and c > 0.5 * (h + lo))
+                    or ((not is_sup) and pc <= lv.extreme and h > lv.extreme and c < lv.neck and c < o and c < 0.5 * (h + lo))
+                )
+            )
+            if not (lv.departed and (approached or fast_sweep)):
+                return None
+            swept_now = (lo < lv.extreme) if is_sup else (h > lv.extreme)
+            if fast_sweep:
+                anchor_init = 0.5 * (h + lo)
+            elif is_sup:
+                anchor_init = ph if (swept_now and c > ph) else h
             else:
-                if c >= lv.extreme or h > lv.band_hi:
-                    self.breakouts.pop(bkey, None)
-                    continue
-                accepted = c < o and c < lv.extreme and c < cand.break_close and h <= lv.band_hi
-                if accepted and bkey not in self.fired_breakout_keys:
-                    self.fired_breakout_keys.add(bkey)
-                    self.breakouts.pop(bkey, None)
-                    inv = max(lv.band_hi, cand.break_high, h) + pad
-                    out.append(MarketEvent(
-                        id=BREAKOUT_ACCEPTED,
-                        direction=-1,
-                        ts=ts,
-                        known_index=k_idx,
-                        attrs={
-                            "zone": lv.clone(),
-                            "level": lv.clone(),
-                            "ref": float(lv.extreme),
-                            "ex": float(min(cand.break_low, l)),
-                            "invalid": float(inv),
-                            "started": cand.break_index,
-                            "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
-                        },
-                    ))
-                    continue
-            if cand.waited >= 2:
-                self.breakouts.pop(bkey, None)
-        return out
+                anchor_init = pl if (swept_now and c < pl) else lo
+            ep = RejectionEpisode(
+                level=lv.clone(),
+                opened_index=bar_index,
+                extreme_px=lo if is_sup else h,
+                extreme_index=bar_index,
+                anchor_px=anchor_init,
+                swept=swept_now,
+            )
+            self.episodes[lkey] = ep
+            return ep
+
+        if is_sup:
+            if lo <= ep.extreme_px:
+                ep.extreme_px, ep.extreme_index = lo, bar_index
+                is_fast = (
+                    not lv.flipped
+                    and lv.kind is not LevelKind.FLIPPED
+                    and pc >= lv.extreme
+                    and lo < lv.extreme
+                    and c > lv.neck
+                    and c > o
+                    and c > 0.5 * (h + lo)
+                )
+                ep.anchor_px = 0.5 * (h + lo) if is_fast else h
+            elif c <= o and h < ep.anchor_px:
+                ep.anchor_px = h
+            if lo < lv.extreme:
+                ep.swept = True
+        else:
+            if h >= ep.extreme_px:
+                ep.extreme_px, ep.extreme_index = h, bar_index
+                is_fast = (
+                    not lv.flipped
+                    and lv.kind is not LevelKind.FLIPPED
+                    and pc <= lv.extreme
+                    and h > lv.extreme
+                    and c < lv.neck
+                    and c < o
+                    and c < 0.5 * (h + lo)
+                )
+                ep.anchor_px = 0.5 * (h + lo) if is_fast else lo
+            elif c >= o and lo > ep.anchor_px:
+                ep.anchor_px = lo
+            if h > lv.extreme:
+                ep.swept = True
+        return ep
+
+    def _try_emit_rejection(
+        self,
+        lkey: tuple[int, int],
+        lv: Level,
+        ep: RejectionEpisode,
+        *,
+        bar_index: int,
+        k_idx: int,
+        bar: tuple[int, float, float, float, float, float],
+        pad: float,
+    ) -> MarketEvent | None:
+        ts, o, _h, _lo, c, _ = bar
+        is_sup = lv.role is LevelRole.SUPPORT
+
+        out_close = (c < lv.extreme) if is_sup else (c > lv.extreme)
+        ep.outside_closes = ep.outside_closes + 1 if out_close else 0
+        if ep.outside_closes >= _OUTSIDE_CLOSE_INVALIDATION_COUNT:
+            self.broken_role_keys.add(lkey)
+            self.episodes.pop(lkey, None)
+            return None
+        if (bar_index - ep.opened_index) > _MAX_REJECTION_EPISODE_BARS:
+            self.episodes.pop(lkey, None)
+            return None
+
+        fire_key = (lv.uid, lv.flip_count, lv.geometry_version)
+        shifted = (
+            (c > o and c > lv.neck and c > ep.anchor_px)
+            if is_sup
+            else (c < o and c < lv.neck and c < ep.anchor_px)
+        )
+        if fire_key in self.fired_episode_keys or not shifted:
+            return None
+
+        raw_stop = min(lv.extreme, ep.extreme_px) if is_sup else max(lv.extreme, ep.extreme_px)
+        inv = (raw_stop - pad) if is_sup else (raw_stop + pad)
+        if (is_sup and c <= inv) or ((not is_sup) and c >= inv):
+            return None
+
+        self.fired_episode_keys.add(fire_key)
+        if lv.flipped:
+            lv.flip_retested = True
+            self.retested_flip_keys.add(lkey)
+        if lv.kind is LevelKind.FLIPPED or lv.flipped:
+            sub_kind = "FLIP_RETEST"
+        elif ep.swept:
+            sub_kind = "SWEEP_TRAP"
+        else:
+            sub_kind = f"LEVEL_REJECT_{lv.kind.value}"
+
+        self.episodes.pop(lkey, None)
+        return MarketEvent(
+            id=LEVEL_REJECTED,
+            direction=1 if is_sup else -1,
+            ts=ts,
+            known_index=k_idx,
+            attrs={
+                "zone": lv.clone(),
+                "level": lv.clone(),
+                "ref": float(lv.neck),
+                "ex": float(ep.extreme_px),
+                "ex_index": ep.extreme_index,
+                "invalid": float(inv),
+                "started": ep.opened_index,
+                "swept": ep.swept,
+                "sub_kind": sub_kind,
+            },
+        )
 
     def step(
         self,
         *,
         bar_index: int,
         bar: tuple[int, float, float, float, float, float],
-        prev_bar: Optional[tuple[int, float, float, float, float, float]],
+        prev_bar: tuple[int, float, float, float, float, float] | None,
         recent_bars: Sequence[tuple[int, float, float, float, float, float]],
         active_levels: Sequence[Level],
         atr: float,
         k_bm: float,
-        known_index_override: Optional[int] = None,
+        known_index_override: int | None = None,
     ) -> list[MarketEvent]:
-        ts, o, h, l, c, _ = bar
+        _ = recent_bars  # Retained for caller signature compatibility
+        _, _o, h, lo, c, _ = bar
         k_idx = bar_index if known_index_override is None else int(known_index_override)
         pad = max(0.0, float(k_bm) * float(atr))
         emitted: list[MarketEvent] = []
         if prev_bar is None:
             return emitted
-        _, po, ph, pl, pc, _ = prev_bar
         active_by_key = {(lv.uid, lv.flip_count): lv for lv in active_levels if lv.is_active}
 
         for lkey, lv in active_by_key.items():
             if lv.flipped and (lv.flip_retested or lkey in self.retested_flip_keys):
                 lv.flip_retested = True
                 continue
-            is_res = lv.role is LevelRole.RESISTANCE
-            is_sup = not is_res
-            if lv.flipped and ((is_sup and c < lv.band_lo) or (is_res and c > lv.band_hi)):
+            is_sup = lv.role is LevelRole.SUPPORT
+            if lv.flipped and ((is_sup and c < lv.band_lo) or ((not is_sup) and c > lv.band_hi)):
                 lv.flip_retested = True
                 self.retested_flip_keys.add(lkey)
                 self.episodes.pop(lkey, None)
                 continue
 
             state = self.states.setdefault(lkey, LevelAuctionState())
+            brk_ev = self._try_emit_breakout(
+                lkey, lv, state, bar_index=bar_index, k_idx=k_idx, bar=bar, prev_bar=prev_bar, pad=pad
+            )
+            if brk_ev is not None:
+                emitted.append(brk_ev)
 
-            # 当根夺权突破确认（消除两根延迟追高）：
-            # 必须先完成墙前吸收 (state.absorbed_wall == True)，且当前棒以强势实体收盘直接破界并吞没前一根反向压制极值：
-            if state.absorbed_wall and lkey not in self.fired_breakout_keys:
-                if (
-                    is_res
-                    and pc <= lv.band_hi
-                    and c > lv.band_hi
-                    and c > o
-                    and c > ph
-                ):
-                    self.fired_breakout_keys.add(lkey)
-                    inv = min(lv.band_lo, l) - pad
-                    probe_inv = min(lv.probe_lo, l) - pad
-                    emitted.append(MarketEvent(
-                        id=BREAKOUT_ACCEPTED,
-                        direction=1,
-                        ts=ts,
-                        known_index=k_idx,
-                        attrs={
-                            "zone": lv.clone(),
-                            "level": lv.clone(),
-                            "ref": float(lv.extreme),
-                            "price": float(c),
-                            "ex": float(h),
-                            "invalid": float(inv),
-                            "probe_invalid": float(probe_inv),
-                            "started": bar_index,
-                            "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
-                        },
-                    ))
-                elif (
-                    is_sup
-                    and pc >= lv.band_lo
-                    and c < lv.band_lo
-                    and c < o
-                    and c < pl
-                ):
-                    self.fired_breakout_keys.add(lkey)
-                    inv = max(lv.band_hi, h) + pad
-                    probe_inv = max(lv.probe_hi, h) + pad
-                    emitted.append(MarketEvent(
-                        id=BREAKOUT_ACCEPTED,
-                        direction=-1,
-                        ts=ts,
-                        known_index=k_idx,
-                        attrs={
-                            "zone": lv.clone(),
-                            "level": lv.clone(),
-                            "ref": float(lv.extreme),
-                            "price": float(c),
-                            "ex": float(l),
-                            "invalid": float(inv),
-                            "probe_invalid": float(probe_inv),
-                            "started": bar_index,
-                            "sub_kind": f"LEVEL_ACCEPT_{lv.kind.value}",
-                        },
-                    ))
-
-            # 更新蓄势吸收因果链（无任何 K 线计数或百分比魔法阈值）：
-            if (is_res and h >= lv.neck and l <= lv.band_hi and c <= lv.band_hi) or (
-                is_sup and l <= lv.neck and h >= lv.band_lo and c >= lv.band_lo
-            ):
-                state.probed_wall = True
-            if state.probed_wall:
-                if is_res and lv.probe_lo <= c <= lv.band_hi:
-                    state.absorbed_wall = True
-                elif is_sup and lv.band_lo <= c <= lv.probe_hi:
-                    state.absorbed_wall = True
+            self._update_wall_absorption(state, lv, h, lo, c)
 
             if lkey in self.broken_role_keys:
                 continue
-            ep = self.episodes.get(lkey)
-            if ep is None and ((is_sup and pc < lv.extreme) or (is_res and pc > lv.extreme)):
-                self.broken_role_keys.add(lkey)
-                continue
-
-            if ep is None:
-                approached = (
-                    (l <= lv.neck and pc > lv.neck and pl >= lv.extreme)
-                    if is_sup
-                    else (h >= lv.neck and pc < lv.neck and ph <= lv.extreme)
-                )
-                fast_sweep = (
-                    not lv.flipped
-                    and lv.kind is not LevelKind.FLIPPED
-                    and lv.departed
-                    and (
-                        (is_sup and pc >= lv.extreme and l < lv.extreme and c > lv.neck and c > o and c > 0.5 * (h + l))
-                        or (is_res and pc <= lv.extreme and h > lv.extreme and c < lv.neck and c < o and c < 0.5 * (h + l))
-                    )
-                )
-                if lv.departed and (approached or fast_sweep):
-                    swept_now = (l < lv.extreme) if is_sup else (h > lv.extreme)
-                    if fast_sweep:
-                        anchor_init = 0.5 * (h + l)
-                    else:
-                        anchor_init = (ph if (swept_now and c > ph) else h) if is_sup else (pl if (swept_now and c < pl) else l)
-                    ep = RejectionEpisode(
-                        level=lv.clone(),
-                        opened_index=bar_index,
-                        extreme_px=l if is_sup else h,
-                        extreme_index=bar_index,
-                        anchor_px=anchor_init,
-                        swept=swept_now,
-                    )
-                    self.episodes[lkey] = ep
-            else:
-                if is_sup:
-                    if l <= ep.extreme_px:
-                        ep.extreme_px, ep.extreme_index = l, bar_index
-                        ep.anchor_px = (
-                            0.5 * (h + l)
-                            if (not lv.flipped and lv.kind is not LevelKind.FLIPPED and pc >= lv.extreme and l < lv.extreme and c > lv.neck and c > o and c > 0.5 * (h + l))
-                            else h
-                        )
-                    elif c <= o and h < ep.anchor_px:
-                        ep.anchor_px = h
-                    if l < lv.extreme:
-                        ep.swept = True
-                else:
-                    if h >= ep.extreme_px:
-                        ep.extreme_px, ep.extreme_index = h, bar_index
-                        ep.anchor_px = (
-                            0.5 * (h + l)
-                            if (not lv.flipped and lv.kind is not LevelKind.FLIPPED and pc <= lv.extreme and h > lv.extreme and c < lv.neck and c < o and c < 0.5 * (h + l))
-                            else l
-                        )
-                    elif c >= o and l > ep.anchor_px:
-                        ep.anchor_px = l
-                    if h > lv.extreme:
-                        ep.swept = True
-
+            ep = self._step_rejection_episode(lkey, lv, bar_index=bar_index, bar=bar, prev_bar=prev_bar)
             if ep is None:
                 continue
-
-            out_close = (c < lv.extreme) if is_sup else (c > lv.extreme)
-            ep.outside_closes = ep.outside_closes + 1 if out_close else 0
-            if ep.outside_closes >= 2:
-                self.broken_role_keys.add(lkey)
-                self.episodes.pop(lkey, None)
-                continue
-
-            if (bar_index - ep.opened_index) > 12:
-                self.episodes.pop(lkey, None)
-                continue
-
-            fire_key = (lv.uid, lv.flip_count, lv.geometry_version)
-            shifted = (
-                (c > o and c > lv.neck and c > ep.anchor_px)
-                if is_sup
-                else (c < o and c < lv.neck and c < ep.anchor_px)
+            rej_ev = self._try_emit_rejection(
+                lkey, lv, ep, bar_index=bar_index, k_idx=k_idx, bar=bar, pad=pad
             )
-            if fire_key not in self.fired_episode_keys and shifted:
-                raw_stop = min(lv.extreme, ep.extreme_px) if is_sup else max(lv.extreme, ep.extreme_px)
-                inv = (raw_stop - pad) if is_sup else (raw_stop + pad)
-                if (is_sup and c <= inv) or ((not is_sup) and c >= inv):
-                    continue
-                self.fired_episode_keys.add(fire_key)
-                if lv.flipped:
-                    lv.flip_retested = True
-                    self.retested_flip_keys.add(lkey)
-                sub_kind = "FLIP_RETEST" if (lv.kind is LevelKind.FLIPPED or lv.flipped) else ("SWEEP_TRAP" if ep.swept else f"LEVEL_REJECT_{lv.kind.value}")
-                emitted.append(MarketEvent(
-                    id=LEVEL_REJECTED,
-                    direction=1 if is_sup else -1,
-                    ts=ts,
-                    known_index=k_idx,
-                    attrs={
-                        "zone": lv.clone(),
-                        "level": lv.clone(),
-                        "ref": float(lv.neck),
-                        "ex": float(ep.extreme_px),
-                        "ex_index": ep.extreme_index,
-                        "invalid": float(inv),
-                        "started": ep.opened_index,
-                        "swept": ep.swept,
-                        "sub_kind": sub_kind,
-                    },
-                ))
-                self.episodes.pop(lkey, None)
+            if rej_ev is not None:
+                emitted.append(rej_ev)
 
-        self._cleanup(active_by_key, h, l, c)
+        self._cleanup(active_by_key, h, lo, c, bar_index)
         return emitted
 
     def _cleanup(
-        self, active_by_key: dict[tuple[int, int], Level], h: float, l: float, c: float
+        self,
+        active_by_key: dict[tuple[int, int], Level],
+        h: float,
+        lo: float,
+        c: float,
+        bar_index: int = 0,
     ) -> None:
+        for lkey in active_by_key:
+            self._last_seen_bar[lkey] = bar_index
         for lkey in list(self.episodes):
             if lkey not in active_by_key:
                 self.episodes.pop(lkey, None)
@@ -421,32 +421,34 @@ class LevelAuctionEngine:
             lv_now = active_by_key.get((fkey[0], fkey[1]))
             if lv_now is None:
                 self.fired_episode_keys.discard(fkey)
-            else:
-                if lv_now.role is LevelRole.SUPPORT and l > lv_now.band_hi and c > lv_now.band_hi:
-                    self.fired_episode_keys.discard(fkey)
-                elif lv_now.role is LevelRole.RESISTANCE and h < lv_now.band_lo and c < lv_now.band_lo:
-                    self.fired_episode_keys.discard(fkey)
+            elif lv_now.role is LevelRole.SUPPORT and lo > lv_now.band_hi and c > lv_now.band_hi:
+                self.fired_episode_keys.discard(fkey)
+            elif lv_now.role is LevelRole.RESISTANCE and h < lv_now.band_lo and c < lv_now.band_lo:
+                self.fired_episode_keys.discard(fkey)
+        # 24/7 常驻内存上限治理: 超出滑动画布久未出现的历史水平位键永久不可重现,安全裁剪
+        cutoff = bar_index - self._STALE_PRUNE_BARS
+        if cutoff > 0:
+            stale = [
+                k for k, seen in self._last_seen_bar.items()
+                if k not in active_by_key and seen < cutoff
+            ]
+            for k in stale:
+                self._last_seen_bar.pop(k, None)
+                self.states.pop(k, None)
+                self.fired_breakout_keys.discard(k)
+                self.broken_role_keys.discard(k)
+                self.retested_flip_keys.discard(k)
 
 
 def origin_choch_events(
-    transitions: Sequence[tuple[str, Optional[Level], Optional[Level]]],
+    transitions: Sequence[tuple[str, Level | None, Level | None]],
     *,
     ts: int,
     known_index: int,
     high: float,
     low: float,
 ) -> list[MarketEvent]:
-    """从 ``FLIPPED`` 结构转移中派生 ORIGIN CHoCH 事件(唯一判定入口)。
-
-    4H 认知收盘(``EventDetector.update``)与触发周期的增量状态维护共用此函数,
-    任一侧都不得另写第二套判定。时钟参数显式传入而非从 bar/structure 推断,
-    让调用方自己决定 ``ts``/``known_index`` 的来源,避免把认知周期语义偷渡进
-    触发周期。
-
-    语义与抽取前逐字等价:仅当 ``trans == "FLIPPED"`` 且转移前 Level 的 kind
-    为 ``ORIGIN`` 才发事件;方向取转移前角色的反侧(原 RESISTANCE ⇒ +1,
-    原 SUPPORT ⇒ -1);``ex`` 取当前 bar 对应方向的极值。
-    """
+    """从 ``FLIPPED`` 结构转移中派生 ORIGIN CHoCH 事件(唯一判定入口)。"""
     emitted: list[MarketEvent] = []
     for trans, _lv_after, lv_before in transitions:
         if trans != "FLIPPED" or lv_before is None or lv_before.kind is not LevelKind.ORIGIN:
@@ -475,17 +477,13 @@ def dominant_choch_events(
     bar: tuple[int, float, float, float, float, float],
     known_index: int,
 ) -> list[MarketEvent]:
-    """触发细周期收盘反向击穿冻结高周期主导水平位外沿时派生级联 CHoCH 事件(唯一判定入口)。
-
-    仅对主导二维水平位(``ORIGIN`` / ``EQUAL`` 或 ``prominence_2d > med_prominence_2d``)生效,
-    严格要求前一根触发收盘仍在防线优势侧而当根收盘实质越过外沿 ``band_lo`` / ``band_hi``。
-    """
+    """触发细周期收盘反向击穿冻结高周期主导水平位外沿时派生级联 CHoCH 事件(唯一判定入口)。"""
     active = [lv for lv in active_levels if lv.is_active]
     if not active:
         return []
     proms = sorted(float(lv.prominence_2d) for lv in active)
     med_prom = proms[len(proms) // 2]
-    ts, _o, h, l, c, _v = bar
+    ts, _o, h, lo, c, _v = bar
     pc = float(prev_close)
     emitted: list[MarketEvent] = []
     for lv in active:
@@ -506,7 +504,7 @@ def dominant_choch_events(
                 "zone": lv.clone(),
                 "level": lv.clone(),
                 "ref": float(lv.band_lo if broke_dn else lv.band_hi),
-                "ex": float(h if direction > 0 else l),
+                "ex": float(h if direction > 0 else lo),
                 "sub_kind": "ORIGIN_CHOCH" if lv.kind is LevelKind.ORIGIN else "DOMINANT_CHOCH",
             },
         ))
@@ -516,7 +514,7 @@ def dominant_choch_events(
 class EventDetector:
     """认知周期价格拍卖事件检测器。"""
 
-    def __init__(self, params: Optional[Params] = None, **_ignored_legacy) -> None:
+    def __init__(self, params: Params | None = None, **_ignored_legacy: Any) -> None:
         self.params = params or Params()
         self.structure = MarketStructure(self.params)
         self._auction = LevelAuctionEngine()
@@ -541,14 +539,7 @@ class EventDetector:
         )
         for klv in known_levels:
             if klv.flipped and klv.flip_retested:
-                self.structure._scanner._flip_retested_anchors.add(klv.origin_index)
-                reg_lv = self.structure._scanner._registry.get((klv.origin_index, klv.role.value))
-                if reg_lv is not None:
-                    reg_lv.flip_retested = True
-                self.structure._scanner._active = [
-                    alv for alv in self.structure._scanner._active
-                    if not (alv.origin_index == klv.origin_index and alv.role is klv.role)
-                ]
+                self.structure.mark_level_flip_retested(klv.origin_index, klv.role)
 
         emitted.extend(origin_choch_events(
             self.structure.last_transitions,

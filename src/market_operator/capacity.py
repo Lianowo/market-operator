@@ -44,8 +44,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from types import MappingProxyType
+from typing import Any
 
 # 决策时刻(路由产生意向时)与成交时刻(经纪商真正建仓时)
 DECISION = "decision"
@@ -60,22 +62,22 @@ MODES = (FULL_COST, STOP_RISK, ADMISSION_FULL_COST)
 VALID_MODES = MODES + (CASH_NET_ADMISSION,)
 
 
-def timeframe_of(symbol: Optional[str]) -> Optional[str]:
+def timeframe_of(symbol: str | None) -> str | None:
     """``BTCUSDT@4h`` → ``4h``;无周期后缀时返回 None(单周期/测试夹具)。"""
     if symbol and "@" in symbol:
         return symbol.rsplit("@", 1)[1]
     return None
 
 
-def symbol_root(symbol: Optional[str]) -> Optional[str]:
+def symbol_root(symbol: str | None) -> str | None:
     """``BTCUSDT@4h`` → ``BTCUSDT``(标的池 B1 的键);无后缀时原样返回。"""
     if symbol and "@" in symbol:
         return symbol.rsplit("@", 1)[0]
     return symbol
 
 
-def asset_class_of(symbol: Optional[str],
-                   contracts: Optional[Mapping[str, Any]] = None) -> str:
+def asset_class_of(symbol: str | None,
+                   contracts: Mapping[str, Any] | None = None) -> str:
     """从合约规格提取资产类别('rwa' | 'crypto');缺失规格时默认归入 'crypto'。"""
     if not symbol or not contracts:
         return "crypto"
@@ -86,6 +88,29 @@ def asset_class_of(symbol: Optional[str],
     if spec is not None and bool(getattr(spec, "is_rwa", False)):
         return "rwa"
     return "crypto"
+
+
+def resolve_dynamic_risk_tier(
+    hwm: float,
+    tiers: Sequence[tuple[float, float]] | Sequence[Sequence[float]] | None,
+    default_frac: float,
+) -> float:
+    """Resolve active single-trade risk fraction from HWM dynamic risk tiers.
+
+    Tiers are ordered ``(upper_equity_bound, risk_frac)`` pairs. When ``hwm``
+    exceeds all upper bounds, the last (most conservative) tier applies.
+    Shared by ``Broker``, ``LiveRunner``, and Telegram ``/risk`` reporting.
+    """
+    if not tiers:
+        return float(default_frac)
+    hwm_val = float(hwm)
+    last_frac = float(default_frac)
+    for pair in tiers:
+        bound, frac = float(pair[0]), float(pair[1])
+        last_frac = frac
+        if hwm_val <= bound:
+            return frac
+    return last_frac
 
 
 @dataclass(frozen=True)
@@ -99,7 +124,7 @@ class Exposure:
     def total(self) -> float:
         return self.stop_loss + self.exit_cost
 
-    def __add__(self, other: "Exposure") -> "Exposure":
+    def __add__(self, other: Exposure) -> Exposure:
         return Exposure(self.stop_loss + other.stop_loss,
                         self.exit_cost + other.exit_cost)
 
@@ -123,8 +148,8 @@ class RiskBudget:
                            沉默不得改变数字)。
     """
 
-    portfolio_frac: Optional[float] = None
-    directional_cap_frac: Optional[float] = None
+    portfolio_frac: float | None = None
+    directional_cap_frac: float | None = None
     per_timeframe_frac: Mapping[str, float] = field(default_factory=dict)
     symbol_frac: Mapping[str, float] = field(default_factory=dict)
     mode: str = ADMISSION_FULL_COST
@@ -132,9 +157,10 @@ class RiskBudget:
     def __post_init__(self) -> None:
         if self.mode not in VALID_MODES:
             raise ValueError(f"capacity mode 必须是 {VALID_MODES},收到 {self.mode!r}")
-        checks = [("portfolio_frac", self.portfolio_frac),
-                  ("directional_cap_frac", self.directional_cap_frac)]
-
+        checks: list[tuple[str, float | None]] = [
+            ("portfolio_frac", self.portfolio_frac),
+            ("directional_cap_frac", self.directional_cap_frac),
+        ]
         checks += [(f"per_timeframe_frac[{tf}]", frac)
                    for tf, frac in self.per_timeframe_frac.items()]
         checks += [(f"symbol_frac[{sym}]", frac)
@@ -144,12 +170,17 @@ class RiskBudget:
                 continue
             if not (0.0 < float(frac) <= 1.0):
                 raise ValueError(f"{label} 必须在 (0,1],收到 {frac!r}")
-        object.__setattr__(self, "per_timeframe_frac",
-                           {str(k): float(v)
-                            for k, v in self.per_timeframe_frac.items()})
-        object.__setattr__(self, "symbol_frac",
-                           {str(k): float(v)
-                            for k, v in self.symbol_frac.items()})
+        # Freeze internal mapping fields to enforce immutability across layers.
+        object.__setattr__(
+            self,
+            "per_timeframe_frac",
+            MappingProxyType({str(k): float(v) for k, v in self.per_timeframe_frac.items()}),
+        )
+        object.__setattr__(
+            self,
+            "symbol_frac",
+            MappingProxyType({str(k): float(v) for k, v in self.symbol_frac.items()}),
+        )
 
     @property
     def is_active(self) -> bool:
@@ -157,58 +188,30 @@ class RiskBudget:
                 or self.directional_cap_frac is not None
                 or bool(self.per_timeframe_frac) or bool(self.symbol_frac))
 
-
-    def pools(self, timeframe: Optional[str], *,
+    def pools(self, timeframe: str | None, *,
               moment: str,
-              symbol: Optional[str] = None
-              ) -> tuple[tuple[str, float, Optional[str]], ...]:
+              symbol: str | None = None
+              ) -> tuple[tuple[str, float, str | None], ...]:
         """该时刻生效的池:``(池名, 上限占比, 约束范围)``。
 
         范围 ``None`` = 全部仓位;``"4h"`` = 该周期后缀;``"sym:BTCUSDT"`` =
-        单个标的(跨周期合并,见 §B1:同一标的 2h/4h/12h/1d 同时持仓时,
-        真正的相关风险是**标的级**的,BTC 一根 4% 阴线会同时打掉 4 个止损)。
-        ``admission_full_cost`` 的决策时刻只返回周期池 + 标的池 —— 这是现行
-        行为(周期池存在时账户池不参与准入判断,而 v21 的 4×2.25% < 账户池
-        12%,所以账户池实际上从不生效;``full_cost``/``stop_risk`` 下它才真正
-        参与)。
+        单个标的(跨周期合并)。账户池在所有时点参与,周期池作为其内部子配额。
         """
         if moment not in MOMENTS:
             raise ValueError(f"moment 必须是 {MOMENTS},收到 {moment!r}")
         tf_frac = self.per_timeframe_frac.get(timeframe) if timeframe else None
         sym_frac = self.symbol_frac.get(symbol) if symbol else None
-        sym_pools = ((("symbol", float(sym_frac), f"sym:{symbol}"),)
-                     if sym_frac is not None else ())
-        if self.mode in (ADMISSION_FULL_COST, CASH_NET_ADMISSION) and moment == DECISION:
-            # 账户池是唯一预算主体的总额度;周期池只是它的内部分配。
-            # 原实现让周期池在准入时刻取代账户池,于是"账户最多同时亏多少"
-            # 根本没有被任何一处定义(4×12% 可相加成 48%)。语义优先:账户池
-            # 在所有时点参与,周期池不再相加成新总额度。
-            pools: list[tuple[str, float, Optional[str]]] = []
-            if tf_frac is not None:
-                pools.append(("tf", float(tf_frac), timeframe))
-            if self.portfolio_frac is not None:
-                pools.append(("portfolio", float(self.portfolio_frac), None))
-            return tuple(pools) + sym_pools
-        pools: list[tuple[str, float, Optional[str]]] = []
+        active_pools: list[tuple[str, float, str | None]] = []
         if tf_frac is not None:
-            pools.append(("tf", float(tf_frac), timeframe))
+            active_pools.append(("tf", float(tf_frac), timeframe))
         if self.portfolio_frac is not None:
-            pools.append(("portfolio", float(self.portfolio_frac), None))
-        return tuple(pools) + sym_pools
+            active_pools.append(("portfolio", float(self.portfolio_frac), None))
+        if sym_frac is not None:
+            active_pools.append(("symbol", float(sym_frac), f"sym:{symbol}"))
+        return tuple(active_pools)
 
     def includes_costs(self, moment: str) -> bool:
-        """该时刻的预算是否计入平仓侧成本。
-
-        ``full_cost``              两个时刻都计入(真实最坏情景)。
-        ``stop_risk``              两个时刻都不计入 —— 预算单位 = 止损风险,与
-                                   ``risk_frac`` 同单位,费用由 PnL 承担。
-        ``admission_full_cost``    只在决策时刻计入(现行生产行为)。
-
-        实测(explore|full,同一份数据):``full_cost`` 净收益 -9.84、
-        ``stop_risk`` -8.60(12h 由 +5.68 翻成 -21.09)。两个对称口径都更差,
-        说明该不对称是承重的,不能当作"笔误"抹平;要改它属于策略决策,需显式
-        选择并重新冻结基线。
-        """
+        """该时刻的预算是否计入平仓侧成本。"""
         if self.mode == STOP_RISK:
             return False
         return not (self.mode in (ADMISSION_FULL_COST, CASH_NET_ADMISSION) and moment == FILL)
@@ -224,7 +227,7 @@ class RiskBudget:
         return self.mode == CASH_NET_ADMISSION
 
 
-def stop_distance(direction: int, price: float, stop: Optional[float]) -> float:
+def stop_distance(direction: int, price: float, stop: float | None) -> float:
     """保护性止损的每单位风险;止损缺失/方向错误返回 ``inf``(视为无预算)。"""
     if stop is None or not math.isfinite(stop):
         return math.inf
@@ -232,7 +235,7 @@ def stop_distance(direction: int, price: float, stop: Optional[float]) -> float:
 
 
 def position_exposure(qty: float, direction: int, mark: float,
-                      stop: Optional[float], *, taker_fee: float,
+                      stop: float | None, *, taker_fee: float,
                       slippage: float) -> Exposure:
     """单仓最坏情景;止损缺失 ⇒ ``inf``(不给出新增额度,而不是崩溃)。"""
     distance = stop_distance(direction, mark, stop)
@@ -242,8 +245,34 @@ def position_exposure(qty: float, direction: int, mark: float,
                     exit_cost=qty * mark * (taker_fee + slippage))
 
 
-def _scope_matches(symbol: str, scope: Optional[str],
-                   timeframe: Optional[str]) -> bool:
+def single_position_exposure(
+    qty: float,
+    direction: int,
+    entry: float,
+    mark: float,
+    stop: float | None,
+    *,
+    taker_fee: float,
+    slippage: float,
+    cash_basis: bool = False,
+) -> Exposure:
+    """Single-position worst-case exposure supporting both mark and cash-principal bases."""
+    if not cash_basis:
+        return position_exposure(
+            qty, direction, mark, stop, taker_fee=taker_fee, slippage=slippage
+        )
+    ref_px = min(entry, mark) if direction > 0 else max(entry, mark)
+    distance = stop_distance(direction, ref_px, stop)
+    if not math.isfinite(distance):
+        return Exposure(stop_loss=math.inf, exit_cost=0.0)
+    return Exposure(
+        stop_loss=qty * distance,
+        exit_cost=qty * mark * (taker_fee + slippage),
+    )
+
+
+def _scope_matches(symbol: str, scope: str | None,
+                   timeframe: str | None) -> bool:
     """池范围过滤:``None`` = 全部;``"sym:BTCUSDT"`` = 单标的;``"4h"`` = 周期后缀。"""
     if scope:
         if scope.startswith("sym:"):
@@ -254,12 +283,12 @@ def _scope_matches(symbol: str, scope: Optional[str],
     return True
 
 
-def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *,
-                         timeframe: Optional[str] = None,
-                         scope: Optional[str] = None,
-                         direction: Optional[int] = None,
-                         asset_class: Optional[str] = None,
-                         contracts: Optional[Mapping[str, Any]] = None,
+def outstanding_exposure(positions: Mapping[str, Any], marks: Mapping[str, float], *,
+                         timeframe: str | None = None,
+                         scope: str | None = None,
+                         direction: int | None = None,
+                         asset_class: str | None = None,
+                         contracts: Mapping[str, Any] | None = None,
                          taker_fee: float = 0.0,
                          slippage: float = 0.0,
                          cash_basis: bool = False) -> Exposure:
@@ -274,22 +303,21 @@ def outstanding_exposure(positions: Iterable[Any], marks: Mapping[str, float], *
             continue
 
         mark = float(marks.get(symbol, pos.entry))
-        if cash_basis:
-            entry_px = float(getattr(pos, "entry", mark))
-            ref_px = min(entry_px, mark) if pos.direction > 0 else max(entry_px, mark)
-            distance = stop_distance(pos.direction, ref_px, pos.invalid)
-            exp = (Exposure(stop_loss=math.inf, exit_cost=0.0) if not math.isfinite(distance)
-                   else Exposure(stop_loss=pos.qty * distance,
-                                 exit_cost=pos.qty * mark * (taker_fee + slippage)))
-            total = total + exp
-        else:
-            total = total + position_exposure(
-                pos.qty, pos.direction, mark, pos.invalid,
-                taker_fee=taker_fee, slippage=slippage)
+        entry_px = float(getattr(pos, "entry", mark))
+        total = total + single_position_exposure(
+            pos.qty,
+            pos.direction,
+            entry_px,
+            mark,
+            pos.invalid,
+            taker_fee=taker_fee,
+            slippage=slippage,
+            cash_basis=cash_basis,
+        )
     return total
 
 
-def candidate_exposure(qty: float, entry: float, stop: Optional[float], *,
+def candidate_exposure(qty: float, entry: float, stop: float | None, *,
                        taker_fee: float, slippage: float) -> Exposure:
     """新仓最坏情景:开平各一次成本,故乘以 2。"""
     distance = stop_distance(1, entry, stop)
@@ -323,23 +351,19 @@ def qty_for_budget(headroom: float, price: float, risk_per_unit: float, *,
     return headroom / per_unit if per_unit > 0.0 else 0.0
 
 
-def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: float,
+def budget_headroom(pools: Sequence[tuple[str, float, str | None]], equity: float,
                     positions: Mapping[str, Any], marks: Mapping[str, float], *,
                     taker_fee: float, slippage: float,
                     include_costs: bool,
-                    reserve_by_tf: Optional[Mapping[str, float]] = None,
-                    candidate_timeframe: Optional[str] = None,
+                    reserve_by_tf: Mapping[str, float] | None = None,
+                    candidate_timeframe: str | None = None,
                     cash_basis: bool = False
                     ) -> tuple[float, str, float]:
     """各池剩余额度的最小值;返回 ``(剩余额度, 最紧池名, 该池上限占比)``。
 
     无生效池 ⇒ ``(inf, "", 0.0)``(不限容量)。仓位止损缺失时该池剩余为 0。
 
-    ``reserve_by_tf``(B2 慢周期保留额度):给 ``{tf: frac}`` 里的周期各留一份
-    **专属**额度,任何不在该表里的周期(如 2h)在准入时要把这些预留里尚未被
-    占用的部分先扣掉。语义 = "慢周期的位置不会被快周期先到先得挤没",这正是
-    跨周期容量争议里唯一值得保留的诉求(实测并非 slot 竞争,而是权益相关性;
-    见 reports/tf_opt_20261023/OPTPATH.md §5.5)。
+    ``reserve_by_tf``:给 ``{tf: frac}`` 里的慢周期保留专属额度,非预留周期准入时先扣除未占用预留。
     """
     if not pools:
         return math.inf, "", 0.0
@@ -370,11 +394,29 @@ def budget_headroom(pools: Sequence[tuple[str, float, Optional[str]]], equity: f
     return best_headroom, best_name, best_frac
 
 
+def cap_effective_size_multiplier(
+    size_mult: float,
+    corr_mult: float = 1.0,
+    max_eff_size_mult: float | None = None,
+) -> float:
+    """合成单笔有效仓位乘数并施加凯利单笔硬封顶(回放 Broker 与实盘 LiveRunner 唯一共享实现)。
+
+    避免多因子放大(如信念乘数 × Markowitz 独狼因子)叠乘越过几何复利凯利峰导致左尾过押回撤放大;
+    ``max_eff_size_mult=None`` 时保持原值不截断(向后兼容历史测试)。
+    """
+    eff = max(0.0, float(size_mult)) * max(0.0, float(corr_mult))
+    if max_eff_size_mult is not None and float(max_eff_size_mult) > 0.0:
+        eff = min(eff, float(max_eff_size_mult))
+    return eff
+
+
 __all__ = [
     "ADMISSION_FULL_COST", "CASH_NET_ADMISSION", "DECISION", "FILL", "FULL_COST",
     "MODES", "MOMENTS", "STOP_RISK", "VALID_MODES", "Exposure", "RiskBudget",
-    "asset_class_of", "budget_headroom", "candidate_exposure", "delta_exposure",
+    "asset_class_of", "budget_headroom", "candidate_exposure",
+    "cap_effective_size_multiplier", "delta_exposure",
     "outstanding_exposure", "position_exposure", "qty_for_budget",
+    "resolve_dynamic_risk_tier", "single_position_exposure",
     "stop_distance", "symbol_root", "timeframe_of",
 ]
 

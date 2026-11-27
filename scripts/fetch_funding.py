@@ -29,21 +29,29 @@ reports/live_cost_audit_20261023/FUNDING_REPLAY.md)。要让回放口径可审�
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping, Sequence
 import hashlib
 import json
-import time
 from pathlib import Path
+import sys
+import time
+from typing import Any
 
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data"
+sys.path.insert(0, str(ROOT / "src"))
+
+from market_operator import heartbeat as hb                                # noqa: E402
+from market_operator import paths                                          # noqa: E402
+from market_operator.bitget_live import BitgetLiveClient                   # noqa: E402
+from market_operator.timeframes import MS_PER_DAY, MS_PER_HOUR             # noqa: E402
+
+DATA_DIR = paths.data_dir()
 RAW_DIR = DATA_DIR / "raw"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
 FAPI = "https://fapi.binance.com/fapi/v1/fundingRate"
 BITGET_FUNDING = "https://api.bitget.com/api/v2/mix/market/history-fund-rate"
-BITGET_CONTRACTS = "https://api.bitget.com/api/v2/mix/market/contracts"
-BITGET_TICKERS = "https://api.bitget.com/api/v2/mix/market/tickers"
 PRODUCT_TYPE = "USDT-FUTURES"
 LIVE_CONFIG = ROOT / "config" / "live.json"
 
@@ -54,7 +62,29 @@ SOURCES = ("binance", "bitget")
 SLEEP_S = 0.15
 RETRIES = 4
 RETRY_BACKOFF_S = 2.0
-MS_DAY = 86_400_000
+HTTP_TIMEOUT_S = 20.0
+DEFAULT_RWA_MIN_VOL = 3_000_000.0
+FRAME_PAD_DAYS = 2
+MS_DAY = MS_PER_DAY
+
+
+def _get_json_with_retry(
+    url: str,
+    params: Mapping[str, Any],
+    *,
+    retries: int = RETRIES,
+    timeout: float = HTTP_TIMEOUT_S,
+) -> Any:
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, params=dict(params), timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.RequestException, ValueError):
+            if attempt == retries - 1:
+                raise
+            time.sleep(RETRY_BACKOFF_S * (attempt + 1))
+    raise RuntimeError("unreachable retry loop")
 
 
 def frame_span(symbol: str, tf: str = "1h") -> tuple[int, int]:
@@ -62,9 +92,10 @@ def frame_span(symbol: str, tf: str = "1h") -> tuple[int, int]:
     path = RAW_DIR / f"{symbol}_{tf}.csv"
     if not path.exists():
         raise FileNotFoundError(path)
-    first = last = None
+    first: int | None = None
+    last: int | None = None
     with path.open(encoding="utf-8") as fh:
-        next(fh)
+        next(fh, None)
         for line in fh:
             if not line.strip():
                 continue
@@ -77,31 +108,28 @@ def frame_span(symbol: str, tf: str = "1h") -> tuple[int, int]:
     return first, last
 
 
-def normalize(rows: list[dict]) -> list[tuple[int, float]]:
+def normalize(rows: Sequence[Mapping[str, Any]]) -> list[tuple[int, float]]:
     """交易所原始行 → 升序去重的 (fundingTime, fundingRate)。"""
     seen: dict[int, float] = {}
-    for x in rows:
-        ts = int(x["fundingTime"])
-        seen[ts] = float(x["fundingRate"])
+    for row in rows:
+        ts = int(row["fundingTime"])
+        seen[ts] = float(row["fundingRate"])
     return sorted(seen.items())
 
 
-def fetch_funding(symbol: str, start_ms: int, end_ms: int) -> list[dict]:
-    out: list[dict] = []
+def fetch_funding(symbol: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     cur = start_ms
     while cur < end_ms:
-        for attempt in range(RETRIES):
-            try:
-                r = requests.get(FAPI, params={
-                    "symbol": symbol, "startTime": cur,
-                    "endTime": end_ms, "limit": PAGE_LIMIT}, timeout=20)
-                r.raise_for_status()
-                break
-            except Exception:                    # noqa: BLE001 - 重试后仍失败则上抛
-                if attempt == RETRIES - 1:
-                    raise
-                time.sleep(RETRY_BACKOFF_S * (attempt + 1))
-        rows = r.json()
+        rows = _get_json_with_retry(
+            FAPI,
+            {
+                "symbol": symbol,
+                "startTime": cur,
+                "endTime": end_ms,
+                "limit": PAGE_LIMIT,
+            },
+        )
         if not rows:
             break
         out.extend(rows)
@@ -113,29 +141,30 @@ def fetch_funding(symbol: str, start_ms: int, end_ms: int) -> list[dict]:
     return out
 
 
-def fetch_funding_bitget(symbol: str, start_ms: int, end_ms: int,
-                         product_type: str = PRODUCT_TYPE) -> list[dict]:
+def fetch_funding_bitget(
+    symbol: str,
+    start_ms: int,
+    end_ms: int,
+    product_type: str = PRODUCT_TYPE,
+) -> list[dict[str, Any]]:
     """Bitget 公开资金费历史(pageNo 翻页;pageSize 上限 100,实测)。
 
     与 Binance 分支的区别:交易所不给 startTime 过滤,只能按页往回翻到
     窗口左界;返回前按窗口裁剪,口径与 `fetch_funding` 完全一致。
     """
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     page = 1
-    body: dict = {}
+    lo, hi = min(start_ms, end_ms), max(start_ms, end_ms)
     while page <= BITGET_MAX_PAGES:
-        for attempt in range(RETRIES):
-            try:
-                r = requests.get(BITGET_FUNDING, params={
-                    "symbol": symbol, "productType": product_type,
-                    "pageSize": BITGET_PAGE_LIMIT, "pageNo": page}, timeout=20)
-                r.raise_for_status()
-                body = r.json()
-                break
-            except Exception:                    # noqa: BLE001 - 重试后仍失败则上抛
-                if attempt == RETRIES - 1:
-                    raise
-                time.sleep(RETRY_BACKOFF_S * (attempt + 1))
+        body = _get_json_with_retry(
+            BITGET_FUNDING,
+            {
+                "symbol": symbol,
+                "productType": product_type,
+                "pageSize": BITGET_PAGE_LIMIT,
+                "pageNo": page,
+            },
+        )
         if str(body.get("code") or "") not in ("", "00000"):
             raise RuntimeError(f"bitget {body.get('code')} {body.get('msg')}")
         rows = body.get("data") or []
@@ -143,11 +172,10 @@ def fetch_funding_bitget(symbol: str, start_ms: int, end_ms: int,
             break
         out.extend(rows)
         oldest = min(int(x["fundingTime"]) for x in rows)
-        if oldest <= min(start_ms, end_ms):
+        if oldest <= lo:
             break
         page += 1
         time.sleep(SLEEP_S)
-    lo, hi = min(start_ms, end_ms), max(start_ms, end_ms)
     return [x for x in out if lo <= int(x["fundingTime"]) <= hi]
 
 
@@ -158,19 +186,16 @@ def rwa_universe(min_volume: float | None = None) -> list[str]:
             uni = json.loads(LIVE_CONFIG.read_text(encoding="utf-8")).get("universe") or {}
             min_volume = float((uni.get("rwa") or {}).get("min_usdt_volume_24h") or 0.0)
         except (OSError, ValueError):
-            min_volume = 3_000_000.0
-    cs = requests.get(BITGET_CONTRACTS, params={"productType": PRODUCT_TYPE},
-                      timeout=20).json().get("data") or []
-    tk = requests.get(BITGET_TICKERS, params={"productType": PRODUCT_TYPE},
-                      timeout=20).json().get("data") or []
-    rwa = {str(c.get("symbol")) for c in cs
-           if str(c.get("isRwa") or "").upper() == "YES"}
-    out = []
-    for t in tk:
-        sym = t.get("symbol")
-        if sym in rwa and float(t.get("usdtVolume") or 0.0) > float(min_volume):
-            out.append(str(sym))
-    return sorted(out)
+            min_volume = DEFAULT_RWA_MIN_VOL
+    client = BitgetLiveClient(None, product_type=PRODUCT_TYPE)
+    rwa = set(client.rwa_symbols())
+    tickers = client.tickers()
+    threshold = float(min_volume)
+    return sorted(
+        str(t["symbol"])
+        for t in tickers
+        if t.get("symbol") in rwa and float(t.get("usdtVolume") or 0.0) > threshold
+    )
 
 
 def existing_series(path: Path) -> list[tuple[int, float]]:
@@ -185,35 +210,44 @@ def existing_series(path: Path) -> list[tuple[int, float]]:
     return rows
 
 
-def validate(series: list[tuple[int, float]]) -> list[str]:
+def validate(series: Sequence[tuple[int, float]]) -> list[str]:
     """连续性检查:升序、无重复、间隔为整小时(交易所偶发 4h/8h/1h 结算)。"""
     issues: list[str] = []
     for i in range(1, len(series)):
         gap = series[i][0] - series[i - 1][0]
         if gap <= 0:
             issues.append(f"non-monotonic at {series[i][0]}")
-        elif gap % 3_600_000:
+        elif gap % MS_PER_HOUR:
             issues.append(f"sub-hour gap {gap}ms at {series[i][0]}")
     return issues
 
 
-def write_symbol(symbol: str, series: list[tuple[int, float]],
-                 out_dir: Path, *, source: str = "binance") -> dict:
+def write_symbol(
+    symbol: str,
+    series: Sequence[tuple[int, float]],
+    out_dir: Path,
+    *,
+    source: str = "binance",
+) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{symbol}.csv"
-    body = ["funding_time,funding_rate"]
-    body += [f"{ts},{rate:.10g}" for ts, rate in series]
-    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    body = ["funding_time,funding_rate", *(f"{ts},{rate:.10g}" for ts, rate in series)]
+    hb.write_atomic(path, "\n".join(body) + "\n")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     try:
         rel = path.resolve().relative_to(ROOT).as_posix()
     except ValueError:                                   # out 目录在仓库之外
         rel = path.as_posix()
-    src = ("binance_fapi/fapi/v1/fundingRate" if source == "binance"
-           else "bitget_mix/market/history-fund-rate")
-    note = ("settlements every 8h (occasionally 4h/1h); signed rate"
-            if source == "binance" else
-            "settlements every 4h or 8h (exchange fundInterval); signed rate")
+    src = (
+        "binance_fapi/fapi/v1/fundingRate"
+        if source == "binance"
+        else "bitget_mix/market/history-fund-rate"
+    )
+    note = (
+        "settlements every 8h (occasionally 4h/1h); signed rate"
+        if source == "binance"
+        else "settlements every 4h or 8h (exchange fundInterval); signed rate"
+    )
     return {
         "path": rel,
         "sha256": digest,
@@ -225,16 +259,22 @@ def write_symbol(symbol: str, series: list[tuple[int, float]],
     }
 
 
-def update_manifest(records: dict, *, source: str = "binance") -> None:
-    manifest: dict = {"files": {}}
+def update_manifest(
+    records: Mapping[str, Mapping[str, Any]],
+    *,
+    source: str = "binance",
+) -> None:
+    manifest: dict[str, Any] = {"files": {}}
     if MANIFEST_PATH.exists():
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     files = manifest.setdefault("files", {})
     prefix = "binance_fapi_funding" if source == "binance" else "bitget_mix_funding"
     for symbol, rec in records.items():
-        files[f"{prefix}/{symbol}.csv"] = rec
-    MANIFEST_PATH.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        files[f"{prefix}/{symbol}.csv"] = dict(rec)
+    hb.write_atomic(
+        MANIFEST_PATH,
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+    )
 
 
 def _window(symbol: str, args: argparse.Namespace) -> tuple[int, int]:
@@ -249,71 +289,104 @@ def _window(symbol: str, args: argparse.Namespace) -> tuple[int, int]:
         if args.days is None:
             raise FileNotFoundError(
                 f"{RAW_DIR / (symbol + '_1h.csv')} 不存在:请给 --start-ts/--end-ts "
-                "或 --days 指定窗口(拉 RWA 标的时通常没有本地 1h 帧)") from None
+                "或 --days 指定窗口(拉 RWA 标的时通常没有本地 1h 帧)"
+            ) from None
         hi = int(time.time() * 1000)
         lo = hi - int(args.days) * MS_DAY
-    start = int(args.start_ts) if have_start else lo - 2 * MS_DAY
-    end = int(args.end_ts) if have_end else hi + 2 * MS_DAY
+    start = int(args.start_ts) if have_start else lo - FRAME_PAD_DAYS * MS_DAY
+    end = int(args.end_ts) if have_end else hi + FRAME_PAD_DAYS * MS_DAY
     return start, end
 
 
-def main(argv: list[str] | None = None) -> int:
+def _sync_symbol(
+    symbol: str,
+    args: argparse.Namespace,
+    out_dir: Path,
+) -> dict[str, Any] | None:
+    prev = existing_series(out_dir / f"{symbol}.csv") if args.incremental else []
+    start, end = _window(symbol, args)
+    if prev:
+        start = max(start, prev[-1][0] + 1)
+        if start >= end:
+            return None
+    rows = (
+        fetch_funding_bitget(symbol, start, end, args.product_type)
+        if args.source == "bitget"
+        else fetch_funding(symbol, start, end)
+    )
+    series = normalize(rows)
+    if prev:
+        merged = dict(prev)
+        merged.update(dict(series))
+        series = sorted(merged.items())
+    if not series:
+        print(f"[{symbol}] 无结算记录(window {start}..{end})")
+        return None
+    issues = validate(series)
+    rec = write_symbol(symbol, series, out_dir, source=args.source)
+    rec["window"] = {"start": start, "end": end}
+    rec["issues"] = issues
+    pos = sum(1 for _, r in series if r > 0) / max(len(series), 1)
+    gaps = sorted({
+        (series[i][0] - series[i - 1][0]) // MS_PER_HOUR
+        for i in range(1, len(series))
+    })
+    print(
+        f"[{symbol}] rows={len(series)} "
+        f"{time.strftime('%Y-%m-%d', time.gmtime(series[0][0] / 1000))}.."
+        f"{time.strftime('%Y-%m-%d', time.gmtime(series[-1][0] / 1000))} "
+        f"interval_h={gaps} pos_share={pos:.1%} issues={len(issues)}"
+    )
+    for msg in issues[:3]:
+        print(f"  ! {msg}")
+    return rec
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT")
     ap.add_argument("--source", choices=SOURCES, default="binance")
     ap.add_argument("--product-type", default=PRODUCT_TYPE)
-    ap.add_argument("--all-rwa", action="store_true",
-                    help="从公开接口取当前宇宙内的 RWA 合约(按 live.json 成交额门槛)")
-    ap.add_argument("--min-volume", type=float, default=None,
-                    help="配合 --all-rwa 的 24h USDT 名义量门槛;缺省读 config/live.json")
-    ap.add_argument("--incremental", action="store_true",
-                    help="从已有 CSV 最后一个结算点继续,只补新数据")
+    ap.add_argument(
+        "--all-rwa",
+        action="store_true",
+        help="从公开接口取当前宇宙内的 RWA 合约(按 live.json 成交额门槛)",
+    )
+    ap.add_argument(
+        "--min-volume",
+        type=float,
+        default=None,
+        help="配合 --all-rwa 的 24h USDT 名义量门槛;缺省读 config/live.json",
+    )
+    ap.add_argument(
+        "--incremental",
+        action="store_true",
+        help="从已有 CSV 最后一个结算点继续,只补新数据",
+    )
     ap.add_argument("--start-ts", type=int, default=None)
     ap.add_argument("--end-ts", type=int, default=None)
-    ap.add_argument("--days", type=int, default=None,
-                    help="本地无 1h 帧时的回看天数(如 RWA 标的)")
+    ap.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="本地无 1h 帧时的回看天数(如 RWA 标的)",
+    )
     ap.add_argument("--out", default=str(RAW_DIR / "funding"))
     ap.add_argument("--no-manifest", action="store_true")
     args = ap.parse_args(argv)
 
     out_dir = Path(args.out).resolve()
-    records: dict = {}
-    syms = (rwa_universe(args.min_volume) if args.all_rwa else
-            [s.strip() for s in args.symbols.split(",") if s.strip()])
+    records: dict[str, dict[str, Any]] = {}
+    syms = (
+        rwa_universe(args.min_volume)
+        if args.all_rwa
+        else [s.strip() for s in args.symbols.split(",") if s.strip()]
+    )
     print(f"[symbols] n={len(syms)} source={args.source} incremental={args.incremental}")
     for symbol in syms:
-        prev = existing_series(out_dir / f"{symbol}.csv") if args.incremental else []
-        start, end = _window(symbol, args)
-        if prev:
-            start = max(start, prev[-1][0] + 1)
-            if start >= end:
-                continue
-        if args.source == "bitget":
-            rows = fetch_funding_bitget(symbol, start, end, args.product_type)
-        else:
-            rows = fetch_funding(symbol, start, end)
-        series = normalize(rows)
-        if prev:
-            merged = dict(prev)
-            merged.update(dict(series))
-            series = sorted(merged.items())
-        if not series:
-            print(f"[{symbol}] 无结算记录(window {start}..{end})")
-            continue
-        issues = validate(series)
-        rec = write_symbol(symbol, series, out_dir, source=args.source)
-        rec["window"] = {"start": start, "end": end}
-        rec["issues"] = issues
-        records[symbol] = rec
-        pos = sum(1 for _, r in series if r > 0) / max(len(series), 1)
-        gaps = sorted({(series[i][0] - series[i - 1][0]) // 3_600_000
-                       for i in range(1, len(series))})
-        print(f"[{symbol}] rows={len(series)} "
-              f"{time.strftime('%Y-%m-%d', time.gmtime(series[0][0] / 1000))}.."
-              f"{time.strftime('%Y-%m-%d', time.gmtime(series[-1][0] / 1000))} "
-              f"interval_h={gaps} pos_share={pos:.1%} issues={len(issues)}")
-        for msg in issues[:3]:
-            print(f"  ! {msg}")
+        rec = _sync_symbol(symbol, args, out_dir)
+        if rec is not None:
+            records[symbol] = rec
 
     if not args.no_manifest:
         update_manifest(records, source=args.source)

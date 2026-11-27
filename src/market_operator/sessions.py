@@ -37,10 +37,13 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import time as _time_mod
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time as _time, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from types import MappingProxyType
+from typing import Any
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,15 +58,15 @@ DEFAULT_RWA = "weekday_only"
 US_EQUITY_RULES = "us_equity"
 
 DAY_S = 86_400
-_CONFIG_CACHE: tuple[Any, Optional[Mapping[str, Any]]] = (None, None)
-_OVER_CACHE: tuple[Any, Optional[Mapping[str, Any]]] = (None, None)
-_ASSIGN_CACHE: tuple[Any, Optional[Mapping[str, Any]]] = (None, None)
+_CONFIG_CACHE: tuple[Any, Mapping[str, Any] | None] = (None, None)
+_OVER_CACHE: tuple[Any, Mapping[str, Any] | None] = (None, None)
+_ASSIGN_CACHE: tuple[Any, Mapping[str, Any] | None] = (None, None)
 
-_LEGACY_FALLBACK: Mapping[str, Any] = {
-    "calendars": {LEGACY: {"legacy_weekend": True}},
+_LEGACY_FALLBACK: Mapping[str, Any] = MappingProxyType({
+    "calendars": MappingProxyType({LEGACY: MappingProxyType({"legacy_weekend": True})}),
     "rwa_default_calendar": LEGACY,
-    "patterns": [],
-}
+    "patterns": (),
+})
 
 
 def _hms(text: str) -> int:
@@ -82,7 +85,7 @@ def _hms(text: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _observed(d: date, *, saturday_skips: bool = False) -> Optional[date]:
+def _observed(d: date, *, saturday_skips: bool = False) -> date | None:
     """观察日平移:周六 → 周五(或按交易所规则不补),周日 → 周一。"""
     if d.weekday() == 5:
         return None if saturday_skips else d - timedelta(days=1)
@@ -184,11 +187,14 @@ def _load_assignments(path: str | Path | None = None) -> Mapping[str, str]:
     return _ASSIGN_CACHE[1]
 
 
-def _load_overrides(path: str | Path | None = None) -> Mapping[str, Any]:
+def load_overrides(path: str | Path | None = None) -> Mapping[str, Any]:
     """运维覆盖文件(可缺省):``data/calendars/overrides.json``。
 
-    结构:``{"assignments": {symbol: calendar}, "closed": {calendar: [YYYY-MM-DD]},
+    结构:``{"mode": "24x7" | "calendar", "assignments": {symbol: calendar},
+    "closed": {calendar: [YYYY-MM-DD]},
     "early_closes": {calendar: {YYYY-MM-DD: "HH:MM"}}}``。
+    ``mode="24x7"`` 时所有非加密标的跳过执行闸门(等同 crypto 日历,
+    包括零成交/一字棒与静默窗口检查),用于运维显式开启 RWA 全天候交易。
     它属于**运行数据**,不写进仓库配置,新上架合约/临时休市不用改代码。
     """
     global _OVER_CACHE
@@ -215,6 +221,9 @@ def _load_overrides(path: str | Path | None = None) -> Mapping[str, Any]:
             _hms(hhmm)
     _OVER_CACHE = (key, data)
     return data
+
+
+_load_overrides = load_overrides  # Backward-compatible private alias
 
 
 
@@ -289,16 +298,16 @@ def load_config(path: str | Path | None = None) -> Mapping[str, Any]:
     return cfg
 
 
-def root_symbol(symbol: Optional[str]) -> Optional[str]:
+def root_symbol(symbol: str | None) -> str | None:
     """``SYM@4h`` → ``SYM``(去掉执行周期后缀;无后缀原样返回)。"""
     if not symbol:
         return None
     return str(symbol).split("@", 1)[0]
 
 
-def _resolve(symbol: Optional[str], cfg: Mapping[str, Any],
-             overrides: Mapping[str, Any],
-             assignments: Mapping[str, str] | None = None) -> tuple[str, str]:
+def resolve_calendar(symbol: str | None, cfg: Mapping[str, Any],
+                     overrides: Mapping[str, Any],
+                     assignments: Mapping[str, str] | None = None) -> tuple[str, str]:
     """(日历名, 来源)。来源 ∈ override / pattern / learned / default。"""
     cals = cfg.get("calendars") or {}
     root = root_symbol(symbol)
@@ -319,14 +328,20 @@ def _resolve(symbol: Optional[str], cfg: Mapping[str, Any],
     return (str(fallback), "default") if fallback in cals else (LEGACY, "default")
 
 
-def calendar_for(symbol: Optional[str],
+_resolve = resolve_calendar  # Backward-compatible private alias
+
+
+def calendar_for(symbol: str | None,
                  cfg: Mapping[str, Any] | None = None, *,
                  overrides: Mapping[str, Any] | None = None,
                  assignments: Mapping[str, str] | None = None) -> str:
     c = cfg or load_config()
-    return _resolve(symbol, c,
-                    overrides if overrides is not None else _load_overrides(),
-                    assignments)[0]
+    return resolve_calendar(
+        symbol,
+        c,
+        overrides if overrides is not None else load_overrides(),
+        assignments,
+    )[0]
 
 
 def _calendar_dates(cal_name: str, cal: Mapping[str, Any], year: int,
@@ -414,12 +429,21 @@ def in_session(calendar: str, ts_ms: int,
         dt_utc = datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=timezone.utc)
         return not _legacy_closed(dt_utc)
     local = datetime.fromtimestamp(int(ts_ms) / 1000.0, ZoneInfo(str(cal["tz"])))
-    closed, early = _calendar_dates(calendar if known else LEGACY, cal,
-                                    local.year, ov)
+    cal_key = calendar if known else LEGACY
+    closed, early = _calendar_dates(cal_key, cal, local.year, ov)
+    if cal.get("daily_session") is not None:
+        # 跨年除夕夜(12/31 晚 -> 1/1 收盘)与元旦凌晨(1/1 凌晨 -> 12/31 开盘)需联合相邻年份假日表
+        if local.month == 12 and local.day == 31:
+            c_next, e_next = _calendar_dates(cal_key, cal, local.year + 1, ov)
+            closed = closed | c_next
+            early = {**early, **e_next}
+        elif local.month == 1 and local.day == 1:
+            c_prev, e_prev = _calendar_dates(cal_key, cal, local.year - 1, ov)
+            closed = closed | c_prev
+            early = {**e_prev, **early}
+        return _in_daily(cal, local, closed, early)
     if cal.get("weekday_only"):
         return local.isoweekday() <= 5 and local.date() not in closed
-    if cal.get("daily_session") is not None:
-        return _in_daily(cal, local, closed, early)
     return _in_intraday(cal, local, closed, early)
 
 
@@ -443,8 +467,8 @@ def _bucket(ts_ms: int) -> tuple[int, int]:
 
 
 def _quiet_block(bar: Sequence[float],
-                 history: Optional[Sequence[Sequence[float]]],
-                 cfg: Mapping[str, Any]) -> Optional[str]:
+                 history: Sequence[Sequence[float]] | None,
+                 cfg: Mapping[str, Any]) -> str | None:
     """静默窗口:确认棒活动 < 同(星期×小时)近期中位数的 floor_frac ⇒ 死水。
 
     不依赖日期与标的:未登记假日、半日市、CME 每日维护、临时停盘都会在这里
@@ -466,12 +490,12 @@ def _quiet_block(bar: Sequence[float],
     return INACTIVE if cur < float(qw.get("floor_frac") or 0.35) * med else None
 
 
-def block_reason(is_rwa: bool, symbol: Optional[str], ts_ms: int,
-                 bar: Optional[Sequence[float]] = None, *,
-                 history: Optional[Sequence[Sequence[float]]] = None,
+def block_reason(is_rwa: bool, symbol: str | None, ts_ms: int,
+                 bar: Sequence[float] | None = None, *,
+                 history: Sequence[Sequence[float]] | None = None,
                  cfg: Mapping[str, Any] | None = None,
                  overrides: Mapping[str, Any] | None = None,
-                 assignments: Mapping[str, str] | None = None) -> Optional[str]:
+                 assignments: Mapping[str, str] | None = None) -> str | None:
     """执行闸门:返回 ``RWA_MARKET_CLOSED`` / ``RWA_INACTIVE_SESSION`` / ``None``。
 
     判定顺序:① 确认棒零成交/一字静止 ⇒ ``INACTIVE``;② 不在该标的日历时段
@@ -482,12 +506,14 @@ def block_reason(is_rwa: bool, symbol: Optional[str], ts_ms: int,
     """
     if not is_rwa:
         return None
+    c = cfg or load_config()
+    ov = overrides if overrides is not None else load_overrides()
+    if str(ov.get("mode") or "").lower() == "24x7":
+        return None
     if bar is not None and len(bar) >= 6:
         if float(bar[5]) <= 0.0 or float(bar[2]) <= float(bar[3]):
             return INACTIVE
-    c = cfg or load_config()
-    ov = overrides if overrides is not None else _load_overrides()
-    cal = _resolve(symbol, c, ov, assignments)[0]
+    cal = resolve_calendar(symbol, c, ov, assignments)[0]
     if not in_session(cal, int(ts_ms), c, overrides=ov):
         return CLOSED
     if bar is not None:
@@ -497,20 +523,22 @@ def block_reason(is_rwa: bool, symbol: Optional[str], ts_ms: int,
     return None
 
 
-def describe(symbol: Optional[str], ts_ms: Optional[int] = None, *,
-             is_rwa: Optional[bool] = None,
+def describe(symbol: str | None, ts_ms: int | None = None, *,
+             is_rwa: bool | None = None,
              cfg: Mapping[str, Any] | None = None,
              overrides: Mapping[str, Any] | None = None,
-             assignments: Mapping[str, str] | None = None) -> dict:
+             assignments: Mapping[str, str] | None = None) -> dict[str, Any]:
     """运维诊断:标的解析到的日历、来源、当前是否在时段内(不改变任何判定)。"""
-    import time as _time_mod
     ts = int(ts_ms if ts_ms is not None else _time_mod.time() * 1000)
     if is_rwa is False:
         return {"symbol": root_symbol(symbol), "calendar": "crypto",
                 "source": "crypto", "in_session": True, "ts": ts}
     c = cfg or load_config()
-    ov = overrides if overrides is not None else _load_overrides()
-    cal, source = _resolve(symbol, c, ov, assignments)
+    ov = overrides if overrides is not None else load_overrides()
+    if str(ov.get("mode") or "").lower() == "24x7":
+        return {"symbol": root_symbol(symbol), "calendar": "crypto",
+                "source": "override-24x7", "in_session": True, "ts": ts}
+    cal, source = resolve_calendar(symbol, c, ov, assignments)
     return {"symbol": root_symbol(symbol), "calendar": cal, "source": source,
             "in_session": in_session(cal, ts, c, overrides=ov), "ts": ts}
 

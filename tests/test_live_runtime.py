@@ -1470,6 +1470,7 @@ def test_accept_long_sized_down_while_reject_long_kept(tmp_path):
     """接线:同一套参数下 ACCEPT 多单缩到 0.35,REJECT 多单保持 1.0(方向不被封)。"""
     cfg = _cfg_min()
     cfg["risk"]["edge_size_by_event_direction"] = {"BREAKOUT_ACCEPTED|1": 0.35}
+    cfg["risk"]["factor_burst_cap_1h"] = 0
     r = _runner(tmp_path, _FakeClient(), _FakeTG(), mode="paper", cfg=cfg)
     r.equity = 104.0
 
@@ -1594,30 +1595,44 @@ def test_manage_stops_place_reject_not_breached_keeps_position(tmp_path):
     assert any("保护止损挂单失败" in a for a in tg.alerts)
 
 
-class _NoPosStopClient(_FakeClient):
-    """保护止损挂单被拒:交易所已无该仓位(实测 43023「仓位不足」)。"""
+class _TinyPosStopClient(_FakeClient):
+    """保护止损挂单被拒:仓位真实存在但过小挂不上 TPSL(实测 43023「仓位不足」)。"""
+
+    def positions(self):
+        return [{"symbol": "BTCUSDT", "direction": 1, "qty": 0.001,
+                 "entry_price": 100.0, "mark_price": 99.0}]
 
     def place_stop_loss(self, symbol, **kw):
         raise BitgetError("bitget 400 code=43023: 仓位不足,不能设置止盈或者止损")
 
 
-def test_manage_stops_place_reject_no_position_switches_to_local_stop(tmp_path):
-    """43023「仓位不足」**不再**丢保护:切成本地止损监控(2026-10-29 语义修复)。
+class _NoPosStopClient(_FakeClient):
+    """保护止损挂单被拒:交易所已无该仓位(本地残影,同样返回 43023「仓位不足」)。"""
 
-    旧语义:43023 一律当"交易所已无该仓位" ⇒ `stops.pop()`。
-    实盘反例:ADVANTESTUSDT 名义 ~18.5U 被交易所拒绝挂 TPSL(同一个 43023),
-    于是它既没有交易所保护、也没有本地监控 —— 裸奔。
-    新语义:先切 `mode="local"`(错误只记一次、不再重试交易所单);
-    之后每轮用标记价与本地防线比较,越过即市价离场。
+    def positions(self):
+        return []
+
+    def place_stop_loss(self, symbol, **kw):
+        raise BitgetError("bitget 400 code=43023: 仓位不足,不能设置止盈或者止损")
+
+    def place_partial_take_profit(self, symbol, **kw):
+        raise BitgetError("bitget 400 code=43023: 仓位不足,不能设置止盈或者止损")
+
+
+def test_manage_stops_place_reject_no_position_switches_to_local_stop(tmp_path):
+    """43023「仓位不足」核验交易所实时持仓:仓位仍在(蚂蚁仓) ⇒ 切本地止损监控。
+
+    实盘反例:ADVANTESTUSDT 名义 ~18.5U 被交易所拒绝挂 TPSL(43023),但仓位真实存在;
+    切 `mode="local"`(错误只记一次、不再重试交易所单),越线即市价离场。
     """
-    client, tg = _NoPosStopClient(), _FakeTG()
+    client, tg = _TinyPosStopClient(), _FakeTG()
     r = _runner(tmp_path, client, tg)
     r.positions["BTCUSDT"] = _pos(invalid=95.0, mark=99.0)
 
     r._manage_stops(NOW)
 
     assert client.market_orders == []
-    assert "BTCUSDT" in r.positions          # 仓位是否存在由 reconcile 判定
+    assert "BTCUSDT" in r.positions
     assert r.stops["BTCUSDT"]["mode"] == "local"
     assert r.stops["BTCUSDT"]["order_id"] == ""
     assert r.counters["stop_local_mode"] == 1
@@ -1629,6 +1644,24 @@ def test_manage_stops_place_reject_no_position_switches_to_local_stop(tmp_path):
     r._manage_stops(NOW + 60_000)
     assert [o["symbol"] for o in client.market_orders] == ["BTCUSDT"]
     assert r.counters.get("stop_local_triggered", 0) == 1
+
+
+def test_manage_stops_43023_when_exchange_has_no_position_clears_without_flattening(tmp_path):
+    """43023 核验交易所已无该仓位(本地残影) ⇒ 记 stop_place_no_pos 并加速对账,绝不误报 protection_unavailable 或狂发市价平仓单。"""
+    client, tg = _NoPosStopClient(), _FakeTG()
+    r = _runner(tmp_path, client, tg)
+    pos = _pos(invalid=95.0, mark=99.0)
+    pos["protection_required"] = True
+    r.positions["BTCUSDT"] = pos
+    r._reconcile_at = 999999999.0
+
+    r._manage_stops(NOW)
+
+    assert client.market_orders == []
+    assert "BTCUSDT" not in r.stops
+    assert r.counters.get("stop_place_no_pos", 0) == 1
+    assert r.counters.get("protection_unavailable", 0) == 0
+    assert r._reconcile_at == 0.0
 
 
 class _StaleMarkStopClient(_FakeClient):
@@ -2288,6 +2321,8 @@ def test_universe_tick_marks_held_out_of_universe_symbols_manage_only(tmp_path, 
     assert r._universe_symbols == {"BTCUSDT"}
     assert r._manage_only == {"GRVTUSDT"}
     assert r._manage_only_block("BTCUSDT") is None
+    # 即使当前无持仓,只要已掉出活跃交易宇宙(_universe_symbols),同样禁止新开仓
+    assert r._manage_only_block("DROPPEDMEMEUSDT") == "MANAGE_ONLY"
 
 
 def test_entry_settle_window_uses_wall_clock_not_bar_open(tmp_path, monkeypatch):

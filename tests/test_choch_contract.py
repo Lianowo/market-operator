@@ -144,14 +144,18 @@ def test_dominant_choch_and_fast_sweep_and_trigger_defense_and_pyramid() -> None
     pm.open("BTCUSDT", 1, 100.0, 95.0, 115.0, LEVEL_REJECTED, 1000, 0)
     opp_rej = MarketEvent(LEVEL_REJECTED, -1, 2000, 0, {})
     assert pm.on_trigger_bar("BTCUSDT", (2000, 102.0, 103.0, 101.0, 101.5, 1.0), [opp_rej], tf_label="4h") == []
-    ex_1h = pm.on_trigger_bar("BTCUSDT", (2000, 102.0, 103.0, 101.0, 101.5, 1.0), [opp_rej], tf_label="1h")
-    assert len(ex_1h) == 1 and "LTF_OPPOSING_REJECT" in ex_1h[0].reason
+    assert pm.on_trigger_bar("BTCUSDT", (2000, 102.0, 103.0, 101.0, 101.5, 1.0), [opp_rej], tf_label="1h") == []
+    pm_fast = PositionManager(ltf_opposing_reject_exit=True)
+    pm_fast.open("BTCUSDT", 1, 100.0, 95.0, 115.0, LEVEL_REJECTED, 1000, 0)
+    ex_fast = pm_fast.on_trigger_bar("BTCUSDT", (2000, 102.0, 103.0, 101.0, 101.5, 1.0), [opp_rej])
+    assert len(ex_fast) == 1 and "LTF_OPPOSING_REJECT" in ex_fast[0].reason
 
+    # 策略路由层彻底脱离成交额(零成交量不变性): 1h 上 dollar_volume=0 与 1e9 产出完全一致
     router_1h = MarketRouter(RouterParams(whitelist=frozenset({(LEVEL_REJECTED, 1)})))
-    vw_low_liq = StructureView(Regime.RANGE, (sup, other_res), atr=1.0, tf_hours=1, dollar_volume=500.0)
+    vw_zero_dv = StructureView(Regime.RANGE, (sup, other_res), atr=1.0, tf_hours=1, dollar_volume=0.0)
     ev_long = MarketEvent(LEVEL_REJECTED, 1, 2000, 1, {"level": sup, "zone": sup, "invalid": 98.0, "ex": 98.5, "swept": True})
-    assert router_1h.on_bar("ALTUSDT", (2000, 100.0, 101.5, 98.5, 101.0, 1.0), 1, vw_low_liq, 1.0, [ev_long], universe_size=10, median_dollar_volume=1000.0) == []
-    assert router_1h.counters.get("rejected_low_liquidity") == 1
+    assert len(router_1h.on_bar("FXPAIR", (2000, 100.0, 101.5, 98.5, 101.0, 0.0), 1, vw_zero_dv, 1.0, [ev_long], universe_size=10, median_dollar_volume=1000.0)) == 1
+    assert router_1h.counters.get("rejected_low_liquidity", 0) == 0
 
     specs = {"BTCUSDT@4h": ContractSpec("BTCUSDT@4h", 0.001, 0.001, 3, 2, 5.0)}
     b = Broker(1000.0, risk_frac=0.02, leverage_cap=20.0, taker_fee=0.0, slippage_per_side=0.0, funding_per_8h=0.0, contracts=specs, portfolio_stop_risk_frac=0.20)
